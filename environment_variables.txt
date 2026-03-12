@@ -1,0 +1,63 @@
+# =============================================================================
+# PML Finance Project - Environment Configuration
+# =============================================================================
+# Version: 0.9.4
+# Python version: >=3.12,<3.15
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+# Python logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_LEVEL=INFO
+
+# -----------------------------------------------------------------------------
+# Directory Paths
+# -----------------------------------------------------------------------------
+DATA_DIR=data
+MODEL_DIR=models
+CACHE_DIR=.cache
+OUTPUT_DIR=outputs
+
+# -----------------------------------------------------------------------------
+# Database Configuration
+# -----------------------------------------------------------------------------
+# SQLAlchemy connection URL (required only if --data-source=db)
+# Format: postgresql+psycopg2://user:password@host:port/database
+# Example (PostgreSQL): postgresql+psycopg2://postgres:your_password@localhost:5432/postgres
+# Example (SQLite): sqlite:///equities.sqlite
+DB_URL=postgresql+psycopg2://postgres:bItcfiTg142!@localhost:5432/postgres
+# Optional: Database schema and table to read from
+DB_EQUITIES_SCHEMA=public
+DB_TABLE=equities
+DB_ANALYTICS_SCHEMA=analytics
+
+# -----------------------------------------------------------------------------
+# External API Keys
+# -----------------------------------------------------------------------------
+# ALPHA_VANTAGE_API_KEY=your_api_key_here
+# FINANCIAL_API_KEY=your_api_key_here
+
+# -----------------------------------------------------------------------------
+# Model Configuration
+# -----------------------------------------------------------------------------
+MODEL_VERSION=v9_11
+# RANDOM_SEED=42
+
+# -----------------------------------------------------------------------------
+# Performance Settings
+# -----------------------------------------------------------------------------
+# Number of parallel jobs: -1=all cores, positive integer=specific count
+# N_JOBS=-1
+# Maximum memory allocation for operations
+# MEMORY_LIMIT=8GB
+
+# -----------------------------------------------------------------------------
+# Analytics and Reporting Configuration
+# -----------------------------------------------------------------------------
+# Enable/disable interactive visualizations
+ENABLE_INTERACTIVE_PLOTS=true
+GEIB_DASHBOARD=true
+# Report output format: html, pdf, excel
+# REPORT_FORMAT=html
+# Enable benchmarking analysis (Phase 9.2)
+# ENABLE_BENCHMARKING=true

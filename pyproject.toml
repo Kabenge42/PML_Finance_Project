@@ -1,0 +1,122 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pml-finance-project"
+version = "0.9.5"
+description = "PML Finance Project - Machine Learning for Financial Analysis"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12,<3.15"
+authors = [
+    { name = "Finance ML Team" }
+]
+keywords = ["finance", "machine-learning", "analytics", "trading", "portfolio"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+dependencies = [
+    # --- Numerical Computing & Data Structures ---
+    "numpy>=1.26.0,<3.0.0",
+    "pandas>=2.2.0,<4.0.0",
+    "scipy>=1.14.0,<2.0.0",
+    "statsmodels>=0.14.0,<1.0.0",
+    # --- Machine Learning: Core Frameworks ---
+    "scikit-learn>=1.6.0,<2.0.0",
+    "imbalanced-learn>=0.12.0,<1.0.0",
+    # --- Machine Learning: Gradient Boosting ---
+    "xgboost>=2.1.0,<4.0.0",
+    "lightgbm>=4.5.0,<5.0.0",
+    "catboost>=1.2.5,<2.0.0; python_version < '3.15'",
+    # --- Model Interpretability ---
+    "shap>=0.50.0,<1.0.0; python_version < '3.15'",
+    # --- Data Visualization ---
+    "matplotlib>=3.9.0,<4.0.0",
+    "seaborn>=0.13.0,<1.0.0",
+    "plotly>=5.18.0,<7.0.0",
+    # --- Utilities & Performance ---
+    "tqdm>=4.66.0,<5.0.0",
+    "joblib>=1.4.0,<2.0.0",
+    "xlsxwriter>=3.2.0,<4.0.0",
+    "psutil>=6.0.0,<8.0.0",
+    # --- Bayesian Diagnostics ---
+    "arviz>=0.19.0,<=1.0.0",
+    # --- Hyperparameter Optimization ---
+    "optuna>=4.1.0,<5.0.0",
+]
+
+[project.optional-dependencies]
+# Testing, linting, and code formatting tools
+dev = [
+    "pytest>=8.3.0,<12.0.0",
+    "pytest-cov>=5.0.0,<20.0.0",
+    "black>=24.0.0,<30.0.0",
+    "flake8>=7.1.0,<19.0.0",
+    "mypy>=1.11.0,<1.30.0.0",
+    "isort>=5.13.0,<11.0.0",
+    "pip-tools>=7.4.0,<30.0.0",
+]
+
+# Interactive web dashboards (Python <3.14 for Streamlit)
+dashboards = [
+    "streamlit>=1.40.0,<6.0.0; python_version < '3.15'",
+    "dash>=2.18.0,<7.0.0",
+]
+
+# Database connectivity
+database = [
+    "psycopg2-binary>=2.9.9,<3.0.0",
+    "SQLAlchemy>=2.0.25,<3.0.0",
+]
+
+# Deep learning (Python <3.14 only)
+tensorflow = [
+    "tensorflow>=2.15.0,<3.0.0; python_version < '3.15'",
+    "scikeras>=0.13.0,<1.0.0; python_version < '3.15'",
+]
+
+# Performance optimizations (Python <3.14 only)
+performance = [
+    "numba>=0.60.0,<1.0.0; python_version < '3.15'",
+]
+
+[project.scripts]
+finance-ml = "cli:main"
+finance-ml-analyze = "cli:analyze"
+finance-ml-validate = "cli:validate"
+
+[project.urls]
+Homepage = "https://github.com/finance-ml/analytics-platform"
+Documentation = "https://github.com/finance-ml/analytics-platform#readme"
+Repository = "https://github.com/finance-ml/analytics-platform"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["finance_ml*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312", "py313"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
