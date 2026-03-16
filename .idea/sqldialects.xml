@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="SqlDialectMappings">
+    <file url="file://$PROJECT_DIR$/../Finance_Analytics_Platform/finance_ml/probabilistic_ml_model/data_utils/data_utils.py" dialect="GenericSQL" />
     <file url="file://$PROJECT_DIR$/sql_scripts/create_equities_schema.sql" dialect="GenericSQL" />
     <file url="file://$PROJECT_DIR$/sql_scripts/create_helper_functions.sql" dialect="GenericSQL" />
     <file url="file://$PROJECT_DIR$/sql_scripts/currency_import.sql" dialect="GenericSQL" />
@@ -11,5 +12,6 @@
     <file url="file://$PROJECT_DIR$/sql_scripts/mv_dcf.sql" dialect="GenericSQL" />
     <file url="file://$PROJECT_DIR$/sql_scripts/mv_equities.sql" dialect="GenericSQL" />
     <file url="file://$PROJECT_DIR$/sql_scripts/mv_expected_returns.sql" dialect="GenericSQL" />
+    <file url="PROJECT" dialect="PostgreSQL" />
   </component>
 </project>

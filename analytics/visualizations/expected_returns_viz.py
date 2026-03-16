@@ -161,11 +161,9 @@ def create_kalman_vs_raw_scatter(kal: pd.DataFrame) -> go.Figure:
 
     sample = plot_df.sample(min(2000, len(plot_df)), random_state=42).copy()
     sample["filtered_log"] = np.sign(sample["filtered_upside"]) * np.log1p(
-        np.abs(sample["filtered_upside"]),
+        np.abs(sample["filtered_upside"])
     )
-    sample["raw_log"] = np.sign(sample["raw_upside"]) * np.log1p(
-        np.abs(sample["raw_upside"]),
-    )
+    sample["raw_log"] = np.sign(sample["raw_upside"]) * np.log1p(np.abs(sample["raw_upside"]))
 
     fig = px.scatter(
         sample,
@@ -229,7 +227,7 @@ def create_strong_consensus_bar(strong: pd.DataFrame) -> go.Figure:
             y=strong["expected_upside_pct"],
             name="MC Expected Upside",
             marker_color=COLORS[0],
-        ),
+        )
     )
     fig.add_trace(
         go.Bar(
@@ -237,7 +235,7 @@ def create_strong_consensus_bar(strong: pd.DataFrame) -> go.Figure:
             y=strong["filtered_upside"],
             name="Kalman Filtered Upside",
             marker_color=COLORS[1],
-        ),
+        )
     )
     fig.add_trace(
         go.Bar(
@@ -245,7 +243,7 @@ def create_strong_consensus_bar(strong: pd.DataFrame) -> go.Figure:
             y=strong["expected_return_prob_weighted"],
             name="Prob-Weighted Return",
             marker_color=COLORS[2],
-        ),
+        )
     )
     fig.update_layout(
         title=f"Top {len(strong)} Strong Consensus Picks (All 3 Models Bullish)",
@@ -303,7 +301,7 @@ def create_sector_heatmap(
             "pt_mean": "Achiev. Mean",
             "pt_median": "Achiev. Median",
             "pct_bullish": "% All Bullish",
-        },
+        }
     )
 
     fig = px.imshow(
@@ -410,10 +408,7 @@ def create_var_analysis(mc: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def create_beat_vs_achievement_scatter(
-    beat: pd.DataFrame,
-    pt: pd.DataFrame,
-) -> go.Figure:
+def create_beat_vs_achievement_scatter(beat: pd.DataFrame, pt: pd.DataFrame) -> go.Figure:
     """Scatter: P(Beat) vs P(Reach Price Target) coloured by return."""
     if beat.empty or pt.empty:
         return create_no_data_figure("Beat vs Achievement — Insufficient Data")
@@ -498,9 +493,7 @@ def create_model_dispersion_dashboard(summary: pd.DataFrame) -> go.Figure:
         )
 
     if "agreement_score" in summary.columns and "weighted_agreement" in summary.columns:
-        sample = summary.dropna(
-            subset=["agreement_score", "weighted_agreement"],
-        ).sample(
+        sample = summary.dropna(subset=["agreement_score", "weighted_agreement"]).sample(
             min(2000, len(summary)),
             random_state=42,
         )
@@ -575,7 +568,7 @@ def create_return_distribution_fit_chart(mc: pd.DataFrame) -> go.Figure:
             marker_color=COLORS[0],
             opacity=0.6,
             name="Observed",
-        ),
+        )
     )
 
     x_range = np.linspace(upside.min(), upside.max(), 300)
@@ -594,7 +587,7 @@ def create_return_distribution_fit_chart(mc: pd.DataFrame) -> go.Figure:
                     mode="lines",
                     line=dict(color=color, width=2),
                     name=label,
-                ),
+                )
             )
         except Exception:
             continue
@@ -660,7 +653,7 @@ def create_sector_return_analytics_heatmap(sector_analytics: pd.DataFrame) -> go
         "mean_beat_prob": "Mean P(Beat)",
     }
     heatmap_data = heatmap_data.rename(
-        columns={k: v for k, v in rename_map.items() if k in heatmap_data.columns},
+        columns={k: v for k, v in rename_map.items() if k in heatmap_data.columns}
     )
 
     fig = px.imshow(
@@ -671,10 +664,7 @@ def create_sector_return_analytics_heatmap(sector_analytics: pd.DataFrame) -> go
         title="Sector Expected Returns — Enhanced Analytics Heatmap",
         labels={"color": "Value"},
     )
-    fig.update_layout(
-        template=PLOTLY_TEMPLATE,
-        height=max(600, len(sector_analytics) * 28),
-    )
+    fig.update_layout(template=PLOTLY_TEMPLATE, height=max(600, len(sector_analytics) * 28))
     return fig
 
 
@@ -698,7 +688,7 @@ def create_screening_summary_chart(screens: dict[str, pd.DataFrame]) -> go.Figur
             marker_color=COLORS[: len(names)],
             text=counts,
             textposition="auto",
-        ),
+        )
     )
     fig.update_layout(
         title="Stock Screening Results Summary",
@@ -791,7 +781,7 @@ def create_price_target_drift_dashboard(
                         name=base.replace("_", " ").title(),
                         line=dict(color=COLORS[color_idx % len(COLORS)], width=2),
                         marker=dict(size=8),
-                    ),
+                    )
                 )
                 color_idx += 1
 
@@ -799,8 +789,7 @@ def create_price_target_drift_dashboard(
     if hist_price_cols:
         # Find current price column
         current_price_col = next(
-            (c for c in mv_equities_df.columns if c in ["close", "price", "current_price"]),
-            None,
+            (c for c in mv_equities_df.columns if c in ["close", "price", "current_price"]), None
         )
 
         if current_price_col and current_price_col in mv_equities_df.columns:
@@ -822,7 +811,7 @@ def create_price_target_drift_dashboard(
                         name="Historical Price",
                         line=dict(color="black", width=2, dash="dot"),
                         marker=dict(size=8, symbol="square"),
-                    ),
+                    )
                 )
 
     if not fig.data:

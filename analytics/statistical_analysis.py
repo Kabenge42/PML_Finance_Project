@@ -45,12 +45,12 @@ logger = logging.getLogger(__name__)
 
 
 def _normal_normal_conjugate_posterior(
-        sample_mean: float,
-        sample_var: float,
-        n: int,
-        prior_mean: float,
-        prior_var: float,
-        ) -> tuple[float, float]:
+    sample_mean: float,
+    sample_var: float,
+    n: int,
+    prior_mean: float,
+    prior_var: float,
+) -> tuple[float, float]:
     """
     Compute Normal-Normal conjugate posterior parameters.
 
@@ -63,9 +63,7 @@ def _normal_normal_conjugate_posterior(
         (posterior_mean, posterior_var)
     """
     posterior_var = 1.0 / (1.0 / prior_var + n / sample_var)
-    posterior_mean = posterior_var * (
-            prior_mean / prior_var + n * sample_mean / sample_var
-    )
+    posterior_mean = posterior_var * (prior_mean / prior_var + n * sample_mean / sample_var)
     return posterior_mean, posterior_var
 
 
@@ -75,9 +73,9 @@ def _normal_normal_conjugate_posterior(
 
 
 def _compute_dynamic_thresholds(
-        df: pd.DataFrame,
-        feature_threshold_specs: dict[str, dict],
-        ) -> dict[str, float]:
+    df: pd.DataFrame,
+    feature_threshold_specs: dict[str, dict],
+) -> dict[str, float]:
     """
     Compute thresholds dynamically from data distributions.
 
@@ -107,8 +105,10 @@ def _compute_dynamic_thresholds(
         return {f: spec["fallback"] for f, spec in feature_threshold_specs.items()}
 
     analytics = run_category_probability_analytics(
-            df, category_name="dynamic_threshold_estimation", features=features,
-            )
+        df,
+        category_name="dynamic_threshold_estimation",
+        features=features,
+    )
 
     bayesian = analytics.get("bayesian_results", {})
     dist_fits = analytics.get("distribution_fits", {})
@@ -137,13 +137,11 @@ def _compute_dynamic_thresholds(
                     "normal": stats.norm,
                     "student_t": stats.t,
                     "skew_normal": stats.skewnorm,
-                    }
+                }
                 dist_obj = dist_map.get(dist_name)
                 if dist_obj is not None:
                     try:
-                        thresholds[feat] = float(
-                                dist_obj.ppf(target_pct / 100.0, *params),
-                                )
+                        thresholds[feat] = float(dist_obj.ppf(target_pct / 100.0, *params))
                         continue
                     except Exception:
                         pass
@@ -154,9 +152,7 @@ def _compute_dynamic_thresholds(
             post_mean = post.get("posterior_mean", fallback)
             post_std = post.get("posterior_std", 0)
             if post_std > 0:
-                thresholds[feat] = float(
-                        stats.norm.ppf(target_pct / 100.0, post_mean, post_std),
-                        )
+                thresholds[feat] = float(stats.norm.ppf(target_pct / 100.0, post_mean, post_std))
                 continue
 
         # Strategy 3: Empirical percentile fallback
@@ -222,7 +218,7 @@ class BayesianTechnicalResampler:
         "1Y": "price_1y_ago",
         "3Y": "price_3y_ago",
         "5Y": "price_5y_ago",
-        }
+    }
 
     # SQL-style column name fallbacks (as returned by PostgreSQL views)
     _PRICE_SNAPSHOT_SQL_MAP: dict[str, str] = {
@@ -234,7 +230,7 @@ class BayesianTechnicalResampler:
         "1Y": "Price (1Y Ago)",
         "3Y": "Price (3Y Ago)",
         "5Y": "Price (5Y Ago)",
-        }
+    }
 
     _MOMENTUM_FEATURES: list[str] = [
         "price_momentum_1m",
@@ -242,7 +238,7 @@ class BayesianTechnicalResampler:
         "price_momentum_6m",
         "price_momentum_1y",
         "price_momentum_5d",
-        ]
+    ]
 
     _TECHNICAL_FEATURES: list[str] = [
         "ema_slope_20d",
@@ -251,16 +247,16 @@ class BayesianTechnicalResampler:
         "breakout_signal",
         "volatility_compression",
         "volatility_term_structure",
-        ]
+    ]
 
     def __init__(
-            self,
-            prior_return_mean: float = 0.05,
-            prior_return_std: float = 0.20,
-            n_posterior_samples: int = 4000,
-            n_chains: int = 4,
-            random_seed: int = 42,
-            ):
+        self,
+        prior_return_mean: float = 0.05,
+        prior_return_std: float = 0.20,
+        n_posterior_samples: int = 4000,
+        n_chains: int = 4,
+        random_seed: int = 42,
+    ):
         self.prior_return_mean = prior_return_mean
         self.prior_return_std = prior_return_std
         self.n_posterior_samples = n_posterior_samples
@@ -290,7 +286,7 @@ class BayesianTechnicalResampler:
             "1Y": 365,
             "3Y": 1095,
             "5Y": 1825,
-            }
+        }
 
         for period, col in self._PRICE_SNAPSHOT_MAP.items():
             if col not in df.columns:
@@ -313,27 +309,27 @@ class BayesianTechnicalResampler:
             ticker_col = "ticker" if "ticker" in df.columns else "Ticker"
             for idx, row_idx in enumerate(subset.index):
                 records.append(
-                        {
-                            "ticker": (
-                                subset.loc[row_idx, ticker_col]
-                                if ticker_col in subset.columns
-                                else str(row_idx)
-                            ),
-                            "period": period,
-                            "days": days,
-                            "return_pct": float(hpr.iloc[idx]) * 100,
-                            "annualised_return": float(ann_return.iloc[idx]),
-                            },
-                        )
+                    {
+                        "ticker": (
+                            subset.loc[row_idx, ticker_col]
+                            if ticker_col in subset.columns
+                            else str(row_idx)
+                        ),
+                        "period": period,
+                        "days": days,
+                        "return_pct": float(hpr.iloc[idx]) * 100,
+                        "annualised_return": float(ann_return.iloc[idx]),
+                    }
+                )
 
         return pd.DataFrame(records)
 
     def resample_returns(
-            self,
-            df: pd.DataFrame,
-            freq: str = "1ME",
-            group_col: str = "sector",
-            ) -> pd.DataFrame:
+        self,
+        df: pd.DataFrame,
+        freq: str = "1ME",
+        group_col: str = "sector",
+    ) -> pd.DataFrame:
         """
         Compute resampled Bayesian posterior return distributions.
 
@@ -355,7 +351,7 @@ class BayesianTechnicalResampler:
         if returns_df.empty:
             return pd.DataFrame()
 
-        prior_var = self.prior_return_std ** 2
+        prior_var = self.prior_return_std**2
         results = []
 
         for ticker, group in returns_df.groupby("ticker"):
@@ -369,18 +365,22 @@ class BayesianTechnicalResampler:
 
             # Normal-Normal conjugate posterior
             posterior_mean, posterior_var = _normal_normal_conjugate_posterior(
-                    sample_mean, sample_var, n, self.prior_return_mean, prior_var,
-                    )
+                sample_mean,
+                sample_var,
+                n,
+                self.prior_return_mean,
+                prior_var,
+            )
             posterior_std = np.sqrt(posterior_var)
 
             ci_90 = (
                 posterior_mean - 1.645 * posterior_std,
                 posterior_mean + 1.645 * posterior_std,
-                )
+            )
             ci_95 = (
                 posterior_mean - 1.96 * posterior_std,
                 posterior_mean + 1.96 * posterior_std,
-                )
+            )
             prob_positive = float(1 - stats.norm.cdf(0, posterior_mean, posterior_std))
 
             var_5 = float(np.percentile(data, 5))
@@ -391,23 +391,23 @@ class BayesianTechnicalResampler:
             )
 
             results.append(
-                    ResampledReturnDistribution(
-                            ticker=str(ticker),
-                            frequency=freq,
-                            n_periods=n,
-                            sample_mean=float(sample_mean),
-                            sample_std=float(np.sqrt(sample_var)),
-                            posterior_mean=float(posterior_mean),
-                            posterior_std=float(posterior_std),
-                            credible_interval_90=ci_90,
-                            credible_interval_95=ci_95,
-                            prob_positive_return=prob_positive,
-                            skewness=float(stats.skew(data)),
-                            kurtosis=float(stats.kurtosis(data)),
-                            var_5=var_5,
-                            cvar_5=cvar_5,
-                            ),
-                    )
+                ResampledReturnDistribution(
+                    ticker=str(ticker),
+                    frequency=freq,
+                    n_periods=n,
+                    sample_mean=float(sample_mean),
+                    sample_std=float(np.sqrt(sample_var)),
+                    posterior_mean=float(posterior_mean),
+                    posterior_std=float(posterior_std),
+                    credible_interval_90=ci_90,
+                    credible_interval_95=ci_95,
+                    prob_positive_return=prob_positive,
+                    skewness=float(stats.skew(data)),
+                    kurtosis=float(stats.kurtosis(data)),
+                    var_5=var_5,
+                    cvar_5=cvar_5,
+                )
+            )
 
         if not results:
             return pd.DataFrame()
@@ -430,11 +430,11 @@ class BayesianTechnicalResampler:
         return result_df
 
     def build_inference_data(
-            self,
-            df: pd.DataFrame,
-            freq: str = "1ME",
-            result_df: pd.DataFrame | None = None,
-            ) -> "az.InferenceData | xr.Dataset | None":
+        self,
+        df: pd.DataFrame,
+        freq: str = "1ME",
+        result_df: pd.DataFrame | None = None,
+    ) -> "az.InferenceData | xr.Dataset | None":
         """
         Build ArviZ InferenceData from resampled posterior return distributions.
 
@@ -464,66 +464,66 @@ class BayesianTechnicalResampler:
         post_stds = result_df["posterior_std"].values
 
         posterior_samples = np.stack(
-                [
-                    self.rng.normal(
-                            post_means,
-                            post_stds,
-                            size=(self.n_posterior_samples, n_equities),
-                            )
-                    for _ in range(self.n_chains)
-                    ],
+            [
+                self.rng.normal(
+                    post_means,
+                    post_stds,
+                    size=(self.n_posterior_samples, n_equities),
                 )
+                for _ in range(self.n_chains)
+            ]
+        )
 
         obs_stds = result_df["sample_std"].values
         pp_samples = posterior_samples + self.rng.normal(0, obs_stds, size=posterior_samples.shape)
 
         observed_means = result_df["sample_mean"].values
         log_lik = stats.norm.logpdf(
-                observed_means[np.newaxis, np.newaxis, :],
-                loc=posterior_samples,
-                scale=obs_stds[np.newaxis, np.newaxis, :] + 1e-12,
-                )
+            observed_means[np.newaxis, np.newaxis, :],
+            loc=posterior_samples,
+            scale=obs_stds[np.newaxis, np.newaxis, :] + 1e-12,
+        )
 
         coords = {
             "chain": np.arange(self.n_chains),
             "draw": np.arange(self.n_posterior_samples),
             "equity": tickers,
-            }
+        }
 
         if ARVIZ_AVAILABLE and az is not None:
             return az.from_dict(
-                    posterior={"expected_return_prob_weighted": posterior_samples},
-                    posterior_predictive={"future_return": pp_samples},
-                    log_likelihood={"return_obs": log_lik},
-                    observed_data={"observed_return": observed_means},
-                    constant_data={
-                        "prior_mean": np.array([self.prior_return_mean]),
-                        "prior_std": np.array([self.prior_return_std]),
-                        "frequency": np.array([freq]),
-                        },
-                    coords=coords,
-                    dims={
-                        "expected_return_prob_weighted": ["chain", "draw", "equity"],
-                        "future_return": ["chain", "draw", "equity"],
-                        "return_obs": ["chain", "draw", "equity"],
-                        },
-                    )
+                posterior={"expected_return_prob_weighted": posterior_samples},
+                posterior_predictive={"future_return": pp_samples},
+                log_likelihood={"return_obs": log_lik},
+                observed_data={"observed_return": observed_means},
+                constant_data={
+                    "prior_mean": np.array([self.prior_return_mean]),
+                    "prior_std": np.array([self.prior_return_std]),
+                    "frequency": np.array([freq]),
+                },
+                coords=coords,
+                dims={
+                    "expected_return_prob_weighted": ["chain", "draw", "equity"],
+                    "future_return": ["chain", "draw", "equity"],
+                    "return_obs": ["chain", "draw", "equity"],
+                },
+            )
         elif xr is not None:
             return xr.Dataset(
-                    {"expected_return_prob_weighted": (["chain", "draw", "equity"], posterior_samples)},
-                    coords=coords,
-                    )
+                {"expected_return_prob_weighted": (["chain", "draw", "equity"], posterior_samples)},
+                coords=coords,
+            )
         return None
 
 
 def resampled_posterior_returns(
-        df: pd.DataFrame,
-        freq: str = "1ME",
-        prior_return_mean: float = 0.10,
-        prior_return_std: float = 0.20,
-        n_posterior_samples: int = 4000,
-        n_chains: int = 4,
-        ) -> tuple[pd.DataFrame, "az.InferenceData | xr.Dataset | None"]:
+    df: pd.DataFrame,
+    freq: str = "1ME",
+    prior_return_mean: float = 0.10,
+    prior_return_std: float = 0.20,
+    n_posterior_samples: int = 4000,
+    n_chains: int = 4,
+) -> tuple[pd.DataFrame, "az.InferenceData | xr.Dataset | None"]:
     """
     Convenience function: compute resampled posterior returns + InferenceData.
 
@@ -555,12 +555,12 @@ def resampled_posterior_returns(
 
 
 def bayesian_category_analysis(
-        df: pd.DataFrame,
-        category_name: str,
-        features: list,
-        prior_mean: float = 0,
-        prior_std: float = 10,
-        ) -> dict:
+    df: pd.DataFrame,
+    category_name: str,
+    features: list,
+    prior_mean: float = 0,
+    prior_std: float = 10,
+) -> dict:
     """
     Bayesian analysis of feature distributions within a category.
 
@@ -608,10 +608,14 @@ def bayesian_category_analysis(
         sample_var = data.var()
 
         # Posterior parameters (Normal-Normal conjugate)
-        prior_var = prior_std ** 2
+        prior_var = prior_std**2
         posterior_mean, posterior_var = _normal_normal_conjugate_posterior(
-                sample_mean, sample_var, n, prior_mean, prior_var,
-                )
+            sample_mean,
+            sample_var,
+            n,
+            prior_mean,
+            prior_var,
+        )
         posterior_std = np.sqrt(posterior_var)
 
         # 95% Credible Interval
@@ -633,12 +637,12 @@ def bayesian_category_analysis(
             "ci_95_low": ci_low,
             "ci_95_high": ci_high,
             "prob_positive": prob_positive,
-            }
+        }
 
         if ARVIZ_AVAILABLE and az is not None:
             feature_result["inference_data"] = az.from_dict(
-                    posterior={"mu": samples.reshape(1, -1)},  # single chain
-                    )
+                posterior={"mu": samples.reshape(1, -1)},  # single chain
+            )
 
         results[feature] = feature_result
 
@@ -646,14 +650,14 @@ def bayesian_category_analysis(
 
 
 def metropolis_hastings_sampler(
-        data: np.ndarray,
-        n_samples: int = 10000,
-        burn_in: int = 2000,
-        proposal_std: float = 0.5,
-        prior_mean: float = 0,
-        prior_std: float = 10,
-        random_seed: int | None = None,
-        ) -> Tuple[np.ndarray, float]:
+    data: np.ndarray,
+    n_samples: int = 10000,
+    burn_in: int = 2000,
+    proposal_std: float = 0.5,
+    prior_mean: float = 0,
+    prior_std: float = 10,
+    random_seed: int | None = None,
+) -> Tuple[np.ndarray, float]:
     """
     Metropolis-Hastings MCMC sampler for estimating posterior of mean parameter.
 
@@ -698,7 +702,7 @@ def metropolis_hastings_sampler(
 
     def log_posterior(mu):
         # Log-likelihood
-        ll = -n / 2 * np.log(2 * np.pi * data_std ** 2) - np.sum((data - mu) ** 2) / (2 * data_std ** 2)
+        ll = -n / 2 * np.log(2 * np.pi * data_std**2) - np.sum((data - mu) ** 2) / (2 * data_std**2)
         # Log-prior
         lp = -0.5 * ((mu - prior_mean) / prior_std) ** 2
         return ll + lp
@@ -736,8 +740,8 @@ def metropolis_hastings_sampler(
 
 
 def mcmc_student_t(
-        data: np.ndarray, n_samples: int = 10000, burn_in: int = 2000,
-        ) -> Tuple[np.ndarray, np.ndarray]:
+    data: np.ndarray, n_samples: int = 10000, burn_in: int = 2000
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     MCMC for Student's t location parameter with heavier tails.
 
@@ -797,8 +801,8 @@ def mcmc_student_t(
 
 
 def hierarchical_mcmc_by_sector(
-        df: pd.DataFrame, feature: str, sector_col: str = "industry", n_samples: int = 8000,
-        ) -> dict:
+    df: pd.DataFrame, feature: str, sector_col: str = "industry", n_samples: int = 8000
+) -> dict:
     """
     Hierarchical MCMC: estimate sector-level means with pooling toward global mean.
 
@@ -856,7 +860,7 @@ def hierarchical_mcmc_by_sector(
             "shrinkage": shrinkage,
             "samples": samples,
             "n_obs": n,
-            }
+        }
 
     # Build multi-group InferenceData with sector-level coordinates
     if ARVIZ_AVAILABLE and az is not None and results:
@@ -864,10 +868,10 @@ def hierarchical_mcmc_by_sector(
         sector_samples = [results[s]["samples"] for s in sector_names]
         try:
             idata = az.from_dict(
-                    posterior={"sector_mu": np.stack(sector_samples)},
-                    coords={"sector": sector_names},
-                    dims={"sector_mu": ["sector"]},
-                    )
+                posterior={"sector_mu": np.stack(sector_samples)},
+                coords={"sector": sector_names},
+                dims={"sector_mu": ["sector"]},
+            )
             result = {"sectors": results, "inference_data": idata}
             return result
         except Exception:
@@ -887,17 +891,17 @@ _HIERARCHICAL_CATEGORY_COLS: list[str] = [
     "industry",
     "style_class",
     "size_class",
-    ]
+]
 
 
 def hierarchical_mcmc_multi_level(
-        df: pd.DataFrame,
-        feature: str,
-        group_cols: list[str] | None = None,
-        n_samples: int = 8000,
-        min_group_size: int = 10,
-        shrinkage_strength: float = 20.0,
-        ) -> dict:
+    df: pd.DataFrame,
+    feature: str,
+    group_cols: list[str] | None = None,
+    n_samples: int = 8000,
+    min_group_size: int = 10,
+    shrinkage_strength: float = 20.0,
+) -> dict:
     """
     Multi-level hierarchical MCMC with nested category pooling.
 
@@ -982,7 +986,7 @@ def hierarchical_mcmc_multi_level(
         "industry": "sector",
         "style_class": None,
         "size_class": None,
-        }
+    }
 
     levels: dict[str, dict] = {}
     all_samples_for_idata: dict[str, np.ndarray] = {}
@@ -1032,7 +1036,7 @@ def hierarchical_mcmc_multi_level(
             ci_95 = (
                 float(np.percentile(samples, 2.5)),
                 float(np.percentile(samples, 97.5)),
-                )
+            )
             prob_positive = float((samples > 0).mean())
 
             level_results[str(group_val)] = {
@@ -1046,19 +1050,21 @@ def hierarchical_mcmc_multi_level(
                 "prob_positive": prob_positive,
                 "samples": samples,
                 "n_obs": n,
-                }
+            }
 
-            cross_level_rows.append({
-                "level": col,
-                "group": str(group_val),
-                "n_obs": n,
-                "raw_mean": group_mean,
-                "posterior_mean": posterior_mean,
-                "shrinkage": shrinkage,
-                "ci_95_low": ci_95[0],
-                "ci_95_high": ci_95[1],
-                "prob_positive": prob_positive,
-                })
+            cross_level_rows.append(
+                {
+                    "level": col,
+                    "group": str(group_val),
+                    "n_obs": n,
+                    "raw_mean": group_mean,
+                    "posterior_mean": posterior_mean,
+                    "shrinkage": shrinkage,
+                    "ci_95_low": ci_95[0],
+                    "ci_95_high": ci_95[1],
+                    "prob_positive": prob_positive,
+                }
+            )
 
         levels[col] = level_results
 
@@ -1073,32 +1079,32 @@ def hierarchical_mcmc_multi_level(
         "global": {"mean": global_mean, "std": global_std, "n_obs": len(global_data)},
         "levels": levels,
         "cross_level_summary": pd.DataFrame(cross_level_rows),
-        }
+    }
 
     # Build unified InferenceData across all levels
     if ARVIZ_AVAILABLE and az is not None and all_samples_for_idata:
         try:
             idata = az.from_dict(
-                    posterior=all_samples_for_idata,
-                    coords=all_coords_for_idata,
-                    dims={k: [k.replace("_mu", "")] for k in all_samples_for_idata},
-                    )
+                posterior=all_samples_for_idata,
+                coords=all_coords_for_idata,
+                dims={k: [k.replace("_mu", "")] for k in all_samples_for_idata},
+            )
             result["inference_data"] = idata
         except Exception as e:
             logger.debug("InferenceData construction failed for multi-level MCMC: %s", e)
 
     logger.info(
-            "Multi-level hierarchical MCMC: %d levels, %d total groups for '%s'",
-            len(levels),
-            sum(len(v) for v in levels.values()),
-            feature,
-            )
+        "Multi-level hierarchical MCMC: %d levels, %d total groups for '%s'",
+        len(levels),
+        sum(len(v) for v in levels.values()),
+        feature,
+    )
     return result
 
 
 def fit_distributions_by_category(
-        df: pd.DataFrame, category: str, features: list, n_simulations: int = 10000,
-        ) -> dict:
+    df: pd.DataFrame, category: str, features: list, n_simulations: int = 10000
+) -> dict:
     """
     Fit multiple distributions and select best fit using AIC.
 
@@ -1197,23 +1203,23 @@ def fit_distributions_by_category(
             "var_5_pct": var_5,
             "cvar_5_pct": cvar_5,
             "simulations": simulations,
-            }
+        }
 
     return results
 
 
 def calculate_ruin_probability(
-        df: pd.DataFrame,
-        initial_capital_col: str = "market_cap",
-        cash_burn_col: str = "cash_burn_rate",
-        volatility_col: str = "volatility_regime",
-        # NEW: Additional leverage/liquidity inputs (v3.4)
-        debt_maturity_risk_col: str = "debt_maturity_risk",
-        balance_sheet_strength_col: str = "balance_sheet_strength",
-        cash_ratio_col: str = "cash_ratio",
-        risk_tier_bins: list[float] | None = None,
-        risk_tier_labels: list[str] | None = None,
-        ) -> pd.DataFrame:
+    df: pd.DataFrame,
+    initial_capital_col: str = "market_cap",
+    cash_burn_col: str = "cash_burn_rate",
+    volatility_col: str = "volatility_regime",
+    # NEW: Additional leverage/liquidity inputs (v3.4)
+    debt_maturity_risk_col: str = "debt_maturity_risk",
+    balance_sheet_strength_col: str = "balance_sheet_strength",
+    cash_ratio_col: str = "cash_ratio",
+    risk_tier_bins: list[float] | None = None,
+    risk_tier_labels: list[str] | None = None,
+) -> pd.DataFrame:
     """
     Calculate investor's ruin probability using modified Gambler's Ruin framework.
 
@@ -1300,31 +1306,25 @@ def calculate_ruin_probability(
     negative_drift_ruin = (1.0 / (1.0 + np.exp(-10 * np.abs(mu)))).clip(0.5, 0.95)
 
     result["ruin_probability"] = np.where(
-            mu > 0,
-            positive_drift_ruin,
-            negative_drift_ruin,
-            )
+        mu > 0,
+        positive_drift_ruin,
+        negative_drift_ruin,
+    )
 
     result["survival_probability"] = 1 - result["ruin_probability"]
 
     # ── 4b. Leverage/liquidity adjustment (v3.4) ──
     if debt_maturity_risk_col in df.columns:
         debt_risk = df[debt_maturity_risk_col].fillna(0) / 100
-        result["ruin_probability"] = np.clip(
-                result["ruin_probability"] + debt_risk * 0.15, 0, 1,
-                )
+        result["ruin_probability"] = np.clip(result["ruin_probability"] + debt_risk * 0.15, 0, 1)
     if balance_sheet_strength_col in df.columns:
         bs = df[balance_sheet_strength_col].fillna(50) / 100
-        result["ruin_probability"] = np.clip(
-                result["ruin_probability"] * (1.3 - bs * 0.6), 0, 1,
-                )
+        result["ruin_probability"] = np.clip(result["ruin_probability"] * (1.3 - bs * 0.6), 0, 1)
     if cash_ratio_col in df.columns:
         cr = df[cash_ratio_col].fillna(0.5)
         # Low cash ratio increases ruin probability
         cash_penalty = np.where(cr < 0.1, 0.10, np.where(cr < 0.3, 0.05, 0.0))
-        result["ruin_probability"] = np.clip(
-                result["ruin_probability"] + cash_penalty, 0, 1,
-                )
+        result["ruin_probability"] = np.clip(result["ruin_probability"] + cash_penalty, 0, 1)
     result["survival_probability"] = 1 - result["ruin_probability"]
 
     # ── 5. Risk tier classification (wider low-risk band) ──
@@ -1337,7 +1337,7 @@ def calculate_ruin_probability(
         if len(ruin_data) >= 30:
             specs: dict[str, dict] = {
                 "ruin_probability": {"direction": "max", "percentile": 75, "fallback": 0.60},
-                }
+            }
             dynamic = _compute_dynamic_thresholds(result, specs)
             q75 = dynamic.get("ruin_probability", 0.60)
             # Build bins: [0, q25, q50, q75, 1.0] from distribution
@@ -1350,7 +1350,7 @@ def calculate_ruin_probability(
                 max(q25 + 0.01, min(q50, 0.55)),
                 max(q50 + 0.01, min(q75, 0.90)),
                 1.0,
-                ]
+            ]
             # Deduplicate: when quantiles collapse, edges can repeat
             risk_tier_bins = sorted(set(risk_tier_bins))
             # Adjust labels to match the (possibly reduced) number of bins
@@ -1360,17 +1360,17 @@ def calculate_ruin_probability(
             risk_tier_bins = [0, 0.15, 0.35, 0.60, 1.0]
 
     result["risk_level"] = pd.cut(
-            result["ruin_probability"],
-            bins=risk_tier_bins,
-            labels=risk_tier_labels,
-            )
+        result["ruin_probability"],
+        bins=risk_tier_bins,
+        labels=risk_tier_labels,
+    )
 
     return result
 
 
 def calculate_conditional_probabilities(
-        df: pd.DataFrame, feature_categories: dict, distress_threshold: float = 30,
-        ) -> pd.DataFrame:
+    df: pd.DataFrame, feature_categories: dict, distress_threshold: float = 30
+) -> pd.DataFrame:
     """
     Calculate conditional probability of financial distress given feature conditions.
 
@@ -1427,29 +1427,29 @@ def calculate_conditional_probabilities(
             lift_low = p_distress_low / base_distress_rate if base_distress_rate > 0 else 1
 
             results.append(
-                    {
-                        "category": category,
-                        "feature": feature,
-                        "p_distress_high": p_distress_high,
-                        "p_distress_low": p_distress_low,
-                        "lift_high": lift_high,
-                        "lift_low": lift_low,
-                        "separation": abs(p_distress_high - p_distress_low),
-                        },
-                    )
+                {
+                    "category": category,
+                    "feature": feature,
+                    "p_distress_high": p_distress_high,
+                    "p_distress_low": p_distress_low,
+                    "lift_high": lift_high,
+                    "lift_low": lift_low,
+                    "separation": abs(p_distress_high - p_distress_low),
+                }
+            )
 
     if not results:
         return pd.DataFrame(
-                columns=[
-                    "category",
-                    "feature",
-                    "p_distress_high",
-                    "p_distress_low",
-                    "lift_high",
-                    "lift_low",
-                    "separation",
-                    ],
-                )
+            columns=[
+                "category",
+                "feature",
+                "p_distress_high",
+                "p_distress_low",
+                "lift_high",
+                "lift_low",
+                "separation",
+            ]
+        )
 
     return pd.DataFrame(results).sort_values("separation", ascending=False)
 
@@ -1497,7 +1497,7 @@ def monte_carlo_price_target_simulation(df: pd.DataFrame, n_simulations: int = 2
     valid_df = valid_df[
         (valid_df["price_target_high"] > valid_df["price_target_low"])
         & (valid_df["last_price"] > 0)
-        ]
+    ]
 
     if valid_df.empty:
         return pd.DataFrame()
@@ -1515,11 +1515,11 @@ def monte_carlo_price_target_simulation(df: pd.DataFrame, n_simulations: int = 2
 
     # Vectorized triangular simulation: (n_stocks, n_simulations)
     simulated_pts = rng.triangular(
-            pt_low[:, np.newaxis],
-            pt_median[:, np.newaxis],
-            pt_high[:, np.newaxis],
-            size=(n_stocks, n_simulations),
-            )
+        pt_low[:, np.newaxis],
+        pt_median[:, np.newaxis],
+        pt_high[:, np.newaxis],
+        size=(n_stocks, n_simulations),
+    )
 
     # Vectorized upside calculation
     simulated_upside = (simulated_pts - last_price[:, np.newaxis]) / last_price[:, np.newaxis] * 100
@@ -1532,34 +1532,36 @@ def monte_carlo_price_target_simulation(df: pd.DataFrame, n_simulations: int = 2
     risk_reward = np.where(upside_std > 0, expected_upside / upside_std, 0.0)
 
     # Build result DataFrame
-    result_df = pd.DataFrame({
-        "ticker": valid_df.get("ticker", pd.Series("", index=valid_df.index)).values,
-        "name": valid_df.get("name", pd.Series("", index=valid_df.index)).values,
-        "sector": valid_df.get("sector", pd.Series("", index=valid_df.index)).values,
-        "industry": valid_df.get("industry", pd.Series("", index=valid_df.index)).values,
-        "region": valid_df.get("region", pd.Series("", index=valid_df.index)).values,
-        "country": valid_df.get("country", pd.Series("", index=valid_df.index)).values,
-        "exchange": valid_df.get("exchange", pd.Series("", index=valid_df.index)).values,
-        "last_price": last_price,
-        "pt_median": pt_median,
-        "pt_spread": pt_high - pt_low,
-        "expected_upside_pct": expected_upside,
-        "upside_std": upside_std,
-        "var_5_pct": var_5,
-        "prob_positive_upside": prob_positive,
-        "risk_reward_ratio": risk_reward,
-        })
+    result_df = pd.DataFrame(
+        {
+            "ticker": valid_df.get("ticker", pd.Series("", index=valid_df.index)).values,
+            "name": valid_df.get("name", pd.Series("", index=valid_df.index)).values,
+            "sector": valid_df.get("sector", pd.Series("", index=valid_df.index)).values,
+            "industry": valid_df.get("industry", pd.Series("", index=valid_df.index)).values,
+            "region": valid_df.get("region", pd.Series("", index=valid_df.index)).values,
+            "country": valid_df.get("country", pd.Series("", index=valid_df.index)).values,
+            "exchange": valid_df.get("exchange", pd.Series("", index=valid_df.index)).values,
+            "last_price": last_price,
+            "pt_median": pt_median,
+            "pt_spread": pt_high - pt_low,
+            "expected_upside_pct": expected_upside,
+            "upside_std": upside_std,
+            "var_5_pct": var_5,
+            "prob_positive_upside": prob_positive,
+            "risk_reward_ratio": risk_reward,
+        }
+    )
 
     return result_df
 
 
 def kalman_filter_price_target(
-        df: pd.DataFrame,
-        observation_col: str = "last_price",
-        target_col: str = "price_target",
-        process_variance: float | None = None,
-        measurement_variance: float | None = None,
-        ) -> pd.DataFrame:
+    df: pd.DataFrame,
+    observation_col: str = "last_price",
+    target_col: str = "price_target",
+    process_variance: float | None = None,
+    measurement_variance: float | None = None,
+) -> pd.DataFrame:
     """
     Kalman filter for smoothing price targets and estimating true value.
 
@@ -1599,8 +1601,10 @@ def kalman_filter_price_target(
         specs: dict[str, dict] = {}
         if process_variance is None and observation_col in df.columns:
             specs[observation_col] = {
-                "direction": "max", "percentile": 50, "fallback": 1e-5,
-                }
+                "direction": "max",
+                "percentile": 50,
+                "fallback": 1e-5,
+            }
         if measurement_variance is None and target_col in df.columns and observation_col in df.columns:
             # Use the spread between target and observation as proxy
             residual_col = "_kalman_residual_proxy"
@@ -1608,13 +1612,15 @@ def kalman_filter_price_target(
             obs_valid = df[observation_col].notna() & (df[observation_col] > 0)
             tgt_valid = df[target_col].notna() & (df[target_col] > 0)
             df[residual_col] = np.where(
-                    obs_valid & tgt_valid,
-                    ((df[target_col] - df[observation_col]) / df[observation_col]).abs(),
-                    np.nan,
-                    )
+                obs_valid & tgt_valid,
+                ((df[target_col] - df[observation_col]) / df[observation_col]).abs(),
+                np.nan,
+            )
             specs[residual_col] = {
-                "direction": "max", "percentile": 50, "fallback": 0.1,
-                }
+                "direction": "max",
+                "percentile": 50,
+                "fallback": 0.1,
+            }
 
         if specs:
             dynamic = _compute_dynamic_thresholds(df, specs)
@@ -1634,14 +1640,14 @@ def kalman_filter_price_target(
                 measurement_variance = 0.1
     if observation_col not in df.columns or target_col not in df.columns:
         return pd.DataFrame(
-                columns=[
-                    "ticker",
-                    "kalman_estimate",
-                    "kalman_variance",
-                    "kalman_gain",
-                    "signal_strength",
-                    ],
-                )
+            columns=[
+                "ticker",
+                "kalman_estimate",
+                "kalman_variance",
+                "kalman_gain",
+                "signal_strength",
+            ]
+        )
 
     # Filter valid rows
     mask = df[observation_col].notna() & df[target_col].notna() & (df[observation_col] > 0) & (df[target_col] > 0)
@@ -1663,31 +1669,35 @@ def kalman_filter_price_target(
     signal_strength = 1.0 / (p_est + 1e-10)
     filtered_upside = np.where(obs > 0, (x_est - obs) / obs * 100, 0.0)
 
-    result_df = pd.DataFrame({
-        "ticker": valid_df.get("ticker", pd.Series(valid_df.index.astype(str), index=valid_df.index)).values,
-        "name": valid_df.get("name", pd.Series("", index=valid_df.index)).values,
-        "sector": valid_df.get("sector", pd.Series("", index=valid_df.index)).values,
-        "industry": valid_df.get("industry", pd.Series("", index=valid_df.index)).values,
-        "country": valid_df.get("country", pd.Series("", index=valid_df.index)).values,
-        "exchange": valid_df.get("exchange", pd.Series("", index=valid_df.index)).values,
-        "kalman_estimate": x_est,
-        "kalman_variance": np.full(len(valid_df), p_est),
-        "kalman_gain": np.full(len(valid_df), kalman_gain),
-        "signal_strength": np.full(len(valid_df), signal_strength),
-        "original_price": obs,
-        "original_target": z,
-        "filtered_upside": filtered_upside,
-        })
+    result_df = pd.DataFrame(
+        {
+            "ticker": valid_df.get(
+                "ticker", pd.Series(valid_df.index.astype(str), index=valid_df.index)
+            ).values,
+            "name": valid_df.get("name", pd.Series("", index=valid_df.index)).values,
+            "sector": valid_df.get("sector", pd.Series("", index=valid_df.index)).values,
+            "industry": valid_df.get("industry", pd.Series("", index=valid_df.index)).values,
+            "country": valid_df.get("country", pd.Series("", index=valid_df.index)).values,
+            "exchange": valid_df.get("exchange", pd.Series("", index=valid_df.index)).values,
+            "kalman_estimate": x_est,
+            "kalman_variance": np.full(len(valid_df), p_est),
+            "kalman_gain": np.full(len(valid_df), kalman_gain),
+            "signal_strength": np.full(len(valid_df), signal_strength),
+            "original_price": obs,
+            "original_target": z,
+            "filtered_upside": filtered_upside,
+        }
+    )
 
     return result_df
 
 
 def kalman_momentum_filter(
-        df: pd.DataFrame,
-        momentum_cols: list = None,
-        process_variance: float = 0.05,
-        measurement_variance: float = 0.25,
-        ) -> pd.DataFrame:
+    df: pd.DataFrame,
+    momentum_cols: list = None,
+    process_variance: float = 0.05,
+    measurement_variance: float = 0.25,
+) -> pd.DataFrame:
     """
     Apply Kalman filter to smooth noisy momentum indicators.
 
@@ -1716,14 +1726,15 @@ def kalman_momentum_filter(
     >>> print(filtered_df['price_momentum_1m_filtered'].head())
     """
     if momentum_cols is None:
-        momentum_cols = ["price_momentum_1m",
-                         "price_momentum_3m",
-                         "price_momentum_6m",
-                         "price_momentum_1y",
-                         "price_momentum_5d",
-                         "price_momentum_3y",
-                         "price_momentum_5y",
-                         ]
+        momentum_cols = [
+            "price_momentum_1m",
+            "price_momentum_3m",
+            "price_momentum_6m",
+            "price_momentum_1y",
+            "price_momentum_5d",
+            "price_momentum_3y",
+            "price_momentum_5y",
+        ]
 
     available_cols = [col for col in momentum_cols if col in df.columns]
 
@@ -1814,7 +1825,7 @@ def fit_gaussian_copula(df: pd.DataFrame, features: list, n_simulations: int = 2
             "simulated_samples": np.array([]),
             "tail_dependence": {"lower": np.array([]), "upper": np.array([])},
             "marginal_params": {},
-            }
+        }
 
     # Extract data and handle missing values
     data = df[available_features].dropna()
@@ -1826,7 +1837,7 @@ def fit_gaussian_copula(df: pd.DataFrame, features: list, n_simulations: int = 2
             "simulated_samples": np.array([]),
             "tail_dependence": {"lower": np.array([]), "upper": np.array([])},
             "marginal_params": {},
-            }
+        }
 
     n_features = len(available_features)
 
@@ -1846,7 +1857,7 @@ def fit_gaussian_copula(df: pd.DataFrame, features: list, n_simulations: int = 2
             "median": float(np.median(col_data)),
             "skew": float(stats.skew(col_data)),
             "kurtosis": float(stats.kurtosis(col_data)),
-            }
+        }
 
     # Transform to normal and estimate correlation
     normal_data = stats.norm.ppf(uniform_data)
@@ -1880,7 +1891,7 @@ def fit_gaussian_copula(df: pd.DataFrame, features: list, n_simulations: int = 2
         "tail_dependence": tail_dep,
         "marginal_params": marginal_params,
         "n_observations": len(data),
-        }
+    }
 
 
 def _calculate_tail_dependence(uniform_data: np.ndarray, threshold: float = 0.05) -> dict:
@@ -1925,8 +1936,8 @@ def _calculate_tail_dependence(uniform_data: np.ndarray, threshold: float = 0.05
 
 
 def parallel_mcmc_chains(
-        data: np.ndarray, n_chains: int = 4, n_samples: int = 10000, n_jobs: int = -1,
-        ) -> dict:
+    data: np.ndarray, n_chains: int = 4, n_samples: int = 10000, n_jobs: int = -1
+) -> dict:
     """
     Run multiple MCMC chains in parallel for better convergence diagnostics.
 
@@ -1970,16 +1981,18 @@ def parallel_mcmc_chains(
     def run_single_chain(seed: int) -> np.ndarray:
         """Run a single MCMC chain with given seed."""
         samples, _ = metropolis_hastings_sampler(
-                data, n_samples=n_samples, burn_in=n_samples // 5,
-                random_seed=seed,
-                )
+            data,
+            n_samples=n_samples,
+            burn_in=n_samples // 5,
+            random_seed=seed,
+        )
         return samples
 
     # Run chains
     if use_parallel and n_jobs != 1:
         chains = Parallel(n_jobs=n_jobs)(
-                delayed(run_single_chain)(seed) for seed in range(n_chains),
-                )
+            delayed(run_single_chain)(seed) for seed in range(n_chains)
+        )
     else:
         # Sequential fallback
         chains = [run_single_chain(seed) for seed in range(n_chains)]
@@ -1999,7 +2012,7 @@ def parallel_mcmc_chains(
         "posterior_mean": np.mean(combined_samples),
         "posterior_std": np.std(combined_samples),
         "ci_95": (np.percentile(combined_samples, 2.5), np.percentile(combined_samples, 97.5)),
-        }
+    }
 
     # Stack chains into array for ArviZ
     chain_array = np.stack(chains)
@@ -2007,10 +2020,9 @@ def parallel_mcmc_chains(
     if ARVIZ_AVAILABLE and az is not None:
         try:
             idata = az.from_dict(
-                    posterior={"mu": chain_array.reshape(n_chains, 1, n_samples)
-                    .transpose(0, 2, 1)},
-                    coords={"chain": np.arange(n_chains), "draw": np.arange(n_samples)},
-                    )
+                posterior={"mu": chain_array.reshape(n_chains, 1, n_samples).transpose(0, 2, 1)},
+                coords={"chain": np.arange(n_chains), "draw": np.arange(n_samples)},
+            )
             summary = az.summary(idata)
             result["r_hat"] = float(summary["r_hat"].iloc[0])
             result["ess_bulk"] = float(summary["ess_bulk"].iloc[0])
@@ -2075,8 +2087,8 @@ def _calculate_gelman_rubin(chains: list) -> float:
 
 
 def analyze_employee_productivity_frontier(
-        df: pd.DataFrame, sector_col: str = "industry",
-        ) -> pd.DataFrame:
+    df: pd.DataFrame, sector_col: str = "industry"
+) -> pd.DataFrame:
     """
     Identify companies with superior human capital efficiency using industry-adjusted rankings.
 
@@ -2095,8 +2107,8 @@ def analyze_employee_productivity_frontier(
     for metric in available_metrics:
         # Normalize by sector (z-score)
         result[f"{metric}_sector_z"] = result.groupby(sector_col)[metric].transform(
-                lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0,
-                )
+            lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0
+        )
 
     # Calculate productivity frontier score (average of available z-scores)
     z_cols = [f"{m}_sector_z" for m in available_metrics]
@@ -2108,18 +2120,18 @@ def analyze_employee_productivity_frontier(
 
     # Rank companies
     result["productivity_rank"] = result.groupby(sector_col)["productivity_frontier_score"].rank(
-            ascending=False,
-            )
+        ascending=False
+    )
 
     return result
 
 
 def detect_accounting_anomalies(
-        df: pd.DataFrame,
-        anomaly_z_threshold: float | None = None,
-        tier_bins: list[float] | None = None,
-        tier_labels: list[str] | None = None,
-        ) -> pd.DataFrame:
+    df: pd.DataFrame,
+    anomaly_z_threshold: float | None = None,
+    tier_bins: list[float] | None = None,
+    tier_labels: list[str] | None = None,
+) -> pd.DataFrame:
     """
     Detect accounting anomalies using multi-layered statistical analysis.
 
@@ -2173,8 +2185,10 @@ def detect_accounting_anomalies(
         specs: dict[str, dict] = {}
         if "accounting_anomaly_score" in df.columns:
             specs["accounting_anomaly_score"] = {
-                "direction": "max", "percentile": 75, "fallback": 2.5,
-                }
+                "direction": "max",
+                "percentile": 75,
+                "fallback": 2.5,
+            }
         if specs:
             dynamic = _compute_dynamic_thresholds(df, specs)
             # Map the 75th-pctl score to a z-score proxy (normalize to ~2-3 range)
@@ -2208,7 +2222,9 @@ def detect_accounting_anomalies(
         "eps_adjustment_ratio",
         "exceptional_items_to_ebitda",
         "restructuring_intensity",
+        "merger_impact_ratio",
         "goodwill_change_rate",
+        "goodwill_impairment_frequency",
         # ── EPS adjustment features ──
         "eps_adj_ltm",
         "eps_adjustment_ratio_comp",
@@ -2234,13 +2250,12 @@ def detect_accounting_anomalies(
         "gaap_revision_1y",
         # ── Earnings quality & discontinuities ──
         "discontinued_ops_impact",
-        "earnings_quality_warning",
         "revision_quality_divergence",
         # ── Surprise & growth acceleration ──
         "eps_growth_accel",
         "eps_surprise_pct",
         "revenue_surprise_pct",
-        ]
+    ]
 
     # Feature importance weights (higher = more indicative of manipulation)
     feature_weights = {
@@ -2285,7 +2300,7 @@ def detect_accounting_anomalies(
         "eps_growth_accel": 0.7,  # Growth acceleration is often legitimate
         "eps_surprise_pct": 0.8,  # Surprises alone are weak anomaly signals
         "revenue_surprise_pct": 0.7,  # Revenue surprises — even more common legitimately
-        }
+    }
 
     available = [f for f in features if f in df.columns]
     if not available:
@@ -2294,6 +2309,9 @@ def detect_accounting_anomalies(
     result = df.copy()
     result["accounting_anomaly_score"] = 0.0
     total_weight = 0.0
+
+    # Collect new columns in a dict to avoid DataFrame fragmentation
+    new_cols: dict[str, pd.Series | np.ndarray | float] = {}
 
     # ── Layer 1: Robust z-scores (Median / MAD) ──
     for feat in available:
@@ -2311,8 +2329,8 @@ def detect_accounting_anomalies(
         else:
             robust_z = pd.Series(0.0, index=result.index)
 
-        result[f"{feat}_z_robust"] = robust_z.abs()
-        result[f"{feat}_anomaly_flag"] = robust_z.abs() > anomaly_z_threshold
+        new_cols[f"{feat}_z_robust"] = robust_z.abs()
+        new_cols[f"{feat}_anomaly_flag"] = robust_z.abs() > anomaly_z_threshold
 
         # ── Layer 2: Distribution fitting per feature ──
         weight = feature_weights.get(feat, 1.0)
@@ -2344,8 +2362,8 @@ def detect_accounting_anomalies(
             except Exception:
                 continue
 
-        result[f"{feat}_dist_name"] = best_dist_name
-        result[f"{feat}_dist_pvalue"] = best_pvalue
+        new_cols[f"{feat}_dist_name"] = best_dist_name
+        new_cols[f"{feat}_dist_pvalue"] = best_pvalue
 
         # Score: use fitted distribution's survival function for tail probability
         if best_fit_dist is not None:
@@ -2355,13 +2373,20 @@ def detect_accounting_anomalies(
             tail_prob = np.minimum(cdf_vals, 1 - cdf_vals) * 2
             # Convert to anomaly contribution: lower tail prob = higher anomaly
             feat_score = np.where(
-                    np.isnan(tail_prob), 0.0, -np.log10(np.clip(tail_prob, 1e-10, 1.0)),
-                    )
+                np.isnan(tail_prob), 0.0, -np.log10(np.clip(tail_prob, 1e-10, 1.0))
+            )
         else:
-            feat_score = result[f"{feat}_z_robust"].fillna(0).values
+            feat_score = new_cols[f"{feat}_z_robust"]
+            if isinstance(feat_score, pd.Series):
+                feat_score = feat_score.fillna(0).values
 
         result["accounting_anomaly_score"] += feat_score * weight
         total_weight += weight
+
+    # ── Batch-assign all per-feature columns at once (avoids fragmentation) ──
+    if new_cols:
+        new_df = pd.DataFrame(new_cols, index=result.index)
+        result = pd.concat([result, new_df], axis=1)
 
     # ── Layer 3: Multivariate outlier detection (Mahalanobis distance) ──
     numeric_available = [f for f in available if f in result.columns]
@@ -2399,27 +2424,26 @@ def detect_accounting_anomalies(
         sector_median = result.groupby(sector_col)["accounting_anomaly_score"].transform("median")
         sector_std = result.groupby(sector_col)["accounting_anomaly_score"].transform("std")
         result["sector_relative_anomaly"] = np.where(
-                sector_std > 0,
-                (result["accounting_anomaly_score"] - sector_median) / sector_std,
-                0.0,
-                )
+            sector_std > 0,
+            (result["accounting_anomaly_score"] - sector_median) / sector_std,
+            0.0,
+        )
     else:
         result["sector_relative_anomaly"] = 0.0
 
     # ── Layer 5: Benford's Law test (digit distribution) ──
     # Applied to gaap_adj_eps_gap_pct or eps_adjustment_ratio if available
     benford_col = next(
-            (c for c in ["gaap_adj_eps_gap_pct", "eps_adjustment_ratio"] if c in result.columns),
-            None,
-            )
+        (c for c in ["gaap_adj_eps_gap_pct", "eps_adjustment_ratio"] if c in result.columns),
+        None,
+    )
     if benford_col is not None:
         benford_data = result[benford_col].dropna().abs()
         benford_data = benford_data[benford_data > 0]
         if len(benford_data) > 50:
             leading_digits = benford_data.apply(
-                    lambda x: int(str(f"{abs(x):.10f}").lstrip("0").lstrip(".")[0])
-                    if x != 0 else 0,
-                    )
+                lambda x: int(str(f"{abs(x):.10f}").lstrip("0").lstrip(".")[0]) if x != 0 else 0
+            )
             leading_digits = leading_digits[leading_digits.between(1, 9)]
             if len(leading_digits) > 30:
                 observed = leading_digits.value_counts().reindex(range(1, 10), fill_value=0)
@@ -2437,9 +2461,7 @@ def detect_accounting_anomalies(
     # ── Normalize composite score to 0-100 ──
     max_score = result["accounting_anomaly_score"].max()
     if max_score > 0:
-        result["accounting_anomaly_score"] = (
-                                                     result["accounting_anomaly_score"] / max_score
-                                             ) * 100
+        result["accounting_anomaly_score"] = (result["accounting_anomaly_score"] / max_score) * 100
 
     # ── Anomaly feature count ──
     flag_cols = [c for c in result.columns if c.endswith("_anomaly_flag")]
@@ -2450,10 +2472,10 @@ def detect_accounting_anomalies(
 
     # ── Composite anomaly tier ──
     result["accounting_anomaly_tier"] = pd.cut(
-            result["accounting_anomaly_score"],
-            bins=tier_bins,
-            labels=tier_labels,
-            )
+        result["accounting_anomaly_score"],
+        bins=tier_bins,
+        labels=tier_labels,
+    )
 
     # ── Quality frequency flags (v3.4) ──
     freq_cols = ["goodwill_impairment_frequency", "asset_writedown_frequency", "restructuring_frequency"]
@@ -2477,7 +2499,7 @@ def analyze_reporting_lag_sentiment(df: pd.DataFrame) -> dict:
             "p_value": 1.0,
             "hypothesis_confirmed": False,
             "sample_size": 0,
-            }
+        }
 
     data = df[["reporting_lag", "eps_surprise_pct"]].dropna()
     if len(data) < 5:
@@ -2486,7 +2508,7 @@ def analyze_reporting_lag_sentiment(df: pd.DataFrame) -> dict:
             "p_value": 1.0,
             "hypothesis_confirmed": False,
             "sample_size": len(data),
-            }
+        }
 
     corr, p_val = stats.spearmanr(data["reporting_lag"], data["eps_surprise_pct"])
 
@@ -2499,8 +2521,7 @@ def analyze_reporting_lag_sentiment(df: pd.DataFrame) -> dict:
         "p_value": float(p_val),
         "hypothesis_confirmed": bool(confirmed),
         "sample_size": int(len(data)),
-        }
-
+    }
 
 def analyze_accounting_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     """Deprecated: use AccountingAnomalyProbabilityModel.analyze_dataframe().
@@ -2512,24 +2533,24 @@ def analyze_accounting_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     import warnings
 
     warnings.warn(
-            "analyze_accounting_anomalies() is deprecated. "
-            "Use AccountingAnomalyProbabilityModel().analyze_dataframe(df) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-            )
+        "analyze_accounting_anomalies() is deprecated. "
+        "Use AccountingAnomalyProbabilityModel().analyze_dataframe(df) instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     from analytics.probability_analytics import (
         AccountingAnomalyProbabilityModel,
-        )
+    )
 
     return AccountingAnomalyProbabilityModel().analyze_dataframe(df)
 
 
 def run_category_probability_analytics(
-        df: pd.DataFrame,
-        category_name: str,
-        features: list[str],
-        n_simulations: int = 10000,
-        ) -> dict:
+    df: pd.DataFrame,
+    category_name: str,
+    features: list[str],
+    n_simulations: int = 10000,
+) -> dict:
     """
     Run comprehensive probability analytics for a feature category.
 
@@ -2565,7 +2586,7 @@ def run_category_probability_analytics(
         "distribution_fits": {},
         "conditional_probs": {},
         "summary_statistics": {},
-        }
+    }
 
     # 1. Bayesian parameter estimation
     bayesian = bayesian_category_analysis(df, category_name, available_features)
@@ -2590,15 +2611,15 @@ def run_category_probability_analytics(
                 "std": float(data.std()),
                 "skewness": float(data.skew()),
                 "kurtosis": float(data.kurtosis()),
-                }
+            }
 
     return results
 
 
 def run_all_views_probability_analytics(
-        views_dict: dict[str, pd.DataFrame],
-        view_category_mapping: dict[str, str],
-        ) -> dict[str, dict]:
+    views_dict: dict[str, pd.DataFrame],
+    view_category_mapping: dict[str, str],
+) -> dict[str, dict]:
     """
     Run probability analytics for all feature views.
 
@@ -2635,11 +2656,11 @@ def run_all_views_probability_analytics(
 
 
 def export_probability_view_results(
-        df: pd.DataFrame,
-        view_name: str,
-        feature_cols: list[str],
-        identifier_cols: list[str] | None = None,
-        ) -> int | None:
+    df: pd.DataFrame,
+    view_name: str,
+    feature_cols: list[str],
+    identifier_cols: list[str] | None = None,
+) -> int | None:
     """
     Export per-feature probability metrics to analytics prob_vw_features_* tables.
 
@@ -2751,7 +2772,7 @@ def bayesian_earnings_beat_model(df: pd.DataFrame, n_total: int = 5) -> pd.DataF
         n_beats = min(n_beats, n_total)  # Cap at n_total
 
         # Compute likelihood: P(data | p) = p^k * (1-p)^(n-k)
-        likelihoods = p_grid ** n_beats * (1 - p_grid) ** (n_total - n_beats)
+        likelihoods = p_grid**n_beats * (1 - p_grid) ** (n_total - n_beats)
 
         # Unnormalized posterior
         posterior_unnorm = uniform_prior * likelihoods
@@ -2767,29 +2788,29 @@ def bayesian_earnings_beat_model(df: pd.DataFrame, n_total: int = 5) -> pd.DataF
         confidence = 1 - entropy / np.log(len(p_grid))
 
         results.append(
-                {
-                    "ticker": row.get("ticker", ""),
-                    "name": row.get("name", ""),
-                    "sector": row.get("sector", ""),
-                    "industry": row.get("industry", ""),
-                    "region": row.get("region", ""),
-                    "country": row.get("country", ""),
-                    "exchange": row.get("exchange", ""),
-                    "eps_positive_streak": n_beats,
-                    "posterior_beat_prob": prob_beat_next,
-                    "model_confidence": confidence,
-                    "map_estimate": p_grid[np.argmax(posterior)],  # Maximum a posteriori
-                    },
-                )
+            {
+                "ticker": row.get("ticker", ""),
+                "name": row.get("name", ""),
+                "sector": row.get("sector", ""),
+                "industry": row.get("industry", ""),
+                "region": row.get("region", ""),
+                "country": row.get("country", ""),
+                "exchange": row.get("exchange", ""),
+                "eps_positive_streak": n_beats,
+                "posterior_beat_prob": prob_beat_next,
+                "model_confidence": confidence,
+                "map_estimate": p_grid[np.argmax(posterior)],  # Maximum a posteriori
+            }
+        )
 
     return pd.DataFrame(results)
 
 
 def analyze_distress_distribution(
-        df: pd.DataFrame,
-        high_risk_threshold: float | None = None,
-        low_risk_threshold: float | None = None,
-        ) -> go.Figure:
+    df: pd.DataFrame,
+    high_risk_threshold: float | None = None,
+    low_risk_threshold: float | None = None,
+) -> go.Figure:
     """
     Analyze distress risk score distribution with tail risk metrics.
 
@@ -2826,12 +2847,16 @@ def analyze_distress_distribution(
         specs: dict[str, dict] = {}
         if high_risk_threshold is None:
             specs["combined_distress_risk_score_low"] = {
-                "direction": "min", "percentile": 25, "fallback": 30,
-                }
+                "direction": "min",
+                "percentile": 25,
+                "fallback": 30,
+            }
         if low_risk_threshold is None:
             specs["combined_distress_risk_score_high"] = {
-                "direction": "min", "percentile": 75, "fallback": 70,
-                }
+                "direction": "min",
+                "percentile": 75,
+                "fallback": 70,
+            }
         # Use the actual column for both specs
         if len(distress_data) >= 30:
             if high_risk_threshold is None:
@@ -2845,94 +2870,102 @@ def analyze_distress_distribution(
                 low_risk_threshold = 70
 
     fig = make_subplots(
-            rows=2,
-            cols=2,
-            subplot_titles=[
-                "Distress Risk Score Distribution",
-                "Empirical CDF",
-                "Q-Q Plot vs Normal",
-                "Tail Risk by Industry",
-                ],
-            specs=[
-                [{"type": "histogram"}, {"type": "scatter"}],
-                [{"type": "scatter"}, {"type": "bar"}],
-                ],
-            )
+        rows=2,
+        cols=2,
+        subplot_titles=[
+            "Distress Risk Score Distribution",
+            "Empirical CDF",
+            "Q-Q Plot vs Normal",
+            "Tail Risk by Industry",
+        ],
+        specs=[
+            [{"type": "histogram"}, {"type": "scatter"}],
+            [{"type": "scatter"}, {"type": "bar"}],
+        ],
+    )
 
     # Panel 1: Histogram with fitted distribution
     fig.add_trace(
-            go.Histogram(
-                    x=distress_data,
-                    nbinsx=50,
-                    name="Observed",
-                    marker_color="#3498db",
-                    opacity=0.7,
-                    histnorm="probability density",
-                    ),
-            row=1,
-            col=1,
-            )
+        go.Histogram(
+            x=distress_data,
+            nbinsx=50,
+            name="Observed",
+            marker_color="#3498db",
+            opacity=0.7,
+            histnorm="probability density",
+        ),
+        row=1,
+        col=1,
+    )
 
     # Fit normal for comparison
     mu, std = distress_data.mean(), distress_data.std()
     x_range = np.linspace(0, 100, 100)
     normal_pdf = stats.norm.pdf(x_range, mu, std)
     fig.add_trace(
-            go.Scatter(
-                    x=x_range,
-                    y=normal_pdf,
-                    mode="lines",
-                    name="Normal Fit",
-                    line=dict(color="#e74c3c", dash="dash"),
-                    ),
-            row=1,
-            col=1,
-            )
+        go.Scatter(
+            x=x_range,
+            y=normal_pdf,
+            mode="lines",
+            name="Normal Fit",
+            line=dict(color="#e74c3c", dash="dash"),
+        ),
+        row=1,
+        col=1,
+    )
 
     # Panel 2: Empirical CDF
     sorted_data = np.sort(distress_data)
     ecdf = np.arange(1, len(sorted_data) + 1) / len(sorted_data)
     fig.add_trace(
-            go.Scatter(x=sorted_data, y=ecdf, mode="lines", name="ECDF", line=dict(color="#00bc8c")),
-            row=1,
-            col=2,
-            )
+        go.Scatter(x=sorted_data, y=ecdf, mode="lines", name="ECDF", line=dict(color="#00bc8c")),
+        row=1,
+        col=2,
+    )
     # Add risk thresholds
     fig.add_vline(
-            x=high_risk_threshold, line_dash="dot", line_color="#e74c3c", row=1, col=2,
-            annotation_text=f"High Risk (<{high_risk_threshold:.0f})",
-            )
+        x=high_risk_threshold,
+        line_dash="dot",
+        line_color="#e74c3c",
+        row=1,
+        col=2,
+        annotation_text=f"High Risk (<{high_risk_threshold:.0f})",
+    )
     fig.add_vline(
-            x=low_risk_threshold, line_dash="dot", line_color="#2ecc71", row=1, col=2,
-            annotation_text=f"Low Risk (>{low_risk_threshold:.0f})",
-            )
+        x=low_risk_threshold,
+        line_dash="dot",
+        line_color="#2ecc71",
+        row=1,
+        col=2,
+        annotation_text=f"Low Risk (>{low_risk_threshold:.0f})",
+    )
 
     # Panel 3: Q-Q Plot
     theoretical_quantiles = stats.norm.ppf(np.linspace(0.01, 0.99, 100))
     empirical_quantiles = np.percentile(distress_data, np.linspace(1, 99, 100))
     fig.add_trace(
-            go.Scatter(
-                    x=theoretical_quantiles,
-                    y=empirical_quantiles,
-                    mode="markers",
-                    marker=dict(size=4, color="#9b59b6"),
-                    name="Q-Q",
-                    ),
-            row=2,
-            col=1,
-            )
+        go.Scatter(
+            x=theoretical_quantiles,
+            y=empirical_quantiles,
+            mode="markers",
+            marker=dict(size=4, color="#9b59b6"),
+            name="Q-Q",
+        ),
+        row=2,
+        col=1,
+    )
     # Reference line
     fig.add_trace(
-            go.Scatter(
-                    x=[-3, 3],
-                    y=[mu - 3 * std, mu + 3 * std],
-                    mode="lines",
-                    line=dict(dash="dash", color="white"),
-                    name="Normal Ref",
-                    ),
-            row=2,
-            col=1,
-            )
+        go.Scatter(
+            x=[-3, 3],
+            y=[mu - 3 * std, mu + 3 * std],
+            mode="lines",
+            line=dict(dash="dash", color="white"),
+            name="Normal Ref",
+        ),
+        row=2,
+        col=1,
+    )
 
     # Panel 4: Tail risk by industry (% below high_risk_threshold)
     if "industry" in df.columns:
@@ -2944,22 +2977,22 @@ def analyze_distress_distribution(
         )
 
         fig.add_trace(
-                go.Bar(
-                        x=tail_risk.values[:15],
-                        y=tail_risk.index[:15],
-                        orientation="h",
-                        marker_color="#e74c3c",
-                        name="High Risk %",
-                        ),
-                row=2,
-                col=2,
-                )
+            go.Bar(
+                x=tail_risk.values[:15],
+                y=tail_risk.index[:15],
+                orientation="h",
+                marker_color="#e74c3c",
+                name="High Risk %",
+            ),
+            row=2,
+            col=2,
+        )
 
     fig.update_layout(
-            height=800,
-            title_text="📉 Financial Distress Risk Distribution Analysis",
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-            )
+        height=800,
+        title_text="📉 Financial Distress Risk Distribution Analysis",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+    )
 
     # Compute tail risk metrics
     var_5 = np.percentile(distress_data, 5)
@@ -2968,43 +3001,43 @@ def analyze_distress_distribution(
 
     # Add annotations
     fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=1.08,
-            y=1.0,
-            text=f"μ={mu:.1f}, σ={std:.1f}",
-            showarrow=False,
-            font=dict(size=12),
-            )
+        xref="paper",
+        yref="paper",
+        x=1.08,
+        y=1.0,
+        text=f"μ={mu:.1f}, σ={std:.1f}",
+        showarrow=False,
+        font=dict(size=12),
+    )
 
     fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=1.08,
-            y=0.9,
-            text=f"VaR(5%): {var_5:.1f}",
-            showarrow=False,
-            font=dict(size=12),
-            )
+        xref="paper",
+        yref="paper",
+        x=1.08,
+        y=0.9,
+        text=f"VaR(5%): {var_5:.1f}",
+        showarrow=False,
+        font=dict(size=12),
+    )
 
     fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=1.08,
-            y=0.8,
-            text=f"VaR(1%): {var_1:.1f}",
-            showarrow=False,
-            font=dict(size=12),
-            )
+        xref="paper",
+        yref="paper",
+        x=1.08,
+        y=0.8,
+        text=f"VaR(1%): {var_1:.1f}",
+        showarrow=False,
+        font=dict(size=12),
+    )
 
     fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=1.08,
-            y=0.7,
-            text=f"High Risk (<{high_risk_threshold:.0f}): {high_risk_pct:.1f}%",
-            showarrow=False,
-            font=dict(size=12),
-            )
+        xref="paper",
+        yref="paper",
+        x=1.08,
+        y=0.7,
+        text=f"High Risk (<{high_risk_threshold:.0f}): {high_risk_pct:.1f}%",
+        showarrow=False,
+        font=dict(size=12),
+    )
 
     return fig

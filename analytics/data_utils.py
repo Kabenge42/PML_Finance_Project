@@ -53,9 +53,9 @@ class ProbExportPolicy:
 
 
 def aggregate_probability_results(
-        df: pd.DataFrame,
-        policy: ProbExportPolicy | None = None,
-        ) -> pd.DataFrame:
+    df: pd.DataFrame,
+    policy: ProbExportPolicy | None = None,
+) -> pd.DataFrame:
     """
     Apply aggregation and row-limit policy to a per-feature probability
     DataFrame before database export.
@@ -89,11 +89,7 @@ def aggregate_probability_results(
     available_metrics = [c for c in metric_cols if c in df.columns]
 
     # ── Optional: keep only top-N ISINs by mean prob_above_median ──
-    if (
-            policy.top_n_isins
-            and "isin" in df.columns
-            and "prob_above_median" in available_metrics
-    ):
+    if policy.top_n_isins and "isin" in df.columns and "prob_above_median" in available_metrics:
         isin_rank = (
             df.groupby("isin")["prob_above_median"]
             .mean()
@@ -110,16 +106,13 @@ def aggregate_probability_results(
     if aggregation == "none" and len(df) > policy.max_rows:
         aggregation = "by_feature"
         logging.info(
-                "prob export: %d rows exceeds limit %d — auto-aggregating by feature",
-                len(df),
-                policy.max_rows,
-                )
+            "prob export: %d rows exceeds limit %d — auto-aggregating by feature",
+            len(df),
+            policy.max_rows,
+        )
 
     if aggregation == "by_feature" and "feature" in df.columns:
-        agg_dict = {
-            m: ["mean", "median", "std", "min", "max", "count"]
-            for m in available_metrics
-            }
+        agg_dict = {m: ["mean", "median", "std", "min", "max", "count"] for m in available_metrics}
         result = df.groupby("feature").agg(agg_dict)
         # Flatten MultiIndex columns  →  "value_mean", "percentile_std", …
         result.columns = ["_".join(col).strip() for col in result.columns]
@@ -140,23 +133,18 @@ def aggregate_probability_results(
             "region",
             "country",
             "exchange",
-            ]:
+        ]:
             if c in df.columns:
                 id_first[c] = "first"
         result = df.groupby(group_cols).agg({**agg_dict, **id_first})
         result.columns = [
-            "_".join(col).strip() if isinstance(col, tuple) else col
-            for col in result.columns
-            ]
+            "_".join(col).strip() if isinstance(col, tuple) else col for col in result.columns
+        ]
         result = result.reset_index()
         logging.info("Aggregated by isin: %d → %d rows", len(df), len(result))
         return result
 
-    if (
-            aggregation == "by_sector"
-            and "sector" in df.columns
-            and "feature" in df.columns
-    ):
+    if aggregation == "by_sector" and "sector" in df.columns and "feature" in df.columns:
         agg_dict = {m: ["mean", "median", "std", "count"] for m in available_metrics}
         result = df.groupby(["sector", "feature"]).agg(agg_dict)
         result.columns = ["_".join(col).strip() for col in result.columns]
@@ -167,10 +155,10 @@ def aggregate_probability_results(
     # ── Fallback: apply hard LIMIT ──
     if len(df) > policy.max_rows:
         logging.warning(
-                "prob export: truncating %d rows to %d (LIMIT)",
-                len(df),
-                policy.max_rows,
-                )
+            "prob export: truncating %d rows to %d (LIMIT)",
+            len(df),
+            policy.max_rows,
+        )
         df = df.head(policy.max_rows)
 
     return df
@@ -181,6 +169,7 @@ try:
 except ImportError:  # pragma: no cover
     create_engine = None  # type: ignore
     text = None  # type: ignore
+
 
 # Default identifier columns (fallback when DB is unreachable)
 _DEFAULT_IDENTIFIER_COLS = [
@@ -215,7 +204,7 @@ _DEFAULT_IDENTIFIER_COLS = [
     "next_fy_end_date",
     "next_income_statement_report_date",
     "reference_date",
-    ]
+]
 
 # Module-level cache for identifier columns loaded from the DB
 _identifier_cols_cache: list[str] | None = None
@@ -225,9 +214,9 @@ _equities_schema_cache: dict[str, dict[str, str | int | None]] | None = None
 
 
 def load_equities_schema_from_db(
-        db_url: Optional[str] = None,
-        schema: str = "public",
-        ) -> dict[str, dict[str, str | int | None]]:
+    db_url: Optional[str] = None,
+    schema: str = "public",
+) -> dict[str, dict[str, str | int | None]]:
     """
     Load equities schema metadata from ``equities_schema_metadata`` table.
 
@@ -261,9 +250,7 @@ def load_equities_schema_from_db(
     >>> market_data_cols = [k for k, v in schema_meta.items() if v["role"] == "market_data"]
     """
     if create_engine is None or text is None:
-        logging.warning(
-                "SQLAlchemy not available, cannot load equities schema metadata",
-                )
+        logging.warning("SQLAlchemy not available, cannot load equities schema metadata")
         return {}
 
     resolved_url = db_url or os.environ.get("DB_URL")
@@ -293,34 +280,34 @@ def load_equities_schema_from_db(
                 row[3],
                 row[4],
                 row[5],
-                )
+            )
             metadata[col_alias] = {
                 "column_name": col_name,
                 "role": role,
                 "description": description,
                 "column_type": ddl_eq,
                 "column_count": col_count,
-                }
+            }
 
         logging.info(
-                "Loaded %d column definitions from %s.equities_schema_metadata",
-                len(metadata),
-                schema,
-                )
+            "Loaded %d column definitions from %s.equities_schema_metadata",
+            len(metadata),
+            schema,
+        )
         return metadata
 
     except Exception as e:
         logging.warning(
-                "Could not load equities schema metadata from DB: %s",
-                e,
-                )
+            "Could not load equities schema metadata from DB: %s",
+            e,
+        )
         return {}
 
 
 def get_equities_schema(
-        db_url: Optional[str] = None,
-        schema: str = "public",
-        ) -> dict[str, dict[str, str | int | None]]:
+    db_url: Optional[str] = None,
+    schema: str = "public",
+) -> dict[str, dict[str, str | int | None]]:
     """
     Load equities schema metadata from database, with process-level caching.
 
@@ -357,21 +344,19 @@ def get_equities_schema(
     """
     global _equities_schema_cache
     if _equities_schema_cache is None:
-        _equities_schema_cache = load_equities_schema_from_db(
-                db_url=db_url, schema=schema,
-                )
+        _equities_schema_cache = load_equities_schema_from_db(db_url=db_url, schema=schema)
         logging.info(
-                "Cached equities schema: %d columns across %d roles",
-                len(_equities_schema_cache),
-                len({v["role"] for v in _equities_schema_cache.values()}),
-                )
+            "Cached equities schema: %d columns across %d roles",
+            len(_equities_schema_cache),
+            len({v["role"] for v in _equities_schema_cache.values()}),
+        )
     return _equities_schema_cache
 
 
 def load_identifier_columns(
-        db_url: Optional[str] = None,
-        schema: str = "public",
-        ) -> list[str]:
+    db_url: Optional[str] = None,
+    schema: str = "public",
+) -> list[str]:
     """
     Load identifier column names from postgres.public.vw_identifier_columns.
 
@@ -415,18 +400,18 @@ def load_identifier_columns(
             cols = list(result.keys())
 
         logging.info(
-                "Loaded %d identifier columns from %s.vw_identifier_columns",
-                len(cols),
-                schema,
-                )
+            "Loaded %d identifier columns from %s.vw_identifier_columns",
+            len(cols),
+            schema,
+        )
         _identifier_cols_cache = cols
         return _identifier_cols_cache
 
     except Exception as e:
         logging.warning(
-                "Could not load identifier columns from DB: %s. Using defaults.",
-                e,
-                )
+            "Could not load identifier columns from DB: %s. Using defaults.",
+            e,
+        )
         _identifier_cols_cache = list(_DEFAULT_IDENTIFIER_COLS)
         return _identifier_cols_cache
 
@@ -468,7 +453,7 @@ ANALYTICS_EXPORT_TABLES: list[str] = [
     "credit_risk_analysis",
     "dividend_safety_analysis",
     "accounting_anomaly_analysis",
-    ]
+]
 
 VW_FEATURES_VIEWS = [
     "vw_features_analyst_sentiment",
@@ -488,7 +473,7 @@ VW_FEATURES_VIEWS = [
     "vw_features_temporal",
     "vw_features_unusual_items",
     "vw_features_valuation_ratios",
-    ]
+]
 
 
 def get_analytics_engine() -> "Engine":
@@ -511,10 +496,10 @@ def get_analytics_engine() -> "Engine":
 
 
 def export_to_analytics_db(
-        df: pd.DataFrame,
-        table_name: str,
-        if_exists: str = "replace",
-        ) -> int | None:
+    df: pd.DataFrame,
+    table_name: str,
+    if_exists: str = "replace",
+) -> int | None:
     """
     Export DataFrame to PostgreSQL analytics schema.
 
@@ -546,12 +531,12 @@ def export_to_analytics_db(
     logging.info("Exporting %d rows to %s.%s", len(df), schema, table_name)
 
     result = df.to_sql(
-            name=table_name,
-            con=engine,
-            schema=schema,
-            if_exists=if_exists,
-            index=False,
-            )
+        name=table_name,
+        con=engine,
+        schema=schema,
+        if_exists=if_exists,
+        index=False,
+    )
 
     logging.info("Export complete: %s.%s", schema, table_name)
     return result
@@ -573,7 +558,7 @@ class ExportConfig:
     if_exists : str, default "replace"
         Behaviour when a DB table already exists: 'fail', 'replace',
         'append', or 'delete_rows'.
-    output_dir : str, default "outputs"
+    output_dir : str, default "outputs/analytics/views"
         Base directory for file-based exports (CSV / JSON).
     orient : str, default "records"
         Pandas ``to_json`` *orient* parameter.
@@ -594,7 +579,7 @@ class ExportConfig:
 
     table_name: str = ""
     if_exists: str = "replace"
-    output_dir: str = "outputs"
+    output_dir: str = "outputs/analytics/views"
     orient: str = "records"
     json_indent: int = 2
     csv_sep: str = ","
@@ -602,11 +587,11 @@ class ExportConfig:
 
 
 def export_to_db(
-        df: pd.DataFrame,
-        config: ExportConfig | None = None,
-        table_name: str | None = None,
-        if_exists: str = "replace",
-        ) -> int | None:
+    df: pd.DataFrame,
+    config: ExportConfig | None = None,
+    table_name: str | None = None,
+    if_exists: str = "replace",
+) -> int | None:
     """
     Export DataFrame to the PostgreSQL analytics schema.
 
@@ -634,20 +619,18 @@ def export_to_db(
     cfg = config or ExportConfig()
     resolved_table = table_name or cfg.table_name
     if not resolved_table:
-        raise ValueError(
-                "table_name must be provided either directly or via ExportConfig.",
-                )
+        raise ValueError("table_name must be provided either directly or via ExportConfig.")
     resolved_if_exists = if_exists if table_name else cfg.if_exists
 
     return export_to_analytics_db(df, resolved_table, if_exists=resolved_if_exists)
 
 
 def export_to_csv(
-        df: pd.DataFrame,
-        config: ExportConfig | None = None,
-        table_name: str | None = None,
-        output_dir: str | None = None,
-        ) -> Path:
+    df: pd.DataFrame,
+    config: ExportConfig | None = None,
+    table_name: str | None = None,
+    output_dir: str | None = None,
+) -> Path:
     """
     Export DataFrame to a CSV file.
 
@@ -670,9 +653,7 @@ def export_to_csv(
     cfg = config or ExportConfig()
     resolved_name = table_name or cfg.table_name
     if not resolved_name:
-        raise ValueError(
-                "table_name must be provided either directly or via ExportConfig.",
-                )
+        raise ValueError("table_name must be provided either directly or via ExportConfig.")
     resolved_dir = Path(output_dir or cfg.output_dir)
 
     resolved_dir.mkdir(parents=True, exist_ok=True)
@@ -684,15 +665,15 @@ def export_to_csv(
 
 
 def export_to_json(
-        df: pd.DataFrame,
-        config: ExportConfig | None = None,
-        table_name: str | None = None,
-        output_dir: str | None = None,
-        ) -> Path:
+    df: pd.DataFrame,
+    config: ExportConfig | None = None,
+    table_name: str | None = None,
+    output_dir: str | None = None,
+) -> Path:
     """
     Export DataFrame to a JSON file.
 
-    The default output directory is ``outputs``.
+    The default output directory is ``outputs/analytics/views``.
 
     Parameters
     ----------
@@ -713,17 +694,13 @@ def export_to_json(
     cfg = config or ExportConfig()
     resolved_name = table_name or cfg.table_name
     if not resolved_name:
-        raise ValueError(
-                "table_name must be provided either directly or via ExportConfig.",
-                )
+        raise ValueError("table_name must be provided either directly or via ExportConfig.")
     resolved_dir = Path(output_dir or cfg.output_dir)
 
     resolved_dir.mkdir(parents=True, exist_ok=True)
     file_path = resolved_dir / f"{resolved_name}.json"
 
-    df.to_json(
-            file_path, orient=cfg.orient, indent=cfg.json_indent, default_handler=str,
-            )
+    df.to_json(file_path, orient=cfg.orient, indent=cfg.json_indent, default_handler=str)
     logging.info("Exported %d rows to %s", len(df), file_path)
     return file_path
 
@@ -739,9 +716,9 @@ def _resolve_db_url(db_url: Optional[str]) -> str:
     db_url = os.environ.get("DB_URL")
     if db_url is None:
         raise ValueError(
-                "db_url parameter not provided and DB_URL environment variable not set. "
-                "Please provide a database URL or set the DB_URL environment variable.",
-                )
+            "db_url parameter not provided and DB_URL environment variable not set. "
+            "Please provide a database URL or set the DB_URL environment variable."
+        )
     return db_url
 
 
@@ -753,9 +730,9 @@ def _resolve_schema(schema: Optional[str]) -> str:
 
 
 def _build_feature_query(
-        view_ref: str,
-        limit: Optional[int] = None,
-        ) -> text:
+    view_ref: str,
+    limit: Optional[int] = None,
+) -> text:
     """Build a parameterised SQL query for the feature materialized view."""
     base_sql = f"""
         SELECT *
@@ -767,11 +744,11 @@ def _build_feature_query(
 
 
 def load_feature_data_from_db(
-        db_url: Optional[str] = None,
-        earnings_date_filter: str = "2026-01-01",
-        limit: Optional[int] = None,
-        schema: Optional[str] = None,
-        ) -> pd.DataFrame:
+    db_url: Optional[str] = None,
+    earnings_date_filter: str = "2026-01-01",
+    limit: Optional[int] = None,
+    schema: Optional[str] = None,
+) -> pd.DataFrame:
     """
     Load feature data from PostgreSQL database materialized view.
 
@@ -809,8 +786,8 @@ def load_feature_data_from_db(
     """
     if create_engine is None:
         raise ImportError(
-                "SQLAlchemy not available. Install psycopg2-binary and SQLAlchemy to use database loading.",
-                )
+            "SQLAlchemy not available. Install psycopg2-binary and SQLAlchemy to use database loading."
+        )
 
     db_url = _resolve_db_url(db_url)
     schema = _resolve_schema(schema)
@@ -818,32 +795,32 @@ def load_feature_data_from_db(
 
     safe_db_url = db_url.split("@")[-1] if "@" in db_url else db_url
     logging.info(
-            "Loading feature data from %s (view: %s, earnings_date_filter: %s)",
-            safe_db_url,
-            view_ref,
-            earnings_date_filter,
-            )
+        "Loading feature data from %s (view: %s, earnings_date_filter: %s)",
+        safe_db_url,
+        view_ref,
+        earnings_date_filter,
+    )
 
     engine = create_engine(db_url)
     query = _build_feature_query(view_ref, limit)
 
     df = pd.read_sql(
-            query,
-            engine,
-            params={
-                "earnings_date": earnings_date_filter,
-                "lookahead_days": _EARNINGS_LOOKAHEAD_DAYS,
-                },
-            )
+        query,
+        engine,
+        params={
+            "earnings_date": earnings_date_filter,
+            "lookahead_days": _EARNINGS_LOOKAHEAD_DAYS,
+        },
+    )
 
     logging.info("Loaded %d rows from %s", len(df), view_ref)
     return df
 
 
 def _build_equities_query(
-        view_ref: str,
-        limit: Optional[int] = None,
-        ) -> text:
+    view_ref: str,
+    limit: Optional[int] = None,
+) -> text:
     """Build a parameterised SQL query for the equities materialized view."""
     base_sql = f"""
         SELECT *
@@ -855,11 +832,11 @@ def _build_equities_query(
 
 
 def load_equities_data_from_db(
-        db_url: Optional[str] = None,
-        earnings_date_filter: str = "2026-01-01",
-        limit: Optional[int] = None,
-        schema: Optional[str] = None,
-        ) -> pd.DataFrame:
+    db_url: Optional[str] = None,
+    earnings_date_filter: str = "2026-01-01",
+    limit: Optional[int] = None,
+    schema: Optional[str] = None,
+) -> pd.DataFrame:
     """
     Load equities data from PostgreSQL materialized view ``mv_equities``.
 
@@ -900,8 +877,8 @@ def load_equities_data_from_db(
     """
     if create_engine is None:
         raise ImportError(
-                "SQLAlchemy not available. Install psycopg2-binary and SQLAlchemy to use database loading.",
-                )
+            "SQLAlchemy not available. Install psycopg2-binary and SQLAlchemy to use database loading."
+        )
 
     db_url = _resolve_db_url(db_url)
     schema = _resolve_schema(schema)
@@ -909,10 +886,10 @@ def load_equities_data_from_db(
 
     safe_db_url = db_url.split("@")[-1] if "@" in db_url else db_url
     logging.info(
-            "Loading equities data from %s (view: %s)",
-            safe_db_url,
-            view_ref,
-            )
+        "Loading equities data from %s (view: %s)",
+        safe_db_url,
+        view_ref,
+    )
 
     engine = create_engine(db_url)
 
@@ -1124,7 +1101,7 @@ def compute_metric_statistics(series: pd.Series) -> Optional[dict]:
         "q75": float(data.quantile(0.75)),
         "positive_pct": float((data > 0).sum() / len(data) * 100),
         "missing_pct": float((series.isna().sum() / len(series)) * 100),
-        }
+    }
 
 
 def validate_feature_alignment(df: pd.DataFrame, categories: dict) -> dict:
@@ -1161,18 +1138,18 @@ def validate_feature_alignment(df: pd.DataFrame, categories: dict) -> dict:
             "missing_count": len(missing),
             "coverage_pct": coverage,
             "missing_features": missing[:5],  # Show first 5 missing
-            }
+        }
 
     return validation_results
 
 
 def load_all_feature_views(
-        db_url: Optional[str] = None,
-        earnings_date_filter: str = "2026-01-01",
-        schema: str = "public",
-        views: Optional[list[str]] = None,
-        return_dict: bool = False,
-        ) -> dict[str, pd.DataFrame] | pd.DataFrame:
+    db_url: Optional[str] = None,
+    earnings_date_filter: str = "2026-01-01",
+    schema: str = "public",
+    views: Optional[list[str]] = None,
+    return_dict: bool = False,
+) -> dict[str, pd.DataFrame] | pd.DataFrame:
     """
     Load all vw_features tables from postgres.public database.
 
@@ -1254,23 +1231,21 @@ def load_all_feature_views(
             # Get feature columns (exclude identifiers already present)
             feature_cols = [c for c in df_view.columns if c not in merged_df.columns]
             merge_cols = [
-                c
-                for c in identifier_cols
-                if c in df_view.columns and c in merged_df.columns
-                ]
+                c for c in identifier_cols if c in df_view.columns and c in merged_df.columns
+            ]
             if merge_cols and feature_cols:
                 merged_df = merged_df.merge(
-                        df_view[merge_cols + feature_cols], on=merge_cols, how="outer",
-                        )
+                    df_view[merge_cols + feature_cols], on=merge_cols, how="outer"
+                )
 
     return merged_df if merged_df is not None else pd.DataFrame()
 
 
 def get_view_category_mapping(
-        db_url: Optional[str] = None,
-        schema: str = "public",
-        use_db: bool = True,
-        ) -> dict[str, dict[str, str | list[str]]]:
+    db_url: Optional[str] = None,
+    schema: str = "public",
+    use_db: bool = True,
+) -> dict[str, dict[str, str | list[str]]]:
     """
     Return mapping of view names to feature categories and their feature columns.
 
@@ -1299,17 +1274,17 @@ def get_view_category_mapping(
             return _load_view_category_mapping_from_db(db_url, schema)
         except Exception as e:
             logging.warning(
-                    "Could not load view category mapping from DB: %s. Using fallback.",
-                    e,
-                    )
+                "Could not load view category mapping from DB: %s. Using fallback.",
+                e,
+            )
 
     return _get_fallback_view_category_mapping()
 
 
 def _load_view_category_mapping_from_db(
-        db_url: Optional[str] = None,
-        schema: str = "public",
-        ) -> dict[str, dict[str, str | list[str]]]:
+    db_url: Optional[str] = None,
+    schema: str = "public",
+) -> dict[str, dict[str, str | list[str]]]:
     """
     Build the view→category mapping by introspecting the actual DB views.
 
@@ -1379,7 +1354,7 @@ def _load_view_category_mapping_from_db(
         "temporal": "Temporal Features",
         "unusual_items": "Unusual Items",
         "valuation_ratios": "Valuation Ratios",
-        }
+    }
 
     mapping: dict[str, dict[str, str | list[str]]] = {}
     for view_name, columns in view_columns.items():
@@ -1390,13 +1365,13 @@ def _load_view_category_mapping_from_db(
         mapping[view_name] = {
             "category": category,
             "feature_cols": feature_cols,
-            }
+        }
 
     logging.info(
-            "Loaded view category mapping from DB: %d views, %d total features",
-            len(mapping),
-            sum(len(v["feature_cols"]) for v in mapping.values()),
-            )
+        "Loaded view category mapping from DB: %d views, %d total features",
+        len(mapping),
+        sum(len(v["feature_cols"]) for v in mapping.values()),
+    )
     return mapping
 
 
@@ -1439,8 +1414,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "analyst_coverage_change_1y",
                 "pt_vs_price_momentum",
                 "analyst_coverage_trend",
-                ],
-            },
+            ],
+        },
         "vw_features_balance_sheet": {
             "category": "Balance Sheet",
             "feature_cols": [
@@ -1505,8 +1480,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "goodwill_to_assets_trend",
                 "impairment_risk_score",
                 "goodwill_concentration",
-                ],
-            },
+            ],
+        },
         "vw_features_cashflow": {
             "category": "Cash Flow",
             "feature_cols": [
@@ -1596,8 +1571,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "fcf_est_always_positive",
                 "fcf_est_vs_historical",
                 "fcf_est_capex_implied_ratio",
-                ],
-            },
+            ],
+        },
         "vw_features_composite_scores": {
             "category": "Composite Scores",
             "feature_cols": [
@@ -1634,8 +1609,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "net_income_yoy_quarterly",
                 "net_income_vs_5y_avg",
                 "normalized_ni_vs_5y_avg",
-                ],
-            },
+            ],
+        },
         "vw_features_cost_structure": {
             "category": "Cost Structure",
             "feature_cols": [
@@ -1685,8 +1660,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "interest_income_to_revenue",
                 "interest_expense_to_revenue",
                 "net_interest_margin_proxy",
-                ],
-            },
+            ],
+        },
         "vw_features_dividends": {
             "category": "Dividend Features",
             "feature_cols": [
@@ -1719,8 +1694,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "dividend_streak_comp",
                 "high_yield_flag",
                 "sustainable_dividend_flag",
-                ],
-            },
+            ],
+        },
         "vw_features_earnings": {
             "category": "Earnings Quality",
             "feature_cols": [
@@ -1798,8 +1773,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "gaap_revision_acceleration",
                 "gaap_positive_revision_flag",
                 "revision_quality_divergence",
-                ],
-            },
+            ],
+        },
         "vw_features_employment": {
             "category": "Employment Metrics",
             "feature_cols": [
@@ -1822,8 +1797,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "layoff_risk_flag",
                 "rapid_hiring_flag",
                 "sustainable_growth_flag",
-                ],
-            },
+            ],
+        },
         "vw_features_growth": {
             "category": "Growth Metrics",
             "feature_cols": [
@@ -1894,8 +1869,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "revenue_vs_5y_avg_ltm",
                 "revenue_fq_vs_avg",
                 "revenue_momentum",
-                ],
-            },
+            ],
+        },
         "vw_features_leverage_liquidity": {
             "category": "Leverage & Liquidity",
             "feature_cols": [
@@ -1976,8 +1951,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "wc_efficiency_score",
                 "negative_wc_flag",
                 "wc_improvement_flag_deep",
-                ],
-            },
+            ],
+        },
         "vw_features_momentum": {
             "category": "Momentum",
             "feature_cols": [
@@ -2004,8 +1979,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "price_vs_ema_250d_long",
                 "multi_year_high_flag",
                 "secular_trend_flag",
-                ],
-            },
+            ],
+        },
         "vw_features_profitability": {
             "category": "Profitability",
             "feature_cols": [
@@ -2081,8 +2056,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "gp_margin_trend",
                 "gp_positive_quarters",
                 "gp_margin_expansion",
-                ],
-            },
+            ],
+        },
         "vw_features_quality_risk": {
             "category": "Quality & Risk",
             "feature_cols": [
@@ -2119,7 +2094,6 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "restructuring_intensity",
                 "exceptional_items_frequency",
                 "merger_impact_ratio",
-
                 "asset_sale_boost",
                 "accounting_quality_score",
                 # calc_quality_features_comprehensive
@@ -2134,8 +2108,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "exceptional_items_to_ebitda_comp",
                 "quality_issues_count_5y",
                 "accounting_quality_score_comp",
-                ],
-            },
+            ],
+        },
         "vw_features_technical_analysis": {
             "category": "Technical Analysis",
             "feature_cols": [
@@ -2151,8 +2125,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "low_volume_flag",
                 "volatility_compression",
                 "volatility_term_structure",
-                ],
-            },
+            ],
+        },
         "vw_features_temporal": {
             "category": "Temporal Features",
             "feature_cols": [
@@ -2174,8 +2148,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "post_earnings_window",
                 "reporting_freshness_score",
                 "fiscal_quarter_progress",
-                ],
-            },
+            ],
+        },
         "vw_features_unusual_items": {
             "category": "Unusual Items",
             "feature_cols": [
@@ -2189,8 +2163,8 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "unusual_items_to_ebitda",
                 "has_unusual_items_flag",
                 "earnings_quality_impact",
-                ],
-            },
+            ],
+        },
         "vw_features_valuation_ratios": {
             "category": "Valuation Ratios",
             "feature_cols": [
@@ -2225,9 +2199,9 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "p_b_momentum_yoy",
                 "valuation_compression",
                 "forward_pe_premium",
-                ],
-            },
-        }
+            ],
+        },
+    }
 
 
 def get_view_category_labels() -> dict[str, str]:
@@ -2239,9 +2213,7 @@ def get_view_category_labels() -> dict[str, str]:
     dict[str, str]
         Mapping from view name to category label string
     """
-    return {
-        view: info["category"] for view, info in get_view_category_mapping().items()
-        }
+    return {view: info["category"] for view, info in get_view_category_mapping().items()}
 
 
 def get_view_feature_cols(view_name: str) -> list[str]:
@@ -2268,9 +2240,9 @@ def get_view_feature_cols(view_name: str) -> list[str]:
 
 
 def export_view_analytics_results(
-        analytics_results: dict[str, dict],
-        output_schema: str = "analytics",
-        ) -> dict[str, int]:
+    analytics_results: dict[str, dict],
+    output_schema: str = "analytics",
+) -> dict[str, int]:
     """
     Export view-based analytics results to database.
 
@@ -2333,9 +2305,9 @@ def export_view_analytics_results(
                     elif isinstance(value, tuple):
                         # Convert tuples with numpy types (like params)
                         clean_fits[feature][key] = tuple(
-                                float(v) if isinstance(v, (np.integer, np.floating)) else v
-                                for v in value,
-                                )
+                            float(v) if isinstance(v, (np.integer, np.floating)) else v
+                            for v in value
+                        )
                     else:
                         clean_fits[feature][key] = value
 
@@ -2377,8 +2349,8 @@ def safe_get_column(df: pd.DataFrame, *column_names: str, default=None):
 
 
 def load_feature_categories_from_db(
-        connection_string: Optional[str] = None,
-        ) -> dict[str, list[str]]:
+    connection_string: Optional[str] = None,
+) -> dict[str, list[str]]:
     """
     Load feature categories from the calculated_features_registry table.
 
@@ -2443,7 +2415,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "peg_ratio",
             "price_to_tangible_book",
             "tangible_book_value_ltm",
-            ],
+        ],
         "Valuation Timeseries": [
             "ev_sales_trend_1y",
             "ev_ebitda_momentum",
@@ -2457,7 +2429,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "valuation_mean_reversion",
             "valuation_compression",
             "forward_pe_premium",
-            ],
+        ],
         "Momentum & Technical": [
             "price_momentum_1m",
             "price_momentum_3m",
@@ -2471,7 +2443,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "secular_trend_flag",
             "beta_momentum",
             "volatility_regime",
-            ],
+        ],
         "Technical Analysis": [
             "ema_slope_20d",
             "ema_trend_consistency",
@@ -2482,7 +2454,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "breakout_signal",
             "volatility_compression",
             "volatility_term_structure",
-            ],
+        ],
         "Profitability": [
             "roe",
             "roa",
@@ -2499,7 +2471,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "ebitda_margin_trend",
             "margin_expansion_flag",
             "margin_stability_score",
-            ],
+        ],
         "Earnings Quality": [
             "eps_surprise_pct",
             "revenue_surprise_pct",
@@ -2513,7 +2485,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "earnings_quality_composite",
             "gaap_revision_momentum",
             "revision_quality_divergence",
-            ],
+        ],
         "EPS Trajectory": [
             "eps_qoq_growth",
             "eps_yoy_quarterly",
@@ -2524,7 +2496,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "eps_vs_5y_avg",
             "eps_trajectory_score",
             "eps_stability",
-            ],
+        ],
         "Growth Metrics": [
             "revenue_growth_yoy",
             "growth_ebitda_growth_yoy",
@@ -2534,7 +2506,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "forward_revenue_growth",
             "revenue_vs_5y_avg",
             "revenue_acceleration",
-            ],
+        ],
         "Quality & Risk": [
             "piotroski_f_score",
             "altman_z_score",  # ensure always present
@@ -2550,7 +2522,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "quick_ratio",
             "accounting_quality_score",
             "beta_stability_score",
-            ],
+        ],
         "Financial Distress": [
             "combined_distress_risk_score",
             "liquidity_stress_score",
@@ -2559,16 +2531,15 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "wc_deteriorating_flag",
             "accumulated_deficit_flag",
             "adequate_cash_buffer",
-            ],
+        ],
         "Accounting Quality": [
             "goodwill_change_rate",
             "restructuring_intensity",
             "exceptional_items_frequency",
             "merger_impact_ratio",
-
             "asset_sale_boost",
             "accounting_quality_score",
-            ],
+        ],
         "Leverage & Liquidity": [
             "debt_to_equity",
             "debt_to_assets",
@@ -2578,13 +2549,13 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "working_capital_ratio",
             "debt_deleveraging",
             "debt_to_equity_trend",
-            ],
+        ],
         "Efficiency Ratios": [
             "asset_turnover",
             "inventory_turnover",
             "receivables_days",
             "working_capital_turns",
-            ],
+        ],
         "Balance Sheet": [
             "assets_fq",
             "assets_yoy_growth",
@@ -2596,7 +2567,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "inventory_yoy_change",
             "receivables_change_yoy",
             "retained_earnings_vs_5y",
-            ],
+        ],
         "Analyst Sentiment": [
             "analyst_bullish_pct",
             "analyst_neutral_pct",
@@ -2609,7 +2580,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "analyst_rating_normalized",
             "analyst_coverage_quality",
             "eps_revision_momentum",
-            ],
+        ],
         "Price Target Dynamics": [
             "pt_momentum_1w",
             "pt_momentum_1m",
@@ -2620,7 +2591,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "analyst_coverage_change_1m",
             "analyst_coverage_change_3m",
             "analyst_coverage_trend",
-            ],
+        ],
         "Dividend Reliability": [
             "dividend_streak",
             "dividend_yield_ltm",
@@ -2632,7 +2603,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "dividend_consistency",
             "dividend_yield_vs_5y_avg",
             "sustainable_dividend_flag",
-            ],
+        ],
         "Cash Flow": [
             "cfo_to_net_income",
             "fcf_to_net_income",
@@ -2643,7 +2614,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "fcf_positive_years",
             "fcf_yield",
             "cash_flow_quality_score",
-            ],
+        ],
         "Employee Productivity": [
             "revenue_per_employee",
             "profit_per_employee",
@@ -2653,7 +2624,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "fte_growth_3y_pct",
             "workforce_stability",
             "productivity_trend",
-            ],
+        ],
         "Efficiency": [
             "asset_turnover",
             "inventory_turnover",
@@ -2661,13 +2632,13 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "working_capital_turns",
             "cost_efficiency_score",
             "wc_efficiency_score",
-            ],
+        ],
         "Composite Scores": [
             "piotroski_f_score",
             "dilution_score",
             "quality_momentum_score",
             "earnings_quality_composite",
-            ],
+        ],
         "Volatility Surface": [
             "volatility_1m",
             "volatility_3m",
@@ -2682,7 +2653,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "beta_convexity",
             "realized_vs_implied_proxy",
             "beta_short_term_shift",
-            ],
+        ],
         "Tax Rate": [
             "effective_tax_rate_ltm",
             "effective_tax_rate_fy",
@@ -2691,7 +2662,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "tax_rate_stability",
             "low_tax_flag",
             "tax_rate_trend_4q",
-            ],
+        ],
         "OpEx Temporal": [
             "opex_fq",
             "opex_ltm",
@@ -2702,12 +2673,12 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "sga_qoq_growth",
             "sga_yoy_growth",
             "operating_leverage_score",
-            ],
+        ],
         "Asset Sales": [
             "asset_sale_gain_loss_ltm",
             "asset_sale_frequency",
             "asset_sale_trend",
-            ],
+        ],
         "FCF Estimates": [
             "fcf_est_avg_fy1e",
             "fcf_est_avg_fy2e",
@@ -2716,7 +2687,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "fcf_est_avg_fy5e",
             "fcf_est_cagr_5y",
             "fcf_est_trend",
-            ],
+        ],
         "Dividend History": [
             "div_yield_2fyind",
             "div_yield_3fyind",
@@ -2724,19 +2695,19 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "div_yield_5fyind",
             "div_yield_5y_trend",
             "div_yield_stability",
-            ],
+        ],
         "Interest Income Temporal": [
             "interest_income_fq",
             "interest_income_fy",
             "interest_income_qoq_growth",
             "interest_income_yoy_growth",
             "interest_income_to_revenue_trend",
-            ],
+        ],
         "Share Dilution": [
             "shares_yoy_change_pct",
             "net_buyback_flag",
             "shrs_out_1fy",
-            ],
+        ],
         "Forward Consensus": [
             "pe_ntm",
             "pe_est_fy1",
@@ -2750,7 +2721,7 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "ebitda_forward_growth",
             "earnings_revision_divergence",
             "forward_pe_vs_sector_proxy",
-            ],
+        ],
         "Direct Reference": [
             "current_fiscal_quarter",
             "dividend_record_currency",
@@ -2777,14 +2748,14 @@ def _get_fallback_feature_categories() -> dict[str, list[str]]:
             "eps_gaap_est_avg_fy1e",
             "eps_norm_est_avg_ntm",
             "eps_norm_est_avg_fy1e",
-            ],
-        }
+        ],
+    }
 
 
 def validate_feature_registry_alignment(
-        db_url: Optional[str] = None,
-        schema: str = "public",
-        ) -> dict[str, Any]:
+    db_url: Optional[str] = None,
+    schema: str = "public",
+) -> dict[str, Any]:
     """
     Cross-validate calculated_features_registry against equities_schema_metadata.
 
@@ -2821,20 +2792,20 @@ def validate_feature_registry_alignment(
         with engine.connect() as conn:
             # All feature registry entries
             features = pd.read_sql(
-                    f"SELECT feature_key, category, source_function, primary_source_col "
-                    f"FROM {schema}.calculated_features_registry",
-                    conn,
-                    )
+                f"SELECT feature_key, category, source_function, primary_source_col "
+                f"FROM {schema}.calculated_features_registry",
+                conn,
+            )
             # All equities metadata column aliases
             eq_cols = pd.read_sql(
-                    f"SELECT column_alias FROM {schema}.equities_schema_metadata",
-                    conn,
-                    )
+                f"SELECT column_alias FROM {schema}.equities_schema_metadata",
+                conn,
+            )
             # All function metadata
             fn_meta = pd.read_sql(
-                    f"SELECT function_name FROM {schema}.feature_registry_metadata",
-                    conn,
-                    )
+                f"SELECT function_name FROM {schema}.feature_registry_metadata",
+                conn,
+            )
 
         eq_col_set = set(eq_cols["column_alias"].dropna())
         fn_set = set(fn_meta["function_name"].dropna())
@@ -2842,12 +2813,11 @@ def validate_feature_registry_alignment(
         orphan_cols = features[
             features["primary_source_col"].notna()
             & ~features["primary_source_col"].isin(eq_col_set)
-            ][["feature_key", "primary_source_col"]].to_dict("records")
+        ][["feature_key", "primary_source_col"]].to_dict("records")
 
         orphan_fns = features[
-            features["source_function"].notna()
-            & ~features["source_function"].isin(fn_set)
-            ][["feature_key", "source_function"]].to_dict("records")
+            features["source_function"].notna() & ~features["source_function"].isin(fn_set)
+        ][["feature_key", "source_function"]].to_dict("records")
 
         category_coverage = features.groupby("category").size().to_dict()
 
@@ -2856,15 +2826,15 @@ def validate_feature_registry_alignment(
             "orphan_functions": orphan_fns,
             "category_coverage": category_coverage,
             "total_features": len(features),
-            }
+        }
     except Exception as e:
         logging.warning("Feature registry validation failed: %s", e)
         return {"error": str(e)}
 
 
 def compare_registry_with_local(
-        db_categories: dict[str, list[str]], local_categories: dict[str, list[str]],
-        ) -> dict:
+    db_categories: dict[str, list[str]], local_categories: dict[str, list[str]]
+) -> dict:
     """
     Compare database registry with local/fallback categories.
 
@@ -2887,7 +2857,7 @@ def compare_registry_with_local(
         "categories_only_in_local": [],
         "features_only_in_db": {},
         "features_only_in_local": {},
-        }
+    }
 
     db_cats = set(db_categories.keys())
     local_cats = set(local_categories.keys())
@@ -2911,9 +2881,9 @@ def compare_registry_with_local(
 
 
 def validate_viz_column_coverage(
-        feature_categories: dict[str, list[str]],
-        viz_required_columns: dict[str, list[str]],
-        ) -> dict[str, list[str]]:
+    feature_categories: dict[str, list[str]],
+    viz_required_columns: dict[str, list[str]],
+) -> dict[str, list[str]]:
     """
     Cross-check visualization function column requirements against
     calculated_features_registry to surface mismatches early.

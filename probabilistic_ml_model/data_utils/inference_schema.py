@@ -654,7 +654,6 @@ def build_credit_risk_inference_data(
         dims=dims,
     )
 
-
 # =============================================================================
 # 3b. InferenceData Factory — Accounting Anomaly Detection
 # =============================================================================
@@ -1174,7 +1173,9 @@ def build_resampled_technical_inference_data(
     -------
     arviz.InferenceData, xr.Dataset, or None
     """
-    from analytics.statistical_analysis import BayesianTechnicalResampler
+    from probabilistic_ml_model.statistical_functions.statistical_analysis import (
+        BayesianTechnicalResampler,
+    )
 
     resampler = BayesianTechnicalResampler(
         prior_return_mean=prior_return_mean,

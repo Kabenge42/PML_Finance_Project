@@ -14,6 +14,7 @@ from typing import Optional
 
 import pandas as pd
 
+
 # =============================================================================
 # Dynamic threshold computation from statistical distributions
 # =============================================================================
@@ -45,7 +46,9 @@ def _compute_dynamic_thresholds(
     dict[str, float]
         Mapping of feature name -> computed threshold value.
     """
-    from analytics.statistical_analysis import run_category_probability_analytics
+    from probabilistic_ml_model.statistical_functions.statistical_analysis import (
+        run_category_probability_analytics,
+    )
 
     features = [f for f in feature_threshold_specs if f in df.columns]
     thresholds: dict[str, float] = {}
@@ -926,7 +929,7 @@ def rank_stocks_by_composite_score(
 
     if export:
         try:
-            from analytics.data_utils import export_to_analytics_db
+            from probabilistic_ml_model.data_utils import export_to_analytics_db
 
             export_cols = ["ticker", "name", "sector", "industry", "composite_score"]
             available = [c for c in export_cols if c in result.columns]

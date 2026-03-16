@@ -30,9 +30,7 @@ from analytics.visualizations._shared import (
 
 
 def create_margin_waterfall_chart(
-    df: pd.DataFrame,
-    ticker: Optional[str] = None,
-    show_median: bool = True,
+    df: pd.DataFrame, ticker: Optional[str] = None, show_median: bool = True
 ) -> go.Figure:
     """
     Waterfall chart showing revenue to net income margin breakdown.
@@ -136,7 +134,7 @@ def create_margin_waterfall_chart(
             increasing={"marker": {"color": "rgb(46, 184, 46)"}},
             decreasing={"marker": {"color": "rgb(255, 65, 54)"}},
             totals={"marker": {"color": "rgb(55, 128, 191)"}},
-        ),
+        )
     )
 
     fig.update_layout(
@@ -190,8 +188,7 @@ def create_dupont_decomposition_dashboard(df: pd.DataFrame, top_n: int = 20) -> 
         if "roa" in plot_df.columns and "net_margin_pct" in plot_df.columns:
             # Asset Turnover ≈ ROA / Net Margin
             plot_df["asset_turnover"] = plot_df["roa"] / plot_df["net_margin_pct"].replace(
-                0,
-                np.nan,
+                0, np.nan
             )
         else:
             plot_df["asset_turnover"] = 1.0
@@ -462,7 +459,7 @@ def create_profitability_quadrant(
                 else None
             ),
             name="Stocks",
-        ),
+        )
     )
 
     # Add quadrant labels
@@ -508,9 +505,7 @@ def create_profitability_quadrant(
 
 
 def create_margin_trend_heatmap(
-    df: pd.DataFrame,
-    margin_col: str = "net_margin_trend_yoy",
-    group_col: str = "industry",
+    df: pd.DataFrame, margin_col: str = "net_margin_trend_yoy", group_col: str = "industry"
 ) -> go.Figure:
     """
     Heatmap of margin trends by industry.
@@ -549,7 +544,7 @@ def create_margin_trend_heatmap(
                 ("std", "std"),
                 ("count", "count"),
                 ("positive_pct", lambda x: (x > 0).sum() / len(x) * 100),
-            ],
+            ]
         )
         .reset_index()
     )
@@ -569,8 +564,7 @@ def create_margin_trend_heatmap(
             font=dict(size=16),
         )
         fig.update_layout(
-            title="Margin Trend Heatmap - Insufficient Data",
-            template=PLOTLY_TEMPLATE,
+            title="Margin Trend Heatmap - Insufficient Data", template=PLOTLY_TEMPLATE
         )
         return fig
 
@@ -602,7 +596,7 @@ def create_margin_trend_heatmap(
             hovertemplate=(
                 "<b>%{y}</b><br>" + "%{x}: %{text}<br>" + "Z-score: %{z:.2f}<extra></extra>"
             ),
-        ),
+        )
     )
 
     fig.update_layout(

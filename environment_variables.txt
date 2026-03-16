@@ -7,6 +7,8 @@
 # -----------------------------------------------------------------------------
 # Logging Configuration
 # -----------------------------------------------------------------------------
+# TensorFlow log level: 0=DEBUG, 1=INFO, 2=WARNING, 3=ERROR
+TF_CPP_MIN_LOG_LEVEL=2
 # Python logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_LEVEL=INFO
 
@@ -44,12 +46,20 @@ MODEL_VERSION=v9_11
 # RANDOM_SEED=42
 
 # -----------------------------------------------------------------------------
+# PyTensor / PyMC Configuration
+# -----------------------------------------------------------------------------
+# C backend disabled: MinGW g++ 15.x cannot link against MSVC-built Python 3.14
+# (ABI mismatch and libgcc 15 DLL issue: https://github.com/pymc-devs/pytensor/issues/1398)
+# PyTensor uses pure-Python VM instead (functionally identical, slightly slower).
+PYTENSOR_FLAGS=device=cpu,floatX=float64,cxx=
+
+# -----------------------------------------------------------------------------
 # Performance Settings
 # -----------------------------------------------------------------------------
 # Number of parallel jobs: -1=all cores, positive integer=specific count
-# N_JOBS=-1
+N_JOBS=-1
 # Maximum memory allocation for operations
-# MEMORY_LIMIT=8GB
+#MEMORY_LIMIT=8GB
 
 # -----------------------------------------------------------------------------
 # Analytics and Reporting Configuration

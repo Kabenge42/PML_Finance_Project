@@ -1,0 +1,1613 @@
+2026-03-16 11:43:04,550 - __main__ - INFO - ================================================================================
+2026-03-16 11:43:04,551 - __main__ - INFO - Expected Returns Analytics Pipeline v4.0
+2026-03-16 11:43:04,551 - __main__ - INFO - ================================================================================
+2026-03-16 11:43:04,551 - __main__ - INFO - 
+────────────────────────────────────────────────────────────────────────────────
+2026-03-16 11:43:04,551 - __main__ - INFO - ▶ Phase 1: Data Ingestion & Enrichment
+2026-03-16 11:43:04,551 - __main__ - INFO - ────────────────────────────────────────────────────────────────────────────────
+2026-03-16 11:43:05,821 - arviz - INFO - Found 'auto' as default backend, checking available backends
+2026-03-16 11:43:05,822 - arviz - INFO - Matplotlib is available, defining as default backend
+2026-03-16 11:43:05,860 - arviz.preview - INFO - arviz_base available, exposing its functions as part of arviz.preview
+2026-03-16 11:43:10,153 - arviz.preview - INFO - arviz_stats available, exposing its functions as part of arviz.preview
+2026-03-16 11:43:10,303 - arviz.preview - INFO - arviz_plots available, exposing its functions as part of arviz.preview
+2026-03-16 11:43:12,137 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-03-16 11:43:15,393 - root - INFO - Loaded 6389 rows from public.mv_equities
+2026-03-16 11:43:15,393 - __main__ - INFO - ✓ mv_equities: 6,389 stocks × 674 features
+2026-03-16 11:43:15,393 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-03-16 11:43:19,509 - root - INFO - Loaded 6389 rows from public.mv_all_stock_features
+2026-03-16 11:43:19,509 - __main__ - INFO - ✓ mv_all_stock_features: 6,389 stocks
+2026-03-16 11:43:19,629 - root - INFO - Backfill complete. Columns: 677
+2026-03-16 11:43:19,629 - root - INFO - Backfill complete. Columns: 821
+2026-03-16 11:43:19,946 - root - INFO - Loaded 24 feature categories from database
+2026-03-16 11:43:20,006 - root - INFO - Loaded 674 column definitions from public.equities_schema_metadata
+2026-03-16 11:43:20,006 - root - INFO - Cached equities schema: 674 columns across 26 roles
+2026-03-16 11:43:20,028 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-03-16 11:43:20,028 - __main__ - INFO - ✓ Historical drift enrichment: 12 derived columns added
+2026-03-16 11:43:20,076 - __main__ - INFO -   ⏱ Phase 1: Data Ingestion & Enrichment completed in 15.5s
+
+2026-03-16 11:43:20,077 - __main__ - INFO - 
+────────────────────────────────────────────────────────────────────────────────
+2026-03-16 11:43:20,077 - __main__ - INFO - ▶ Phase 2: Core PML Model Execution
+2026-03-16 11:43:20,077 - __main__ - INFO - ────────────────────────────────────────────────────────────────────────────────
+2026-03-16 11:43:20,077 - __main__ - INFO -   [7] Monte Carlo Simulation...
+2026-03-16 11:43:28,396 - probabilistic_ml_model.pipeline_runners - INFO - Monte Carlo simulation: 5540 stocks processed
+2026-03-16 11:43:28,401 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_mc for 5540 / 5540 stocks (mean=6851.23)
+2026-03-16 11:43:28,401 - __main__ - INFO -     ✓ 5,540 stocks — mean upside: 30.5%
+2026-03-16 11:43:28,401 - __main__ - INFO -   [8] Price Target Achievement...
+2026-03-16 11:43:28,424 - probabilistic_ml_model.pipeline_runners - INFO - Price target achievement: merged 10 sentiment columns from feature views
+2026-03-16 11:43:28,426 - probabilistic_ml_model.pipeline_runners - INFO - Price target: merged 4 risk columns
+2026-03-16 11:43:28,539 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-03-16 11:43:29,285 - analytics.probability_analytics - INFO - MH sampler for price target: acceptance_rate=0.252, mean_posterior=29.333
+2026-03-16 11:43:53,612 - probabilistic_ml_model.pipeline_runners - INFO - Price target achievement: 6389 stocks processed
+2026-03-16 11:43:53,634 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_prob_weighted for 6389 / 6389 stocks (mean=5632.41)
+2026-03-16 11:43:53,637 - __main__ - INFO -     ✓ 6,389 stocks — mean P(achieve): 0.474
+2026-03-16 11:43:53,637 - __main__ - INFO -   [9] Kalman Filter...
+2026-03-16 11:43:54,423 - probabilistic_ml_model.pipeline_runners - INFO - Kalman filter: 6388 stocks processed
+2026-03-16 11:43:54,425 - __main__ - INFO -     ✓ 6,388 stocks — mean filtered upside: 22.6%
+2026-03-16 11:43:54,426 - __main__ - INFO -   [10] Earnings Beat Analysis...
+2026-03-16 11:44:00,050 - probabilistic_ml_model.pipeline_runners - INFO - Earnings beat analysis: 6389 stocks processed
+2026-03-16 11:44:01,430 - probabilistic_ml_model.pipeline_runners - INFO - EPS streak enrichment: 8 columns added
+2026-03-16 11:44:29,624 - probabilistic_ml_model.pipeline_runners - INFO - Resampled beat enrichment: 10 columns added
+2026-03-16 11:44:29,967 - __main__ - INFO -     ✓ 6,389 stocks — mean P(beat): 0.502
+2026-03-16 11:44:29,967 - __main__ - INFO -   [11] Accounting Anomaly Detection...
+2026-03-16 11:44:29,988 - probabilistic_ml_model.pipeline_runners - INFO - Accounting anomaly analysis: merged 31 columns from feature views
+2026-03-16 11:44:37,490 - analytics.probability_analytics - INFO - MH sampler for anomaly scores: acceptance_rate=0.204, threshold=36.48, mean_posterior=38.137
+2026-03-16 11:44:48,089 - analytics.probability_analytics - INFO - Anomaly MCMC converged: R̂=1.0000
+2026-03-16 11:44:48,089 - analytics.probability_analytics - INFO - AccountingAnomalyProbabilityModel: severity computed for 6389 stocks, 747 multi-flag alerts, mean conditional P(anomaly)=0.333
+2026-03-16 11:44:56,720 - probabilistic_ml_model.pipeline_runners - INFO - MCMC anomaly posterior: location=37.026
+2026-03-16 11:44:56,720 - probabilistic_ml_model.pipeline_runners - INFO - Accounting anomaly analysis: 6389 stocks processed
+2026-03-16 11:44:56,724 - __main__ - INFO -     ✓ 6,389 stocks analyzed
+2026-03-16 11:44:56,724 - __main__ - INFO -   [12] Credit Risk Analysis...
+2026-03-16 11:44:56,749 - probabilistic_ml_model.pipeline_runners - INFO - Credit risk analysis: merged 43 risk columns from feature views
+2026-03-16 11:45:04,645 - analytics.probability_analytics - INFO - Sector-adjusted distress: 3563 / 6389 stocks flagged (vs 1411 with global threshold)
+2026-03-16 11:45:04,724 - probabilistic_ml_model.pipeline_runners - INFO - Hierarchical MCMC credit risk: 49 sectors enriched
+2026-03-16 11:45:05,045 - probabilistic_ml_model.pipeline_runners - INFO - Ruin probability enrichment: 7 columns added
+2026-03-16 11:45:05,045 - probabilistic_ml_model.pipeline_runners - INFO - Credit risk analysis: 6389 stocks processed
+2026-03-16 11:45:05,048 - __main__ - INFO -     ✓ 6,389 stocks — credit risk assessed
+2026-03-16 11:45:05,048 - __main__ - INFO -   [13] Dividend Safety Analysis...
+2026-03-16 11:45:10,901 - analytics.probability_analytics - INFO - Hierarchical sector MCMC for dividend FCF coverage: 41 sectors
+2026-03-16 11:45:10,905 - probabilistic_ml_model.pipeline_runners - INFO - Dividend safety analysis: 6389 stocks processed
+2026-03-16 11:45:10,907 - __main__ - INFO -     ✓ 6,389 stocks — dividend safety assessed
+2026-03-16 11:45:10,907 - __main__ - INFO -   ⏱ Phase 2: Core PML Model Execution completed in 110.8s
+
+2026-03-16 11:45:10,907 - __main__ - INFO - 
+────────────────────────────────────────────────────────────────────────────────
+2026-03-16 11:45:10,907 - __main__ - INFO - ▶ Phase 3: Probabilistic Linear Market Models
+2026-03-16 11:45:10,907 - __main__ - INFO - ────────────────────────────────────────────────────────────────────────────────
+2026-03-16 11:45:10,907 - __main__ - INFO -   [14] Probabilistic Linear Regression...
+2026-03-16 11:45:12,620 - pymc.sampling.mcmc - INFO - Initializing NUTS using jitter+adapt_diag...
+2026-03-16 11:45:13,502 - pymc.sampling.mcmc - INFO - Sequential sampling (2 chains in 1 job)
+2026-03-16 11:45:13,502 - pymc.sampling.mcmc - INFO - NUTS: [alpha, betas, sigma]
+2026-03-16 12:39:15,177 - __main__ - INFO - ================================================================================
+2026-03-16 12:39:15,177 - __main__ - INFO - Expected Returns Analytics Pipeline v3.6
+2026-03-16 12:39:15,177 - __main__ - INFO - ================================================================================
+2026-03-16 12:39:15,177 - __main__ - INFO - 
+2026-03-16 12:39:15,204 - __main__ - INFO - 🔧 Numba: True, Joblib: True, ArviZ: True
+2026-03-16 12:39:15,204 - __main__ - INFO -    n_jobs=-1, max_features/cat=100, caching=on
+2026-03-16 12:39:15,204 - __main__ - INFO - 
+2026-03-16 12:39:15,204 - __main__ - INFO - 📦 Step 1: Loading feature data (v3.6: equities MV + feature views + all stock features MV)...
+2026-03-16 12:39:15,204 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:39:15,204 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-03-16 12:39:17,820 - root - INFO - Loaded 6388 rows from public.mv_equities
+2026-03-16 12:39:17,821 - root - INFO - Backfill complete. Columns: 677
+2026-03-16 12:39:17,850 - root - INFO - Loaded 24 feature categories from database
+2026-03-16 12:39:17,850 - __main__ - INFO - Loaded 24 feature categories (226 total features)
+2026-03-16 12:39:17,850 - __main__ - INFO - All feature categories have ≥80%% coverage
+2026-03-16 12:39:17,850 - __main__ - INFO - Loaded expected returns data: 6388 stocks × 677 features
+2026-03-16 12:39:17,850 - __main__ - INFO - ✓ Loaded mv_equities: 6,388 stocks × 677 features
+2026-03-16 12:39:17,877 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-03-16 12:39:17,877 - root - INFO - Loading view: public.vw_features_analyst_sentiment
+2026-03-16 12:39:18,390 - root - INFO - Loaded 6388 rows from vw_features_analyst_sentiment
+2026-03-16 12:39:18,390 - root - INFO - Loading view: public.vw_features_balance_sheet
+2026-03-16 12:39:18,806 - root - INFO - Loaded 6388 rows from vw_features_balance_sheet
+2026-03-16 12:39:18,806 - root - INFO - Loading view: public.vw_features_cashflow
+2026-03-16 12:39:19,349 - root - INFO - Loaded 6388 rows from vw_features_cashflow
+2026-03-16 12:39:19,349 - root - INFO - Loading view: public.vw_features_composite_scores
+2026-03-16 12:39:19,746 - root - INFO - Loaded 6388 rows from vw_features_composite_scores
+2026-03-16 12:39:19,746 - root - INFO - Loading view: public.vw_features_cost_structure
+2026-03-16 12:39:20,071 - root - INFO - Loaded 6388 rows from vw_features_cost_structure
+2026-03-16 12:39:20,071 - root - INFO - Loading view: public.vw_features_dividends
+2026-03-16 12:39:20,259 - root - INFO - Loaded 6388 rows from vw_features_dividends
+2026-03-16 12:39:20,259 - root - INFO - Loading view: public.vw_features_earnings
+2026-03-16 12:39:20,792 - root - INFO - Loaded 6388 rows from vw_features_earnings
+2026-03-16 12:39:20,792 - root - INFO - Loading view: public.vw_features_employment
+2026-03-16 12:39:20,996 - root - INFO - Loaded 6388 rows from vw_features_employment
+2026-03-16 12:39:20,996 - root - INFO - Loading view: public.vw_features_growth
+2026-03-16 12:39:21,588 - root - INFO - Loaded 6388 rows from vw_features_growth
+2026-03-16 12:39:21,588 - root - INFO - Loading view: public.vw_features_leverage_liquidity
+2026-03-16 12:39:22,139 - root - INFO - Loaded 6388 rows from vw_features_leverage_liquidity
+2026-03-16 12:39:22,139 - root - INFO - Loading view: public.vw_features_momentum
+2026-03-16 12:39:22,392 - root - INFO - Loaded 6388 rows from vw_features_momentum
+2026-03-16 12:39:22,393 - root - INFO - Loading view: public.vw_features_profitability
+2026-03-16 12:39:22,932 - root - INFO - Loaded 6388 rows from vw_features_profitability
+2026-03-16 12:39:22,933 - root - INFO - Loading view: public.vw_features_quality_risk
+2026-03-16 12:39:23,253 - root - INFO - Loaded 6388 rows from vw_features_quality_risk
+2026-03-16 12:39:23,253 - root - INFO - Loading view: public.vw_features_technical_analysis
+2026-03-16 12:39:23,410 - root - INFO - Loaded 6388 rows from vw_features_technical_analysis
+2026-03-16 12:39:23,410 - root - INFO - Loading view: public.vw_features_temporal
+2026-03-16 12:39:23,576 - root - INFO - Loaded 6388 rows from vw_features_temporal
+2026-03-16 12:39:23,576 - root - INFO - Loading view: public.vw_features_unusual_items
+2026-03-16 12:39:23,749 - root - INFO - Loaded 6388 rows from vw_features_unusual_items
+2026-03-16 12:39:23,749 - root - INFO - Loading view: public.vw_features_valuation_ratios
+2026-03-16 12:39:24,138 - root - INFO - Loaded 6388 rows from vw_features_valuation_ratios
+2026-03-16 12:39:25,298 - root - INFO - Backfill complete. Columns: 718
+2026-03-16 12:39:25,345 - __main__ - INFO - Kalman momentum filter applied to 5 columns
+2026-03-16 12:39:25,924 - __main__ - INFO - Loaded all stock features: 6388 stocks × 728 features, 17 view specs
+2026-03-16 12:39:25,924 - __main__ - INFO - ✓ Loaded feature views: 6,388 stocks × 728 features
+2026-03-16 12:39:25,924 - __main__ - INFO -   View specs loaded: 17 views
+2026-03-16 12:39:25,924 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-03-16 12:39:29,753 - root - INFO - Loaded 6388 rows from public.mv_all_stock_features
+2026-03-16 12:39:29,753 - __main__ - INFO - Loaded mv_all_stock_features: 6388 rows × 818 columns
+2026-03-16 12:39:29,753 - __main__ - INFO - ✓ Loaded mv_all_stock_features: 6,388 stocks × 818 features
+2026-03-16 12:39:29,819 - __main__ - INFO -   Schema metadata: 674 columns
+2026-03-16 12:39:29,819 - __main__ - INFO -   Feature registry: 63 functions
+2026-03-16 12:39:29,863 - __main__ - INFO -   mv_equities spec unavailable: DataFrame must contain a 'ticker' column
+2026-03-16 12:39:29,863 - __main__ - INFO - 
+2026-03-16 12:39:29,863 - __main__ - INFO - 📦 Step 1b: Pre-computing historical target drift enrichment...
+2026-03-16 12:39:29,863 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:39:29,894 - root - INFO - Loaded 674 column definitions from public.equities_schema_metadata
+2026-03-16 12:39:29,894 - root - INFO - Cached equities schema: 674 columns across 26 roles
+2026-03-16 12:39:29,894 - __main__ - INFO - Column lists derived from equities schema (46 total columns)
+2026-03-16 12:39:29,895 - __main__ - INFO - Historical price/target coverage: 40 / 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-03-16 12:39:29,912 - __main__ - INFO - Historical target drift enrichment: 12 derived columns added
+2026-03-16 12:39:29,912 - __main__ - INFO - ✓ Historical drift enrichment complete (12 derived columns)
+2026-03-16 12:39:29,912 - __main__ - INFO -   ⏱ Step 1 completed in 14.7s
+2026-03-16 12:39:29,912 - __main__ - INFO - 
+2026-03-16 12:39:29,912 - __main__ - INFO - 🎲 Step 2: Monte Carlo price target simulation (50,000 samples)...
+2026-03-16 12:39:29,912 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:39:38,533 - __main__ - INFO - Monte Carlo simulation: 5539 stocks processed
+2026-03-16 12:39:38,535 - __main__ - INFO - ✓ 5,539 stocks simulated
+2026-03-16 12:39:38,536 - __main__ - INFO -   Mean upside:  30.5%
+2026-03-16 12:39:38,536 - __main__ - INFO -   Median upside: 22.6%
+2026-03-16 12:39:38,536 - __main__ - INFO -   Positive prob (mean): 83.6%
+2026-03-16 12:39:38,537 - __main__ - INFO - Computed price_target_mc for 5539 / 5539 stocks (mean=6853.72)
+2026-03-16 12:39:38,538 - __main__ - INFO -   Monte Carlo targets (5,539 stocks): implied return=15.5%
+2026-03-16 12:39:38,675 - __main__ - INFO - Monte Carlo: computed detailed statistics for 5 / 5 columns
+2026-03-16 12:39:45,105 - __main__ - INFO - MCMC Student-t: μ=21.70 (±0.29), df=2.0
+2026-03-16 12:39:45,105 - __main__ - INFO - 
+  📐 Best-fit distribution: t (AIC=54038.1, KS p=0.000)
+2026-03-16 12:39:45,105 - __main__ - INFO - 
+  📉 VaR 1%: -29.6%  |  CVaR 5%: -22.8%
+2026-03-16 12:39:45,105 - __main__ - INFO -      Downside deviation: 16.34
+2026-03-16 12:39:45,105 - __main__ - INFO -      Gain/Loss ratio: 3.23
+2026-03-16 12:39:45,105 - __main__ - INFO - 
+  🏷️  Tiers: High-conviction=3016, Moderate=1777, Speculative=16, Avoid=745
+2026-03-16 12:39:45,105 - __main__ - INFO -   ⏱ Step 2 completed in 15.2s
+2026-03-16 12:39:45,105 - __main__ - INFO - 
+2026-03-16 12:39:45,105 - __main__ - INFO - 🎯 Step 3: Price target achievement model...
+2026-03-16 12:39:45,105 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:39:45,126 - __main__ - INFO - Price target achievement: merged 10 sentiment columns from feature views
+2026-03-16 12:39:45,129 - __main__ - INFO - Price target: merged 4 risk columns
+2026-03-16 12:39:45,972 - analytics.probability_analytics - INFO - MH sampler for price target: acceptance_rate=0.256, mean_posterior=29.393
+2026-03-16 12:40:00,451 - __main__ - INFO - Price target achievement: 6388 stocks processed
+2026-03-16 12:40:00,454 - __main__ - INFO - ✓ 6,388 stocks analyzed
+2026-03-16 12:40:00,454 - __main__ - INFO -   Mean achievement prob: 0.474
+2026-03-16 12:40:00,454 - __main__ - INFO -   Mean prob-weighted return: 7.5%
+2026-03-16 12:40:00,459 - __main__ - INFO - Computed price_target_prob_weighted for 6388 / 6388 stocks (mean=5633.28)
+2026-03-16 12:40:00,461 - __main__ - INFO -   Prob-weighted targets (6,388 stocks): implied return=5.1%
+2026-03-16 12:40:00,647 - __main__ - INFO - Price Target Achievement: computed detailed statistics for 5 / 5 columns
+2026-03-16 12:40:00,652 - __main__ - INFO -   ⏱ Step 3 completed in 15.5s
+2026-03-16 12:40:00,652 - __main__ - INFO - 
+2026-03-16 12:40:00,652 - __main__ - INFO - 📐 Step 4: Kalman-filtered price targets...
+2026-03-16 12:40:00,652 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:40:01,388 - __main__ - INFO - Kalman filter: 6387 stocks processed
+2026-03-16 12:40:01,390 - __main__ - INFO - ✓ 6,387 stocks filtered
+2026-03-16 12:40:01,391 - __main__ - INFO -   Mean filtered upside: 22.6%
+2026-03-16 12:40:01,473 - __main__ - INFO - Kalman Filter: computed detailed statistics for 3 / 3 columns
+2026-03-16 12:40:01,475 - __main__ - INFO -   ⏱ Step 4 completed in 0.8s
+2026-03-16 12:40:01,475 - __main__ - INFO - 
+2026-03-16 12:40:01,475 - __main__ - INFO - 📊 Step 5: Bayesian earnings beat analysis...
+2026-03-16 12:40:01,476 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:40:03,390 - __main__ - INFO - Earnings beat analysis: 6388 stocks processed
+2026-03-16 12:40:04,521 - __main__ - INFO - EPS streak enrichment: 8 columns added
+2026-03-16 12:41:06,654 - __main__ - INFO - Resampled beat enrichment: 12 columns added
+2026-03-16 12:41:06,972 - __main__ - INFO - ✓ 6,388 stocks analyzed
+2026-03-16 12:41:06,972 - __main__ - INFO -   Mean P(beat): 0.440
+2026-03-16 12:41:06,973 - __main__ - INFO -   Classified as 'likely_beat': 2842
+2026-03-16 12:41:06,973 - __main__ - INFO -   ⏱ Step 5 completed in 65.5s
+2026-03-16 12:41:06,973 - __main__ - INFO - 
+2026-03-16 12:41:06,973 - __main__ - INFO - 🔬 Step 5b: Accounting anomaly detection & analytics...
+2026-03-16 12:41:06,973 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:41:06,993 - __main__ - INFO - Accounting anomaly analysis: merged 32 columns from feature views
+2026-03-16 12:41:14,693 - analytics.probability_analytics - INFO - MH sampler for anomaly scores: acceptance_rate=0.201, threshold=36.14, mean_posterior=37.659
+2026-03-16 12:41:25,082 - analytics.probability_analytics - INFO - Anomaly MCMC converged: R̂=1.0000
+2026-03-16 12:41:25,082 - analytics.probability_analytics - INFO - AccountingAnomalyProbabilityModel: severity computed for 6388 stocks, 815 multi-flag alerts, mean conditional P(anomaly)=0.330
+2026-03-16 12:41:36,976 - __main__ - INFO - MCMC anomaly posterior: location=36.632
+2026-03-16 12:41:36,976 - __main__ - INFO - Accounting anomaly analysis: 6388 stocks processed
+2026-03-16 12:41:36,984 - __main__ - INFO -   Anomaly tier distribution:
+2026-03-16 12:41:36,986 - __main__ - INFO -     Clean: 1,688 (26.4%)
+2026-03-16 12:41:36,986 - __main__ - INFO -     Watch: 3,081 (48.2%)
+2026-03-16 12:41:36,986 - __main__ - INFO -     Flag: 1,478 (23.1%)
+2026-03-16 12:41:36,986 - __main__ - INFO -     Alert: 141 (2.2%)
+2026-03-16 12:41:36,989 - __main__ - INFO -   Anomaly score — mean: 37.7, median: 36.1, std: 17.6, max: 100.0
+2026-03-16 12:41:36,990 - __main__ - INFO -   Stocks with ≥1 flagged feature: 5,866, ≥10 flags: 815
+2026-03-16 12:41:36,991 - __main__ - INFO -   Per-feature anomaly flags:
+2026-03-16 12:41:36,991 - __main__ - INFO -     discontinued_ops_impact: 75 stocks flagged
+2026-03-16 12:41:36,991 - __main__ - INFO -     ebit_adjustment_pct_fy: 1,911 stocks flagged
+2026-03-16 12:41:36,991 - __main__ - INFO -     ebit_adjustment_pct_ltm: 250 stocks flagged
+2026-03-16 12:41:36,991 - __main__ - INFO -     ebitda_adjustment_pct_fy: 1,747 stocks flagged
+2026-03-16 12:41:36,991 - __main__ - INFO -     ebitda_adjustment_pct_ltm: 98 stocks flagged
+2026-03-16 12:41:36,992 - __main__ - INFO -     ebitda_adjustment_ratio: 151 stocks flagged
+2026-03-16 12:41:36,992 - __main__ - INFO -     eps_adjustment_pct: 729 stocks flagged
+2026-03-16 12:41:36,992 - __main__ - INFO -     eps_adjustment_ratio: 720 stocks flagged
+2026-03-16 12:41:36,992 - __main__ - INFO -     eps_adjustment_ratio_comp: 720 stocks flagged
+2026-03-16 12:41:36,992 - __main__ - INFO -     eps_adjustment_spread_fy: 1,824 stocks flagged
+2026-03-16 12:41:36,992 - __main__ - INFO -     eps_adjustment_spread_ltm: 1,043 stocks flagged
+2026-03-16 12:41:36,992 - __main__ - INFO -     eps_growth_accel: 374 stocks flagged
+2026-03-16 12:41:36,992 - __main__ - INFO -     eps_surprise_pct: 669 stocks flagged
+2026-03-16 12:41:36,992 - __main__ - INFO -     exceptional_items_frequency: 463 stocks flagged
+2026-03-16 12:41:36,993 - __main__ - INFO -     exceptional_items_to_ebitda: 2,977 stocks flagged
+2026-03-16 12:41:36,993 - __main__ - INFO -     forward_eps_gaap_adj_spread: 1,697 stocks flagged
+2026-03-16 12:41:36,993 - __main__ - INFO -     gaap_adj_eps_gap_pct: 1,555 stocks flagged
+2026-03-16 12:41:36,993 - __main__ - INFO -     gaap_revision_1m: 1,107 stocks flagged
+2026-03-16 12:41:36,993 - __main__ - INFO -     gaap_revision_1y: 572 stocks flagged
+2026-03-16 12:41:36,993 - __main__ - INFO -     gaap_revision_3m: 984 stocks flagged
+2026-03-16 12:41:36,993 - __main__ - INFO -     gaap_revision_6m: 807 stocks flagged
+2026-03-16 12:41:36,993 - __main__ - INFO -     gaap_revision_momentum: 1,189 stocks flagged
+2026-03-16 12:41:36,993 - __main__ - INFO -     gaap_vs_norm_revision_spread: 1,060 stocks flagged
+2026-03-16 12:41:36,994 - __main__ - INFO -     goodwill_change_rate: 1,331 stocks flagged
+2026-03-16 12:41:36,994 - __main__ - INFO -     net_income_adjustment_pct: 175 stocks flagged
+2026-03-16 12:41:36,994 - __main__ - INFO -     net_income_adjustment_ratio_fy: 2,163 stocks flagged
+2026-03-16 12:41:36,994 - __main__ - INFO -     net_income_adjustment_ratio_ltm: 843 stocks flagged
+2026-03-16 12:41:36,994 - __main__ - INFO -     restructuring_intensity: 119 stocks flagged
+2026-03-16 12:41:36,994 - __main__ - INFO -     revenue_surprise_pct: 815 stocks flagged
+2026-03-16 12:41:36,994 - __main__ - INFO -     revision_quality_divergence: 944 stocks flagged
+2026-03-16 12:41:36,995 - __main__ - INFO -   Mahalanobis distance — computed: 1,298, mean: 3.67, p95: 8.58
+2026-03-16 12:41:36,995 - __main__ - INFO -   Sector-relative outliers (|z| > 2): 232
+2026-03-16 12:41:36,996 - __main__ - INFO -   Severity score — mean: 39.89, median: 36.56, max: 100.00
+2026-03-16 12:41:36,996 - __main__ - INFO -   Conditional P(anomaly) — mean: 0.330, median: 0.306, max: 0.500
+2026-03-16 12:41:36,996 - __main__ - INFO -   Multi-flag alerts: 815
+2026-03-16 12:41:36,996 - __main__ - INFO -   Stocks in top 10% risk rank: 639
+2026-03-16 12:41:36,996 - __main__ - INFO -   Benford's Law chi² p-value: 0.0372 (⚠️ suspicious)
+2026-03-16 12:41:36,997 - __main__ - INFO -   Best-fit distributions per feature:
+2026-03-16 12:41:36,999 - __main__ - INFO -     asset_sale_boost: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,000 - __main__ - INFO -     discontinued_ops_impact: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,001 - __main__ - INFO -     ebit_adjustment_pct_fy: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,002 - __main__ - INFO -     ebit_adjustment_pct_ltm: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,002 - __main__ - INFO -     ebitda_adjustment_pct_fy: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,003 - __main__ - INFO -     ebitda_adjustment_pct_ltm: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,005 - __main__ - INFO -     ebitda_adjustment_ratio: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,006 - __main__ - INFO -     eps_adjustment_pct: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,008 - __main__ - INFO -     eps_adjustment_ratio_comp: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,009 - __main__ - INFO -     eps_adjustment_ratio: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,009 - __main__ - INFO -     eps_adjustment_spread_fy: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,010 - __main__ - INFO -     eps_adjustment_spread_ltm: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,011 - __main__ - INFO -     eps_growth_accel: student_t (mean KS p=0.076)
+2026-03-16 12:41:37,012 - __main__ - INFO -     eps_surprise_pct: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,013 - __main__ - INFO -     exceptional_items_frequency: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,014 - __main__ - INFO -     exceptional_items_to_ebitda: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,015 - __main__ - INFO -     forward_eps_gaap_adj_spread: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,015 - __main__ - INFO -     gaap_adj_eps_gap_pct: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,016 - __main__ - INFO -     gaap_revision_1m: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,017 - __main__ - INFO -     gaap_revision_1y: student_t (mean KS p=0.002)
+2026-03-16 12:41:37,017 - __main__ - INFO -     gaap_revision_3m: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,018 - __main__ - INFO -     gaap_revision_6m: student_t (mean KS p=0.001)
+2026-03-16 12:41:37,019 - __main__ - INFO -     gaap_revision_momentum: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,019 - __main__ - INFO -     gaap_vs_norm_revision_spread: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,020 - __main__ - INFO -     goodwill_change_rate: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,021 - __main__ - INFO -     net_income_adjustment_pct: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,021 - __main__ - INFO -     net_income_adjustment_ratio_fy: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,022 - __main__ - INFO -     net_income_adjustment_ratio_ltm: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,023 - __main__ - INFO -     restructuring_intensity: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,023 - __main__ - INFO -     revenue_surprise_pct: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,024 - __main__ - INFO -     revision_quality_divergence: student_t (mean KS p=0.000)
+2026-03-16 12:41:37,035 - root - INFO - Exporting 6388 rows to analytics.accounting_anomaly_analysis
+2026-03-16 12:41:42,657 - root - INFO - Export complete: analytics.accounting_anomaly_analysis
+2026-03-16 12:41:42,658 - __main__ - INFO -   ✓ Exported 6,388 rows → analytics.accounting_anomaly_analysis
+2026-03-16 12:41:42,658 - __main__ - INFO - ✓ Accounting anomaly analysis complete: 6,388 stocks
+2026-03-16 12:41:42,661 - __main__ - INFO -   ⏱ Step 5b completed in 35.7s
+2026-03-16 12:41:42,661 - __main__ - INFO - 
+2026-03-16 12:41:42,661 - __main__ - INFO - 🛡️ Step 5c: Credit risk & dividend safety analysis...
+2026-03-16 12:41:42,661 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:41:42,698 - __main__ - INFO - Credit risk analysis: merged 49 risk columns from feature views
+2026-03-16 12:41:58,794 - analytics.probability_analytics - INFO - Sector-adjusted distress: 3563 / 6388 stocks flagged (vs 1411 with global threshold)
+2026-03-16 12:41:58,917 - __main__ - INFO - Hierarchical MCMC credit risk: 49 sectors enriched
+2026-03-16 12:41:59,455 - __main__ - INFO - Ruin probability enrichment: 7 columns added
+2026-03-16 12:41:59,455 - __main__ - INFO - Credit risk analysis: 6388 stocks processed
+2026-03-16 12:41:59,463 - __main__ - INFO - ✓ Credit risk: 6,388 stocks, 3710 high/distressed
+2026-03-16 12:41:59,464 - __main__ - INFO -   Mean ruin probability: 0.048
+2026-03-16 12:41:59,479 - __main__ - INFO -   Merged 820 anomaly columns into credit risk DataFrame
+2026-03-16 12:42:09,965 - analytics.probability_analytics - INFO - Hierarchical sector MCMC for dividend FCF coverage: 41 sectors
+2026-03-16 12:42:09,976 - __main__ - INFO - Dividend safety analysis: 6388 stocks processed
+2026-03-16 12:42:09,980 - __main__ - INFO - ✓ Dividend safety: 6,388 stocks, 3188 at risk
+2026-03-16 12:42:09,980 - __main__ - INFO -   ⏱ Step 5c completed in 27.3s
+2026-03-16 12:42:09,980 - __main__ - INFO - 
+2026-03-16 12:42:09,980 - __main__ - INFO - 🔍 Step 5d: Running stock screening strategies...
+2026-03-16 12:42:09,980 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:42:10,072 - __main__ - INFO -   ✓ Productivity frontier scores added
+2026-03-16 12:42:10,075 - __main__ - INFO -    Reporting lag sentiment: corr=-0.035, p=0.0405, hypothesis=marginally significant (p < 0.10)
+2026-03-16 12:42:10,075 - __main__ - INFO - Quality screen: 0 stocks
+2026-03-16 12:42:10,075 - __main__ - WARNING - Quality screen returned 0 stocks — applying adaptive fallback.
+2026-03-16 12:42:10,075 - __main__ - WARNING - Adaptive screening: quality returned 0 stocks (0.0% < 1.0% threshold). Applying percentile-based fallback (top 10%).
+2026-03-16 12:42:10,085 - __main__ - INFO - Adaptive screening: quality fallback using piotroski_f_score >= 6.00 → 1164 stocks
+2026-03-16 12:42:11,892 - __main__ - INFO - Earnings quality screen: 1200 stocks
+2026-03-16 12:42:14,037 - __main__ - INFO - Value screen: 1044 stocks
+2026-03-16 12:42:16,103 - __main__ - INFO - Growth screen: 2796 stocks
+2026-03-16 12:42:17,883 - __main__ - INFO - GARP screen: 913 stocks
+2026-03-16 12:42:19,811 - __main__ - INFO - Dividend screen: 13 stocks
+2026-03-16 12:42:19,811 - __main__ - WARNING - Dividend screen returned only 13 stocks (0.2% of universe) — applying adaptive fallback.
+2026-03-16 12:42:19,811 - __main__ - WARNING - Adaptive screening: dividend returned 13 stocks (0.2% < 1.0% threshold). Applying percentile-based fallback (top 15%).
+2026-03-16 12:42:19,821 - __main__ - INFO - Adaptive screening: dividend fallback using piotroski_f_score >= 6.00 → 1164 stocks
+2026-03-16 12:42:21,000 - __main__ - INFO - Financial health screen: 1403 stocks
+2026-03-16 12:42:21,830 - __main__ - INFO - Valuation reversion screen: 464 stocks
+2026-03-16 12:42:23,820 - __main__ - INFO - Integrity growth screen: 1313 stocks
+2026-03-16 12:42:25,013 - __main__ - INFO - High-yield safe dividend screen: 41 stocks
+2026-03-16 12:42:25,035 - __main__ - INFO - Sector-relative ranking: 6388 stocks
+2026-03-16 12:42:27,282 - __main__ - INFO - Low-volatility quality screen: 2202 stocks
+2026-03-16 12:42:28,288 - __main__ - INFO - FCF compounders screen: 983 stocks
+2026-03-16 12:42:28,305 - __main__ - INFO - Total return leaders screen: 6388 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ quality: 1,164 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ earnings_quality: 1,200 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ value: 1,044 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ growth: 2,796 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ garp: 913 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ dividend: 1,164 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ healthy: 1,403 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ valuation_reversion: 464 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ integrity_growth: 1,313 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ high_yield_safe: 41 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ sector_relative: 6,388 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ low_vol_quality: 2,202 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ fcf_compounders: 983 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ✓ total_return_leaders: 6,388 stocks
+2026-03-16 12:42:28,306 - __main__ - INFO -   ⏱ Step 5d completed in 18.3s
+2026-03-16 12:42:28,306 - __main__ - INFO - 
+2026-03-16 12:42:28,306 - __main__ - INFO - 🧪 Step 5e: Resampled Bayesian posterior returns...
+2026-03-16 12:42:28,306 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:42:45,432 - __main__ - INFO - Resampled posterior returns: 6388 stocks, mean posterior=-1.25%
+2026-03-16 12:42:45,718 - __main__ - INFO -   ✓ Resampled posteriors: 6,388 stocks
+2026-03-16 12:42:45,719 - __main__ - INFO -   Mean posterior return: -1.25%
+2026-03-16 12:42:45,719 - __main__ - INFO -   ⏱ Step 5e completed in 17.4s
+2026-03-16 12:42:45,719 - __main__ - INFO - 
+2026-03-16 12:42:45,719 - __main__ - INFO - 🔗 Step 6: Cross-model alignment...
+2026-03-16 12:42:45,720 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:42:45,746 - __main__ - INFO - Tri-model alignment: 5539 stocks, 4667 strong bullish
+2026-03-16 12:42:45,753 - __main__ - INFO - Strong consensus picks: 50 stocks
+2026-03-16 12:42:45,765 - __main__ - INFO - Quad-model alignment: 5539 stocks, full consensus (4/4): 1546
+2026-03-16 12:42:45,766 - __main__ - INFO -   Tri-model coverage: 5,539 stocks
+2026-03-16 12:42:45,767 - __main__ - INFO -     Strong Bearish (0/3): 572
+2026-03-16 12:42:45,768 - __main__ - INFO -     Bearish (1/3): 130
+2026-03-16 12:42:45,769 - __main__ - INFO -     Bullish (2/3): 170
+2026-03-16 12:42:45,770 - __main__ - INFO -     Strong Bullish (3/3): 4667
+2026-03-16 12:42:45,770 - __main__ - INFO -   Strong consensus picks: 50
+2026-03-16 12:42:45,771 - __main__ - INFO -   Quad-model (4/4): 1546 stocks
+2026-03-16 12:42:45,800 - __main__ - INFO -   MC ↔ Kalman correlation: 0.951
+2026-03-16 12:42:45,801 - __main__ - INFO -   ⏱ Step 6 completed in 0.1s
+2026-03-16 12:42:45,801 - __main__ - INFO - 
+2026-03-16 12:42:45,801 - __main__ - INFO - 📋 Step 7: Building expected_returns_summary (4-model merge)...
+2026-03-16 12:42:45,801 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:42:45,835 - __main__ - INFO - Enriched expected_returns_summary with 43 anomaly columns
+2026-03-16 12:42:45,845 - __main__ - INFO - Enriched expected_returns_summary with 16 credit risk columns
+2026-03-16 12:42:45,859 - __main__ - INFO - Enriched expected_returns_summary with 10 dividend safety columns
+2026-03-16 12:42:45,904 - __main__ - INFO - Enriched expected_returns_summary with 33 columns from mv_all_stock_features
+2026-03-16 12:42:45,913 - __main__ - INFO - Expected returns summary: 5539 stocks, 1546 strong bullish (4/4)
+2026-03-16 12:42:45,914 - __main__ - INFO -   ✓ 5,539 stocks in expected_returns_summary
+2026-03-16 12:42:45,914 - __main__ - INFO -   Full consensus (4/4): 1546 stocks
+2026-03-16 12:42:45,986 - __main__ - INFO - Quality scoring: 12 High, 1712 Above Avg
+2026-03-16 12:42:45,994 - __main__ - INFO -   High-quality full consensus: 742 stocks
+2026-03-16 12:42:46,096 - __main__ - INFO - Added z-scores and percentile ranks for 3 return metrics
+2026-03-16 12:42:46,100 - __main__ - INFO -   Agreement distribution:
+2026-03-16 12:42:46,102 - __main__ - INFO -     Strong Bearish (0/4): 424
+2026-03-16 12:42:46,103 - __main__ - INFO -     Bearish (1/4): 239
+2026-03-16 12:42:46,105 - __main__ - INFO -     Neutral (2/4): 154
+2026-03-16 12:42:46,106 - __main__ - INFO -     Bullish (3/4): 3176
+2026-03-16 12:42:46,107 - __main__ - INFO -     Strong Bullish (4/4): 1546
+2026-03-16 12:42:46,302 - __main__ - INFO - Cross-model diagnostics: tail agreement=94.6%, mean dispersion=9.21
+2026-03-16 12:42:46,306 - __main__ - INFO - 
+  🔬 Cross-Model Diagnostics:
+2026-03-16 12:42:46,306 - __main__ - INFO -      Direction agreement: 94.6%
+2026-03-16 12:42:46,306 - __main__ - INFO -      Mean inter-model dispersion: 9.21
+2026-03-16 12:42:46,307 - __main__ - INFO -      Kendall τ (expected_upside_pct ↔ filtered_upside): 0.917 (p=0.0000)
+2026-03-16 12:42:46,307 - __main__ - INFO -      Kendall τ (expected_upside_pct ↔ expected_return_prob_weighted): 0.501 (p=0.0000)
+2026-03-16 12:42:46,307 - __main__ - INFO -      Kendall τ (filtered_upside ↔ expected_return_prob_weighted): 0.529 (p=0.0000)
+2026-03-16 12:42:46,477 - __main__ - INFO - 
+  🏢 Sector Analytics: 59 sectors
+2026-03-16 12:42:46,711 - __main__ - INFO -    Hierarchical MCMC: 52 sector posteriors (Bayesian shrinkage)
+2026-03-16 12:42:46,711 - __main__ - INFO -      Technology Hardware Storage and Peripherals: raw=26.5% → posterior=27.1% (shrinkage=0.86)
+2026-03-16 12:42:46,711 - __main__ - INFO -      Consumer Staples Distribution and Retail: raw=24.4% → posterior=25.0% (shrinkage=0.91)
+2026-03-16 12:42:46,711 - __main__ - INFO -      Household Durables: raw=34.3% → posterior=33.9% (shrinkage=0.91)
+2026-03-16 12:42:46,711 - __main__ - INFO -      Metals and Mining: raw=29.5% → posterior=29.5% (shrinkage=0.97)
+2026-03-16 12:42:46,711 - __main__ - INFO -      Gas Utilities: raw=5.4% → posterior=11.0% (shrinkage=0.78)
+2026-03-16 12:42:48,549 - analytics.statistical_analysis - INFO - Multi-level hierarchical MCMC: 9 levels, 304 total groups for 'expected_upside_pct'
+2026-03-16 12:42:48,551 - __main__ - INFO -    Multi-level MCMC: 9 category levels, 304 group posteriors
+2026-03-16 12:42:48,553 - __main__ - INFO -      [region] Europe: raw=38.3% → posterior=38.2% (n=1569, shrink=0.99)
+2026-03-16 12:42:48,554 - __main__ - INFO -      [region] United States and Canada: raw=36.2% → posterior=36.1% (n=1714, shrink=0.99)
+2026-03-16 12:42:48,554 - __main__ - INFO -      [region] Latin America and Caribbean: raw=35.9% → posterior=35.7% (n=229, shrink=0.96)
+2026-03-16 12:42:48,554 - __main__ - INFO -      [region] Africa / Middle East: raw=30.4% → posterior=30.4% (n=280, shrink=0.97)
+2026-03-16 12:42:48,554 - __main__ - INFO -      [region] Asia / Pacific: raw=17.3% → posterior=17.4% (n=1747, shrink=0.99)
+2026-03-16 12:42:48,556 - __main__ - INFO -      [country] LU: raw=68.9% → posterior=58.9% (n=25, shrink=0.68)
+2026-03-16 12:42:48,556 - __main__ - INFO -      [country] GB: raw=50.7% → posterior=50.3% (n=292, shrink=0.97)
+2026-03-16 12:42:48,556 - __main__ - INFO -      [country] DE: raw=47.0% → posterior=46.5% (n=172, shrink=0.95)
+2026-03-16 12:42:48,556 - __main__ - INFO -      [country] IE: raw=46.0% → posterior=44.1% (n=32, shrink=0.76)
+2026-03-16 12:42:48,556 - __main__ - INFO -      [country] NL: raw=45.0% → posterior=44.0% (n=56, shrink=0.85)
+2026-03-16 12:42:48,556 - __main__ - INFO -      [country] MX: raw=43.1% → posterior=41.8% (n=46, shrink=0.82)
+2026-03-16 12:42:48,556 - __main__ - INFO -      [country] SE: raw=41.2% → posterior=41.0% (n=166, shrink=0.94)
+2026-03-16 12:42:48,556 - __main__ - INFO -      [country] MT: raw=114.1% → posterior=40.4% (n=3, shrink=0.03)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] FR: raw=40.6% → posterior=40.4% (n=161, shrink=0.94)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] IT: raw=40.3% → posterior=40.2% (n=104, shrink=0.91)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] VG: raw=149.7% → posterior=39.0% (n=3, shrink=0.03)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] JE: raw=40.4% → posterior=38.3% (n=3, shrink=0.03)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] AE: raw=39.9% → posterior=37.8% (n=36, shrink=0.78)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] BE: raw=37.5% → posterior=37.7% (n=41, shrink=0.80)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] US: raw=37.5% → posterior=37.5% (n=1498, shrink=0.99)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] SI: raw=-4.3% → posterior=37.0% (n=3, shrink=0.03)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] HU: raw=8.9% → posterior=36.7% (n=4, shrink=0.05)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] BR: raw=36.4% → posterior=36.4% (n=124, shrink=0.93)
+2026-03-16 12:42:48,557 - __main__ - INFO -      [country] KY: raw=45.6% → posterior=36.2% (n=4, shrink=0.05)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] SA: raw=36.6% → posterior=35.9% (n=75, shrink=0.88)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] CY: raw=6.4% → posterior=35.8% (n=5, shrink=0.08)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] TR: raw=36.8% → posterior=35.6% (n=44, shrink=0.81)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] ID: raw=41.6% → posterior=35.2% (n=29, shrink=0.74)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] CZ: raw=4.2% → posterior=34.6% (n=6, shrink=0.11)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] PE: raw=8.1% → posterior=34.3% (n=4, shrink=0.05)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] HR: raw=7.3% → posterior=33.9% (n=7, shrink=0.14)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] DK: raw=32.3% → posterior=33.6% (n=36, shrink=0.78)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] CO: raw=15.8% → posterior=33.6% (n=6, shrink=0.11)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] ZA: raw=34.2% → posterior=33.3% (n=35, shrink=0.78)
+2026-03-16 12:42:48,558 - __main__ - INFO -      [country] PT: raw=14.0% → posterior=33.1% (n=9, shrink=0.21)
+2026-03-16 12:42:48,559 - __main__ - INFO -      [country] QA: raw=36.0% → posterior=32.2% (n=12, shrink=0.32)
+2026-03-16 12:42:48,559 - __main__ - INFO -      [country] ES: raw=30.0% → posterior=31.3% (n=52, shrink=0.84)
+2026-03-16 12:42:48,559 - __main__ - INFO -      [country] RO: raw=-15.4% → posterior=30.7% (n=7, shrink=0.14)
+2026-03-16 12:42:48,559 - __main__ - INFO -      [country] MA: raw=36.4% → posterior=30.6% (n=3, shrink=0.03)
+2026-03-16 12:42:48,559 - __main__ - INFO -      [country] CH: raw=29.1% → posterior=29.8% (n=114, shrink=0.92)
+2026-03-16 12:42:48,560 - __main__ - INFO -      [country] IL: raw=29.3% → posterior=29.7% (n=24, shrink=0.66)
+2026-03-16 12:42:48,560 - __main__ - INFO -      [country] GR: raw=22.1% → posterior=29.0% (n=20, shrink=0.57)
+2026-03-16 12:42:48,560 - __main__ - INFO -      [country] KW: raw=12.4% → posterior=28.4% (n=6, shrink=0.11)
+2026-03-16 12:42:48,560 - __main__ - INFO -      [country] CL: raw=19.9% → posterior=28.0% (n=17, shrink=0.49)
+2026-03-16 12:42:48,560 - __main__ - INFO -      [country] CA: raw=27.2% → posterior=27.6% (n=216, shrink=0.96)
+2026-03-16 12:42:48,560 - __main__ - INFO -      [country] BM: raw=19.6% → posterior=26.9% (n=19, shrink=0.55)
+2026-03-16 12:42:48,560 - __main__ - INFO -      [country] HK: raw=28.0% → posterior=26.5% (n=60, shrink=0.86)
+2026-03-16 12:42:48,560 - __main__ - INFO -      [country] SG: raw=31.5% → posterior=26.1% (n=22, shrink=0.62)
+2026-03-16 12:42:48,561 - __main__ - INFO -      [country] FI: raw=24.2% → posterior=25.8% (n=80, shrink=0.89)
+2026-03-16 12:42:48,561 - __main__ - INFO -      [country] EG: raw=20.8% → posterior=25.4% (n=18, shrink=0.52)
+2026-03-16 12:42:48,562 - __main__ - INFO -      [country] AU: raw=25.9% → posterior=24.6% (n=56, shrink=0.85)
+2026-03-16 12:42:48,562 - __main__ - INFO -      [country] AT: raw=19.6% → posterior=24.5% (n=29, shrink=0.74)
+2026-03-16 12:42:48,562 - __main__ - INFO -      [country] PL: raw=19.8% → posterior=23.0% (n=48, shrink=0.83)
+2026-03-16 12:42:48,562 - __main__ - INFO -      [country] IN: raw=22.3% → posterior=22.1% (n=204, shrink=0.95)
+2026-03-16 12:42:48,562 - __main__ - INFO -      [country] OM: raw=-5.3% → posterior=20.1% (n=11, shrink=0.29)
+2026-03-16 12:42:48,564 - __main__ - INFO -      [trading_country] GB: raw=52.0% → posterior=51.6% (n=298, shrink=0.97)
+2026-03-16 12:42:48,565 - __main__ - INFO -      [trading_country] DE: raw=49.9% → posterior=49.3% (n=181, shrink=0.95)
+2026-03-16 12:42:48,565 - __main__ - INFO -      [trading_country] SE: raw=41.9% → posterior=41.7% (n=169, shrink=0.94)
+2026-03-16 12:42:48,565 - __main__ - INFO -      [trading_country] MX: raw=42.9% → posterior=41.5% (n=42, shrink=0.81)
+2026-03-16 12:42:48,565 - __main__ - INFO -      [trading_country] BE: raw=40.7% → posterior=40.2% (n=38, shrink=0.79)
+2026-03-16 12:42:48,565 - __main__ - INFO -      [trading_country] FR: raw=39.9% → posterior=39.8% (n=161, shrink=0.94)
+2026-03-16 12:42:48,566 - __main__ - INFO -      [trading_country] US: raw=38.6% → posterior=38.6% (n=1688, shrink=0.99)
+2026-03-16 12:42:48,566 - __main__ - INFO -      [trading_country] IT: raw=38.6% → posterior=38.6% (n=102, shrink=0.91)
+2026-03-16 12:42:48,566 - __main__ - INFO -      [trading_country] IE: raw=26.2% → posterior=37.6% (n=4, shrink=0.05)
+2026-03-16 12:42:48,566 - __main__ - INFO -      [trading_country] SI: raw=-4.3% → posterior=37.0% (n=3, shrink=0.03)
+2026-03-16 12:42:48,566 - __main__ - INFO -      [trading_country] HU: raw=-7.3% → posterior=36.9% (n=3, shrink=0.03)
+2026-03-16 12:42:48,566 - __main__ - INFO -      [trading_country] AE: raw=38.7% → posterior=36.8% (n=33, shrink=0.77)
+2026-03-16 12:42:48,567 - __main__ - INFO -      [trading_country] BR: raw=36.2% → posterior=36.2% (n=120, shrink=0.92)
+2026-03-16 12:42:48,567 - __main__ - INFO -      [trading_country] TR: raw=37.2% → posterior=35.9% (n=43, shrink=0.81)
+2026-03-16 12:42:48,567 - __main__ - INFO -      [trading_country] SA: raw=36.6% → posterior=35.9% (n=75, shrink=0.88)
+2026-03-16 12:42:48,567 - __main__ - INFO -      [trading_country] ID: raw=41.6% → posterior=35.2% (n=29, shrink=0.74)
+2026-03-16 12:42:48,567 - __main__ - INFO -      [trading_country] CZ: raw=-1.7% → posterior=35.2% (n=5, shrink=0.08)
+2026-03-16 12:42:48,567 - __main__ - INFO -      [trading_country] PE: raw=10.8% → posterior=35.0% (n=3, shrink=0.03)
+2026-03-16 12:42:48,567 - __main__ - INFO -      [trading_country] NL: raw=34.2% → posterior=34.9% (n=50, shrink=0.83)
+2026-03-16 12:42:48,567 - __main__ - INFO -      [trading_country] HR: raw=7.3% → posterior=33.9% (n=7, shrink=0.14)
+2026-03-16 12:42:48,567 - __main__ - INFO -      [trading_country] DK: raw=32.3% → posterior=33.7% (n=34, shrink=0.77)
+2026-03-16 12:42:48,568 - __main__ - INFO -      [trading_country] CO: raw=15.8% → posterior=33.6% (n=6, shrink=0.11)
+2026-03-16 12:42:48,568 - __main__ - INFO -      [trading_country] QA: raw=36.0% → posterior=32.2% (n=12, shrink=0.32)
+2026-03-16 12:42:48,568 - __main__ - INFO -      [trading_country] PT: raw=11.5% → posterior=31.6% (n=10, shrink=0.25)
+2026-03-16 12:42:48,568 - __main__ - INFO -      [trading_country] ES: raw=29.8% → posterior=31.2% (n=51, shrink=0.84)
+2026-03-16 12:42:48,568 - __main__ - INFO -      [trading_country] HK: raw=31.3% → posterior=30.6% (n=196, shrink=0.95)
+2026-03-16 12:42:48,568 - __main__ - INFO -      [trading_country] GR: raw=21.6% → posterior=30.6% (n=16, shrink=0.46)
+2026-03-16 12:42:48,569 - __main__ - INFO -      [trading_country] MA: raw=36.4% → posterior=30.6% (n=3, shrink=0.03)
+2026-03-16 12:42:48,569 - __main__ - INFO -      [trading_country] CL: raw=21.3% → posterior=29.1% (n=16, shrink=0.46)
+2026-03-16 12:42:48,569 - __main__ - INFO -      [trading_country] CA: raw=28.5% → posterior=28.9% (n=215, shrink=0.96)
+2026-03-16 12:42:48,569 - __main__ - INFO -      [trading_country] KW: raw=12.4% → posterior=28.4% (n=6, shrink=0.11)
+2026-03-16 12:42:48,569 - __main__ - INFO -      [trading_country] CH: raw=26.2% → posterior=27.3% (n=95, shrink=0.90)
+2026-03-16 12:42:48,569 - __main__ - INFO -      [trading_country] RO: raw=-13.6% → posterior=27.2% (n=9, shrink=0.21)
+2026-03-16 12:42:48,569 - __main__ - INFO -      [trading_country] ZA: raw=24.9% → posterior=26.1% (n=33, shrink=0.77)
+2026-03-16 12:42:48,570 - __main__ - INFO -      [trading_country] IL: raw=-10.8% → posterior=26.0% (n=6, shrink=0.11)
+2026-03-16 12:42:48,570 - __main__ - INFO -      [trading_country] EG: raw=20.8% → posterior=25.4% (n=18, shrink=0.52)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] FI: raw=23.8% → posterior=25.4% (n=79, shrink=0.89)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] PL: raw=19.5% → posterior=22.5% (n=52, shrink=0.84)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] AT: raw=13.6% → posterior=22.5% (n=23, shrink=0.64)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] AU: raw=23.0% → posterior=22.1% (n=54, shrink=0.84)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] NO: raw=20.0% → posterior=21.7% (n=98, shrink=0.91)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] IN: raw=21.8% → posterior=21.6% (n=203, shrink=0.95)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] OM: raw=-5.3% → posterior=20.1% (n=11, shrink=0.29)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] TH: raw=21.7% → posterior=20.0% (n=22, shrink=0.62)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] NG: raw=-18.9% → posterior=18.1% (n=10, shrink=0.25)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] PH: raw=22.8% → posterior=17.8% (n=5, shrink=0.08)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] MY: raw=17.2% → posterior=17.3% (n=26, shrink=0.69)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] NZ: raw=12.0% → posterior=16.8% (n=6, shrink=0.11)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] VN: raw=13.2% → posterior=16.8% (n=7, shrink=0.14)
+2026-03-16 12:42:48,571 - __main__ - INFO -      [trading_country] SG: raw=9.6% → posterior=15.1% (n=11, shrink=0.29)
+2026-03-16 12:42:48,574 - __main__ - INFO -      [exchange] NasdaqGM: raw=83.0% → posterior=79.1% (n=107, shrink=0.91)
+2026-03-16 12:42:48,574 - __main__ - INFO -      [exchange] NasdaqCM: raw=82.2% → posterior=76.7% (n=72, shrink=0.88)
+2026-03-16 12:42:48,574 - __main__ - INFO -      [exchange] AIM: raw=77.5% → posterior=75.2% (n=106, shrink=0.91)
+2026-03-16 12:42:48,574 - __main__ - INFO -      [exchange] DB: raw=73.1% → posterior=48.6% (n=5, shrink=0.08)
+2026-03-16 12:42:48,574 - __main__ - INFO -      [exchange] XTRA: raw=47.7% → posterior=47.7% (n=174, shrink=0.95)
+2026-03-16 12:42:48,574 - __main__ - INFO -      [exchange] ISE: raw=26.2% → posterior=43.2% (n=4, shrink=0.05)
+2026-03-16 12:42:48,574 - __main__ - INFO -      [exchange] OM: raw=42.8% → posterior=42.7% (n=167, shrink=0.94)
+2026-03-16 12:42:48,574 - __main__ - INFO -      [exchange] BMV: raw=42.9% → posterior=42.7% (n=42, shrink=0.81)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] NasdaqGS: raw=42.4% → posterior=42.3% (n=616, shrink=0.98)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] ENXTBR: raw=40.7% → posterior=40.1% (n=38, shrink=0.79)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] ENXTPA: raw=39.9% → posterior=40.0% (n=161, shrink=0.94)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] IDX: raw=41.6% → posterior=39.9% (n=29, shrink=0.74)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] ADX: raw=40.7% → posterior=39.5% (n=20, shrink=0.57)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] NYSEAM: raw=55.0% → posterior=39.3% (n=6, shrink=0.11)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] CNSX: raw=82.3% → posterior=38.8% (n=3, shrink=0.03)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] BIT: raw=38.6% → posterior=38.7% (n=102, shrink=0.91)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] LSE: raw=38.0% → posterior=38.6% (n=192, shrink=0.95)
+2026-03-16 12:42:48,575 - __main__ - INFO -      [exchange] OTCPK: raw=47.1% → posterior=37.7% (n=3, shrink=0.03)
+2026-03-16 12:42:48,576 - __main__ - INFO -      [exchange] TSXV: raw=55.6% → posterior=37.7% (n=13, shrink=0.36)
+2026-03-16 12:42:48,576 - __main__ - INFO -      [exchange] DFM: raw=35.7% → posterior=37.0% (n=13, shrink=0.36)
+2026-03-16 12:42:48,577 - __main__ - INFO -      [exchange] IBSE: raw=37.2% → posterior=36.9% (n=43, shrink=0.81)
+2026-03-16 12:42:48,577 - __main__ - INFO -      [exchange] SASE: raw=36.6% → posterior=36.5% (n=75, shrink=0.88)
+2026-03-16 12:42:48,577 - __main__ - INFO -      [exchange] BOVESPA: raw=36.2% → posterior=36.3% (n=120, shrink=0.92)
+2026-03-16 12:42:48,578 - __main__ - INFO -      [exchange] ENXTAM: raw=34.2% → posterior=35.8% (n=50, shrink=0.83)
+2026-03-16 12:42:48,578 - __main__ - INFO -      [exchange] LJSE: raw=-4.3% → posterior=35.8% (n=3, shrink=0.03)
+2026-03-16 12:42:48,578 - __main__ - INFO -      [exchange] BUSE: raw=-7.3% → posterior=35.5% (n=3, shrink=0.03)
+2026-03-16 12:42:48,579 - __main__ - INFO -      [exchange] BVL: raw=10.8% → posterior=33.6% (n=3, shrink=0.03)
+2026-03-16 12:42:48,579 - __main__ - INFO -      [exchange] DSM: raw=36.0% → posterior=33.4% (n=12, shrink=0.32)
+2026-03-16 12:42:48,579 - __main__ - INFO -      [exchange] CPSE: raw=32.3% → posterior=32.6% (n=34, shrink=0.77)
+2026-03-16 12:42:48,579 - __main__ - INFO -      [exchange] SEP: raw=-1.7% → posterior=31.8% (n=5, shrink=0.08)
+2026-03-16 12:42:48,579 - __main__ - INFO -      [exchange] BVC: raw=15.8% → posterior=31.7% (n=6, shrink=0.11)
+2026-03-16 12:42:48,579 - __main__ - INFO -      [exchange] CBSE: raw=36.4% → posterior=30.7% (n=3, shrink=0.03)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] SEHK: raw=31.3% → posterior=30.5% (n=196, shrink=0.95)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] ZGSE: raw=7.3% → posterior=30.2% (n=7, shrink=0.14)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] BME: raw=29.8% → posterior=30.0% (n=51, shrink=0.84)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] ENXTLS: raw=11.5% → posterior=27.7% (n=10, shrink=0.25)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] NYSE: raw=27.0% → posterior=27.1% (n=884, shrink=0.99)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] JSE: raw=24.9% → posterior=26.8% (n=33, shrink=0.77)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] KWSE: raw=12.4% → posterior=26.7% (n=6, shrink=0.11)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] SWX: raw=26.2% → posterior=26.5% (n=95, shrink=0.90)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] TSX: raw=25.6% → posterior=25.7% (n=198, shrink=0.95)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] ATSE: raw=21.6% → posterior=25.6% (n=16, shrink=0.46)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] TASE: raw=-10.8% → posterior=25.3% (n=6, shrink=0.11)
+2026-03-16 12:42:48,580 - __main__ - INFO -      [exchange] SNSE: raw=21.3% → posterior=24.9% (n=16, shrink=0.46)
+2026-03-16 12:42:48,581 - __main__ - INFO -      [exchange] HLSE: raw=23.8% → posterior=24.0% (n=79, shrink=0.89)
+2026-03-16 12:42:48,581 - __main__ - INFO -      [exchange] NSEI: raw=23.9% → posterior=23.8% (n=146, shrink=0.94)
+2026-03-16 12:42:48,581 - __main__ - INFO -      [exchange] ASX: raw=23.0% → posterior=23.3% (n=54, shrink=0.84)
+2026-03-16 12:42:48,581 - __main__ - INFO -      [exchange] CASE: raw=20.8% → posterior=23.0% (n=18, shrink=0.52)
+2026-03-16 12:42:48,581 - __main__ - INFO -      [exchange] SGX: raw=9.6% → posterior=21.4% (n=11, shrink=0.29)
+2026-03-16 12:42:48,581 - __main__ - INFO -      [exchange] BVB: raw=-13.6% → posterior=21.3% (n=9, shrink=0.21)
+2026-03-16 12:42:48,583 - __main__ - INFO -      [unit] GBP: raw=52.1% → posterior=51.4% (n=296, shrink=0.97)
+2026-03-16 12:42:48,584 - __main__ - INFO -      [unit] SEK: raw=41.5% → posterior=40.9% (n=168, shrink=0.94)
+2026-03-16 12:42:48,584 - __main__ - INFO -      [unit] MXN: raw=42.9% → posterior=40.5% (n=42, shrink=0.81)
+2026-03-16 12:42:48,584 - __main__ - INFO -      [unit] IDR: raw=41.6% → posterior=38.7% (n=29, shrink=0.74)
+2026-03-16 12:42:48,584 - __main__ - INFO -      [unit] USD: raw=38.6% → posterior=38.6% (n=1691, shrink=0.99)
+2026-03-16 12:42:48,584 - __main__ - INFO -      [unit] EUR: raw=37.2% → posterior=37.2% (n=729, shrink=0.99)
+2026-03-16 12:42:48,585 - __main__ - INFO -      [unit] AED: raw=38.7% → posterior=36.8% (n=33, shrink=0.77)
+2026-03-16 12:42:48,585 - __main__ - INFO -      [unit] TRY: raw=37.2% → posterior=35.9% (n=43, shrink=0.81)
+2026-03-16 12:42:48,585 - __main__ - INFO -      [unit] SAR: raw=36.6% → posterior=35.9% (n=75, shrink=0.88)
+2026-03-16 12:42:48,585 - __main__ - INFO -      [unit] BRL: raw=36.2% → posterior=35.8% (n=120, shrink=0.92)
+2026-03-16 12:42:48,585 - __main__ - INFO -      [unit] QAR: raw=36.0% → posterior=32.3% (n=12, shrink=0.32)
+2026-03-16 12:42:48,585 - __main__ - INFO -      [unit] DKK: raw=32.3% → posterior=31.9% (n=34, shrink=0.77)
+2026-03-16 12:42:48,585 - __main__ - INFO -      [unit] HKD: raw=31.3% → posterior=31.2% (n=196, shrink=0.95)
+2026-03-16 12:42:48,585 - __main__ - INFO -      [unit] MAD: raw=36.4% → posterior=30.7% (n=3, shrink=0.03)
+2026-03-16 12:42:48,585 - __main__ - INFO -      [unit] PHP: raw=22.8% → posterior=29.9% (n=5, shrink=0.08)
+2026-03-16 12:42:48,586 - __main__ - INFO -      [unit] HUF: raw=-7.3% → posterior=29.4% (n=3, shrink=0.03)
+2026-03-16 12:42:48,586 - __main__ - INFO -      [unit] COP: raw=15.8% → posterior=28.9% (n=6, shrink=0.11)
+2026-03-16 12:42:48,586 - __main__ - INFO -      [unit] CAD: raw=28.5% → posterior=28.6% (n=215, shrink=0.96)
+2026-03-16 12:42:48,586 - __main__ - INFO -      [unit] KWD: raw=12.4% → posterior=28.6% (n=6, shrink=0.11)
+2026-03-16 12:42:48,586 - __main__ - INFO -      [unit] NZD: raw=12.0% → posterior=28.5% (n=6, shrink=0.11)
+2026-03-16 12:42:48,586 - __main__ - INFO -      [unit] VND: raw=13.2% → posterior=28.1% (n=7, shrink=0.14)
+2026-03-16 12:42:48,587 - __main__ - INFO -      [unit] CZK: raw=-1.7% → posterior=28.0% (n=5, shrink=0.08)
+2026-03-16 12:42:48,587 - __main__ - INFO -      [unit] CHF: raw=26.2% → posterior=26.6% (n=95, shrink=0.90)
+2026-03-16 12:42:48,587 - __main__ - INFO -      [unit] CLP: raw=21.3% → posterior=26.3% (n=16, shrink=0.46)
+2026-03-16 12:42:48,588 - __main__ - INFO -      [unit] ZAR: raw=24.9% → posterior=26.2% (n=33, shrink=0.77)
+2026-03-16 12:42:48,588 - __main__ - INFO -      [unit] ILS: raw=-10.8% → posterior=26.1% (n=6, shrink=0.11)
+2026-03-16 12:42:48,588 - __main__ - INFO -      [unit] EGP: raw=20.8% → posterior=25.5% (n=18, shrink=0.52)
+2026-03-16 12:42:48,588 - __main__ - INFO -      [unit] THB: raw=21.7% → posterior=25.1% (n=22, shrink=0.62)
+2026-03-16 12:42:48,588 - __main__ - INFO -      [unit] SGD: raw=9.6% → posterior=24.5% (n=11, shrink=0.29)
+2026-03-16 12:42:48,588 - __main__ - INFO -      [unit] AUD: raw=23.0% → posterior=24.2% (n=54, shrink=0.84)
+2026-03-16 12:42:48,588 - __main__ - INFO -      [unit] INR: raw=21.8% → posterior=22.2% (n=203, shrink=0.95)
+2026-03-16 12:42:48,589 - __main__ - INFO -      [unit] MYR: raw=17.2% → posterior=21.3% (n=26, shrink=0.69)
+2026-03-16 12:42:48,589 - __main__ - INFO -      [unit] PLN: raw=19.5% → posterior=21.3% (n=52, shrink=0.84)
+2026-03-16 12:42:48,589 - __main__ - INFO -      [unit] RON: raw=-13.6% → posterior=21.1% (n=9, shrink=0.21)
+2026-03-16 12:42:48,589 - __main__ - INFO -      [unit] NOK: raw=20.0% → posterior=21.0% (n=98, shrink=0.91)
+2026-03-16 12:42:48,589 - __main__ - INFO -      [unit] OMR: raw=-5.3% → posterior=20.2% (n=11, shrink=0.29)
+2026-03-16 12:42:48,590 - __main__ - INFO -      [unit] NGN: raw=-18.9% → posterior=18.2% (n=10, shrink=0.25)
+2026-03-16 12:42:48,590 - __main__ - INFO -      [unit] KRW: raw=14.6% → posterior=16.0% (n=97, shrink=0.91)
+2026-03-16 12:42:48,590 - __main__ - INFO -      [unit] TWD: raw=12.8% → posterior=14.4% (n=103, shrink=0.91)
+2026-03-16 12:42:48,591 - __main__ - INFO -      [unit] JPY: raw=11.3% → posterior=11.8% (n=345, shrink=0.97)
+2026-03-16 12:42:48,591 - __main__ - INFO -      [unit] CNY: raw=11.4% → posterior=11.7% (n=592, shrink=0.98)
+2026-03-16 12:42:48,594 - __main__ - INFO -      [sector] Health Care: raw=55.2% → posterior=54.9% (n=728, shrink=0.99)
+2026-03-16 12:42:48,594 - __main__ - INFO -      [sector] Consumer Discretionary: raw=37.1% → posterior=37.1% (n=797, shrink=0.99)
+2026-03-16 12:42:48,594 - __main__ - INFO -      [sector] Communication Services: raw=31.4% → posterior=30.9% (n=249, shrink=0.96)
+2026-03-16 12:42:48,594 - __main__ - INFO -      [sector] Information Technology: raw=30.8% → posterior=30.7% (n=841, shrink=0.99)
+2026-03-16 12:42:48,594 - __main__ - INFO -      [sector] Consumer Staples: raw=26.0% → posterior=25.9% (n=511, shrink=0.98)
+2026-03-16 12:42:48,595 - __main__ - INFO -      [sector] Industrials: raw=25.6% → posterior=25.7% (n=1252, shrink=0.99)
+2026-03-16 12:42:48,595 - __main__ - INFO -      [sector] Materials: raw=24.4% → posterior=24.2% (n=611, shrink=0.98)
+2026-03-16 12:42:48,595 - __main__ - INFO -      [sector] Energy: raw=9.7% → posterior=10.5% (n=322, shrink=0.97)
+2026-03-16 12:42:48,595 - __main__ - INFO -      [sector] Utilities: raw=9.7% → posterior=10.1% (n=228, shrink=0.96)
+2026-03-16 12:42:48,597 - __main__ - INFO -      [industry] Biotechnology: raw=82.5% → posterior=81.2% (n=212, shrink=0.95)
+2026-03-16 12:42:48,597 - __main__ - INFO -      [industry] Software: raw=58.4% → posterior=57.1% (n=215, shrink=0.96)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Health Care Technology: raw=53.7% → posterior=54.1% (n=27, shrink=0.71)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Life Sciences Tools and Services: raw=51.9% → posterior=52.3% (n=66, shrink=0.87)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Professional Services: raw=54.9% → posterior=51.9% (n=90, shrink=0.90)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Pharmaceuticals: raw=47.3% → posterior=47.8% (n=176, shrink=0.95)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Interactive Media and Services: raw=50.4% → posterior=47.0% (n=48, shrink=0.83)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Health Care Equipment and Supplies: raw=42.5% → posterior=43.4% (n=122, shrink=0.92)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Hotels Restaurants and Leisure: raw=43.4% → posterior=43.1% (n=164, shrink=0.94)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Distributors: raw=49.6% → posterior=41.2% (n=12, shrink=0.32)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Media: raw=42.7% → posterior=40.7% (n=74, shrink=0.88)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Entertainment: raw=40.0% → posterior=39.0% (n=81, shrink=0.89)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Specialty Retail: raw=38.5% → posterior=38.4% (n=154, shrink=0.94)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] IT Services: raw=38.4% → posterior=37.8% (n=109, shrink=0.92)
+2026-03-16 12:42:48,598 - __main__ - INFO -      [industry] Diversified Consumer Services: raw=37.2% → posterior=37.2% (n=44, shrink=0.81)
+2026-03-16 12:42:48,599 - __main__ - INFO -      [industry] Leisure Products: raw=37.2% → posterior=37.2% (n=29, shrink=0.74)
+2026-03-16 12:42:48,599 - __main__ - INFO -      [industry] Passenger Airlines: raw=39.0% → posterior=36.5% (n=42, shrink=0.81)
+2026-03-16 12:42:48,599 - __main__ - INFO -      [industry] Health Care Providers and Services: raw=34.4% → posterior=35.9% (n=125, shrink=0.93)
+2026-03-16 12:42:48,599 - __main__ - INFO -      [industry] Textiles Apparel and Luxury Goods: raw=35.1% → posterior=35.4% (n=70, shrink=0.88)
+2026-03-16 12:42:48,599 - __main__ - INFO -      [industry] Automobile Components: raw=35.1% → posterior=35.3% (n=116, shrink=0.92)
+2026-03-16 12:42:48,599 - __main__ - INFO -      [industry] Household Durables: raw=34.3% → posterior=34.5% (n=103, shrink=0.91)
+2026-03-16 12:42:48,599 - __main__ - INFO -      [industry] Commercial Services and Supplies: raw=33.3% → posterior=32.5% (n=88, shrink=0.90)
+2026-03-16 12:42:48,599 - __main__ - INFO -      [industry] Automobiles: raw=30.9% → posterior=31.8% (n=60, shrink=0.86)
+2026-03-16 12:42:48,600 - __main__ - INFO -      [industry] Personal Care Products: raw=33.2% → posterior=31.8% (n=43, shrink=0.81)
+2026-03-16 12:42:48,600 - __main__ - INFO -      [industry] Trading Companies and Distributors: raw=31.6% → posterior=30.9% (n=73, shrink=0.88)
+2026-03-16 12:42:48,600 - __main__ - INFO -      [industry] Building Products: raw=31.3% → posterior=30.7% (n=74, shrink=0.88)
+2026-03-16 12:42:48,600 - __main__ - INFO -      [industry] Broadline Retail: raw=28.7% → posterior=30.2% (n=45, shrink=0.82)
+2026-03-16 12:42:48,600 - __main__ - INFO -      [industry] Construction Materials: raw=30.7% → posterior=29.7% (n=57, shrink=0.85)
+2026-03-16 12:42:48,600 - __main__ - INFO -      [industry] Metals and Mining: raw=29.5% → posterior=29.3% (n=276, shrink=0.97)
+2026-03-16 12:42:48,600 - __main__ - INFO -      [industry] Ground Transportation: raw=29.1% → posterior=28.6% (n=69, shrink=0.87)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Technology Hardware Storage and Peripherals: raw=26.5% → posterior=27.1% (n=60, shrink=0.86)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Paper and Forest Products: raw=26.0% → posterior=25.4% (n=23, shrink=0.64)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Containers and Packaging: raw=24.8% → posterior=24.7% (n=32, shrink=0.76)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Consumer Staples Distribution and Retail: raw=24.4% → posterior=24.5% (n=96, shrink=0.91)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Industrial Conglomerates: raw=22.9% → posterior=23.4% (n=47, shrink=0.82)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Food Products: raw=22.5% → posterior=22.7% (n=190, shrink=0.95)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Tobacco: raw=16.9% → posterior=22.6% (n=13, shrink=0.36)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Beverages: raw=21.3% → posterior=21.8% (n=75, shrink=0.88)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Diversified Telecommunication Services: raw=20.4% → posterior=21.5% (n=79, shrink=0.89)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Machinery: raw=21.2% → posterior=21.4% (n=265, shrink=0.96)
+2026-03-16 12:42:48,601 - __main__ - INFO -      [industry] Aerospace and Defense: raw=20.7% → posterior=21.2% (n=90, shrink=0.90)
+2026-03-16 12:42:48,602 - __main__ - INFO -      [industry] Transportation Infrastructure: raw=20.1% → posterior=21.0% (n=51, shrink=0.84)
+2026-03-16 12:42:48,602 - __main__ - INFO -      [industry] Air Freight and Logistics: raw=19.6% → posterior=20.9% (n=37, shrink=0.79)
+2026-03-16 12:42:48,602 - __main__ - INFO -      [industry] Electronic Equipment Instruments and Components: raw=19.2% → posterior=19.7% (n=201, shrink=0.95)
+2026-03-16 12:42:48,602 - __main__ - INFO -      [industry] Electrical Equipment: raw=19.0% → posterior=19.3% (n=179, shrink=0.95)
+2026-03-16 12:42:48,602 - __main__ - INFO -      [industry] Household Products: raw=13.6% → posterior=18.9% (n=20, shrink=0.57)
+2026-03-16 12:42:48,602 - __main__ - INFO -      [industry] Construction and Engineering: raw=17.9% → posterior=18.5% (n=113, shrink=0.92)
+2026-03-16 12:42:48,602 - __main__ - INFO -      [industry] Communications Equipment: raw=15.1% → posterior=17.7% (n=50, shrink=0.83)
+2026-03-16 12:42:48,602 - __main__ - INFO -      [industry] Wireless Telecommunication Services: raw=13.3% → posterior=16.7% (n=41, shrink=0.80)
+2026-03-16 12:42:48,602 - __main__ - INFO -      [industry] Chemicals: raw=16.1% → posterior=16.5% (n=223, shrink=0.96)
+2026-03-16 12:42:48,604 - __main__ - INFO -      [style_class] Growth: raw=31.4% → posterior=31.4% (n=730, shrink=0.99)
+2026-03-16 12:42:48,604 - __main__ - INFO -      [style_class] Core: raw=31.1% → posterior=31.1% (n=3239, shrink=1.00)
+2026-03-16 12:42:48,604 - __main__ - INFO -      [style_class] Value: raw=29.0% → posterior=29.0% (n=1570, shrink=0.99)
+2026-03-16 12:42:48,605 - __main__ - INFO -      [size_class] Small Cap: raw=42.9% → posterior=42.8% (n=2852, shrink=1.00)
+2026-03-16 12:42:48,605 - __main__ - INFO -      [size_class] Mid Cap: raw=19.1% → posterior=19.2% (n=1599, shrink=0.99)
+2026-03-16 12:42:48,606 - __main__ - INFO -      [size_class] Large Cap: raw=14.9% → posterior=15.0% (n=1088, shrink=0.99)
+2026-03-16 12:42:48,606 - __main__ - INFO -      Biotechnology: MC mean=82.5%, consensus=78%, risk-adj=1.01
+2026-03-16 12:42:48,606 - __main__ - INFO -      Software: MC mean=58.4%, consensus=65%, risk-adj=1.23
+2026-03-16 12:42:48,606 - __main__ - INFO -      Professional Services: MC mean=54.9%, consensus=63%, risk-adj=0.93
+2026-03-16 12:42:48,607 - __main__ - INFO -      Health Care Technology: MC mean=53.7%, consensus=56%, risk-adj=1.03
+2026-03-16 12:42:48,607 - __main__ - INFO -      Life Sciences Tools and Services: MC mean=51.9%, consensus=65%, risk-adj=1.11
+2026-03-16 12:42:48,607 - __main__ - INFO -      Interactive Media and Services: MC mean=50.4%, consensus=69%, risk-adj=1.41
+2026-03-16 12:42:48,607 - __main__ - INFO -      Distributors: MC mean=49.6%, consensus=67%, risk-adj=1.73
+2026-03-16 12:42:48,607 - __main__ - INFO -      Pharmaceuticals: MC mean=47.3%, consensus=60%, risk-adj=0.83
+2026-03-16 12:42:48,607 - __main__ - INFO -      Hotels Restaurants and Leisure: MC mean=43.4%, consensus=54%, risk-adj=1.11
+2026-03-16 12:42:48,607 - __main__ - INFO -      Media: MC mean=42.7%, consensus=74%, risk-adj=1.03
+2026-03-16 12:42:48,607 - __main__ - INFO -      Health Care Equipment and Supplies: MC mean=42.5%, consensus=66%, risk-adj=1.08
+2026-03-16 12:42:48,608 - __main__ - INFO -      Entertainment: MC mean=40.0%, consensus=73%, risk-adj=1.15
+2026-03-16 12:42:48,608 - __main__ - INFO -      Passenger Airlines: MC mean=39.0%, consensus=67%, risk-adj=1.66
+2026-03-16 12:42:48,608 - __main__ - INFO -      Specialty Retail: MC mean=38.5%, consensus=66%, risk-adj=0.85
+2026-03-16 12:42:48,608 - __main__ - INFO -      IT Services: MC mean=38.4%, consensus=56%, risk-adj=1.23
+2026-03-16 12:42:48,608 - __main__ - INFO -      Leisure Products: MC mean=37.2%, consensus=66%, risk-adj=0.85
+2026-03-16 12:42:48,608 - __main__ - INFO -      Diversified Consumer Services: MC mean=37.2%, consensus=64%, risk-adj=1.55
+2026-03-16 12:42:48,608 - __main__ - INFO -      Automobile Components: MC mean=35.1%, consensus=59%, risk-adj=0.85
+2026-03-16 12:42:48,608 - __main__ - INFO -      Textiles Apparel and Luxury Goods: MC mean=35.1%, consensus=60%, risk-adj=1.10
+2026-03-16 12:42:48,609 - __main__ - INFO -      Health Care Providers and Services: MC mean=34.4%, consensus=59%, risk-adj=0.87
+2026-03-16 12:42:48,609 - __main__ - INFO -      Household Durables: MC mean=34.3%, consensus=60%, risk-adj=1.21
+2026-03-16 12:42:48,609 - __main__ - INFO -      Commercial Services and Supplies: MC mean=33.3%, consensus=55%, risk-adj=0.66
+2026-03-16 12:42:48,609 - __main__ - INFO -      Personal Care Products: MC mean=33.2%, consensus=58%, risk-adj=1.26
+2026-03-16 12:42:48,609 - __main__ - INFO -      Trading Companies and Distributors: MC mean=31.6%, consensus=51%, risk-adj=0.98
+2026-03-16 12:42:48,609 - __main__ - INFO -      Building Products: MC mean=31.3%, consensus=55%, risk-adj=1.21
+2026-03-16 12:42:48,609 - __main__ - INFO -      Automobiles: MC mean=30.9%, consensus=68%, risk-adj=1.48
+2026-03-16 12:42:48,609 - __main__ - INFO -      Construction Materials: MC mean=30.7%, consensus=70%, risk-adj=1.06
+2026-03-16 12:42:48,609 - __main__ - INFO -      Metals and Mining: MC mean=29.5%, consensus=67%, risk-adj=0.68
+2026-03-16 12:42:48,609 - __main__ - INFO -      Ground Transportation: MC mean=29.1%, consensus=57%, risk-adj=0.89
+2026-03-16 12:42:48,610 - __main__ - INFO -      Broadline Retail: MC mean=28.7%, consensus=64%, risk-adj=1.03
+2026-03-16 12:42:48,610 - __main__ - INFO -      Technology Hardware Storage and Peripherals: MC mean=26.5%, consensus=48%, risk-adj=1.00
+2026-03-16 12:42:48,610 - __main__ - INFO -      Paper and Forest Products: MC mean=26.0%, consensus=61%, risk-adj=1.17
+2026-03-16 12:42:48,610 - __main__ - INFO -      Containers and Packaging: MC mean=24.8%, consensus=66%, risk-adj=1.21
+2026-03-16 12:42:48,610 - __main__ - INFO -      Consumer Staples Distribution and Retail: MC mean=24.4%, consensus=58%, risk-adj=0.95
+2026-03-16 12:42:48,610 - __main__ - INFO -      Industrial Conglomerates: MC mean=22.9%, consensus=60%, risk-adj=1.27
+2026-03-16 12:42:48,610 - __main__ - INFO -      Food Products: MC mean=22.5%, consensus=58%, risk-adj=0.89
+2026-03-16 12:42:48,610 - __main__ - INFO -      Beverages: MC mean=21.3%, consensus=44%, risk-adj=0.96
+2026-03-16 12:42:48,610 - __main__ - INFO -      Machinery: MC mean=21.2%, consensus=56%, risk-adj=1.02
+2026-03-16 12:42:48,611 - __main__ - INFO -      Aerospace and Defense: MC mean=20.7%, consensus=51%, risk-adj=0.77
+2026-03-16 12:42:48,611 - __main__ - INFO -      Diversified Telecommunication Services: MC mean=20.4%, consensus=52%, risk-adj=0.66
+2026-03-16 12:42:48,611 - __main__ - INFO -      Transportation Infrastructure: MC mean=20.1%, consensus=57%, risk-adj=0.90
+2026-03-16 12:42:48,611 - __main__ - INFO -      Air Freight and Logistics: MC mean=19.6%, consensus=54%, risk-adj=0.78
+2026-03-16 12:42:48,611 - __main__ - INFO -      Electronic Equipment Instruments and Components: MC mean=19.2%, consensus=45%, risk-adj=0.67
+2026-03-16 12:42:48,611 - __main__ - INFO -      Electrical Equipment: MC mean=19.0%, consensus=44%, risk-adj=0.50
+2026-03-16 12:42:48,611 - __main__ - INFO -      Construction and Engineering: MC mean=17.9%, consensus=50%, risk-adj=0.89
+2026-03-16 12:42:48,611 - __main__ - INFO -      Tobacco: MC mean=16.9%, consensus=62%, risk-adj=0.87
+2026-03-16 12:42:48,611 - __main__ - INFO -      Chemicals: MC mean=16.1%, consensus=56%, risk-adj=0.56
+2026-03-16 12:42:48,611 - __main__ - INFO -      Communications Equipment: MC mean=15.1%, consensus=26%, risk-adj=0.49
+2026-03-16 12:42:48,612 - __main__ - INFO -      Semiconductors and Semiconductor Equipment: MC mean=14.6%, consensus=44%, risk-adj=0.51
+2026-03-16 12:42:48,612 - __main__ - INFO -      Multi-Utilities: MC mean=14.0%, consensus=53%, risk-adj=0.54
+2026-03-16 12:42:48,612 - __main__ - INFO -   ⏱ Step 7 completed in 2.8s
+2026-03-16 12:42:48,612 - __main__ - INFO - 
+2026-03-16 12:42:48,612 - __main__ - INFO - 🔀 Step 7a: Parallel MCMC return analysis...
+2026-03-16 12:42:48,612 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:42:54,278 - __main__ - INFO - Parallel MCMC: R̂=1.0000, converged=True, posterior mean=30.43
+2026-03-16 12:42:54,278 - __main__ - INFO -   R̂=1.0000, converged=True, posterior mean=30.43
+2026-03-16 12:42:55,295 - __main__ - INFO -    ✓ er_mcse_convergence.html
+2026-03-16 12:42:55,295 - __main__ - INFO -   ⏱ Step 7a completed in 6.7s
+2026-03-16 12:42:55,295 - __main__ - INFO - 
+2026-03-16 12:42:55,295 - __main__ - INFO - 🧮 Step 7b: Per-category Bayesian probability analytics...
+2026-03-16 12:42:55,295 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 12:42:55,343 - root - INFO - Loaded view category mapping from DB: 17 views, 689 total features
+2026-03-16 12:42:55,343 - __main__ - INFO -   Feature categories from 17 views → 17 categories, 689 total features
+2026-03-16 13:18:15,252 - __main__ - INFO - ================================================================================
+2026-03-16 13:18:15,252 - __main__ - INFO - Expected Returns Analytics Pipeline v3.6
+2026-03-16 13:18:15,252 - __main__ - INFO - ================================================================================
+2026-03-16 13:18:15,253 - __main__ - INFO - 
+2026-03-16 13:18:15,369 - __main__ - INFO - 🔧 Numba: True, Joblib: True, ArviZ: True
+2026-03-16 13:18:15,370 - __main__ - INFO -    n_jobs=-1, max_features/cat=100, caching=on
+2026-03-16 13:18:15,370 - __main__ - INFO - 
+2026-03-16 13:18:15,370 - __main__ - INFO - 📦 Step 1: Loading feature data (v3.6: equities MV + feature views + all stock features MV)...
+2026-03-16 13:18:15,370 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:18:15,373 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-03-16 13:18:18,266 - root - INFO - Loaded 6388 rows from public.mv_equities
+2026-03-16 13:18:18,269 - root - INFO - Backfill complete. Columns: 677
+2026-03-16 13:18:18,303 - root - INFO - Loaded 24 feature categories from database
+2026-03-16 13:18:18,304 - __main__ - INFO - Loaded 24 feature categories (226 total features)
+2026-03-16 13:18:18,305 - __main__ - INFO - All feature categories have ≥80%% coverage
+2026-03-16 13:18:18,305 - __main__ - INFO - Loaded expected returns data: 6388 stocks × 677 features
+2026-03-16 13:18:18,305 - __main__ - INFO - ✓ Loaded mv_equities: 6,388 stocks × 677 features
+2026-03-16 13:18:18,334 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-03-16 13:18:18,335 - root - INFO - Loading view: public.vw_features_analyst_sentiment
+2026-03-16 13:18:18,652 - root - INFO - Loaded 6388 rows from vw_features_analyst_sentiment
+2026-03-16 13:18:18,653 - root - INFO - Loading view: public.vw_features_balance_sheet
+2026-03-16 13:18:19,060 - root - INFO - Loaded 6388 rows from vw_features_balance_sheet
+2026-03-16 13:18:19,060 - root - INFO - Loading view: public.vw_features_cashflow
+2026-03-16 13:18:19,601 - root - INFO - Loaded 6388 rows from vw_features_cashflow
+2026-03-16 13:18:19,601 - root - INFO - Loading view: public.vw_features_composite_scores
+2026-03-16 13:18:19,899 - root - INFO - Loaded 6388 rows from vw_features_composite_scores
+2026-03-16 13:18:19,900 - root - INFO - Loading view: public.vw_features_cost_structure
+2026-03-16 13:18:20,231 - root - INFO - Loaded 6388 rows from vw_features_cost_structure
+2026-03-16 13:18:20,231 - root - INFO - Loading view: public.vw_features_dividends
+2026-03-16 13:18:20,418 - root - INFO - Loaded 6388 rows from vw_features_dividends
+2026-03-16 13:18:20,418 - root - INFO - Loading view: public.vw_features_earnings
+2026-03-16 13:18:20,931 - root - INFO - Loaded 6388 rows from vw_features_earnings
+2026-03-16 13:18:20,932 - root - INFO - Loading view: public.vw_features_employment
+2026-03-16 13:18:21,136 - root - INFO - Loaded 6388 rows from vw_features_employment
+2026-03-16 13:18:21,136 - root - INFO - Loading view: public.vw_features_growth
+2026-03-16 13:18:21,627 - root - INFO - Loaded 6388 rows from vw_features_growth
+2026-03-16 13:18:21,627 - root - INFO - Loading view: public.vw_features_leverage_liquidity
+2026-03-16 13:18:22,187 - root - INFO - Loaded 6388 rows from vw_features_leverage_liquidity
+2026-03-16 13:18:22,187 - root - INFO - Loading view: public.vw_features_momentum
+2026-03-16 13:18:22,450 - root - INFO - Loaded 6388 rows from vw_features_momentum
+2026-03-16 13:18:22,450 - root - INFO - Loading view: public.vw_features_profitability
+2026-03-16 13:18:23,088 - root - INFO - Loaded 6388 rows from vw_features_profitability
+2026-03-16 13:18:23,089 - root - INFO - Loading view: public.vw_features_quality_risk
+2026-03-16 13:18:23,431 - root - INFO - Loaded 6388 rows from vw_features_quality_risk
+2026-03-16 13:18:23,431 - root - INFO - Loading view: public.vw_features_technical_analysis
+2026-03-16 13:18:23,613 - root - INFO - Loaded 6388 rows from vw_features_technical_analysis
+2026-03-16 13:18:23,613 - root - INFO - Loading view: public.vw_features_temporal
+2026-03-16 13:18:23,791 - root - INFO - Loaded 6388 rows from vw_features_temporal
+2026-03-16 13:18:23,791 - root - INFO - Loading view: public.vw_features_unusual_items
+2026-03-16 13:18:23,951 - root - INFO - Loaded 6388 rows from vw_features_unusual_items
+2026-03-16 13:18:23,951 - root - INFO - Loading view: public.vw_features_valuation_ratios
+2026-03-16 13:18:24,353 - root - INFO - Loaded 6388 rows from vw_features_valuation_ratios
+2026-03-16 13:18:25,678 - root - INFO - Backfill complete. Columns: 718
+2026-03-16 13:18:25,730 - __main__ - INFO - Kalman momentum filter applied to 5 columns
+2026-03-16 13:18:26,329 - __main__ - INFO - Loaded all stock features: 6388 stocks × 728 features, 17 view specs
+2026-03-16 13:18:26,329 - __main__ - INFO - ✓ Loaded feature views: 6,388 stocks × 728 features
+2026-03-16 13:18:26,330 - __main__ - INFO -   View specs loaded: 17 views
+2026-03-16 13:18:26,330 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-03-16 13:18:30,520 - root - INFO - Loaded 6388 rows from public.mv_all_stock_features
+2026-03-16 13:18:30,520 - __main__ - INFO - Loaded mv_all_stock_features: 6388 rows × 818 columns
+2026-03-16 13:18:30,520 - __main__ - INFO - ✓ Loaded mv_all_stock_features: 6,388 stocks × 818 features
+2026-03-16 13:18:30,592 - __main__ - INFO -   Schema metadata: 674 columns
+2026-03-16 13:18:30,592 - __main__ - INFO -   Feature registry: 63 functions
+2026-03-16 13:18:30,712 - __main__ - INFO -   mv_equities spec unavailable: DataFrame must contain a 'ticker' column
+2026-03-16 13:18:30,712 - __main__ - INFO - 
+2026-03-16 13:18:30,712 - __main__ - INFO - 📦 Step 1b: Pre-computing historical target drift enrichment...
+2026-03-16 13:18:30,712 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:18:30,745 - root - INFO - Loaded 674 column definitions from public.equities_schema_metadata
+2026-03-16 13:18:30,745 - root - INFO - Cached equities schema: 674 columns across 26 roles
+2026-03-16 13:18:30,745 - __main__ - INFO - Column lists derived from equities schema (46 total columns)
+2026-03-16 13:18:30,746 - __main__ - INFO - Historical price/target coverage: 40 / 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-03-16 13:18:30,779 - __main__ - INFO - Historical target drift enrichment: 12 derived columns added
+2026-03-16 13:18:30,780 - __main__ - INFO - ✓ Historical drift enrichment complete (12 derived columns)
+2026-03-16 13:18:30,780 - __main__ - INFO -   ⏱ Step 1 completed in 15.4s
+2026-03-16 13:18:30,780 - __main__ - INFO - 
+2026-03-16 13:18:30,780 - __main__ - INFO - 🎲 Step 2: Monte Carlo price target simulation (50,000 samples)...
+2026-03-16 13:18:30,780 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:18:39,978 - __main__ - INFO - Monte Carlo simulation: 5539 stocks processed
+2026-03-16 13:18:39,982 - __main__ - INFO - ✓ 5,539 stocks simulated
+2026-03-16 13:18:39,983 - __main__ - INFO -   Mean upside:  30.5%
+2026-03-16 13:18:39,984 - __main__ - INFO -   Median upside: 22.6%
+2026-03-16 13:18:39,984 - __main__ - INFO -   Positive prob (mean): 83.6%
+2026-03-16 13:18:39,987 - __main__ - INFO - Computed price_target_mc for 5539 / 5539 stocks (mean=6853.51)
+2026-03-16 13:18:39,989 - __main__ - INFO -   Monte Carlo targets (5,539 stocks): implied return=15.5%
+2026-03-16 13:18:40,668 - __main__ - INFO - Monte Carlo: computed detailed statistics for 5 / 5 columns
+2026-03-16 13:18:47,674 - __main__ - INFO - MCMC Student-t: μ=21.78 (±0.34), df=2.0
+2026-03-16 13:18:47,675 - __main__ - INFO - 
+  📐 Best-fit distribution: t (AIC=54038.3, KS p=0.000)
+2026-03-16 13:18:47,675 - __main__ - INFO - 
+  📉 VaR 1%: -29.6%  |  CVaR 5%: -22.8%
+2026-03-16 13:18:47,675 - __main__ - INFO -      Downside deviation: 16.38
+2026-03-16 13:18:47,675 - __main__ - INFO -      Gain/Loss ratio: 3.21
+2026-03-16 13:18:47,675 - __main__ - INFO - 
+  🏷️  Tiers: High-conviction=3013, Moderate=1783, Speculative=20, Avoid=742
+2026-03-16 13:18:47,675 - __main__ - INFO -   ⏱ Step 2 completed in 16.9s
+2026-03-16 13:18:47,675 - __main__ - INFO - 
+2026-03-16 13:18:47,675 - __main__ - INFO - 🎯 Step 3: Price target achievement model...
+2026-03-16 13:18:47,675 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:18:47,703 - __main__ - INFO - Price target achievement: merged 10 sentiment columns from feature views
+2026-03-16 13:18:47,707 - __main__ - INFO - Price target: merged 4 risk columns
+2026-03-16 13:18:52,087 - analytics.probability_analytics - INFO - MH sampler for price target: acceptance_rate=0.247, mean_posterior=29.341
+2026-03-16 13:19:19,389 - __main__ - INFO - Price target achievement: 6388 stocks processed
+2026-03-16 13:19:19,392 - __main__ - INFO - ✓ 6,388 stocks analyzed
+2026-03-16 13:19:19,392 - __main__ - INFO -   Mean achievement prob: 0.474
+2026-03-16 13:19:19,393 - __main__ - INFO -   Mean prob-weighted return: 7.5%
+2026-03-16 13:19:19,404 - __main__ - INFO - Computed price_target_prob_weighted for 6388 / 6388 stocks (mean=5633.28)
+2026-03-16 13:19:19,409 - __main__ - INFO -   Prob-weighted targets (6,388 stocks): implied return=5.1%
+2026-03-16 13:19:20,182 - __main__ - INFO - Price Target Achievement: computed detailed statistics for 5 / 5 columns
+2026-03-16 13:19:20,184 - __main__ - INFO -   ⏱ Step 3 completed in 32.5s
+2026-03-16 13:19:20,184 - __main__ - INFO - 
+2026-03-16 13:19:20,184 - __main__ - INFO - 📐 Step 4: Kalman-filtered price targets...
+2026-03-16 13:19:20,185 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:19:21,049 - __main__ - INFO - Kalman filter: 6387 stocks processed
+2026-03-16 13:19:21,051 - __main__ - INFO - ✓ 6,387 stocks filtered
+2026-03-16 13:19:21,052 - __main__ - INFO -   Mean filtered upside: 22.6%
+2026-03-16 13:19:21,468 - __main__ - INFO - Kalman Filter: computed detailed statistics for 3 / 3 columns
+2026-03-16 13:19:21,469 - __main__ - INFO -   ⏱ Step 4 completed in 1.3s
+2026-03-16 13:19:21,469 - __main__ - INFO - 
+2026-03-16 13:19:21,469 - __main__ - INFO - 📊 Step 5: Bayesian earnings beat analysis...
+2026-03-16 13:19:21,470 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:19:32,540 - __main__ - INFO - Earnings beat analysis: 6388 stocks processed
+2026-03-16 13:19:49,229 - __main__ - INFO - EPS streak enrichment: 8 columns added
+2026-03-16 13:22:15,494 - __main__ - INFO - Resampled beat enrichment: 12 columns added
+2026-03-16 13:22:16,685 - __main__ - INFO - ✓ 6,388 stocks analyzed
+2026-03-16 13:22:16,686 - __main__ - INFO -   Mean P(beat): 0.440
+2026-03-16 13:22:16,687 - __main__ - INFO -   Classified as 'likely_beat': 2842
+2026-03-16 13:22:16,687 - __main__ - INFO -   ⏱ Step 5 completed in 175.2s
+2026-03-16 13:22:16,687 - __main__ - INFO - 
+2026-03-16 13:22:16,687 - __main__ - INFO - 🔬 Step 5b: Accounting anomaly detection & analytics...
+2026-03-16 13:22:16,687 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:22:16,711 - __main__ - INFO - Accounting anomaly analysis: merged 32 columns from feature views
+2026-03-16 13:22:25,302 - analytics.probability_analytics - INFO - MH sampler for anomaly scores: acceptance_rate=0.206, threshold=36.14, mean_posterior=37.660
+2026-03-16 13:22:43,377 - analytics.probability_analytics - INFO - Anomaly MCMC converged: R̂=1.0000
+2026-03-16 13:22:43,379 - analytics.probability_analytics - INFO - AccountingAnomalyProbabilityModel: severity computed for 6388 stocks, 815 multi-flag alerts, mean conditional P(anomaly)=0.330
+2026-03-16 13:22:52,429 - __main__ - INFO - MCMC anomaly posterior: location=36.660
+2026-03-16 13:22:52,430 - __main__ - INFO - Accounting anomaly analysis: 6388 stocks processed
+2026-03-16 13:22:52,436 - __main__ - INFO -   Anomaly tier distribution:
+2026-03-16 13:22:52,437 - __main__ - INFO -     Clean: 1,688 (26.4%)
+2026-03-16 13:22:52,437 - __main__ - INFO -     Watch: 3,081 (48.2%)
+2026-03-16 13:22:52,437 - __main__ - INFO -     Flag: 1,478 (23.1%)
+2026-03-16 13:22:52,437 - __main__ - INFO -     Alert: 141 (2.2%)
+2026-03-16 13:22:52,440 - __main__ - INFO -   Anomaly score — mean: 37.7, median: 36.1, std: 17.6, max: 100.0
+2026-03-16 13:22:52,441 - __main__ - INFO -   Stocks with ≥1 flagged feature: 5,866, ≥10 flags: 815
+2026-03-16 13:22:52,442 - __main__ - INFO -   Per-feature anomaly flags:
+2026-03-16 13:22:52,442 - __main__ - INFO -     discontinued_ops_impact: 75 stocks flagged
+2026-03-16 13:22:52,442 - __main__ - INFO -     ebit_adjustment_pct_fy: 1,911 stocks flagged
+2026-03-16 13:22:52,442 - __main__ - INFO -     ebit_adjustment_pct_ltm: 250 stocks flagged
+2026-03-16 13:22:52,443 - __main__ - INFO -     ebitda_adjustment_pct_fy: 1,747 stocks flagged
+2026-03-16 13:22:52,443 - __main__ - INFO -     ebitda_adjustment_pct_ltm: 98 stocks flagged
+2026-03-16 13:22:52,443 - __main__ - INFO -     ebitda_adjustment_ratio: 151 stocks flagged
+2026-03-16 13:22:52,443 - __main__ - INFO -     eps_adjustment_pct: 729 stocks flagged
+2026-03-16 13:22:52,443 - __main__ - INFO -     eps_adjustment_ratio: 720 stocks flagged
+2026-03-16 13:22:52,443 - __main__ - INFO -     eps_adjustment_ratio_comp: 720 stocks flagged
+2026-03-16 13:22:52,444 - __main__ - INFO -     eps_adjustment_spread_fy: 1,824 stocks flagged
+2026-03-16 13:22:52,444 - __main__ - INFO -     eps_adjustment_spread_ltm: 1,043 stocks flagged
+2026-03-16 13:22:52,444 - __main__ - INFO -     eps_growth_accel: 374 stocks flagged
+2026-03-16 13:22:52,444 - __main__ - INFO -     eps_surprise_pct: 669 stocks flagged
+2026-03-16 13:22:52,444 - __main__ - INFO -     exceptional_items_frequency: 463 stocks flagged
+2026-03-16 13:22:52,444 - __main__ - INFO -     exceptional_items_to_ebitda: 2,977 stocks flagged
+2026-03-16 13:22:52,445 - __main__ - INFO -     forward_eps_gaap_adj_spread: 1,697 stocks flagged
+2026-03-16 13:22:52,445 - __main__ - INFO -     gaap_adj_eps_gap_pct: 1,555 stocks flagged
+2026-03-16 13:22:52,445 - __main__ - INFO -     gaap_revision_1m: 1,107 stocks flagged
+2026-03-16 13:22:52,445 - __main__ - INFO -     gaap_revision_1y: 572 stocks flagged
+2026-03-16 13:22:52,445 - __main__ - INFO -     gaap_revision_3m: 984 stocks flagged
+2026-03-16 13:22:52,445 - __main__ - INFO -     gaap_revision_6m: 807 stocks flagged
+2026-03-16 13:22:52,446 - __main__ - INFO -     gaap_revision_momentum: 1,189 stocks flagged
+2026-03-16 13:22:52,446 - __main__ - INFO -     gaap_vs_norm_revision_spread: 1,060 stocks flagged
+2026-03-16 13:22:52,446 - __main__ - INFO -     goodwill_change_rate: 1,331 stocks flagged
+2026-03-16 13:22:52,446 - __main__ - INFO -     net_income_adjustment_pct: 175 stocks flagged
+2026-03-16 13:22:52,446 - __main__ - INFO -     net_income_adjustment_ratio_fy: 2,163 stocks flagged
+2026-03-16 13:22:52,446 - __main__ - INFO -     net_income_adjustment_ratio_ltm: 843 stocks flagged
+2026-03-16 13:22:52,446 - __main__ - INFO -     restructuring_intensity: 119 stocks flagged
+2026-03-16 13:22:52,447 - __main__ - INFO -     revenue_surprise_pct: 815 stocks flagged
+2026-03-16 13:22:52,447 - __main__ - INFO -     revision_quality_divergence: 944 stocks flagged
+2026-03-16 13:22:52,448 - __main__ - INFO -   Mahalanobis distance — computed: 1,298, mean: 3.67, p95: 8.58
+2026-03-16 13:22:52,449 - __main__ - INFO -   Sector-relative outliers (|z| > 2): 232
+2026-03-16 13:22:52,449 - __main__ - INFO -   Severity score — mean: 39.89, median: 36.56, max: 100.00
+2026-03-16 13:22:52,450 - __main__ - INFO -   Conditional P(anomaly) — mean: 0.330, median: 0.306, max: 0.500
+2026-03-16 13:22:52,450 - __main__ - INFO -   Multi-flag alerts: 815
+2026-03-16 13:22:52,450 - __main__ - INFO -   Stocks in top 10% risk rank: 639
+2026-03-16 13:22:52,451 - __main__ - INFO -   Benford's Law chi² p-value: 0.0372 (⚠️ suspicious)
+2026-03-16 13:22:52,452 - __main__ - INFO -   Best-fit distributions per feature:
+2026-03-16 13:22:52,454 - __main__ - INFO -     asset_sale_boost: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,455 - __main__ - INFO -     discontinued_ops_impact: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,456 - __main__ - INFO -     ebit_adjustment_pct_fy: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,458 - __main__ - INFO -     ebit_adjustment_pct_ltm: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,459 - __main__ - INFO -     ebitda_adjustment_pct_fy: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,460 - __main__ - INFO -     ebitda_adjustment_pct_ltm: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,461 - __main__ - INFO -     ebitda_adjustment_ratio: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,462 - __main__ - INFO -     eps_adjustment_pct: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,463 - __main__ - INFO -     eps_adjustment_ratio_comp: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,464 - __main__ - INFO -     eps_adjustment_ratio: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,465 - __main__ - INFO -     eps_adjustment_spread_fy: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,466 - __main__ - INFO -     eps_adjustment_spread_ltm: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,467 - __main__ - INFO -     eps_growth_accel: student_t (mean KS p=0.076)
+2026-03-16 13:22:52,468 - __main__ - INFO -     eps_surprise_pct: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,469 - __main__ - INFO -     exceptional_items_frequency: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,470 - __main__ - INFO -     exceptional_items_to_ebitda: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,471 - __main__ - INFO -     forward_eps_gaap_adj_spread: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,472 - __main__ - INFO -     gaap_adj_eps_gap_pct: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,473 - __main__ - INFO -     gaap_revision_1m: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,474 - __main__ - INFO -     gaap_revision_1y: student_t (mean KS p=0.002)
+2026-03-16 13:22:52,475 - __main__ - INFO -     gaap_revision_3m: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,476 - __main__ - INFO -     gaap_revision_6m: student_t (mean KS p=0.001)
+2026-03-16 13:22:52,477 - __main__ - INFO -     gaap_revision_momentum: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,478 - __main__ - INFO -     gaap_vs_norm_revision_spread: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,479 - __main__ - INFO -     goodwill_change_rate: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,480 - __main__ - INFO -     net_income_adjustment_pct: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,481 - __main__ - INFO -     net_income_adjustment_ratio_fy: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,482 - __main__ - INFO -     net_income_adjustment_ratio_ltm: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,483 - __main__ - INFO -     restructuring_intensity: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,484 - __main__ - INFO -     revenue_surprise_pct: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,486 - __main__ - INFO -     revision_quality_divergence: student_t (mean KS p=0.000)
+2026-03-16 13:22:52,508 - root - INFO - Exporting 6388 rows to analytics.accounting_anomaly_analysis
+2026-03-16 13:22:55,705 - root - INFO - Export complete: analytics.accounting_anomaly_analysis
+2026-03-16 13:22:55,705 - __main__ - INFO -   ✓ Exported 6,388 rows → analytics.accounting_anomaly_analysis
+2026-03-16 13:22:55,705 - __main__ - INFO - ✓ Accounting anomaly analysis complete: 6,388 stocks
+2026-03-16 13:22:55,707 - __main__ - INFO -   ⏱ Step 5b completed in 39.0s
+2026-03-16 13:22:55,707 - __main__ - INFO - 
+2026-03-16 13:33:04,696 - __main__ - INFO - ================================================================================
+2026-03-16 13:33:04,696 - __main__ - INFO - Expected Returns Analytics Pipeline v3.6
+2026-03-16 13:33:04,696 - __main__ - INFO - ================================================================================
+2026-03-16 13:33:04,696 - __main__ - INFO - 
+2026-03-16 13:33:04,739 - __main__ - INFO - 🔧 Numba: True, Joblib: True, ArviZ: True
+2026-03-16 13:33:04,739 - __main__ - INFO -    n_jobs=-1, max_features/cat=100, caching=on
+2026-03-16 13:33:04,739 - __main__ - INFO - 
+2026-03-16 13:33:04,739 - __main__ - INFO - 📦 Step 1: Loading feature data (v3.6: equities MV + feature views + all stock features MV)...
+2026-03-16 13:33:04,739 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:33:04,740 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-03-16 13:33:07,423 - root - INFO - Loaded 6388 rows from public.mv_equities
+2026-03-16 13:33:07,424 - root - INFO - Backfill complete. Columns: 677
+2026-03-16 13:33:07,460 - root - INFO - Loaded 24 feature categories from database
+2026-03-16 13:33:07,460 - __main__ - INFO - Loaded 24 feature categories (226 total features)
+2026-03-16 13:33:07,460 - __main__ - INFO - All feature categories have ≥80%% coverage
+2026-03-16 13:33:07,460 - __main__ - INFO - Loaded expected returns data: 6388 stocks × 677 features
+2026-03-16 13:33:07,460 - __main__ - INFO - ✓ Loaded mv_equities: 6,388 stocks × 677 features
+2026-03-16 13:33:07,491 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-03-16 13:33:07,491 - root - INFO - Loading view: public.vw_features_analyst_sentiment
+2026-03-16 13:33:07,809 - root - INFO - Loaded 6388 rows from vw_features_analyst_sentiment
+2026-03-16 13:33:07,809 - root - INFO - Loading view: public.vw_features_balance_sheet
+2026-03-16 13:33:08,225 - root - INFO - Loaded 6388 rows from vw_features_balance_sheet
+2026-03-16 13:33:08,226 - root - INFO - Loading view: public.vw_features_cashflow
+2026-03-16 13:33:08,763 - root - INFO - Loaded 6388 rows from vw_features_cashflow
+2026-03-16 13:33:08,763 - root - INFO - Loading view: public.vw_features_composite_scores
+2026-03-16 13:33:09,142 - root - INFO - Loaded 6388 rows from vw_features_composite_scores
+2026-03-16 13:33:09,142 - root - INFO - Loading view: public.vw_features_cost_structure
+2026-03-16 13:33:09,456 - root - INFO - Loaded 6388 rows from vw_features_cost_structure
+2026-03-16 13:33:09,457 - root - INFO - Loading view: public.vw_features_dividends
+2026-03-16 13:33:09,638 - root - INFO - Loaded 6388 rows from vw_features_dividends
+2026-03-16 13:33:09,638 - root - INFO - Loading view: public.vw_features_earnings
+2026-03-16 13:33:10,135 - root - INFO - Loaded 6388 rows from vw_features_earnings
+2026-03-16 13:33:10,135 - root - INFO - Loading view: public.vw_features_employment
+2026-03-16 13:33:10,328 - root - INFO - Loaded 6388 rows from vw_features_employment
+2026-03-16 13:33:10,328 - root - INFO - Loading view: public.vw_features_growth
+2026-03-16 13:33:10,857 - root - INFO - Loaded 6388 rows from vw_features_growth
+2026-03-16 13:33:10,857 - root - INFO - Loading view: public.vw_features_leverage_liquidity
+2026-03-16 13:33:11,406 - root - INFO - Loaded 6388 rows from vw_features_leverage_liquidity
+2026-03-16 13:33:11,406 - root - INFO - Loading view: public.vw_features_momentum
+2026-03-16 13:33:11,663 - root - INFO - Loaded 6388 rows from vw_features_momentum
+2026-03-16 13:33:11,663 - root - INFO - Loading view: public.vw_features_profitability
+2026-03-16 13:33:12,258 - root - INFO - Loaded 6388 rows from vw_features_profitability
+2026-03-16 13:33:12,258 - root - INFO - Loading view: public.vw_features_quality_risk
+2026-03-16 13:33:12,579 - root - INFO - Loaded 6388 rows from vw_features_quality_risk
+2026-03-16 13:33:12,579 - root - INFO - Loading view: public.vw_features_technical_analysis
+2026-03-16 13:33:12,726 - root - INFO - Loaded 6388 rows from vw_features_technical_analysis
+2026-03-16 13:33:12,727 - root - INFO - Loading view: public.vw_features_temporal
+2026-03-16 13:33:12,893 - root - INFO - Loaded 6388 rows from vw_features_temporal
+2026-03-16 13:33:12,893 - root - INFO - Loading view: public.vw_features_unusual_items
+2026-03-16 13:33:13,065 - root - INFO - Loaded 6388 rows from vw_features_unusual_items
+2026-03-16 13:33:13,066 - root - INFO - Loading view: public.vw_features_valuation_ratios
+2026-03-16 13:33:13,450 - root - INFO - Loaded 6388 rows from vw_features_valuation_ratios
+2026-03-16 13:33:14,598 - root - INFO - Backfill complete. Columns: 718
+2026-03-16 13:33:14,644 - __main__ - INFO - Kalman momentum filter applied to 5 columns
+2026-03-16 13:33:15,231 - __main__ - INFO - Loaded all stock features: 6388 stocks × 728 features, 17 view specs
+2026-03-16 13:33:15,231 - __main__ - INFO - ✓ Loaded feature views: 6,388 stocks × 728 features
+2026-03-16 13:33:15,231 - __main__ - INFO -   View specs loaded: 17 views
+2026-03-16 13:33:15,231 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-03-16 13:33:19,132 - root - INFO - Loaded 6388 rows from public.mv_all_stock_features
+2026-03-16 13:33:19,132 - __main__ - INFO - Loaded mv_all_stock_features: 6388 rows × 818 columns
+2026-03-16 13:33:19,132 - __main__ - INFO - ✓ Loaded mv_all_stock_features: 6,388 stocks × 818 features
+2026-03-16 13:33:19,191 - __main__ - INFO -   Schema metadata: 674 columns
+2026-03-16 13:33:19,192 - __main__ - INFO -   Feature registry: 63 functions
+2026-03-16 13:33:19,230 - __main__ - INFO -   mv_equities spec unavailable: DataFrame must contain a 'ticker' column
+2026-03-16 13:33:19,230 - __main__ - INFO - 
+2026-03-16 13:33:19,230 - __main__ - INFO - 📦 Step 1b: Pre-computing historical target drift enrichment...
+2026-03-16 13:33:19,230 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:33:19,264 - root - INFO - Loaded 674 column definitions from public.equities_schema_metadata
+2026-03-16 13:33:19,264 - root - INFO - Cached equities schema: 674 columns across 26 roles
+2026-03-16 13:33:19,264 - __main__ - INFO - Column lists derived from equities schema (46 total columns)
+2026-03-16 13:33:19,264 - __main__ - INFO - Historical price/target coverage: 40 / 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-03-16 13:33:19,282 - __main__ - INFO - Historical target drift enrichment: 12 derived columns added
+2026-03-16 13:33:19,282 - __main__ - INFO - ✓ Historical drift enrichment complete (12 derived columns)
+2026-03-16 13:33:19,282 - __main__ - INFO -   ⏱ Step 1 completed in 14.5s
+2026-03-16 13:33:19,282 - __main__ - INFO - 
+2026-03-16 13:33:19,282 - __main__ - INFO - 🎲 Step 2: Monte Carlo price target simulation (50,000 samples)...
+2026-03-16 13:33:19,282 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:33:27,961 - __main__ - INFO - Monte Carlo simulation: 5539 stocks processed
+2026-03-16 13:33:27,964 - __main__ - INFO - ✓ 5,539 stocks simulated
+2026-03-16 13:33:27,964 - __main__ - INFO -   Mean upside:  30.5%
+2026-03-16 13:33:27,965 - __main__ - INFO -   Median upside: 22.6%
+2026-03-16 13:33:27,965 - __main__ - INFO -   Positive prob (mean): 83.6%
+2026-03-16 13:33:27,966 - __main__ - INFO - Computed price_target_mc for 5539 / 5539 stocks (mean=6852.96)
+2026-03-16 13:33:27,967 - __main__ - INFO -   Monte Carlo targets (5,539 stocks): implied return=15.5%
+2026-03-16 13:33:28,109 - __main__ - INFO - Monte Carlo: computed detailed statistics for 5 / 5 columns
+2026-03-16 13:33:34,464 - __main__ - INFO - MCMC Student-t: μ=21.75 (±0.30), df=2.0
+2026-03-16 13:33:34,464 - __main__ - INFO - 
+  📐 Best-fit distribution: t (AIC=54038.6, KS p=0.000)
+2026-03-16 13:33:34,464 - __main__ - INFO - 
+  📉 VaR 1%: -29.6%  |  CVaR 5%: -22.8%
+2026-03-16 13:33:34,464 - __main__ - INFO -      Downside deviation: 16.41
+2026-03-16 13:33:34,464 - __main__ - INFO -      Gain/Loss ratio: 3.20
+2026-03-16 13:33:34,464 - __main__ - INFO - 
+  🏷️  Tiers: High-conviction=3015, Moderate=1784, Speculative=18, Avoid=739
+2026-03-16 13:33:34,464 - __main__ - INFO -   ⏱ Step 2 completed in 15.2s
+2026-03-16 13:33:34,464 - __main__ - INFO - 
+2026-03-16 13:33:34,464 - __main__ - INFO - 🎯 Step 3: Price target achievement model...
+2026-03-16 13:33:34,464 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:33:34,484 - __main__ - INFO - Price target achievement: merged 10 sentiment columns from feature views
+2026-03-16 13:33:34,486 - __main__ - INFO - Price target: merged 4 risk columns
+2026-03-16 13:33:35,298 - analytics.probability_analytics - INFO - MH sampler for price target: acceptance_rate=0.248, mean_posterior=29.363
+2026-03-16 13:33:50,124 - __main__ - INFO - Price target achievement: 6388 stocks processed
+2026-03-16 13:33:50,127 - __main__ - INFO - ✓ 6,388 stocks analyzed
+2026-03-16 13:33:50,128 - __main__ - INFO -   Mean achievement prob: 0.474
+2026-03-16 13:33:50,128 - __main__ - INFO -   Mean prob-weighted return: 7.5%
+2026-03-16 13:33:50,134 - __main__ - INFO - Computed price_target_prob_weighted for 6388 / 6388 stocks (mean=5633.28)
+2026-03-16 13:33:50,137 - __main__ - INFO -   Prob-weighted targets (6,388 stocks): implied return=5.1%
+2026-03-16 13:33:50,312 - __main__ - INFO - Price Target Achievement: computed detailed statistics for 5 / 5 columns
+2026-03-16 13:33:50,319 - __main__ - INFO -   ⏱ Step 3 completed in 15.9s
+2026-03-16 13:33:50,319 - __main__ - INFO - 
+2026-03-16 13:33:50,319 - __main__ - INFO - 📐 Step 4: Kalman-filtered price targets...
+2026-03-16 13:33:50,319 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:33:51,045 - __main__ - INFO - Kalman filter: 6387 stocks processed
+2026-03-16 13:33:51,047 - __main__ - INFO - ✓ 6,387 stocks filtered
+2026-03-16 13:33:51,047 - __main__ - INFO -   Mean filtered upside: 22.6%
+2026-03-16 13:33:51,132 - __main__ - INFO - Kalman Filter: computed detailed statistics for 3 / 3 columns
+2026-03-16 13:33:51,137 - __main__ - INFO -   ⏱ Step 4 completed in 0.8s
+2026-03-16 13:33:51,138 - __main__ - INFO - 
+2026-03-16 13:33:51,138 - __main__ - INFO - 📊 Step 5: Bayesian earnings beat analysis...
+2026-03-16 13:33:51,138 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:33:53,111 - __main__ - INFO - Earnings beat analysis: 6388 stocks processed
+2026-03-16 13:33:54,275 - __main__ - INFO - EPS streak enrichment: 8 columns added
+2026-03-16 13:34:53,845 - __main__ - INFO - Resampled beat enrichment: 12 columns added
+2026-03-16 13:34:54,180 - __main__ - INFO - ✓ 6,388 stocks analyzed
+2026-03-16 13:34:54,181 - __main__ - INFO -   Mean P(beat): 0.440
+2026-03-16 13:34:54,181 - __main__ - INFO -   Classified as 'likely_beat': 2842
+2026-03-16 13:34:54,181 - __main__ - INFO -   ⏱ Step 5 completed in 63.0s
+2026-03-16 13:34:54,181 - __main__ - INFO - 
+2026-03-16 13:34:54,181 - __main__ - INFO - 🔬 Step 5b: Accounting anomaly detection & analytics...
+2026-03-16 13:34:54,181 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:34:54,203 - __main__ - INFO - Accounting anomaly analysis: merged 32 columns from feature views
+2026-03-16 13:35:01,840 - analytics.probability_analytics - INFO - MH sampler for anomaly scores: acceptance_rate=0.195, threshold=35.87, mean_posterior=37.375
+2026-03-16 13:35:11,914 - analytics.probability_analytics - INFO - Anomaly MCMC converged: R̂=1.0000
+2026-03-16 13:35:11,915 - analytics.probability_analytics - INFO - AccountingAnomalyProbabilityModel: severity computed for 6388 stocks, 844 multi-flag alerts, mean conditional P(anomaly)=0.338
+2026-03-16 13:35:20,202 - __main__ - INFO - MCMC anomaly posterior: location=36.366
+2026-03-16 13:35:20,203 - __main__ - INFO - Accounting anomaly analysis: 6388 stocks processed
+2026-03-16 13:35:20,206 - __main__ - INFO -   Anomaly tier distribution:
+2026-03-16 13:35:20,206 - __main__ - INFO -     Clean: 1,710 (26.8%)
+2026-03-16 13:35:20,206 - __main__ - INFO -     Watch: 3,102 (48.6%)
+2026-03-16 13:35:20,206 - __main__ - INFO -     Flag: 1,447 (22.7%)
+2026-03-16 13:35:20,206 - __main__ - INFO -     Alert: 129 (2.0%)
+2026-03-16 13:35:20,208 - __main__ - INFO -   Anomaly score — mean: 37.4, median: 35.9, std: 17.6, max: 100.0
+2026-03-16 13:35:20,208 - __main__ - INFO -   Stocks with ≥1 flagged feature: 5,924, ≥10 flags: 844
+2026-03-16 13:35:20,208 - __main__ - INFO -   Per-feature anomaly flags:
+2026-03-16 13:35:20,208 - __main__ - INFO -     discontinued_ops_impact: 75 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     ebit_adjustment_pct_fy: 1,911 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     ebit_adjustment_pct_ltm: 250 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     ebitda_adjustment_pct_fy: 1,747 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     ebitda_adjustment_pct_ltm: 98 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     ebitda_adjustment_ratio: 151 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     eps_adj_ltm: 844 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     eps_adjustment_pct: 729 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     eps_adjustment_ratio: 720 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     eps_adjustment_ratio_comp: 720 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     eps_adjustment_spread_fy: 1,824 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     eps_adjustment_spread_ltm: 1,043 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     eps_growth_accel: 374 stocks flagged
+2026-03-16 13:35:20,208 - __main__ - INFO -     eps_surprise_pct: 669 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     exceptional_items_frequency: 463 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     exceptional_items_to_ebitda: 2,977 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     forward_eps_gaap_adj_spread: 1,697 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     gaap_adj_eps_gap_pct: 1,555 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     gaap_revision_1m: 1,107 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     gaap_revision_1y: 572 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     gaap_revision_3m: 984 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     gaap_revision_6m: 807 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     gaap_revision_momentum: 1,189 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     gaap_vs_norm_revision_spread: 1,060 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     goodwill_change_rate: 1,331 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     net_income_adjustment_pct: 175 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     net_income_adjustment_ratio_fy: 2,163 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     net_income_adjustment_ratio_ltm: 843 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     restructuring_intensity: 119 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     revenue_surprise_pct: 815 stocks flagged
+2026-03-16 13:35:20,209 - __main__ - INFO -     revision_quality_divergence: 944 stocks flagged
+2026-03-16 13:35:20,210 - __main__ - INFO -   Mahalanobis distance — computed: 1,298, mean: 3.73, p95: 8.78
+2026-03-16 13:35:20,210 - __main__ - INFO -   Sector-relative outliers (|z| > 2): 230
+2026-03-16 13:35:20,210 - __main__ - INFO -   Severity score — mean: 40.04, median: 36.68, max: 100.00
+2026-03-16 13:35:20,210 - __main__ - INFO -   Conditional P(anomaly) — mean: 0.338, median: 0.312, max: 0.513
+2026-03-16 13:35:20,210 - __main__ - INFO -   Multi-flag alerts: 844
+2026-03-16 13:35:20,210 - __main__ - INFO -   Stocks in top 10% risk rank: 639
+2026-03-16 13:35:20,210 - __main__ - INFO -   Benford's Law chi² p-value: 0.0372 (⚠️ suspicious)
+2026-03-16 13:35:20,211 - __main__ - INFO -   Best-fit distributions per feature:
+2026-03-16 13:35:20,211 - __main__ - INFO -     asset_sale_boost: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,212 - __main__ - INFO -     discontinued_ops_impact: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,212 - __main__ - INFO -     ebit_adjustment_pct_fy: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,212 - __main__ - INFO -     ebit_adjustment_pct_ltm: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,213 - __main__ - INFO -     ebitda_adjustment_pct_fy: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,213 - __main__ - INFO -     ebitda_adjustment_pct_ltm: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,213 - __main__ - INFO -     ebitda_adjustment_ratio: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,214 - __main__ - INFO -     eps_adj_ltm: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,214 - __main__ - INFO -     eps_adjustment_pct: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,214 - __main__ - INFO -     eps_adjustment_ratio_comp: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,215 - __main__ - INFO -     eps_adjustment_ratio: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,215 - __main__ - INFO -     eps_adjustment_spread_fy: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,216 - __main__ - INFO -     eps_adjustment_spread_ltm: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,216 - __main__ - INFO -     eps_growth_accel: student_t (mean KS p=0.076)
+2026-03-16 13:35:20,216 - __main__ - INFO -     eps_surprise_pct: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,217 - __main__ - INFO -     exceptional_items_frequency: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,217 - __main__ - INFO -     exceptional_items_to_ebitda: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,217 - __main__ - INFO -     forward_eps_gaap_adj_spread: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,218 - __main__ - INFO -     gaap_adj_eps_gap_pct: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,218 - __main__ - INFO -     gaap_revision_1m: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,218 - __main__ - INFO -     gaap_revision_1y: student_t (mean KS p=0.002)
+2026-03-16 13:35:20,219 - __main__ - INFO -     gaap_revision_3m: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,219 - __main__ - INFO -     gaap_revision_6m: student_t (mean KS p=0.001)
+2026-03-16 13:35:20,219 - __main__ - INFO -     gaap_revision_momentum: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,220 - __main__ - INFO -     gaap_vs_norm_revision_spread: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,220 - __main__ - INFO -     goodwill_change_rate: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,220 - __main__ - INFO -     net_income_adjustment_pct: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,221 - __main__ - INFO -     net_income_adjustment_ratio_fy: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,221 - __main__ - INFO -     net_income_adjustment_ratio_ltm: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,222 - __main__ - INFO -     restructuring_intensity: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,222 - __main__ - INFO -     revenue_surprise_pct: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,222 - __main__ - INFO -     revision_quality_divergence: student_t (mean KS p=0.000)
+2026-03-16 13:35:20,228 - root - INFO - Exporting 6388 rows to analytics.accounting_anomaly_analysis
+2026-03-16 13:35:23,201 - root - INFO - Export complete: analytics.accounting_anomaly_analysis
+2026-03-16 13:35:23,201 - __main__ - INFO -   ✓ Exported 6,388 rows → analytics.accounting_anomaly_analysis
+2026-03-16 13:35:23,201 - __main__ - INFO - ✓ Accounting anomaly analysis complete: 6,388 stocks
+2026-03-16 13:35:23,203 - __main__ - INFO -   ⏱ Step 5b completed in 29.0s
+2026-03-16 13:35:23,203 - __main__ - INFO - 
+2026-03-16 13:35:23,203 - __main__ - INFO - 🛡️ Step 5c: Credit risk & dividend safety analysis...
+2026-03-16 13:35:23,203 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:35:23,220 - __main__ - INFO - Credit risk analysis: merged 49 risk columns from feature views
+2026-03-16 13:35:30,957 - analytics.probability_analytics - INFO - Sector-adjusted distress: 3563 / 6388 stocks flagged (vs 1411 with global threshold)
+2026-03-16 13:35:31,035 - __main__ - INFO - Hierarchical MCMC credit risk: 49 sectors enriched
+2026-03-16 13:35:31,345 - __main__ - INFO - Ruin probability enrichment: 7 columns added
+2026-03-16 13:35:31,345 - __main__ - INFO - Credit risk analysis: 6388 stocks processed
+2026-03-16 13:35:31,349 - __main__ - INFO - ✓ Credit risk: 6,388 stocks, 3710 high/distressed
+2026-03-16 13:35:31,350 - __main__ - INFO -   Mean ruin probability: 0.048
+2026-03-16 13:35:31,357 - __main__ - INFO -   Merged 824 anomaly columns into credit risk DataFrame
+2026-03-16 13:35:37,080 - analytics.probability_analytics - INFO - Hierarchical sector MCMC for dividend FCF coverage: 41 sectors
+2026-03-16 13:35:37,087 - __main__ - INFO - Dividend safety analysis: 6388 stocks processed
+2026-03-16 13:35:37,090 - __main__ - INFO - ✓ Dividend safety: 6,388 stocks, 3188 at risk
+2026-03-16 13:35:37,090 - __main__ - INFO -   ⏱ Step 5c completed in 13.9s
+2026-03-16 13:35:37,090 - __main__ - INFO - 
+2026-03-16 13:35:37,090 - __main__ - INFO - 🔍 Step 5d: Running stock screening strategies...
+2026-03-16 13:35:37,090 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:35:37,132 - __main__ - INFO -   ✓ Productivity frontier scores added
+2026-03-16 13:35:37,134 - __main__ - INFO -    Reporting lag sentiment: corr=-0.035, p=0.0405, hypothesis=marginally significant (p < 0.10)
+2026-03-16 13:35:37,134 - __main__ - INFO - Quality screen: 0 stocks
+2026-03-16 13:35:37,134 - __main__ - WARNING - Quality screen returned 0 stocks — applying adaptive fallback.
+2026-03-16 13:35:37,134 - __main__ - WARNING - Adaptive screening: quality returned 0 stocks (0.0% < 1.0% threshold). Applying percentile-based fallback (top 10%).
+2026-03-16 13:35:37,141 - __main__ - INFO - Adaptive screening: quality fallback using piotroski_f_score >= 6.00 → 1164 stocks
+2026-03-16 13:35:38,073 - __main__ - INFO - Earnings quality screen: 1200 stocks
+2026-03-16 13:35:39,179 - __main__ - INFO - Value screen: 1044 stocks
+2026-03-16 13:35:40,279 - __main__ - INFO - Growth screen: 2796 stocks
+2026-03-16 13:35:41,292 - __main__ - INFO - GARP screen: 913 stocks
+2026-03-16 13:35:42,370 - __main__ - INFO - Dividend screen: 13 stocks
+2026-03-16 13:35:42,370 - __main__ - WARNING - Dividend screen returned only 13 stocks (0.2% of universe) — applying adaptive fallback.
+2026-03-16 13:35:42,370 - __main__ - WARNING - Adaptive screening: dividend returned 13 stocks (0.2% < 1.0% threshold). Applying percentile-based fallback (top 15%).
+2026-03-16 13:35:42,377 - __main__ - INFO - Adaptive screening: dividend fallback using piotroski_f_score >= 6.00 → 1164 stocks
+2026-03-16 13:35:43,061 - __main__ - INFO - Financial health screen: 1403 stocks
+2026-03-16 13:35:43,518 - __main__ - INFO - Valuation reversion screen: 464 stocks
+2026-03-16 13:35:44,576 - __main__ - INFO - Integrity growth screen: 1313 stocks
+2026-03-16 13:35:45,161 - __main__ - INFO - High-yield safe dividend screen: 41 stocks
+2026-03-16 13:35:45,179 - __main__ - INFO - Sector-relative ranking: 6388 stocks
+2026-03-16 13:35:46,365 - __main__ - INFO - Low-volatility quality screen: 2202 stocks
+2026-03-16 13:35:46,829 - __main__ - INFO - FCF compounders screen: 983 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO - Total return leaders screen: 6388 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ quality: 1,164 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ earnings_quality: 1,200 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ value: 1,044 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ growth: 2,796 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ garp: 913 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ dividend: 1,164 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ healthy: 1,403 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ valuation_reversion: 464 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ integrity_growth: 1,313 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ high_yield_safe: 41 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ sector_relative: 6,388 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ low_vol_quality: 2,202 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ fcf_compounders: 983 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ✓ total_return_leaders: 6,388 stocks
+2026-03-16 13:35:46,841 - __main__ - INFO -   ⏱ Step 5d completed in 9.8s
+2026-03-16 13:35:46,841 - __main__ - INFO - 
+2026-03-16 13:35:46,841 - __main__ - INFO - 🧪 Step 5e: Resampled Bayesian posterior returns...
+2026-03-16 13:35:46,842 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:35:56,732 - __main__ - INFO - Resampled posterior returns: 6388 stocks, mean posterior=-1.25%
+2026-03-16 13:35:56,877 - __main__ - INFO -   ✓ Resampled posteriors: 6,388 stocks
+2026-03-16 13:35:56,877 - __main__ - INFO -   Mean posterior return: -1.25%
+2026-03-16 13:35:56,877 - __main__ - INFO -   ⏱ Step 5e completed in 10.0s
+2026-03-16 13:35:56,877 - __main__ - INFO - 
+2026-03-16 13:35:56,877 - __main__ - INFO - 🔗 Step 6: Cross-model alignment...
+2026-03-16 13:35:56,877 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:35:56,885 - __main__ - INFO - Tri-model alignment: 5539 stocks, 4672 strong bullish
+2026-03-16 13:35:56,888 - __main__ - INFO - Strong consensus picks: 50 stocks
+2026-03-16 13:35:56,892 - __main__ - INFO - Quad-model alignment: 5539 stocks, full consensus (4/4): 1548
+2026-03-16 13:35:56,892 - __main__ - INFO -   Tri-model coverage: 5,539 stocks
+2026-03-16 13:35:56,892 - __main__ - INFO -     Strong Bearish (0/3): 572
+2026-03-16 13:35:56,892 - __main__ - INFO -     Bearish (1/3): 129
+2026-03-16 13:35:56,893 - __main__ - INFO -     Bullish (2/3): 166
+2026-03-16 13:35:56,893 - __main__ - INFO -     Strong Bullish (3/3): 4672
+2026-03-16 13:35:56,893 - __main__ - INFO -   Strong consensus picks: 50
+2026-03-16 13:35:56,893 - __main__ - INFO -   Quad-model (4/4): 1548 stocks
+2026-03-16 13:35:56,905 - __main__ - INFO -   MC ↔ Kalman correlation: 0.951
+2026-03-16 13:35:56,905 - __main__ - INFO -   ⏱ Step 6 completed in 0.0s
+2026-03-16 13:35:56,905 - __main__ - INFO - 
+2026-03-16 13:35:56,905 - __main__ - INFO - 📋 Step 7: Building expected_returns_summary (4-model merge)...
+2026-03-16 13:35:56,905 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:35:56,916 - __main__ - INFO - Enriched expected_returns_summary with 43 anomaly columns
+2026-03-16 13:35:56,919 - __main__ - INFO - Enriched expected_returns_summary with 16 credit risk columns
+2026-03-16 13:35:56,923 - __main__ - INFO - Enriched expected_returns_summary with 10 dividend safety columns
+2026-03-16 13:35:56,941 - __main__ - INFO - Enriched expected_returns_summary with 33 columns from mv_all_stock_features
+2026-03-16 13:35:56,945 - __main__ - INFO - Expected returns summary: 5539 stocks, 1548 strong bullish (4/4)
+2026-03-16 13:35:56,945 - __main__ - INFO -   ✓ 5,539 stocks in expected_returns_summary
+2026-03-16 13:35:56,945 - __main__ - INFO -   Full consensus (4/4): 1548 stocks
+2026-03-16 13:35:57,001 - __main__ - INFO - Quality scoring: 12 High, 1712 Above Avg
+2026-03-16 13:35:57,008 - __main__ - INFO -   High-quality full consensus: 744 stocks
+2026-03-16 13:35:57,053 - __main__ - INFO - Added z-scores and percentile ranks for 3 return metrics
+2026-03-16 13:35:57,055 - __main__ - INFO -   Agreement distribution:
+2026-03-16 13:35:57,055 - __main__ - INFO -     Strong Bearish (0/4): 424
+2026-03-16 13:35:57,056 - __main__ - INFO -     Bearish (1/4): 238
+2026-03-16 13:35:57,056 - __main__ - INFO -     Neutral (2/4): 152
+2026-03-16 13:35:57,056 - __main__ - INFO -     Bullish (3/4): 3177
+2026-03-16 13:35:57,057 - __main__ - INFO -     Strong Bullish (4/4): 1548
+2026-03-16 13:35:57,127 - __main__ - INFO - Cross-model diagnostics: tail agreement=94.7%, mean dispersion=9.21
+2026-03-16 13:35:57,130 - __main__ - INFO - 
+  🔬 Cross-Model Diagnostics:
+2026-03-16 13:35:57,130 - __main__ - INFO -      Direction agreement: 94.7%
+2026-03-16 13:35:57,130 - __main__ - INFO -      Mean inter-model dispersion: 9.21
+2026-03-16 13:35:57,130 - __main__ - INFO -      Kendall τ (expected_upside_pct ↔ filtered_upside): 0.917 (p=0.0000)
+2026-03-16 13:35:57,130 - __main__ - INFO -      Kendall τ (expected_upside_pct ↔ expected_return_prob_weighted): 0.502 (p=0.0000)
+2026-03-16 13:35:57,130 - __main__ - INFO -      Kendall τ (filtered_upside ↔ expected_return_prob_weighted): 0.529 (p=0.0000)
+2026-03-16 13:35:57,184 - __main__ - INFO - 
+  🏢 Sector Analytics: 59 sectors
+2026-03-16 13:35:57,248 - __main__ - INFO -    Hierarchical MCMC: 52 sector posteriors (Bayesian shrinkage)
+2026-03-16 13:35:57,248 - __main__ - INFO -      Electronic Equipment Instruments and Components: raw=19.2% → posterior=19.7% (shrinkage=0.95)
+2026-03-16 13:35:57,248 - __main__ - INFO -      Wireless Telecommunication Services: raw=13.3% → posterior=16.7% (shrinkage=0.80)
+2026-03-16 13:35:57,248 - __main__ - INFO -      Household Durables: raw=34.3% → posterior=33.9% (shrinkage=0.91)
+2026-03-16 13:35:57,249 - __main__ - INFO -      Metals and Mining: raw=29.5% → posterior=29.5% (shrinkage=0.97)
+2026-03-16 13:35:57,249 - __main__ - INFO -      Technology Hardware Storage and Peripherals: raw=26.5% → posterior=27.1% (shrinkage=0.86)
+2026-03-16 13:35:57,731 - analytics.statistical_analysis - INFO - Multi-level hierarchical MCMC: 9 levels, 304 total groups for 'expected_upside_pct'
+2026-03-16 13:35:57,732 - __main__ - INFO -    Multi-level MCMC: 9 category levels, 304 group posteriors
+2026-03-16 13:35:57,733 - __main__ - INFO -      [region] Europe: raw=38.3% → posterior=38.2% (n=1569, shrink=0.99)
+2026-03-16 13:35:57,733 - __main__ - INFO -      [region] United States and Canada: raw=36.2% → posterior=36.1% (n=1714, shrink=0.99)
+2026-03-16 13:35:57,733 - __main__ - INFO -      [region] Latin America and Caribbean: raw=35.9% → posterior=35.7% (n=229, shrink=0.96)
+2026-03-16 13:35:57,733 - __main__ - INFO -      [region] Africa / Middle East: raw=30.4% → posterior=30.4% (n=280, shrink=0.97)
+2026-03-16 13:35:57,733 - __main__ - INFO -      [region] Asia / Pacific: raw=17.3% → posterior=17.4% (n=1747, shrink=0.99)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] LU: raw=68.9% → posterior=58.9% (n=25, shrink=0.68)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] GB: raw=50.7% → posterior=50.3% (n=292, shrink=0.97)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] DE: raw=47.0% → posterior=46.5% (n=172, shrink=0.95)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] IE: raw=45.9% → posterior=44.1% (n=32, shrink=0.76)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] NL: raw=45.0% → posterior=44.0% (n=56, shrink=0.85)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] MX: raw=43.1% → posterior=41.8% (n=46, shrink=0.82)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] SE: raw=41.2% → posterior=41.0% (n=166, shrink=0.94)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] MT: raw=113.9% → posterior=40.4% (n=3, shrink=0.03)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] FR: raw=40.6% → posterior=40.4% (n=161, shrink=0.94)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] IT: raw=40.3% → posterior=40.2% (n=104, shrink=0.91)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] VG: raw=149.3% → posterior=39.0% (n=3, shrink=0.03)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] JE: raw=40.4% → posterior=38.3% (n=3, shrink=0.03)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] AE: raw=39.9% → posterior=37.8% (n=36, shrink=0.78)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] BE: raw=37.6% → posterior=37.7% (n=41, shrink=0.80)
+2026-03-16 13:35:57,734 - __main__ - INFO -      [country] US: raw=37.5% → posterior=37.5% (n=1498, shrink=0.99)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] SI: raw=-4.3% → posterior=37.0% (n=3, shrink=0.03)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] HU: raw=8.7% → posterior=36.7% (n=4, shrink=0.05)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] BR: raw=36.4% → posterior=36.4% (n=124, shrink=0.93)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] KY: raw=45.6% → posterior=36.2% (n=4, shrink=0.05)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] SA: raw=36.6% → posterior=35.9% (n=75, shrink=0.88)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] CY: raw=6.4% → posterior=35.8% (n=5, shrink=0.08)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] TR: raw=36.8% → posterior=35.6% (n=44, shrink=0.81)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] ID: raw=41.6% → posterior=35.2% (n=29, shrink=0.74)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] CZ: raw=4.3% → posterior=34.6% (n=6, shrink=0.11)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] PE: raw=8.1% → posterior=34.3% (n=4, shrink=0.05)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] HR: raw=7.3% → posterior=33.9% (n=7, shrink=0.14)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] DK: raw=32.3% → posterior=33.6% (n=36, shrink=0.78)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] CO: raw=15.8% → posterior=33.6% (n=6, shrink=0.11)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] ZA: raw=34.2% → posterior=33.3% (n=35, shrink=0.78)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] PT: raw=14.0% → posterior=33.1% (n=9, shrink=0.21)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] QA: raw=35.9% → posterior=32.2% (n=12, shrink=0.32)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] ES: raw=30.0% → posterior=31.3% (n=52, shrink=0.84)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] RO: raw=-15.4% → posterior=30.7% (n=7, shrink=0.14)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] MA: raw=36.4% → posterior=30.6% (n=3, shrink=0.03)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] CH: raw=29.1% → posterior=29.8% (n=114, shrink=0.92)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] IL: raw=29.4% → posterior=29.7% (n=24, shrink=0.66)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] GR: raw=22.1% → posterior=29.0% (n=20, shrink=0.57)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] KW: raw=12.4% → posterior=28.4% (n=6, shrink=0.11)
+2026-03-16 13:35:57,735 - __main__ - INFO -      [country] CL: raw=19.9% → posterior=28.0% (n=17, shrink=0.49)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] CA: raw=27.2% → posterior=27.6% (n=216, shrink=0.96)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] BM: raw=19.6% → posterior=26.9% (n=19, shrink=0.55)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] HK: raw=28.0% → posterior=26.5% (n=60, shrink=0.86)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] SG: raw=31.5% → posterior=26.1% (n=22, shrink=0.62)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] FI: raw=24.2% → posterior=25.8% (n=80, shrink=0.89)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] EG: raw=20.8% → posterior=25.4% (n=18, shrink=0.52)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] AU: raw=25.9% → posterior=24.6% (n=56, shrink=0.85)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] AT: raw=19.6% → posterior=24.5% (n=29, shrink=0.74)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] PL: raw=19.8% → posterior=23.0% (n=48, shrink=0.83)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] IN: raw=22.3% → posterior=22.1% (n=204, shrink=0.95)
+2026-03-16 13:35:57,736 - __main__ - INFO -      [country] OM: raw=-5.4% → posterior=20.1% (n=11, shrink=0.29)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] GB: raw=52.0% → posterior=51.6% (n=298, shrink=0.97)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] DE: raw=50.0% → posterior=49.3% (n=181, shrink=0.95)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] SE: raw=41.9% → posterior=41.7% (n=169, shrink=0.94)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] MX: raw=42.9% → posterior=41.5% (n=42, shrink=0.81)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] BE: raw=40.7% → posterior=40.2% (n=38, shrink=0.79)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] FR: raw=40.0% → posterior=39.9% (n=161, shrink=0.94)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] US: raw=38.6% → posterior=38.6% (n=1688, shrink=0.99)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] IT: raw=38.6% → posterior=38.6% (n=102, shrink=0.91)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] IE: raw=26.2% → posterior=37.6% (n=4, shrink=0.05)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] SI: raw=-4.3% → posterior=37.0% (n=3, shrink=0.03)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] HU: raw=-7.4% → posterior=36.9% (n=3, shrink=0.03)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] AE: raw=38.7% → posterior=36.8% (n=33, shrink=0.77)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] BR: raw=36.3% → posterior=36.2% (n=120, shrink=0.92)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] TR: raw=37.2% → posterior=35.9% (n=43, shrink=0.81)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] SA: raw=36.6% → posterior=35.9% (n=75, shrink=0.88)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] ID: raw=41.6% → posterior=35.2% (n=29, shrink=0.74)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] CZ: raw=-1.7% → posterior=35.2% (n=5, shrink=0.08)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] PE: raw=10.8% → posterior=35.0% (n=3, shrink=0.03)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] NL: raw=34.2% → posterior=34.9% (n=50, shrink=0.83)
+2026-03-16 13:35:57,737 - __main__ - INFO -      [trading_country] HR: raw=7.3% → posterior=33.9% (n=7, shrink=0.14)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] DK: raw=32.3% → posterior=33.7% (n=34, shrink=0.77)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] CO: raw=15.8% → posterior=33.6% (n=6, shrink=0.11)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] QA: raw=35.9% → posterior=32.2% (n=12, shrink=0.32)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] PT: raw=11.5% → posterior=31.6% (n=10, shrink=0.25)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] ES: raw=29.8% → posterior=31.2% (n=51, shrink=0.84)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] HK: raw=31.3% → posterior=30.6% (n=196, shrink=0.95)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] GR: raw=21.6% → posterior=30.6% (n=16, shrink=0.46)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] MA: raw=36.4% → posterior=30.6% (n=3, shrink=0.03)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] CL: raw=21.3% → posterior=29.1% (n=16, shrink=0.46)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] CA: raw=28.5% → posterior=28.9% (n=215, shrink=0.96)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] KW: raw=12.4% → posterior=28.4% (n=6, shrink=0.11)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] CH: raw=26.2% → posterior=27.3% (n=95, shrink=0.90)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] RO: raw=-13.6% → posterior=27.2% (n=9, shrink=0.21)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] ZA: raw=24.8% → posterior=26.1% (n=33, shrink=0.77)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] IL: raw=-10.8% → posterior=26.0% (n=6, shrink=0.11)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] FI: raw=23.8% → posterior=25.4% (n=79, shrink=0.89)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] EG: raw=20.8% → posterior=25.4% (n=18, shrink=0.52)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] PL: raw=19.5% → posterior=22.5% (n=52, shrink=0.84)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] AT: raw=13.6% → posterior=22.5% (n=23, shrink=0.64)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] AU: raw=23.1% → posterior=22.2% (n=54, shrink=0.84)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] NO: raw=20.1% → posterior=21.8% (n=98, shrink=0.91)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] IN: raw=21.8% → posterior=21.6% (n=203, shrink=0.95)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] OM: raw=-5.4% → posterior=20.1% (n=11, shrink=0.29)
+2026-03-16 13:35:57,738 - __main__ - INFO -      [trading_country] TH: raw=21.7% → posterior=20.1% (n=22, shrink=0.62)
+2026-03-16 13:35:57,739 - __main__ - INFO -      [trading_country] NG: raw=-18.9% → posterior=18.0% (n=10, shrink=0.25)
+2026-03-16 13:35:57,739 - __main__ - INFO -      [trading_country] PH: raw=22.8% → posterior=17.8% (n=5, shrink=0.08)
+2026-03-16 13:35:57,739 - __main__ - INFO -      [trading_country] MY: raw=17.2% → posterior=17.2% (n=26, shrink=0.69)
+2026-03-16 13:35:57,739 - __main__ - INFO -      [trading_country] NZ: raw=12.0% → posterior=16.8% (n=6, shrink=0.11)
+2026-03-16 13:35:57,739 - __main__ - INFO -      [trading_country] VN: raw=13.2% → posterior=16.8% (n=7, shrink=0.14)
+2026-03-16 13:35:57,739 - __main__ - INFO -      [trading_country] SG: raw=9.6% → posterior=15.1% (n=11, shrink=0.29)
+2026-03-16 13:35:57,739 - __main__ - INFO -      [exchange] NasdaqGM: raw=83.0% → posterior=79.1% (n=107, shrink=0.91)
+2026-03-16 13:35:57,739 - __main__ - INFO -      [exchange] NasdaqCM: raw=82.2% → posterior=76.7% (n=72, shrink=0.88)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] AIM: raw=77.5% → posterior=75.2% (n=106, shrink=0.91)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] DB: raw=73.1% → posterior=48.6% (n=5, shrink=0.08)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] XTRA: raw=47.7% → posterior=47.7% (n=174, shrink=0.95)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] ISE: raw=26.2% → posterior=43.2% (n=4, shrink=0.05)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] OM: raw=42.8% → posterior=42.7% (n=167, shrink=0.94)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] BMV: raw=42.9% → posterior=42.7% (n=42, shrink=0.81)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] NasdaqGS: raw=42.4% → posterior=42.3% (n=616, shrink=0.98)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] ENXTBR: raw=40.7% → posterior=40.1% (n=38, shrink=0.79)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] ENXTPA: raw=40.0% → posterior=40.0% (n=161, shrink=0.94)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] IDX: raw=41.6% → posterior=39.9% (n=29, shrink=0.74)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] ADX: raw=40.7% → posterior=39.5% (n=20, shrink=0.57)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] NYSEAM: raw=55.0% → posterior=39.3% (n=6, shrink=0.11)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] CNSX: raw=82.4% → posterior=38.8% (n=3, shrink=0.03)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] BIT: raw=38.6% → posterior=38.7% (n=102, shrink=0.91)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] LSE: raw=37.9% → posterior=38.6% (n=192, shrink=0.95)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] OTCPK: raw=47.0% → posterior=37.7% (n=3, shrink=0.03)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] TSXV: raw=55.6% → posterior=37.7% (n=13, shrink=0.36)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] DFM: raw=35.7% → posterior=37.0% (n=13, shrink=0.36)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] IBSE: raw=37.2% → posterior=36.9% (n=43, shrink=0.81)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] SASE: raw=36.6% → posterior=36.5% (n=75, shrink=0.88)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] BOVESPA: raw=36.3% → posterior=36.3% (n=120, shrink=0.92)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] ENXTAM: raw=34.2% → posterior=35.8% (n=50, shrink=0.83)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] LJSE: raw=-4.3% → posterior=35.8% (n=3, shrink=0.03)
+2026-03-16 13:35:57,740 - __main__ - INFO -      [exchange] BUSE: raw=-7.4% → posterior=35.5% (n=3, shrink=0.03)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] BVL: raw=10.8% → posterior=33.6% (n=3, shrink=0.03)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] DSM: raw=35.9% → posterior=33.4% (n=12, shrink=0.32)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] CPSE: raw=32.3% → posterior=32.6% (n=34, shrink=0.77)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] SEP: raw=-1.7% → posterior=31.8% (n=5, shrink=0.08)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] BVC: raw=15.8% → posterior=31.7% (n=6, shrink=0.11)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] CBSE: raw=36.4% → posterior=30.7% (n=3, shrink=0.03)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] SEHK: raw=31.3% → posterior=30.6% (n=196, shrink=0.95)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] ZGSE: raw=7.3% → posterior=30.2% (n=7, shrink=0.14)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] BME: raw=29.8% → posterior=30.1% (n=51, shrink=0.84)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] ENXTLS: raw=11.5% → posterior=27.7% (n=10, shrink=0.25)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] NYSE: raw=27.0% → posterior=27.1% (n=884, shrink=0.99)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] JSE: raw=24.8% → posterior=26.8% (n=33, shrink=0.77)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] KWSE: raw=12.4% → posterior=26.7% (n=6, shrink=0.11)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] SWX: raw=26.2% → posterior=26.5% (n=95, shrink=0.90)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] TSX: raw=25.6% → posterior=25.7% (n=198, shrink=0.95)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] ATSE: raw=21.6% → posterior=25.6% (n=16, shrink=0.46)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] TASE: raw=-10.8% → posterior=25.4% (n=6, shrink=0.11)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] SNSE: raw=21.3% → posterior=24.9% (n=16, shrink=0.46)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] HLSE: raw=23.8% → posterior=24.0% (n=79, shrink=0.89)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] NSEI: raw=23.9% → posterior=23.8% (n=146, shrink=0.94)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] ASX: raw=23.1% → posterior=23.3% (n=54, shrink=0.84)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] CASE: raw=20.8% → posterior=23.0% (n=18, shrink=0.52)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] SGX: raw=9.6% → posterior=21.4% (n=11, shrink=0.29)
+2026-03-16 13:35:57,741 - __main__ - INFO -      [exchange] BVB: raw=-13.6% → posterior=21.3% (n=9, shrink=0.21)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] GBP: raw=52.1% → posterior=51.4% (n=296, shrink=0.97)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] SEK: raw=41.5% → posterior=40.9% (n=168, shrink=0.94)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] MXN: raw=42.9% → posterior=40.5% (n=42, shrink=0.81)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] IDR: raw=41.6% → posterior=38.7% (n=29, shrink=0.74)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] USD: raw=38.6% → posterior=38.6% (n=1691, shrink=0.99)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] EUR: raw=37.3% → posterior=37.2% (n=729, shrink=0.99)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] AED: raw=38.7% → posterior=36.8% (n=33, shrink=0.77)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] TRY: raw=37.2% → posterior=35.9% (n=43, shrink=0.81)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] SAR: raw=36.6% → posterior=35.9% (n=75, shrink=0.88)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] BRL: raw=36.3% → posterior=35.8% (n=120, shrink=0.92)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] QAR: raw=35.9% → posterior=32.3% (n=12, shrink=0.32)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] DKK: raw=32.3% → posterior=31.9% (n=34, shrink=0.77)
+2026-03-16 13:35:57,742 - __main__ - INFO -      [unit] HKD: raw=31.3% → posterior=31.2% (n=196, shrink=0.95)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] MAD: raw=36.4% → posterior=30.7% (n=3, shrink=0.03)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] PHP: raw=22.8% → posterior=29.9% (n=5, shrink=0.08)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] HUF: raw=-7.4% → posterior=29.4% (n=3, shrink=0.03)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] COP: raw=15.8% → posterior=28.9% (n=6, shrink=0.11)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] CAD: raw=28.5% → posterior=28.6% (n=215, shrink=0.96)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] KWD: raw=12.4% → posterior=28.6% (n=6, shrink=0.11)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] NZD: raw=12.0% → posterior=28.5% (n=6, shrink=0.11)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] VND: raw=13.2% → posterior=28.1% (n=7, shrink=0.14)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] CZK: raw=-1.7% → posterior=28.0% (n=5, shrink=0.08)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] CHF: raw=26.2% → posterior=26.6% (n=95, shrink=0.90)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] CLP: raw=21.3% → posterior=26.3% (n=16, shrink=0.46)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] ZAR: raw=24.8% → posterior=26.2% (n=33, shrink=0.77)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] ILS: raw=-10.8% → posterior=26.1% (n=6, shrink=0.11)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] EGP: raw=20.8% → posterior=25.5% (n=18, shrink=0.52)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] THB: raw=21.7% → posterior=25.1% (n=22, shrink=0.62)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] SGD: raw=9.6% → posterior=24.5% (n=11, shrink=0.29)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] AUD: raw=23.1% → posterior=24.2% (n=54, shrink=0.84)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] INR: raw=21.8% → posterior=22.2% (n=203, shrink=0.95)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] PLN: raw=19.5% → posterior=21.3% (n=52, shrink=0.84)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] MYR: raw=17.2% → posterior=21.3% (n=26, shrink=0.69)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] RON: raw=-13.6% → posterior=21.1% (n=9, shrink=0.21)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] NOK: raw=20.1% → posterior=21.0% (n=98, shrink=0.91)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] OMR: raw=-5.4% → posterior=20.2% (n=11, shrink=0.29)
+2026-03-16 13:35:57,743 - __main__ - INFO -      [unit] NGN: raw=-18.9% → posterior=18.2% (n=10, shrink=0.25)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [unit] KRW: raw=14.6% → posterior=16.0% (n=97, shrink=0.91)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [unit] TWD: raw=12.8% → posterior=14.4% (n=103, shrink=0.91)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [unit] JPY: raw=11.3% → posterior=11.8% (n=345, shrink=0.97)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [unit] CNY: raw=11.4% → posterior=11.7% (n=592, shrink=0.98)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [sector] Health Care: raw=55.2% → posterior=54.9% (n=728, shrink=0.99)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [sector] Consumer Discretionary: raw=37.1% → posterior=37.1% (n=797, shrink=0.99)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [sector] Communication Services: raw=31.4% → posterior=30.8% (n=249, shrink=0.96)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [sector] Information Technology: raw=30.8% → posterior=30.7% (n=841, shrink=0.99)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [sector] Consumer Staples: raw=26.0% → posterior=25.9% (n=511, shrink=0.98)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [sector] Industrials: raw=25.6% → posterior=25.7% (n=1252, shrink=0.99)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [sector] Materials: raw=24.3% → posterior=24.2% (n=611, shrink=0.98)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [sector] Energy: raw=9.7% → posterior=10.5% (n=322, shrink=0.97)
+2026-03-16 13:35:57,744 - __main__ - INFO -      [sector] Utilities: raw=9.7% → posterior=10.1% (n=228, shrink=0.96)
+2026-03-16 13:35:57,745 - __main__ - INFO -      [industry] Biotechnology: raw=82.5% → posterior=81.3% (n=212, shrink=0.95)
+2026-03-16 13:35:57,745 - __main__ - INFO -      [industry] Software: raw=58.4% → posterior=57.1% (n=215, shrink=0.96)
+2026-03-16 13:35:57,745 - __main__ - INFO -      [industry] Health Care Technology: raw=53.8% → posterior=54.1% (n=27, shrink=0.71)
+2026-03-16 13:35:57,745 - __main__ - INFO -      [industry] Life Sciences Tools and Services: raw=51.9% → posterior=52.3% (n=66, shrink=0.87)
+2026-03-16 13:35:57,745 - __main__ - INFO -      [industry] Professional Services: raw=54.8% → posterior=51.9% (n=90, shrink=0.90)
+2026-03-16 13:35:57,745 - __main__ - INFO -      [industry] Pharmaceuticals: raw=47.3% → posterior=47.8% (n=176, shrink=0.95)
+2026-03-16 13:35:57,745 - __main__ - INFO -      [industry] Interactive Media and Services: raw=50.4% → posterior=47.0% (n=48, shrink=0.83)
+2026-03-16 13:35:57,745 - __main__ - INFO -      [industry] Health Care Equipment and Supplies: raw=42.5% → posterior=43.4% (n=122, shrink=0.92)
+2026-03-16 13:35:57,745 - __main__ - INFO -      [industry] Hotels Restaurants and Leisure: raw=43.4% → posterior=43.0% (n=164, shrink=0.94)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Distributors: raw=49.6% → posterior=41.2% (n=12, shrink=0.32)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Media: raw=42.7% → posterior=40.7% (n=74, shrink=0.88)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Entertainment: raw=40.1% → posterior=39.0% (n=81, shrink=0.89)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Specialty Retail: raw=38.5% → posterior=38.4% (n=154, shrink=0.94)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] IT Services: raw=38.4% → posterior=37.8% (n=109, shrink=0.92)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Diversified Consumer Services: raw=37.2% → posterior=37.2% (n=44, shrink=0.81)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Leisure Products: raw=37.2% → posterior=37.2% (n=29, shrink=0.74)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Passenger Airlines: raw=39.0% → posterior=36.4% (n=42, shrink=0.81)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Health Care Providers and Services: raw=34.4% → posterior=36.0% (n=125, shrink=0.93)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Textiles Apparel and Luxury Goods: raw=35.2% → posterior=35.4% (n=70, shrink=0.88)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Automobile Components: raw=35.1% → posterior=35.3% (n=116, shrink=0.92)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Household Durables: raw=34.3% → posterior=34.5% (n=103, shrink=0.91)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Commercial Services and Supplies: raw=33.3% → posterior=32.5% (n=88, shrink=0.90)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Personal Care Products: raw=33.2% → posterior=31.8% (n=43, shrink=0.81)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Automobiles: raw=30.9% → posterior=31.8% (n=60, shrink=0.86)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Trading Companies and Distributors: raw=31.6% → posterior=30.9% (n=73, shrink=0.88)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Building Products: raw=31.3% → posterior=30.7% (n=74, shrink=0.88)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Broadline Retail: raw=28.7% → posterior=30.2% (n=45, shrink=0.82)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Construction Materials: raw=30.7% → posterior=29.8% (n=57, shrink=0.85)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Metals and Mining: raw=29.5% → posterior=29.3% (n=276, shrink=0.97)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Ground Transportation: raw=29.1% → posterior=28.6% (n=69, shrink=0.87)
+2026-03-16 13:35:57,746 - __main__ - INFO -      [industry] Technology Hardware Storage and Peripherals: raw=26.5% → posterior=27.1% (n=60, shrink=0.86)
+2026-03-16 13:35:57,747 - __main__ - INFO -      [industry] Paper and Forest Products: raw=26.0% → posterior=25.4% (n=23, shrink=0.64)
+2026-03-16 13:35:57,747 - __main__ - INFO -      [industry] Containers and Packaging: raw=24.8% → posterior=24.7% (n=32, shrink=0.76)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Consumer Staples Distribution and Retail: raw=24.4% → posterior=24.5% (n=96, shrink=0.91)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Industrial Conglomerates: raw=22.9% → posterior=23.4% (n=47, shrink=0.82)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Food Products: raw=22.5% → posterior=22.7% (n=190, shrink=0.95)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Tobacco: raw=16.9% → posterior=22.6% (n=13, shrink=0.36)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Beverages: raw=21.3% → posterior=21.8% (n=75, shrink=0.88)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Diversified Telecommunication Services: raw=20.3% → posterior=21.5% (n=79, shrink=0.89)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Machinery: raw=21.2% → posterior=21.4% (n=265, shrink=0.96)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Aerospace and Defense: raw=20.7% → posterior=21.2% (n=90, shrink=0.90)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Transportation Infrastructure: raw=20.1% → posterior=21.0% (n=51, shrink=0.84)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Air Freight and Logistics: raw=19.6% → posterior=20.9% (n=37, shrink=0.79)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Electronic Equipment Instruments and Components: raw=19.2% → posterior=19.7% (n=201, shrink=0.95)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Electrical Equipment: raw=19.0% → posterior=19.3% (n=179, shrink=0.95)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Household Products: raw=13.6% → posterior=18.8% (n=20, shrink=0.57)
+2026-03-16 13:35:57,748 - __main__ - INFO -      [industry] Construction and Engineering: raw=17.9% → posterior=18.5% (n=113, shrink=0.92)
+2026-03-16 13:35:57,749 - __main__ - INFO -      [industry] Communications Equipment: raw=15.1% → posterior=17.7% (n=50, shrink=0.83)
+2026-03-16 13:35:57,749 - __main__ - INFO -      [industry] Wireless Telecommunication Services: raw=13.3% → posterior=16.7% (n=41, shrink=0.80)
+2026-03-16 13:35:57,749 - __main__ - INFO -      [industry] Chemicals: raw=16.1% → posterior=16.5% (n=223, shrink=0.96)
+2026-03-16 13:35:57,749 - __main__ - INFO -      [style_class] Growth: raw=31.4% → posterior=31.4% (n=730, shrink=0.99)
+2026-03-16 13:35:57,749 - __main__ - INFO -      [style_class] Core: raw=31.1% → posterior=31.1% (n=3239, shrink=1.00)
+2026-03-16 13:35:57,750 - __main__ - INFO -      [style_class] Value: raw=28.9% → posterior=29.0% (n=1570, shrink=0.99)
+2026-03-16 13:35:57,750 - __main__ - INFO -      [size_class] Small Cap: raw=42.9% → posterior=42.8% (n=2852, shrink=1.00)
+2026-03-16 13:35:57,750 - __main__ - INFO -      [size_class] Mid Cap: raw=19.1% → posterior=19.2% (n=1599, shrink=0.99)
+2026-03-16 13:35:57,750 - __main__ - INFO -      [size_class] Large Cap: raw=14.9% → posterior=15.0% (n=1088, shrink=0.99)
+2026-03-16 13:35:57,750 - __main__ - INFO -      Biotechnology: MC mean=82.5%, consensus=78%, risk-adj=1.01
+2026-03-16 13:35:57,750 - __main__ - INFO -      Software: MC mean=58.4%, consensus=65%, risk-adj=1.23
+2026-03-16 13:35:57,750 - __main__ - INFO -      Professional Services: MC mean=54.8%, consensus=63%, risk-adj=0.93
+2026-03-16 13:35:57,751 - __main__ - INFO -      Health Care Technology: MC mean=53.8%, consensus=56%, risk-adj=1.03
+2026-03-16 13:35:57,751 - __main__ - INFO -      Life Sciences Tools and Services: MC mean=51.9%, consensus=65%, risk-adj=1.11
+2026-03-16 13:35:57,751 - __main__ - INFO -      Interactive Media and Services: MC mean=50.4%, consensus=69%, risk-adj=1.41
+2026-03-16 13:35:57,751 - __main__ - INFO -      Distributors: MC mean=49.6%, consensus=67%, risk-adj=1.72
+2026-03-16 13:35:57,751 - __main__ - INFO -      Pharmaceuticals: MC mean=47.3%, consensus=60%, risk-adj=0.83
+2026-03-16 13:35:57,751 - __main__ - INFO -      Hotels Restaurants and Leisure: MC mean=43.4%, consensus=54%, risk-adj=1.11
+2026-03-16 13:35:57,751 - __main__ - INFO -      Media: MC mean=42.7%, consensus=74%, risk-adj=1.03
+2026-03-16 13:35:57,751 - __main__ - INFO -      Health Care Equipment and Supplies: MC mean=42.5%, consensus=66%, risk-adj=1.08
+2026-03-16 13:35:57,751 - __main__ - INFO -      Entertainment: MC mean=40.1%, consensus=73%, risk-adj=1.15
+2026-03-16 13:35:57,751 - __main__ - INFO -      Passenger Airlines: MC mean=39.0%, consensus=67%, risk-adj=1.66
+2026-03-16 13:35:57,751 - __main__ - INFO -      Specialty Retail: MC mean=38.5%, consensus=66%, risk-adj=0.85
+2026-03-16 13:35:57,751 - __main__ - INFO -      IT Services: MC mean=38.4%, consensus=56%, risk-adj=1.23
+2026-03-16 13:35:57,751 - __main__ - INFO -      Leisure Products: MC mean=37.2%, consensus=66%, risk-adj=0.85
+2026-03-16 13:35:57,751 - __main__ - INFO -      Diversified Consumer Services: MC mean=37.2%, consensus=64%, risk-adj=1.56
+2026-03-16 13:35:57,751 - __main__ - INFO -      Textiles Apparel and Luxury Goods: MC mean=35.2%, consensus=60%, risk-adj=1.10
+2026-03-16 13:35:57,751 - __main__ - INFO -      Automobile Components: MC mean=35.1%, consensus=59%, risk-adj=0.86
+2026-03-16 13:35:57,751 - __main__ - INFO -      Health Care Providers and Services: MC mean=34.4%, consensus=59%, risk-adj=0.87
+2026-03-16 13:35:57,751 - __main__ - INFO -      Household Durables: MC mean=34.3%, consensus=60%, risk-adj=1.21
+2026-03-16 13:35:57,752 - __main__ - INFO -      Commercial Services and Supplies: MC mean=33.3%, consensus=56%, risk-adj=0.66
+2026-03-16 13:35:57,752 - __main__ - INFO -      Personal Care Products: MC mean=33.2%, consensus=58%, risk-adj=1.26
+2026-03-16 13:35:57,752 - __main__ - INFO -      Trading Companies and Distributors: MC mean=31.6%, consensus=51%, risk-adj=0.98
+2026-03-16 13:35:57,752 - __main__ - INFO -      Building Products: MC mean=31.3%, consensus=55%, risk-adj=1.21
+2026-03-16 13:35:57,752 - __main__ - INFO -      Automobiles: MC mean=30.9%, consensus=68%, risk-adj=1.48
+2026-03-16 13:35:57,752 - __main__ - INFO -      Construction Materials: MC mean=30.7%, consensus=70%, risk-adj=1.07
+2026-03-16 13:35:57,752 - __main__ - INFO -      Metals and Mining: MC mean=29.5%, consensus=67%, risk-adj=0.68
+2026-03-16 13:35:57,753 - __main__ - INFO -      Ground Transportation: MC mean=29.1%, consensus=57%, risk-adj=0.89
+2026-03-16 13:35:57,753 - __main__ - INFO -      Broadline Retail: MC mean=28.7%, consensus=64%, risk-adj=1.03
+2026-03-16 13:35:57,753 - __main__ - INFO -      Technology Hardware Storage and Peripherals: MC mean=26.5%, consensus=48%, risk-adj=1.00
+2026-03-16 13:35:57,753 - __main__ - INFO -      Paper and Forest Products: MC mean=26.0%, consensus=61%, risk-adj=1.17
+2026-03-16 13:35:57,753 - __main__ - INFO -      Containers and Packaging: MC mean=24.8%, consensus=66%, risk-adj=1.21
+2026-03-16 13:35:57,753 - __main__ - INFO -      Consumer Staples Distribution and Retail: MC mean=24.4%, consensus=58%, risk-adj=0.94
+2026-03-16 13:35:57,753 - __main__ - INFO -      Industrial Conglomerates: MC mean=22.9%, consensus=60%, risk-adj=1.27
+2026-03-16 13:35:57,753 - __main__ - INFO -      Food Products: MC mean=22.5%, consensus=58%, risk-adj=0.89
+2026-03-16 13:35:57,753 - __main__ - INFO -      Beverages: MC mean=21.3%, consensus=45%, risk-adj=0.96
+2026-03-16 13:35:57,753 - __main__ - INFO -      Machinery: MC mean=21.2%, consensus=56%, risk-adj=1.02
+2026-03-16 13:35:57,753 - __main__ - INFO -      Aerospace and Defense: MC mean=20.7%, consensus=51%, risk-adj=0.77
+2026-03-16 13:35:57,753 - __main__ - INFO -      Diversified Telecommunication Services: MC mean=20.3%, consensus=52%, risk-adj=0.66
+2026-03-16 13:35:57,753 - __main__ - INFO -      Transportation Infrastructure: MC mean=20.1%, consensus=55%, risk-adj=0.90
+2026-03-16 13:35:57,754 - __main__ - INFO -      Air Freight and Logistics: MC mean=19.6%, consensus=54%, risk-adj=0.78
+2026-03-16 13:35:57,754 - __main__ - INFO -      Electronic Equipment Instruments and Components: MC mean=19.2%, consensus=45%, risk-adj=0.67
+2026-03-16 13:35:57,754 - __main__ - INFO -      Electrical Equipment: MC mean=19.0%, consensus=44%, risk-adj=0.50
+2026-03-16 13:35:57,754 - __main__ - INFO -      Construction and Engineering: MC mean=17.9%, consensus=50%, risk-adj=0.89
+2026-03-16 13:35:57,754 - __main__ - INFO -      Tobacco: MC mean=16.9%, consensus=62%, risk-adj=0.87
+2026-03-16 13:35:57,754 - __main__ - INFO -      Chemicals: MC mean=16.1%, consensus=56%, risk-adj=0.56
+2026-03-16 13:35:57,754 - __main__ - INFO -      Communications Equipment: MC mean=15.1%, consensus=26%, risk-adj=0.49
+2026-03-16 13:35:57,754 - __main__ - INFO -      Semiconductors and Semiconductor Equipment: MC mean=14.6%, consensus=45%, risk-adj=0.51
+2026-03-16 13:35:57,754 - __main__ - INFO -      Multi-Utilities: MC mean=14.0%, consensus=53%, risk-adj=0.54
+2026-03-16 13:35:57,754 - __main__ - INFO -   ⏱ Step 7 completed in 0.8s
+2026-03-16 13:35:57,754 - __main__ - INFO - 
+2026-03-16 13:35:57,754 - __main__ - INFO - 🔀 Step 7a: Parallel MCMC return analysis...
+2026-03-16 13:35:57,754 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:36:01,073 - __main__ - INFO - Parallel MCMC: R̂=1.0000, converged=True, posterior mean=30.43
+2026-03-16 13:36:01,073 - __main__ - INFO -   R̂=1.0000, converged=True, posterior mean=30.43
+2026-03-16 13:36:01,935 - __main__ - INFO -    ✓ er_mcse_convergence.html
+2026-03-16 13:36:01,935 - __main__ - INFO -   ⏱ Step 7a completed in 4.2s
+2026-03-16 13:36:01,935 - __main__ - INFO - 
+2026-03-16 13:36:01,935 - __main__ - INFO - 🧮 Step 7b: Per-category Bayesian probability analytics...
+2026-03-16 13:36:01,935 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-03-16 13:36:01,993 - root - INFO - Loaded view category mapping from DB: 17 views, 689 total features
+2026-03-16 13:36:01,993 - __main__ - INFO -   Feature categories from 17 views → 17 categories, 689 total features

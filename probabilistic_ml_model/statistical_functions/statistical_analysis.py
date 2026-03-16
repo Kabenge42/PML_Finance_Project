@@ -2535,7 +2535,6 @@ def analyze_reporting_lag_sentiment(df: pd.DataFrame) -> dict:
         "sample_size": int(len(data)),
     }
 
-
 def analyze_accounting_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     """Deprecated: use AccountingAnomalyProbabilityModel.analyze_dataframe().
 
@@ -2551,7 +2550,7 @@ def analyze_accounting_anomalies(df: pd.DataFrame) -> pd.DataFrame:
         DeprecationWarning,
         stacklevel=2,
     )
-    from analytics.probability_analytics import (
+    from probabilistic_ml_model.statistical_functions.probability_analytics import (
         AccountingAnomalyProbabilityModel,
     )
 
@@ -2648,7 +2647,7 @@ def run_all_views_probability_analytics(
     dict[str, dict]
         Analytics results for each view
     """
-    from analytics.data_utils import get_identifier_cols_set
+    from probabilistic_ml_model.data_utils import get_identifier_cols_set
 
     all_results = {}
     identifier_cols = get_identifier_cols_set()
@@ -2700,7 +2699,7 @@ def export_probability_view_results(
     """
     from scipy import stats as sp_stats
 
-    from analytics.data_utils import export_to_analytics_db, load_identifier_columns
+    from probabilistic_ml_model.data_utils import export_to_analytics_db, load_identifier_columns
 
     if identifier_cols is None:
         identifier_cols = load_identifier_columns()

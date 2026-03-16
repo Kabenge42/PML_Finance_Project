@@ -555,7 +555,7 @@ class ExportConfig:
     if_exists : str, default "replace"
         Behaviour when a DB table already exists: 'fail', 'replace',
         'append', or 'delete_rows'.
-    output_dir : str, default "outputs"
+    output_dir : str, default "outputs/analytics/views"
         Base directory for file-based exports (CSV / JSON).
     orient : str, default "records"
         Pandas ``to_json`` *orient* parameter.
@@ -576,7 +576,7 @@ class ExportConfig:
 
     table_name: str = ""
     if_exists: str = "replace"
-    output_dir: str = "outputs"
+    output_dir: str = "outputs/analytics/views"
     orient: str = "records"
     json_indent: int = 2
     csv_sep: str = ","
@@ -670,7 +670,7 @@ def export_to_json(
     """
     Export DataFrame to a JSON file.
 
-    The default output directory is ``outputs``.
+    The default output directory is ``outputs/analytics/views``.
 
     Parameters
     ----------

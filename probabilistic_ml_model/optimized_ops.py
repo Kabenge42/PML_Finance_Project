@@ -130,7 +130,7 @@ def load_feature_data_from_db_cached(
     >>> df = load_feature_data_from_db_cached(limit=1000)
     >>> df2 = load_feature_data_from_db_cached(limit=1000)  # Returns cached
     """
-    from analytics.data_utils import load_feature_data_from_db
+    from probabilistic_ml_model.data_utils.data_utils import load_feature_data_from_db
 
     cache_key = (earnings_date_filter, limit)
 
@@ -658,7 +658,7 @@ def get_optimization_status() -> dict:
         Dictionary with optimization feature availability
     """
     try:
-        from analytics.inference_schema import ARVIZ_AVAILABLE as _arviz
+        from probabilistic_ml_model.data_utils.inference_schema import ARVIZ_AVAILABLE as _arviz
     except ImportError:
         _arviz = False
 

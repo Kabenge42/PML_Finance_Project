@@ -407,7 +407,7 @@ def create_earnings_quality_decomposition(
             y=[values.get(col, 0) for col in available_cols],
             name="Selected" if not ticker else ticker,
             marker_color="#0A7EA4",
-        ),
+        )
     )
 
     fig.add_trace(
@@ -416,7 +416,7 @@ def create_earnings_quality_decomposition(
             y=[medians.get(col, 0) for col in available_cols],
             name="Median",
             marker_color="rgba(100, 100, 100, 0.5)",
-        ),
+        )
     )
 
     # Add quality interpretation annotations
@@ -447,7 +447,7 @@ def create_earnings_quality_decomposition(
                     showarrow=False,
                     yshift=15,
                     font=dict(size=10, color=color),
-                ),
+                )
             )
 
     fig.update_layout(
@@ -535,7 +535,7 @@ def create_beat_rate_heatmap(
             textfont={"size": 10},
             hovertemplate="Sector: %{y}<br>Metric: %{x}<br>Value: %{z:.1f}<extra></extra>",
             colorbar=dict(title="Value"),
-        ),
+        )
     )
 
     fig.update_layout(
@@ -605,7 +605,7 @@ def create_earnings_consistency_matrix(
                         opacity=0.7,
                     ),
                     hovertemplate=f"{group}<br>Avg Streak: {avg_streak:.1f}<br>Avg Improvement: {avg_improvement:.1f}<br>Count: {count}<extra></extra>",
-                ),
+                )
             )
     else:
         # Plot individual stocks
@@ -622,7 +622,7 @@ def create_earnings_consistency_matrix(
                         color="#0A7EA4",
                         opacity=0.6,
                     ),
-                ),
+                )
             )
 
     # Add quadrant lines at medians

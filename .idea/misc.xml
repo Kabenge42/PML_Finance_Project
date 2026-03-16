@@ -5,7 +5,7 @@
     <option name="pathToExecutable" value="C:\Users\markm\AppData\Local\Programs\Python\Python313\Scripts\black.exe" />
     <option name="sdkName" value="Python 3.14 (PML_Finance_Project)" />
   </component>
-  <component name="ProjectRootManager" version="2" languageLevel="JDK_25" project-jdk-name="Python 3.14" project-jdk-type="Python SDK">
+  <component name="ProjectRootManager" version="2" languageLevel="JDK_25" project-jdk-name="Python 3.14 (PML_Finance_Project)" project-jdk-type="Python SDK">
     <output url="file://$PROJECT_DIR$/sdk_ouputs" />
   </component>
   <component name="RuffConfiguration">

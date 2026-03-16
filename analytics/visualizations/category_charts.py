@@ -4,7 +4,6 @@ This module provides reusable chart functions for various feature categories
 including analyst sentiment, earnings quality, growth metrics, cash flow,
 dividend features, R&D investment, inventory, goodwill & M&A, and CapEx.
 """
-
 from __future__ import annotations
 from typing import Optional
 import pandas as pd
@@ -61,7 +60,6 @@ def _no_data(title: str) -> go.Figure:
     )
     _apply_default_layout(fig, title=title)
     return fig
-
 
 # =============================================================================
 # Analyst Sentiment Visualizations
@@ -1072,7 +1070,7 @@ def create_quality_risk_radar_chart(
             fill="toself",
             name=ticker,
             line_color="cyan",
-        ),
+        )
     )
 
     fig.update_layout(
@@ -1174,16 +1172,10 @@ def create_productivity_quadrant(
         x_median = df[x_col].median()
         y_median = df[y_col].median()
         fig.add_vline(
-            x=x_median,
-            line_dash="dot",
-            line_color="gray",
-            annotation_text="Market Median Rev",
+            x=x_median, line_dash="dot", line_color="gray", annotation_text="Market Median Rev"
         )
         fig.add_hline(
-            y=y_median,
-            line_dash="dot",
-            line_color="gray",
-            annotation_text="Market Median EBITDA",
+            y=y_median, line_dash="dot", line_color="gray", annotation_text="Market Median EBITDA"
         )
 
     fig.update_layout(
@@ -1248,7 +1240,7 @@ def create_accounting_quality_breakdown(
 
     fig = go.Figure()
     fig.add_trace(
-        go.Scatterpolar(r=values, theta=labels, fill="toself", name=ticker, line_color="gold"),
+        go.Scatterpolar(r=values, theta=labels, fill="toself", name=ticker, line_color="gold")
     )
 
     fig.update_layout(
@@ -1317,7 +1309,7 @@ def create_valuation_range_visual(
             y=categories,
             orientation="h",
             marker_color="rgba(100, 100, 255, 0.5)",
-        ),
+        )
     )
     fig.add_trace(
         go.Bar(
@@ -1326,7 +1318,7 @@ def create_valuation_range_visual(
             y=categories,
             orientation="h",
             marker_color="rgba(255, 100, 100, 0.7)",
-        ),
+        )
     )
 
     fig.update_layout(
@@ -1395,8 +1387,8 @@ def create_cost_structure_breakdown(
                 values=values,
                 hole=0.4,
                 title=f"{ticker} Cost Structure",
-            ),
-        ],
+            )
+        ]
     )
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
@@ -1539,9 +1531,7 @@ def create_fcf_estimate_curve(
     labels = ["FY1E", "FY2E", "FY3E", "FY4E", "FY5E"][: len(available)]
 
     fig = go.Figure(
-        data=[
-            go.Scatter(x=labels, y=values, mode="lines+markers", name=ticker, line=dict(width=3))
-        ],
+        data=[go.Scatter(x=labels, y=values, mode="lines+markers", name=ticker, line=dict(width=3))]
     )
     fig.update_layout(
         title=f"{ticker} — Forward FCF Estimate Curve",

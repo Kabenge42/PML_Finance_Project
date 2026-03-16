@@ -258,13 +258,13 @@ from analytics.screening import create_enhanced_screener
 from analytics.statistical_analysis import bayesian_category_analysis, hierarchical_mcmc_multi_level
 
 # Schema (finance_ml)
-from finance_ml.core.schema import COLUMN_SCHEMA, normalize_column_name, list_price_cols
+from core.schema import COLUMN_SCHEMA, normalize_column_name, list_price_cols
 
 # ETL
-from finance_ml.etl import run_etl_pipeline, ETLConfig
+from etl import run_etl_pipeline, ETLConfig
 
 # Features
-from finance_ml.ml_workflow.features.api import build_features
+from ml_workflow.features.api import build_features
 ```
 
 ### Data Sources (v3.4)
@@ -289,7 +289,7 @@ from finance_ml.ml_workflow.features.api import build_features
 
 ### Design Principles
 
-- **Unified Schema**: `finance_ml.core.schema` (`COLUMN_SCHEMA`) is the single source of truth for column definitions.
+- **Unified Schema**: `core.schema` (`COLUMN_SCHEMA`) is the single source of truth for column definitions.
 - **Optional-dependency stubs**: `analytics/__init__.py` generates stub functions for unavailable optional modules (ArviZ, probability_analytics) so imports never fail at the package level.
 - **Modular ETL**: Configuration and pipeline stages are decoupled in `finance_ml/etl/`.
 

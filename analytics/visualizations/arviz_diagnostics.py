@@ -891,11 +891,7 @@ def create_category_posterior_diagnostics(
                 var: float(ess[var].values) for var in ess.data_vars if float(ess[var].values) < 400
             }
             if low_ess:
-                logger.warning(
-                    "%s: low ESS features (< 400): %s",
-                    cat_name,
-                    low_ess,
-                )
+                logger.warning("%s: low ESS features (< 400): %s", cat_name, low_ess)
         except Exception:
             pass
 

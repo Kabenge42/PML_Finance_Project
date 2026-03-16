@@ -48,7 +48,7 @@ from analytics.data_utils import (
     export_to_db,
     export_to_csv,
     export_to_json,
-    )
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +65,12 @@ def _get_identifier_cols() -> list[str]:
 
 
 def compute_beta_confidence_score(
-        post_alpha: float | np.ndarray,
-        post_beta: float | np.ndarray,
-        prior_alpha: float = 2.0,
-        prior_beta: float = 2.0,
-        normalization_factor: float = 20.0,
-        ) -> float | np.ndarray:
+    post_alpha: float | np.ndarray,
+    post_beta: float | np.ndarray,
+    prior_alpha: float = 2.0,
+    prior_beta: float = 2.0,
+    normalization_factor: float = 20.0,
+) -> float | np.ndarray:
     """
     Compute a multi-component confidence score for Beta posterior parameters.
 
@@ -120,7 +120,7 @@ def _extract_identifiers(row: pd.Series) -> dict:
     id_cols = _get_identifier_cols()
     return {
         col: row.get(col, None) for col in id_cols if col in row.index and pd.notna(row.get(col))
-        }
+    }
 
 
 # Columns that must be cast to numeric before export (Issue 7)
@@ -155,14 +155,14 @@ _NUMERIC_CAST_COLS = [
     "altman_z_score",
     "model_confidence",
     "map_estimate",
-    ]
+]
 _INTEGER_CAST_COLS = [
     "analyst_count",
     "quarterly_beat_streak",
     "gaap_positive_revision_flag",
     "piotroski_f_score",
     "eps_positive_streak",
-    ]
+]
 
 # Lazy ArviZ import (consistent with inference_schema.py)
 try:
@@ -216,8 +216,6 @@ class CreditRiskResult:
     altman_z_score: float
     risk_level: str  # 'Low', 'Medium', 'High', 'Distressed'
     confidence_interval: tuple[float, float]
-
-
 @dataclass
 class AccountingAnomalyResult:
     """Result container for per-stock accounting anomaly analysis."""
@@ -299,34 +297,32 @@ class AccountingAnomalyProbabilityModel:
         """
         from analytics.statistical_analysis import (
             detect_accounting_anomalies,
-            )
+        )
 
         # Phase 1: Multi-layered anomaly detection
         result = detect_accounting_anomalies(
-                df,
-                anomaly_z_threshold=self.anomaly_z_threshold,
-                tier_bins=self.tier_bins,
-                tier_labels=self.tier_labels,
-                )
+            df,
+            anomaly_z_threshold=self.anomaly_z_threshold,
+            tier_bins=self.tier_bins,
+            tier_labels=self.tier_labels,
+        )
 
         if "accounting_anomaly_score" not in result.columns:
             return result
 
         # Phase 2: Extended analytics (severity, ranking, sector percentile)
-        feature_count = result.get(
-                "anomaly_feature_count", pd.Series(0, index=result.index),
-                )
+        feature_count = result.get("anomaly_feature_count", pd.Series(0, index=result.index))
 
         result["anomaly_severity_score"] = (
-                result["accounting_anomaly_score"] * self.severity_anomaly_weight
-                + feature_count.clip(0, 9) / 9 * 100 * self.severity_feature_weight
+            result["accounting_anomaly_score"] * self.severity_anomaly_weight
+            + feature_count.clip(0, 9) / 9 * 100 * self.severity_feature_weight
         )
 
         # Universe-level percentile rank
         severity = result["anomaly_severity_score"].dropna()
         if len(severity) > 1:
             result["anomaly_risk_rank"] = (
-                    result["anomaly_severity_score"].rank(pct=True, ascending=True) * 100
+                result["anomaly_severity_score"].rank(pct=True, ascending=True) * 100
             )
         else:
             result["anomaly_risk_rank"] = 50.0
@@ -335,9 +331,10 @@ class AccountingAnomalyProbabilityModel:
         sector_col = "industry" if "industry" in result.columns else "sector"
         if sector_col in result.columns:
             result["sector_anomaly_percentile"] = (
-                    result.groupby(sector_col)["accounting_anomaly_score"]
-                    .rank(pct=True, ascending=True)
-                    * 100
+                result.groupby(sector_col)["accounting_anomaly_score"].rank(
+                    pct=True, ascending=True
+                )
+                * 100
             )
         else:
             result["sector_anomaly_percentile"] = result["anomaly_risk_rank"]
@@ -393,13 +390,13 @@ class AccountingAnomalyProbabilityModel:
                 median_val = feat_data.median()
                 # Assign P(Anomaly|High) or P(Anomaly|Low) per row
                 row_prob = pd.Series(
-                        np.where(
-                                feat_data > median_val,
-                                cp_row["p_anomaly_high"],
-                                cp_row["p_anomaly_low"],
-                                ),
-                        index=result.index,
-                        )
+                    np.where(
+                        feat_data > median_val,
+                        cp_row["p_anomaly_high"],
+                        cp_row["p_anomaly_low"],
+                    ),
+                    index=result.index,
+                )
                 # NaN features get the base rate
                 row_prob = row_prob.where(feat_data.notna(), cp_row["base_anomaly_rate"])
                 prob_col += row_prob * sep
@@ -416,7 +413,7 @@ class AccountingAnomalyProbabilityModel:
             max_sev = result["anomaly_severity_score"].max()
             if max_sev > 0:
                 result["anomaly_conditional_probability"] = (
-                        result["anomaly_severity_score"] / max_sev
+                    result["anomaly_severity_score"] / max_sev
                 )
             else:
                 result["anomaly_conditional_probability"] = 0.0
@@ -426,12 +423,12 @@ class AccountingAnomalyProbabilityModel:
             result = self._apply_mcmc_posteriors(result)
 
         logger.info(
-                "AccountingAnomalyProbabilityModel: severity computed for %d stocks, "
-                "%d multi-flag alerts, mean conditional P(anomaly)=%.3f",
-                len(result),
-                result["multi_flag_alert"].sum(),
-                result["anomaly_conditional_probability"].mean(),
-                )
+            "AccountingAnomalyProbabilityModel: severity computed for %d stocks, "
+            "%d multi-flag alerts, mean conditional P(anomaly)=%.3f",
+            len(result),
+            result["multi_flag_alert"].sum(),
+            result["anomaly_conditional_probability"].mean(),
+        )
 
         return result
 
@@ -441,7 +438,7 @@ class AccountingAnomalyProbabilityModel:
             mcmc_student_t,
             hierarchical_mcmc_by_sector,
             metropolis_hastings_sampler,
-            )
+        )
 
         if "accounting_anomaly_score" not in result.columns:
             return result
@@ -465,25 +462,25 @@ class AccountingAnomalyProbabilityModel:
             prior_std = max(0.5, 1.0 / self.severity_anomaly_weight)
             proposal_std = max(0.1, float(np.std(anomaly_scores)) * 0.5)
             samples, acc_rate = metropolis_hastings_sampler(
-                    anomaly_scores,
-                    n_samples=self.n_mcmc_samples,
-                    burn_in=self.burn_in,
-                    proposal_std=proposal_std,
-                    prior_mean=anomaly_threshold,
-                    prior_std=prior_std,
-                    )
+                anomaly_scores,
+                n_samples=self.n_mcmc_samples,
+                burn_in=self.burn_in,
+                proposal_std=proposal_std,
+                prior_mean=anomaly_threshold,
+                prior_std=prior_std,
+            )
             # Per-stock: P(anomalous) ≈ P(posterior mean > stock's anomaly score)
             stock_scores = result["accounting_anomaly_score"].values
-            mh_anomaly_prob = np.mean(
-                    samples[:, None] < stock_scores[None, :], axis=0,
-                    )
+            mh_anomaly_prob = np.mean(samples[:, None] < stock_scores[None, :], axis=0)
             result["mh_anomaly_probability"] = np.clip(mh_anomaly_prob, 0, 1)
             result["mh_acceptance_rate"] = acc_rate
             logger.info(
-                    "MH sampler for anomaly scores: acceptance_rate=%.3f, "
-                    "threshold=%.2f, mean_posterior=%.3f",
-                    acc_rate, anomaly_threshold, float(samples.mean()),
-                    )
+                "MH sampler for anomaly scores: acceptance_rate=%.3f, "
+                "threshold=%.2f, mean_posterior=%.3f",
+                acc_rate,
+                anomaly_threshold,
+                float(samples.mean()),
+            )
         except Exception as e:
             logger.warning("MH sampler for anomaly scores failed: %s", e)
             result["mh_anomaly_probability"] = np.nan
@@ -492,10 +489,10 @@ class AccountingAnomalyProbabilityModel:
         # Task 1.1: Student-t posterior for anomaly scores
         try:
             mu_samples, df_samples = mcmc_student_t(
-                    anomaly_scores,
-                    n_samples=self.n_mcmc_samples,
-                    burn_in=self.burn_in,
-                    )
+                anomaly_scores,
+                n_samples=self.n_mcmc_samples,
+                burn_in=self.burn_in,
+            )
             result["anomaly_posterior_mean"] = mu_samples.mean()
             result["anomaly_posterior_std"] = mu_samples.std()
             result["anomaly_ci_lower"] = np.percentile(mu_samples, 2.5)
@@ -508,16 +505,16 @@ class AccountingAnomalyProbabilityModel:
         if sector_col in result.columns:
             try:
                 sector_posteriors = hierarchical_mcmc_by_sector(
-                        result,
-                        feature="accounting_anomaly_score",
-                        sector_col=sector_col,
-                        n_samples=self.n_mcmc_samples,
-                        )
+                    result,
+                    feature="accounting_anomaly_score",
+                    sector_col=sector_col,
+                    n_samples=self.n_mcmc_samples,
+                )
                 sector_mean_map = {
                     s: v.get("posterior_mean", np.nan)
                     for s, v in sector_posteriors.items()
                     if isinstance(v, dict)
-                    }
+                }
                 result["sector_posterior_mean"] = result[sector_col].map(sector_mean_map)
             except Exception as e:
                 logger.warning("Hierarchical MCMC for anomaly sectors failed: %s", e)
@@ -527,15 +524,15 @@ class AccountingAnomalyProbabilityModel:
             from analytics.statistical_analysis import parallel_mcmc_chains
 
             mcmc_convergence = parallel_mcmc_chains(
-                    anomaly_scores, n_chains=4, n_samples=self.n_mcmc_samples,
-                    )
+                anomaly_scores, n_chains=4, n_samples=self.n_mcmc_samples
+            )
             r_hat = mcmc_convergence.get("r_hat", 2.0)
             result["anomaly_mcmc_r_hat"] = r_hat
             if r_hat > 1.1:
                 logger.warning(
-                        "Anomaly MCMC did not converge (R̂=%.3f) — posteriors may be unreliable",
-                        r_hat,
-                        )
+                    "Anomaly MCMC did not converge (R̂=%.3f) — posteriors may be unreliable",
+                    r_hat,
+                )
             else:
                 logger.info("Anomaly MCMC converged: R̂=%.4f", r_hat)
         except Exception as e:
@@ -544,11 +541,11 @@ class AccountingAnomalyProbabilityModel:
         return result
 
     def calculate_conditional_probabilities(
-            self,
-            df: pd.DataFrame,
-            anomaly_threshold: float = 50.0,
-            min_sample_size: int = 10,
-            ) -> pd.DataFrame:
+        self,
+        df: pd.DataFrame,
+        anomaly_threshold: float = 50.0,
+        min_sample_size: int = 10,
+    ) -> pd.DataFrame:
         """
         Calculate conditional probability of anomaly given each accounting feature.
 
@@ -585,7 +582,7 @@ class AccountingAnomalyProbabilityModel:
             "lift_low",
             "separation",
             "base_anomaly_rate",
-            ]
+        ]
 
         if "anomaly_severity_score" not in df.columns:
             return pd.DataFrame(columns=_empty_cols)
@@ -599,9 +596,8 @@ class AccountingAnomalyProbabilityModel:
         raw_features = [
             col.replace("_z_robust", "")
             for col in df.columns
-            if col.endswith("_z_robust")
-               and col.replace("_z_robust", "") in df.columns
-            ]
+            if col.endswith("_z_robust") and col.replace("_z_robust", "") in df.columns
+        ]
 
         results = []
         for feature in raw_features:
@@ -629,16 +625,16 @@ class AccountingAnomalyProbabilityModel:
             )
 
             results.append(
-                    {
-                        "feature": feature,
-                        "p_anomaly_high": p_anomaly_high,
-                        "p_anomaly_low": p_anomaly_low,
-                        "lift_high": lift_high,
-                        "lift_low": lift_low,
-                        "separation": abs(p_anomaly_high - p_anomaly_low),
-                        "base_anomaly_rate": base_anomaly_rate,
-                        },
-                    )
+                {
+                    "feature": feature,
+                    "p_anomaly_high": p_anomaly_high,
+                    "p_anomaly_low": p_anomaly_low,
+                    "lift_high": lift_high,
+                    "lift_low": lift_low,
+                    "separation": abs(p_anomaly_high - p_anomaly_low),
+                    "base_anomaly_rate": base_anomaly_rate,
+                }
+            )
 
         if not results:
             return pd.DataFrame(columns=_empty_cols)
@@ -658,7 +654,6 @@ class DividendSafetyResult:
     dividend_streak: int
     safety_score: float
     risk_category: str  # 'Safe', 'Borderline', 'At Risk'
-
 
 @dataclass
 class PriceTargetResult:
@@ -825,7 +820,7 @@ class PriorParameters:
     def variance(self) -> float:
         """Calculate the variance of the distribution."""
         total = self.alpha + self.beta
-        return (self.alpha * self.beta) / (total ** 2 * (total + 1))
+        return (self.alpha * self.beta) / (total**2 * (total + 1))
 
     @property
     def concentration(self) -> float:
@@ -904,7 +899,7 @@ class ReportedEPSHistory:
             self.eps_basic_2fqfq,
             self.eps_basic_3fqfq,
             self.eps_basic_4fqfq,
-            ]
+        ]
         return [v for v in fields if v is not None]
 
     @property
@@ -917,7 +912,7 @@ class ReportedEPSHistory:
             self.eps_basic_3fy,
             self.eps_basic_4fy,
             self.eps_basic_5fy,
-            ]
+        ]
         return [v for v in fields if v is not None]
 
     def count_yoy_improvements(self) -> tuple[int, int]:
@@ -1001,7 +996,7 @@ class ReportedEPSHistory:
             self.eps_cont_2fqfq,
             self.eps_cont_3fqfq,
             self.eps_cont_4fqfq,
-            ]
+        ]
         return sum(1 for v in all_fields if v is not None)
 
     @property
@@ -1047,16 +1042,16 @@ class ForwardEstimateSignals:
 
     # Recency weights for revision momentum (1W most important)
     _REVISION_WEIGHTS: dict[str, float] = field(
-            default_factory=lambda: {
-                "revision_1w": 0.35,
-                "revision_1m": 0.30,
-                "revision_3m": 0.20,
-                "revision_6m": 0.10,
-                "revision_1y": 0.05,
-                },
-            init=False,
-            repr=False,
-            )
+        default_factory=lambda: {
+            "revision_1w": 0.35,
+            "revision_1m": 0.30,
+            "revision_3m": 0.20,
+            "revision_6m": 0.10,
+            "revision_1y": 0.05,
+        },
+        init=False,
+        repr=False,
+    )
 
     @property
     def gaap_revision_momentum(self) -> float:
@@ -1121,7 +1116,7 @@ class ForwardEstimateSignals:
             self.revision_3m,
             self.revision_6m,
             self.revision_1y,
-            ]
+        ]
         has_revision = any(v is not None for v in revision_fields)
         return has_estimate and has_revision
 
@@ -1157,13 +1152,13 @@ class EarningsBeatProbabilityModel:
     CONFIDENCE_NORMALIZATION_FACTOR = 20
 
     def __init__(
-            self,
-            prior_alpha: float = 1.5,
-            prior_beta: float = 2.0,
-            sector_priors: Optional[dict[str, PriorParameters]] = None,
-            # NEW: Quality-adjusted beat probability (v3.4)
-            use_quality_adjustment: bool = True,
-            ):
+        self,
+        prior_alpha: float = 1.5,
+        prior_beta: float = 2.0,
+        sector_priors: Optional[dict[str, PriorParameters]] = None,
+        # NEW: Quality-adjusted beat probability (v3.4)
+        use_quality_adjustment: bool = True,
+    ):
         """
         Initialize the earnings beat probability model.
 
@@ -1207,13 +1202,13 @@ class EarningsBeatProbabilityModel:
             "Utilities": PriorParameters(2.0, 2.0),  # ~50% prior beat rate
             "Communication Services": PriorParameters(3.0, 1.5),  # ~67% prior beat rate
             "Real Estate": PriorParameters(2.0, 2.0),  # ~50% prior beat rate
-            }
+        }
 
     def _get_prior_parameters(
-            self,
-            sector: Optional[str],
-            use_sector_prior: bool,
-            ) -> PriorParameters:
+        self,
+        sector: Optional[str],
+        use_sector_prior: bool,
+    ) -> PriorParameters:
         """
         Get the appropriate prior parameters based on sector.
 
@@ -1230,10 +1225,10 @@ class EarningsBeatProbabilityModel:
         return self.sector_priors.get(sector, self.default_prior)
 
     def _compute_posterior_statistics(
-            self,
-            alpha: float,
-            beta: float,
-            ) -> tuple[float, float]:
+        self,
+        alpha: float,
+        beta: float,
+    ) -> tuple[float, float]:
         """
         Compute mean and standard deviation of Beta posterior.
 
@@ -1246,15 +1241,15 @@ class EarningsBeatProbabilityModel:
         """
         total = alpha + beta
         posterior_mean = alpha / total
-        posterior_std = np.sqrt((alpha * beta) / (total ** 2 * (total + 1)))
+        posterior_std = np.sqrt((alpha * beta) / (total**2 * (total + 1)))
         return posterior_mean, posterior_std
 
     def _compute_single_credible_interval(
-            self,
-            distribution: stats.rv_continuous,
-            lower_quantile: float,
-            upper_quantile: float,
-            ) -> tuple[float, float]:
+        self,
+        distribution: stats.rv_continuous,
+        lower_quantile: float,
+        upper_quantile: float,
+    ) -> tuple[float, float]:
         """
         Compute a single credible interval from posterior distribution.
 
@@ -1269,9 +1264,9 @@ class EarningsBeatProbabilityModel:
         return (distribution.ppf(lower_quantile), distribution.ppf(upper_quantile))
 
     def _compute_credible_intervals(
-            self,
-            distribution: stats.rv_continuous,
-            ) -> tuple[tuple[float, float], tuple[float, float]]:
+        self,
+        distribution: stats.rv_continuous,
+    ) -> tuple[tuple[float, float], tuple[float, float]]:
         """
         Compute 90% and 95% credible intervals from posterior distribution.
 
@@ -1282,15 +1277,15 @@ class EarningsBeatProbabilityModel:
             Tuple of (ci_90, ci_95) where each is a (lower, upper) tuple
         """
         ci_90 = self._compute_single_credible_interval(
-                distribution,
-                self.CI_90_LOWER_QUANTILE,
-                self.CI_90_UPPER_QUANTILE,
-                )
+            distribution,
+            self.CI_90_LOWER_QUANTILE,
+            self.CI_90_UPPER_QUANTILE,
+        )
         ci_95 = self._compute_single_credible_interval(
-                distribution,
-                self.CI_95_LOWER_QUANTILE,
-                self.CI_95_UPPER_QUANTILE,
-                )
+            distribution,
+            self.CI_95_LOWER_QUANTILE,
+            self.CI_95_UPPER_QUANTILE,
+        )
         return ci_90, ci_95
 
     def _compute_confidence_score(self, alpha: float, beta: float) -> float:
@@ -1307,20 +1302,23 @@ class EarningsBeatProbabilityModel:
         Returns:
             Confidence score between 0 and 1
         """
-        return float(compute_beta_confidence_score(
-                alpha, beta,
+        return float(
+            compute_beta_confidence_score(
+                alpha,
+                beta,
                 prior_alpha=self.default_prior.alpha,
                 prior_beta=self.default_prior.beta,
                 normalization_factor=self.CONFIDENCE_NORMALIZATION_FACTOR,
-                ))
+            )
+        )
 
     def compute_posterior(
-            self,
-            n_beats: int,
-            n_total: int,
-            sector: Optional[str] = None,
-            use_sector_prior: bool = True,
-            ) -> tuple[float, float]:
+        self,
+        n_beats: int,
+        n_total: int,
+        sector: Optional[str] = None,
+        use_sector_prior: bool = True,
+    ) -> tuple[float, float]:
         """
         Compute posterior Beta parameters given observed beats.
 
@@ -1344,12 +1342,12 @@ class EarningsBeatProbabilityModel:
         return posterior_alpha, posterior_beta
 
     def compute_beat_probability(
-            self,
-            n_beats: int,
-            n_total: int,
-            sector: Optional[str] = None,
-            threshold: float = 0.67,
-            ) -> BeatProbabilityEstimate:
+        self,
+        n_beats: int,
+        n_total: int,
+        sector: Optional[str] = None,
+        threshold: float = 0.67,
+    ) -> BeatProbabilityEstimate:
         """
         Compute the probability of future earnings beat.
 
@@ -1381,17 +1379,17 @@ class EarningsBeatProbabilityModel:
             "credible_interval_95": ci_95,
             "prob_exceeds_threshold": prob_exceeds_threshold,
             "confidence_score": confidence_score,
-            }
+        }
 
     def analyze_dataframe(
-            self,
-            df: pd.DataFrame,
-            beats_col: str = "eps_positive_years",
-            total_col: str = "eps_positive_streak",
-            sector_col: str = "sector",
-            ticker_col: str = "ticker",
-            name_col: str = "name",
-            ) -> pd.DataFrame:
+        self,
+        df: pd.DataFrame,
+        beats_col: str = "eps_positive_years",
+        total_col: str = "eps_positive_streak",
+        sector_col: str = "sector",
+        ticker_col: str = "ticker",
+        name_col: str = "name",
+    ) -> pd.DataFrame:
         """
         Analyze earnings beat probabilities for entire DataFrame.
 
@@ -1423,20 +1421,30 @@ class EarningsBeatProbabilityModel:
                 n_total_proxy = df.loc[proxy_mask, "eps_positive_years"].fillna(0).clip(lower=0)
                 n_total_proxy = n_total_proxy.clip(lower=3, upper=15).astype(int)
             elif "eps_improvement_count" in df.columns:
-                n_total_proxy = df.loc[proxy_mask, "eps_improvement_count"].fillna(3).clip(lower=3, upper=15).astype(
-                    int)
+                n_total_proxy = (
+                    df.loc[proxy_mask, "eps_improvement_count"]
+                    .fillna(3)
+                    .clip(lower=3, upper=15)
+                    .astype(int)
+                )
             else:
                 # Graduated proxy: higher trajectory scores imply more consistent data
                 n_total_proxy = pd.Series(
-                        np.where(trajectory >= 80, 8,
-                                 np.where(trajectory >= 60, 6,
-                                          np.where(trajectory >= 40, 5,
-                                                   np.where(trajectory >= 20, 4, 3)))),
-                        index=df.loc[proxy_mask].index,
-                        )
+                    np.where(
+                        trajectory >= 80,
+                        8,
+                        np.where(
+                            trajectory >= 60,
+                            6,
+                            np.where(trajectory >= 40, 5, np.where(trajectory >= 20, 4, 3)),
+                        ),
+                    ),
+                    index=df.loc[proxy_mask].index,
+                )
             n_total_series.loc[proxy_mask] = n_total_proxy
-            n_beats_series.loc[proxy_mask] = (trajectory / 100 * n_total_proxy).astype(int).clip(lower=0,
-                                                                                                 upper=n_total_proxy)
+            n_beats_series.loc[proxy_mask] = (
+                (trajectory / 100 * n_total_proxy).astype(int).clip(lower=0, upper=n_total_proxy)
+            )
 
         # Drop rows still without data
         valid = n_total_series > 0
@@ -1452,9 +1460,9 @@ class EarningsBeatProbabilityModel:
         post_beta = self.prior_beta + (n_total_valid - n_beats_valid)
         posterior_mean = post_alpha / (post_alpha + post_beta)
         posterior_std = np.sqrt(
-                (post_alpha * post_beta)
-                / ((post_alpha + post_beta) ** 2 * (post_alpha + post_beta + 1)),
-                )
+            (post_alpha * post_beta)
+            / ((post_alpha + post_beta) ** 2 * (post_alpha + post_beta + 1))
+        )
 
         # Credible intervals (vectorized via scipy)
         ci_90_lower = stats.beta.ppf(0.05, post_alpha, post_beta)
@@ -1464,30 +1472,35 @@ class EarningsBeatProbabilityModel:
 
         # Multi-component confidence score (replaces constant concentration/20)
         confidence_score = compute_beta_confidence_score(
-                post_alpha.values, post_beta.values,
-                prior_alpha=self.prior_alpha, prior_beta=self.prior_beta,
-                normalization_factor=self.CONFIDENCE_NORMALIZATION_FACTOR,
-                )
+            post_alpha.values,
+            post_beta.values,
+            prior_alpha=self.prior_alpha,
+            prior_beta=self.prior_beta,
+            normalization_factor=self.CONFIDENCE_NORMALIZATION_FACTOR,
+        )
 
         beat_classification = np.where(posterior_mean > 0.5, "likely_beat", "uncertain")
 
-        result_df = pd.DataFrame({
-            "historical_beats": n_beats_valid.values,
-            "total_reports": n_total_valid.values,
-            "historical_beat_rate": (n_beats_valid / n_total_valid).values,
-            "prior_alpha": self.prior_alpha,
-            "prior_beta": self.prior_beta,
-            "posterior_alpha": post_alpha.values,
-            "posterior_beta": post_beta.values,
-            "posterior_beat_prob": posterior_mean.values,
-            "posterior_std": posterior_std.values,
-            "ci_90_lower": ci_90_lower,
-            "ci_90_upper": ci_90_upper,
-            "ci_95_lower": ci_95_lower,
-            "ci_95_upper": ci_95_upper,
-            "confidence_score": np.asarray(confidence_score),
-            "beat_classification": beat_classification,
-            }, index=df_valid.index)
+        result_df = pd.DataFrame(
+            {
+                "historical_beats": n_beats_valid.values,
+                "total_reports": n_total_valid.values,
+                "historical_beat_rate": (n_beats_valid / n_total_valid).values,
+                "prior_alpha": self.prior_alpha,
+                "prior_beta": self.prior_beta,
+                "posterior_alpha": post_alpha.values,
+                "posterior_beta": post_beta.values,
+                "posterior_beat_prob": posterior_mean.values,
+                "posterior_std": posterior_std.values,
+                "ci_90_lower": ci_90_lower,
+                "ci_90_upper": ci_90_upper,
+                "ci_95_lower": ci_95_lower,
+                "ci_95_upper": ci_95_upper,
+                "confidence_score": np.asarray(confidence_score),
+                "beat_classification": beat_classification,
+            },
+            index=df_valid.index,
+        )
 
         # NEW: Quality-adjusted beat probability (v3.4)
         if self.use_quality_adjustment:
@@ -1523,11 +1536,11 @@ class EarningsBeatProbabilityModel:
     MAX_REVISION_PSEUDO_OBS = 3.0
 
     def compute_forward_adjusted_beat_probability(
-            self,
-            reported_history: ReportedEPSHistory,
-            forward_signals: ForwardEstimateSignals,
-            sector: Optional[str] = None,
-            ) -> BeatProbabilityEstimate:
+        self,
+        reported_history: ReportedEPSHistory,
+        forward_signals: ForwardEstimateSignals,
+        sector: Optional[str] = None,
+    ) -> BeatProbabilityEstimate:
         """Compute beat probability fusing historical, revision, and GAAP quality layers.
 
         Layer 1 – Historical beats from actual reported EPS (YoY improvements).
@@ -1578,11 +1591,11 @@ class EarningsBeatProbabilityModel:
             penalty_factor = min(1.0, excess / 100.0)
             # Also penalise divergent GAAP revisions vs norm revisions
             if (
-                    forward_signals.gaap_revision_1m is not None
-                    and forward_signals.revision_1m is not None
+                forward_signals.gaap_revision_1m is not None
+                and forward_signals.revision_1m is not None
             ):
                 rev_sign_mismatch = (
-                        forward_signals.revision_1m > 0 and forward_signals.gaap_revision_1m < 0
+                    forward_signals.revision_1m > 0 and forward_signals.gaap_revision_1m < 0
                 )
                 if rev_sign_mismatch:
                     penalty_factor = min(1.0, penalty_factor + 0.15)
@@ -1629,7 +1642,7 @@ class EarningsBeatProbabilityModel:
             "prior_influence_pct": prior_influence,
             "effective_sample_size": effective_sample,
             "classification_confidence": classification_confidence,
-            }
+        }
 
     # -----------------------------------------------------------------
     # Enhanced DataFrame analysis
@@ -1651,7 +1664,7 @@ class EarningsBeatProbabilityModel:
         "eps_gaap_est_avg_rev_pct_fy1e_6m": "gaap_revision_6m",
         "eps_gaap_est_avg_rev_pct_fy1e_1y": "gaap_revision_1y",
         "eps_norm_est_num_fy1e": "analyst_count",
-        }
+    }
 
     _HISTORY_COL_MAP: dict[str, str] = {
         "net_eps_basic_fq": "eps_basic_fq",
@@ -1678,7 +1691,7 @@ class EarningsBeatProbabilityModel:
         "eps_cont_2fqfq": "eps_cont_2fqfq",
         "eps_cont_3fqfq": "eps_cont_3fqfq",
         "eps_cont_4fqfq": "eps_cont_4fqfq",
-        }
+    }
 
     def _row_to_forward_signals(self, row: pd.Series) -> Optional[ForwardEstimateSignals]:
         """Extract ForwardEstimateSignals from a DataFrame row."""
@@ -1703,12 +1716,12 @@ class EarningsBeatProbabilityModel:
         return ReportedEPSHistory(**kwargs)
 
     def analyze_dataframe_enhanced(
-            self,
-            df: pd.DataFrame,
-            sector_col: str = "sector",
-            ticker_col: str = "ticker",
-            name_col: str = "name",
-            ) -> pd.DataFrame:
+        self,
+        df: pd.DataFrame,
+        sector_col: str = "sector",
+        ticker_col: str = "ticker",
+        name_col: str = "name",
+    ) -> pd.DataFrame:
         """Analyze earnings beat probabilities using enhanced three-layer fusion.
 
         Falls back to trajectory-proxy method when forward data is unavailable.
@@ -1731,7 +1744,7 @@ class EarningsBeatProbabilityModel:
             "piotroski_f_score": "piotroski_f_score",
             "eps_revision_momentum": "eps_revision_momentum",
             "altman_z_score": "altman_z_score",
-            }
+        }
 
         # Check which rows have forward data available
         forward_col_keys = list(self._FORWARD_COL_MAP.keys())
@@ -1763,10 +1776,10 @@ class EarningsBeatProbabilityModel:
                     continue
 
                 prob_result = self.compute_forward_adjusted_beat_probability(
-                        reported_history=history,
-                        forward_signals=forward_signals,
-                        sector=sector,
-                        )
+                    reported_history=history,
+                    forward_signals=forward_signals,
+                    sector=sector,
+                )
                 n_beats, n_total = history.count_yoy_improvements()
                 dynamic_total = history.total_reports_count
                 effective_total = max(n_total, dynamic_total) if dynamic_total > 0 else n_total
@@ -1780,40 +1793,40 @@ class EarningsBeatProbabilityModel:
 
                 record = _extract_identifiers(row)
                 record.update(
-                        {
-                            "ticker": ticker,
-                            "name": name,
-                            "sector": sector,
-                            "historical_beats": n_beats,
-                            "total_reports": effective_total,
-                            "dynamic_total_reports": dynamic_total,
-                            "historical_beat_rate": historical_beat_rate,
-                            "posterior_beat_prob": prob_result["posterior_mean"],
-                            "posterior_std": prob_result["posterior_std"],
-                            "ci_90_lower": prob_result["credible_interval_90"][0],
-                            "ci_90_upper": prob_result["credible_interval_90"][1],
-                            "ci_95_lower": prob_result["credible_interval_95"][0],
-                            "ci_95_upper": prob_result["credible_interval_95"][1],
-                            "confidence_score": prob_result["confidence_score"],
-                            "prior_influence_pct": prob_result["prior_influence_pct"],
-                            "effective_sample_size": prob_result["effective_sample_size"],
-                            "classification_confidence": prob_result["classification_confidence"],
-                            "beat_classification": beat_classification,
-                            "gaap_revision_momentum": forward_signals.gaap_revision_momentum,
-                            "gaap_norm_spread": forward_signals.gaap_norm_spread,
-                            "revision_trend_short": forward_signals.revision_trend_short,
-                            "revision_trend_medium": forward_signals.revision_trend_medium,
-                            "eps_norm_est_fy1e": forward_signals.eps_norm_fy1e,
-                            "eps_norm_est_ntm": forward_signals.eps_norm_ntm,
-                            "eps_gaap_est_ntm": forward_signals.eps_gaap_ntm,
-                            "eps_gaap_est_fy1e": forward_signals.eps_gaap_fy1e,
-                            "analyst_count": forward_signals.analyst_count,
-                            "next_earnings_status": row.get("next_earnings_status", None),
-                            "quarterly_beat_streak": eps_positive_streak,
-                            "data_source": "forward_enhanced",
-                            "eps_positive_streak": eps_positive_streak,
-                            },
-                        )
+                    {
+                        "ticker": ticker,
+                        "name": name,
+                        "sector": sector,
+                        "historical_beats": n_beats,
+                        "total_reports": effective_total,
+                        "dynamic_total_reports": dynamic_total,
+                        "historical_beat_rate": historical_beat_rate,
+                        "posterior_beat_prob": prob_result["posterior_mean"],
+                        "posterior_std": prob_result["posterior_std"],
+                        "ci_90_lower": prob_result["credible_interval_90"][0],
+                        "ci_90_upper": prob_result["credible_interval_90"][1],
+                        "ci_95_lower": prob_result["credible_interval_95"][0],
+                        "ci_95_upper": prob_result["credible_interval_95"][1],
+                        "confidence_score": prob_result["confidence_score"],
+                        "prior_influence_pct": prob_result["prior_influence_pct"],
+                        "effective_sample_size": prob_result["effective_sample_size"],
+                        "classification_confidence": prob_result["classification_confidence"],
+                        "beat_classification": beat_classification,
+                        "gaap_revision_momentum": forward_signals.gaap_revision_momentum,
+                        "gaap_norm_spread": forward_signals.gaap_norm_spread,
+                        "revision_trend_short": forward_signals.revision_trend_short,
+                        "revision_trend_medium": forward_signals.revision_trend_medium,
+                        "eps_norm_est_fy1e": forward_signals.eps_norm_fy1e,
+                        "eps_norm_est_ntm": forward_signals.eps_norm_ntm,
+                        "eps_gaap_est_ntm": forward_signals.eps_gaap_ntm,
+                        "eps_gaap_est_fy1e": forward_signals.eps_gaap_fy1e,
+                        "analyst_count": forward_signals.analyst_count,
+                        "next_earnings_status": row.get("next_earnings_status", None),
+                        "quarterly_beat_streak": eps_positive_streak,
+                        "data_source": "forward_enhanced",
+                        "eps_positive_streak": eps_positive_streak,
+                    }
+                )
 
                 # Pass through composite/quality columns from mv_all_stock_features
                 for src_col, out_key in _PASSTHROUGH_COLS.items():
@@ -1840,12 +1853,17 @@ class EarningsBeatProbabilityModel:
             else:
                 # Graduated proxy: higher trajectory scores imply more consistent data
                 n_total_proxy = pd.Series(
-                        np.where(trajectory >= 80, 8,
-                                 np.where(trajectory >= 60, 6,
-                                          np.where(trajectory >= 40, 5,
-                                                   np.where(trajectory >= 20, 4, 3)))),
-                        index=proxy_df.index,
-                        )
+                    np.where(
+                        trajectory >= 80,
+                        8,
+                        np.where(
+                            trajectory >= 60,
+                            6,
+                            np.where(trajectory >= 40, 5, np.where(trajectory >= 20, 4, 3)),
+                        ),
+                    ),
+                    index=proxy_df.index,
+                )
             n_beats_proxy = (trajectory / 100 * n_total_proxy).astype(int).clip(lower=0, upper=n_total_proxy)
 
             # Vectorized posterior
@@ -1854,9 +1872,9 @@ class EarningsBeatProbabilityModel:
             post_beta = prior.beta + (n_total_proxy - n_beats_proxy)
             posterior_mean = post_alpha / (post_alpha + post_beta)
             posterior_std = np.sqrt(
-                    (post_alpha * post_beta)
-                    / ((post_alpha + post_beta) ** 2 * (post_alpha + post_beta + 1)),
-                    )
+                (post_alpha * post_beta)
+                / ((post_alpha + post_beta) ** 2 * (post_alpha + post_beta + 1))
+            )
             ci_90_lower = pd.Series(stats.beta.ppf(0.05, post_alpha, post_beta), index=proxy_df.index)
             ci_90_upper = pd.Series(stats.beta.ppf(0.95, post_alpha, post_beta), index=proxy_df.index)
             ci_95_lower = pd.Series(stats.beta.ppf(0.025, post_alpha, post_beta), index=proxy_df.index)
@@ -1864,59 +1882,64 @@ class EarningsBeatProbabilityModel:
             # Multi-component confidence score (replaces constant concentration/20)
             prior_total = prior.alpha + prior.beta
             confidence_score = pd.Series(
-                    compute_beta_confidence_score(
-                            post_alpha.values, post_beta.values,
-                            prior_alpha=prior.alpha, prior_beta=prior.beta,
-                            normalization_factor=self.CONFIDENCE_NORMALIZATION_FACTOR,
-                            ),
-                    index=proxy_df.index,
-                    )
+                compute_beta_confidence_score(
+                    post_alpha.values,
+                    post_beta.values,
+                    prior_alpha=prior.alpha,
+                    prior_beta=prior.beta,
+                    normalization_factor=self.CONFIDENCE_NORMALIZATION_FACTOR,
+                ),
+                index=proxy_df.index,
+            )
             concentration = post_alpha + post_beta
             prior_influence = prior_total / concentration * 100.0
             effective_sample = concentration - prior_total
             beat_class = np.where(posterior_mean > 0.5, "likely_beat", "uncertain")
             class_conf = np.where(
-                    confidence_score >= 0.6, "High",
-                    np.where(confidence_score >= 0.3, "Medium", "Low"),
-                    )
+                confidence_score >= 0.6, "High", np.where(confidence_score >= 0.3, "Medium", "Low")
+            )
 
             for i, idx in enumerate(proxy_df.index):
                 row = proxy_df.loc[idx]
                 record = _extract_identifiers(row)
-                record.update({
-                    "historical_beats": int(n_beats_proxy.iloc[i]),
-                    "total_reports": int(n_total_proxy.iloc[i]),
-                    "dynamic_total_reports": 0,
-                    "historical_beat_rate": float(n_beats_proxy.iloc[i] / n_total_proxy.iloc[i]),
-                    "prior_alpha": prior.alpha,
-                    "prior_beta": prior.beta,
-                    "posterior_alpha": float(post_alpha.iloc[i]),
-                    "posterior_beta": float(post_beta.iloc[i]),
-                    "posterior_beat_prob": float(posterior_mean.iloc[i]),
-                    "posterior_std": float(posterior_std.iloc[i]),
-                    "ci_90_lower": float(ci_90_lower.iloc[i]),
-                    "ci_90_upper": float(ci_90_upper.iloc[i]),
-                    "ci_95_lower": float(ci_95_lower.iloc[i]),
-                    "ci_95_upper": float(ci_95_upper.iloc[i]),
-                    "confidence_score": float(confidence_score.iloc[i]),
-                    "prior_influence_pct": float(prior_influence.iloc[i]),
-                    "effective_sample_size": float(effective_sample.iloc[i]),
-                    "classification_confidence": str(class_conf[i]),
-                    "beat_classification": str(beat_class[i]),
-                    "gaap_revision_momentum": None,
-                    "gaap_norm_spread": None,
-                    "revision_trend_short": None,
-                    "revision_trend_medium": None,
-                    "eps_norm_est_fy1e": None,
-                    "eps_norm_est_ntm": None,
-                    "eps_gaap_est_ntm": None,
-                    "eps_gaap_est_fy1e": None,
-                    "analyst_count": None,
-                    "next_earnings_status": row.get("next_earnings_status", None),
-                    "quarterly_beat_streak": None,
-                    "data_source": "trajectory_proxy",
-                    "eps_positive_streak": None,
-                    })
+                record.update(
+                    {
+                        "historical_beats": int(n_beats_proxy.iloc[i]),
+                        "total_reports": int(n_total_proxy.iloc[i]),
+                        "dynamic_total_reports": 0,
+                        "historical_beat_rate": float(
+                            n_beats_proxy.iloc[i] / n_total_proxy.iloc[i]
+                        ),
+                        "prior_alpha": prior.alpha,
+                        "prior_beta": prior.beta,
+                        "posterior_alpha": float(post_alpha.iloc[i]),
+                        "posterior_beta": float(post_beta.iloc[i]),
+                        "posterior_beat_prob": float(posterior_mean.iloc[i]),
+                        "posterior_std": float(posterior_std.iloc[i]),
+                        "ci_90_lower": float(ci_90_lower.iloc[i]),
+                        "ci_90_upper": float(ci_90_upper.iloc[i]),
+                        "ci_95_lower": float(ci_95_lower.iloc[i]),
+                        "ci_95_upper": float(ci_95_upper.iloc[i]),
+                        "confidence_score": float(confidence_score.iloc[i]),
+                        "prior_influence_pct": float(prior_influence.iloc[i]),
+                        "effective_sample_size": float(effective_sample.iloc[i]),
+                        "classification_confidence": str(class_conf[i]),
+                        "beat_classification": str(beat_class[i]),
+                        "gaap_revision_momentum": None,
+                        "gaap_norm_spread": None,
+                        "revision_trend_short": None,
+                        "revision_trend_medium": None,
+                        "eps_norm_est_fy1e": None,
+                        "eps_norm_est_ntm": None,
+                        "eps_gaap_est_ntm": None,
+                        "eps_gaap_est_fy1e": None,
+                        "analyst_count": None,
+                        "next_earnings_status": row.get("next_earnings_status", None),
+                        "quarterly_beat_streak": None,
+                        "data_source": "trajectory_proxy",
+                        "eps_positive_streak": None,
+                    }
+                )
 
                 # Pass through composite/quality columns from mv_all_stock_features
                 for src_col, out_key in _PASSTHROUGH_COLS.items():
@@ -1955,19 +1978,19 @@ class EPSStreakAnalyzer:
         self.mean_reversion_weight = mean_reversion_weight
 
     def compute_streak_from_trajectory(
-            self,
-            eps_trajectory_score: float,
-            eps_positive_streak: Optional[int] = None,
-            eps_improvement_count: Optional[int] = None,
-            ticker: str = "",
-            name: str = "",
-            sector: str = "",
-            industry: str = "",
-            country: str = "",
-            exchange: str = "",
-            reported_history: Optional[ReportedEPSHistory] = None,
-            forward_signals: Optional[ForwardEstimateSignals] = None,
-            ) -> EPSStreakResult:
+        self,
+        eps_trajectory_score: float,
+        eps_positive_streak: Optional[int] = None,
+        eps_improvement_count: Optional[int] = None,
+        ticker: str = "",
+        name: str = "",
+        sector: str = "",
+        industry: str = "",
+        country: str = "",
+        exchange: str = "",
+        reported_history: Optional[ReportedEPSHistory] = None,
+        forward_signals: Optional[ForwardEstimateSignals] = None,
+    ) -> EPSStreakResult:
         """
         Compute streak analysis from trajectory score and related metrics.
 
@@ -2051,7 +2074,7 @@ class EPSStreakAnalyzer:
         # Apply mean reversion adjustment
         mean_reversion_prob = 1 - continuation_prob
         mean_reversion_prob = mean_reversion_prob * (
-                1 - self.mean_reversion_weight
+            1 - self.mean_reversion_weight
         ) + self.mean_reversion_weight * (1 - continuation_prob)
 
         # Confidence based on streak length and data availability
@@ -2069,35 +2092,35 @@ class EPSStreakAnalyzer:
             expected_next = "beat" if streak_type == "miss" else "miss"
 
         return EPSStreakResult(
-                ticker=ticker,
-                name=name,
-                sector=sector,
-                industry=industry,
-                country=country,
-                exchange=exchange,
-                current_streak=current_streak,
-                streak_type=streak_type,
-                max_streak_beat=max(current_streak if streak_type == "beat" else 0, 0),
-                max_streak_miss=max(current_streak if streak_type == "miss" else 0, 0),
-                streak_continuation_prob=continuation_prob,
-                mean_reversion_prob=mean_reversion_prob,
-                expected_next_outcome=expected_next,
-                confidence_level=confidence,
-                )
+            ticker=ticker,
+            name=name,
+            sector=sector,
+            industry=industry,
+            country=country,
+            exchange=exchange,
+            current_streak=current_streak,
+            streak_type=streak_type,
+            max_streak_beat=max(current_streak if streak_type == "beat" else 0, 0),
+            max_streak_miss=max(current_streak if streak_type == "miss" else 0, 0),
+            streak_continuation_prob=continuation_prob,
+            mean_reversion_prob=mean_reversion_prob,
+            expected_next_outcome=expected_next,
+            confidence_level=confidence,
+        )
 
     def analyze_dataframe(
-            self,
-            df: pd.DataFrame,
-            ticker_col: str = "ticker",
-            trajectory_col: str = "eps_trajectory_score",
-            streak_col: str = "eps_positive_streak",
-            improvement_col: str = "eps_improvement_count",
-            name_col: str = "name",
-            sector_col: str = "sector",
-            industry_col: str = "industry",
-            country_col: str = "country",
-            exchange_col: str = "exchange",
-            ) -> pd.DataFrame:
+        self,
+        df: pd.DataFrame,
+        ticker_col: str = "ticker",
+        trajectory_col: str = "eps_trajectory_score",
+        streak_col: str = "eps_positive_streak",
+        improvement_col: str = "eps_improvement_count",
+        name_col: str = "name",
+        sector_col: str = "sector",
+        industry_col: str = "industry",
+        country_col: str = "country",
+        exchange_col: str = "exchange",
+    ) -> pd.DataFrame:
         """
         Analyze EPS streaks for entire DataFrame.
 
@@ -2140,7 +2163,7 @@ class EPSStreakAnalyzer:
             "piotroski_f_score",
             "eps_revision_momentum",
             "altman_z_score",
-            ]
+        ]
 
         # Composite/quality columns to pass through from mv_all_stock_features
         _PASSTHROUGH_COLS = [
@@ -2150,15 +2173,15 @@ class EPSStreakAnalyzer:
             "piotroski_f_score",
             "eps_revision_momentum",
             "altman_z_score",
-            ]
+        ]
 
         # Check if forward/history columns are available
         has_history_cols = any(
-                col in df.columns for col in EarningsBeatProbabilityModel._HISTORY_COL_MAP,
-                )
+            col in df.columns for col in EarningsBeatProbabilityModel._HISTORY_COL_MAP
+        )
         has_forward_cols = any(
-                col in df.columns for col in EarningsBeatProbabilityModel._FORWARD_COL_MAP,
-                )
+            col in df.columns for col in EarningsBeatProbabilityModel._FORWARD_COL_MAP
+        )
 
         # Create a temporary model instance for column mapping helpers
         _model = EarningsBeatProbabilityModel()
@@ -2192,18 +2215,18 @@ class EPSStreakAnalyzer:
                 forward_signals = _model._row_to_forward_signals(row)
 
             result = self.compute_streak_from_trajectory(
-                    eps_trajectory_score=trajectory,
-                    eps_positive_streak=streak,
-                    eps_improvement_count=improvement,
-                    ticker=ticker,
-                    name=name,
-                    sector=sector,
-                    industry=industry,
-                    country=country,
-                    exchange=exchange,
-                    reported_history=reported_history,
-                    forward_signals=forward_signals,
-                    )
+                eps_trajectory_score=trajectory,
+                eps_positive_streak=streak,
+                eps_improvement_count=improvement,
+                ticker=ticker,
+                name=name,
+                sector=sector,
+                industry=industry,
+                country=country,
+                exchange=exchange,
+                reported_history=reported_history,
+                forward_signals=forward_signals,
+            )
 
             # Historical beat rate from dynamically derived total
             n_beats_yoy, n_total_yoy = (
@@ -2234,30 +2257,30 @@ class EPSStreakAnalyzer:
 
             record = _extract_identifiers(row)
             record.update(
-                    {
-                        "current_streak": result.current_streak,
-                        "streak_type": result.streak_type,
-                        "continuation_probability": result.streak_continuation_prob,
-                        "mean_reversion_probability": result.mean_reversion_prob,
-                        "expected_next_outcome": result.expected_next_outcome,
-                        "prediction_confidence": result.confidence_level,
-                        "dynamic_total_reports": dynamic_total,
-                        "historical_beat_rate": historical_beat_rate,
-                        "gaap_revision_momentum": (
-                            forward_signals.gaap_revision_momentum
-                            if forward_signals is not None
-                            else None
-                        ),
-                        "next_earnings_status": row.get("next_earnings_status", None),
-                        # EPS positive streak passthrough
-                        "eps_positive_streak": (
-                            int(streak) if streak is not None and not pd.isna(streak) else None
-                        ),
-                        # Model-derived fields
-                        "model_confidence": round(model_confidence, 10),
-                        "map_estimate": round(map_estimate, 10),
-                        },
-                    )
+                {
+                    "current_streak": result.current_streak,
+                    "streak_type": result.streak_type,
+                    "continuation_probability": result.streak_continuation_prob,
+                    "mean_reversion_probability": result.mean_reversion_prob,
+                    "expected_next_outcome": result.expected_next_outcome,
+                    "prediction_confidence": result.confidence_level,
+                    "dynamic_total_reports": dynamic_total,
+                    "historical_beat_rate": historical_beat_rate,
+                    "gaap_revision_momentum": (
+                        forward_signals.gaap_revision_momentum
+                        if forward_signals is not None
+                        else None
+                    ),
+                    "next_earnings_status": row.get("next_earnings_status", None),
+                    # EPS positive streak passthrough
+                    "eps_positive_streak": (
+                        int(streak) if streak is not None and not pd.isna(streak) else None
+                    ),
+                    # Model-derived fields
+                    "model_confidence": round(model_confidence, 10),
+                    "map_estimate": round(map_estimate, 10),
+                }
+            )
 
             # Pass through composite/quality columns from mv_all_stock_features
             for col in _PASSTHROUGH_COLS:
@@ -2303,8 +2326,8 @@ class ModelConfidenceEstimator:
         self.n_bins = n_bins
 
     def compute_brier_score(
-            self, predicted_probs: np.ndarray, actual_outcomes: np.ndarray,
-            ) -> float:
+        self, predicted_probs: np.ndarray, actual_outcomes: np.ndarray
+    ) -> float:
         """
         Compute Brier score for probability predictions.
 
@@ -2314,8 +2337,8 @@ class ModelConfidenceEstimator:
         return np.mean((predicted_probs - actual_outcomes) ** 2)
 
     def compute_calibration_error(
-            self, predicted_probs: np.ndarray, actual_outcomes: np.ndarray,
-            ) -> tuple[float, dict]:
+        self, predicted_probs: np.ndarray, actual_outcomes: np.ndarray
+    ) -> tuple[float, dict]:
         """
         Compute Expected Calibration Error (ECE) and reliability diagram data.
 
@@ -2330,7 +2353,7 @@ class ModelConfidenceEstimator:
             "observed_freq": [],
             "predicted_mean": [],
             "count": [],
-            }
+        }
 
         total_samples = len(predicted_probs)
         ece = 0.0
@@ -2352,11 +2375,11 @@ class ModelConfidenceEstimator:
         return ece, reliability_data
 
     def compute_confidence_metrics(
-            self,
-            predicted_probs: np.ndarray,
-            actual_outcomes: np.ndarray,
-            model_name: str = "Earnings Beat Model",
-            ) -> ModelConfidenceResult:
+        self,
+        predicted_probs: np.ndarray,
+        actual_outcomes: np.ndarray,
+        model_name: str = "Earnings Beat Model",
+    ) -> ModelConfidenceResult:
         """
         Compute comprehensive confidence metrics for predictions.
 
@@ -2375,9 +2398,9 @@ class ModelConfidenceEstimator:
         eps = 1e-15
         clipped_probs = np.clip(predicted_probs, eps, 1 - eps)
         log_loss = -np.mean(
-                actual_outcomes * np.log(clipped_probs)
-                + (1 - actual_outcomes) * np.log(1 - clipped_probs),
-                )
+            actual_outcomes * np.log(clipped_probs)
+            + (1 - actual_outcomes) * np.log(1 - clipped_probs)
+        )
 
         # Calibration error and reliability data
         ece, reliability_data = self.compute_calibration_error(predicted_probs, actual_outcomes)
@@ -2394,22 +2417,20 @@ class ModelConfidenceEstimator:
             if n_pos > 0 and n_neg > 0:
                 ranks = stats.rankdata(predicted_probs)
                 auc = (ranks[actual_outcomes == 1].sum() - n_pos * (n_pos + 1) / 2) / (
-                        n_pos * n_neg
+                    n_pos * n_neg
                 )
             else:
                 auc = 0.5
 
         # Confidence intervals for predictions
-        ci_coverage = self._compute_ci_coverage(
-                predicted_probs, actual_outcomes, n_observations=5,
-                )
+        ci_coverage = self._compute_ci_coverage(predicted_probs, actual_outcomes, n_observations=5)
 
         # Overall confidence score (0-100)
         # Weighted combination of metrics with discrimination floor
         base_score = (
-                (1 - brier) * 30  # Lower brier is better
-                + (1 - ece) * 30  # Lower ECE is better
-                + auc * 40  # Higher AUC is better
+            (1 - brier) * 30  # Lower brier is better
+            + (1 - ece) * 30  # Lower ECE is better
+            + auc * 40  # Higher AUC is better
         )
 
         # Penalty: AUC below 0.5 means model is anti-discriminating
@@ -2420,22 +2441,22 @@ class ModelConfidenceEstimator:
         overall = min(100, max(0, base_score))
 
         return ModelConfidenceResult(
-                model_name=model_name,
-                brier_score=brier,
-                log_loss=log_loss,
-                calibration_error=ece,
-                discrimination_auc=auc,
-                reliability_diagram_data=reliability_data,
-                confidence_intervals=ci_coverage,
-                overall_confidence=overall,
-                )
+            model_name=model_name,
+            brier_score=brier,
+            log_loss=log_loss,
+            calibration_error=ece,
+            discrimination_auc=auc,
+            reliability_diagram_data=reliability_data,
+            confidence_intervals=ci_coverage,
+            overall_confidence=overall,
+        )
 
     def _compute_ci_coverage(
-            self,
-            predicted_probs: np.ndarray,
-            actual_outcomes: np.ndarray,
-            n_observations: int = 5,
-            ) -> dict:
+        self,
+        predicted_probs: np.ndarray,
+        actual_outcomes: np.ndarray,
+        n_observations: int = 5,
+    ) -> dict:
         """Compute confidence interval coverage rates."""
         coverage_90 = 0.0
         coverage_95 = 0.0
@@ -2455,7 +2476,7 @@ class ModelConfidenceEstimator:
         return {
             "coverage_90": coverage_90 / n if n > 0 else 0,
             "coverage_95": coverage_95 / n if n > 0 else 0,
-            }
+        }
 
 
 class CreditRiskProbabilityModel:
@@ -2477,21 +2498,21 @@ class CreditRiskProbabilityModel:
     """
 
     def __init__(
-            self,
-            distress_threshold: float = 1.81,
-            prior_alpha: float = 2.0,
-            prior_beta: float = 3.0,  # Slightly pessimistic prior
-            n_mcmc_samples: int = 10000,
-            burn_in: int = 2000,
-            use_mcmc: bool = True,
-            # NEW: Leverage & Liquidity enrichment
-            use_debt_trajectory: bool = True,
-            use_cash_buffer_signals: bool = True,
-            use_balance_sheet_quality: bool = True,
-            use_wc_deep_signals: bool = True,
-            # NEW: Quality & Risk enrichment
-            use_quality_risk_flags: bool = True,
-            ):
+        self,
+        distress_threshold: float = 1.81,
+        prior_alpha: float = 2.0,
+        prior_beta: float = 3.0,  # Slightly pessimistic prior
+        n_mcmc_samples: int = 10000,
+        burn_in: int = 2000,
+        use_mcmc: bool = True,
+        # NEW: Leverage & Liquidity enrichment
+        use_debt_trajectory: bool = True,
+        use_cash_buffer_signals: bool = True,
+        use_balance_sheet_quality: bool = True,
+        use_wc_deep_signals: bool = True,
+        # NEW: Quality & Risk enrichment
+        use_quality_risk_flags: bool = True,
+    ):
         self.distress_threshold = distress_threshold
         self.prior_alpha = prior_alpha
         self.prior_beta = prior_beta
@@ -2652,22 +2673,22 @@ class CreditRiskProbabilityModel:
 
             # Compute confidence interval width based on data completeness
             data_points = sum(
-                    1
-                    for v in [
-                        z_score,
-                        liquidity_stress,
-                        cash_runway,
-                        interest_coverage,
-                        quick_ratio,
-                        debt_3y_cagr,
-                        balance_sheet_strength,
-                        debt_maturity_risk,
-                        wc_efficiency_score,
-                        equity_ratio,
-                        distress_risk_score,
-                        ]
-                    if v is not None and not pd.isna(v),
-                    )
+                1
+                for v in [
+                    z_score,
+                    liquidity_stress,
+                    cash_runway,
+                    interest_coverage,
+                    quick_ratio,
+                    debt_3y_cagr,
+                    balance_sheet_strength,
+                    debt_maturity_risk,
+                    wc_efficiency_score,
+                    equity_ratio,
+                    distress_risk_score,
+                ]
+                if v is not None and not pd.isna(v)
+            )
             ci_width = max(0.03, 0.18 - (data_points * 0.015))
 
             risk_level = "Low"
@@ -2680,27 +2701,27 @@ class CreditRiskProbabilityModel:
 
             record = _extract_identifiers(row)
             record.update(
-                    {
-                        "beta_stability_score": beta_stability,
-                        "combined_distress_risk_score": combined_distress,
-                        "distress_probability": prob,
-                        "liquidity_stress_score": liquidity_stress,
-                        "cash_runway_months": cash_runway,
-                        "altman_z_score": z_score,
-                        "altman_z_trend": z_trend,
-                        "interest_coverage": interest_coverage,
-                        "quick_ratio": quick_ratio,
-                        "risk_level": risk_level,
-                        "ci_lower": max(0, prob - ci_width),
-                        "ci_upper": min(1, prob + ci_width),
-                        "debt_3y_cagr": debt_3y_cagr,
-                        "debt_maturity_risk": debt_maturity_risk,
-                        "balance_sheet_strength": balance_sheet_strength,
-                        "wc_efficiency_score": wc_efficiency_score,
-                        "distress_risk_score": distress_risk_score,
-                        "data_quality_score": data_points / 11.0,
-                        },
-                    )
+                {
+                    "beta_stability_score": beta_stability,
+                    "combined_distress_risk_score": combined_distress,
+                    "distress_probability": prob,
+                    "liquidity_stress_score": liquidity_stress,
+                    "cash_runway_months": cash_runway,
+                    "altman_z_score": z_score,
+                    "altman_z_trend": z_trend,
+                    "interest_coverage": interest_coverage,
+                    "quick_ratio": quick_ratio,
+                    "risk_level": risk_level,
+                    "ci_lower": max(0, prob - ci_width),
+                    "ci_upper": min(1, prob + ci_width),
+                    "debt_3y_cagr": debt_3y_cagr,
+                    "debt_maturity_risk": debt_maturity_risk,
+                    "balance_sheet_strength": balance_sheet_strength,
+                    "wc_efficiency_score": wc_efficiency_score,
+                    "distress_risk_score": distress_risk_score,
+                    "data_quality_score": data_points / 11.0,
+                }
+            )
             results.append(record)
 
         result_df = pd.DataFrame(results)
@@ -2712,41 +2733,45 @@ class CreditRiskProbabilityModel:
         return result_df
 
     def _apply_mcmc_posteriors(
-            self, result_df: pd.DataFrame, source_df: pd.DataFrame,
-            ) -> pd.DataFrame:
+        self, result_df: pd.DataFrame, source_df: pd.DataFrame
+    ) -> pd.DataFrame:
         """Apply MCMC posterior estimation for distress probability."""
         from analytics.statistical_analysis import (
             metropolis_hastings_sampler,
             mcmc_student_t,
             hierarchical_mcmc_by_sector,
-            )
+        )
 
-        z_scores = source_df["altman_z_score"].dropna().values if "altman_z_score" in source_df.columns else np.array(
-                [])
+        z_scores = (
+            source_df["altman_z_score"].dropna().values
+            if "altman_z_score" in source_df.columns
+            else np.array([])
+        )
         if len(z_scores) < 10:
             return result_df
 
         try:
             # Task 2.1: MH sampler on z-scores
             samples, acc_rate = metropolis_hastings_sampler(
-                    z_scores,
-                    n_samples=self.n_mcmc_samples,
-                    burn_in=self.burn_in,
-                    prior_mean=self.distress_threshold,
-                    prior_std=1.0,
-                    )
+                z_scores,
+                n_samples=self.n_mcmc_samples,
+                burn_in=self.burn_in,
+                prior_mean=self.distress_threshold,
+                prior_std=1.0,
+            )
             # Per-stock: P(distress) = P(posterior_mean < stock_z)
-            stock_z = result_df["altman_z_score"].values if "altman_z_score" in result_df.columns else np.full(
-                len(result_df), 3.0)
-            distress_prob_per_stock = np.mean(
-                    samples[:, None] > stock_z[None, :], axis=0,
-                    )
+            stock_z = (
+                result_df["altman_z_score"].values
+                if "altman_z_score" in result_df.columns
+                else np.full(len(result_df), 3.0)
+            )
+            distress_prob_per_stock = np.mean(samples[:, None] > stock_z[None, :], axis=0)
             result_df["mcmc_distress_probability"] = np.clip(distress_prob_per_stock, 0, 1)
 
             # Task 2.2: Student-t for robust estimation
             mu_samples, df_samples = mcmc_student_t(
-                    z_scores, n_samples=self.n_mcmc_samples, burn_in=self.burn_in,
-                    )
+                z_scores, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
+            )
             result_df["mcmc_ci_lower"] = np.percentile(mu_samples, 2.5)
             result_df["mcmc_ci_upper"] = np.percentile(mu_samples, 97.5)
         except Exception as e:
@@ -2761,14 +2786,16 @@ class CreditRiskProbabilityModel:
             sector_col = "industry" if "industry" in source_df.columns else "sector"
             if sector_col in source_df.columns and "altman_z_score" in source_df.columns:
                 sector_results = hierarchical_mcmc_by_sector(
-                        source_df, feature="altman_z_score",
-                        sector_col=sector_col, n_samples=self.n_mcmc_samples,
-                        )
+                    source_df,
+                    feature="altman_z_score",
+                    sector_col=sector_col,
+                    n_samples=self.n_mcmc_samples,
+                )
                 sector_mean_map = {
                     s: v.get("posterior_mean", np.nan)
                     for s, v in sector_results.items()
                     if isinstance(v, dict)
-                    }
+                }
                 if sector_col in result_df.columns:
                     result_df["sector_z_posterior_mean"] = result_df[sector_col].map(sector_mean_map)
 
@@ -2778,19 +2805,21 @@ class CreditRiskProbabilityModel:
                     # manufacturing and too aggressive for a global universe.
                     if "altman_z_score" in result_df.columns:
                         sector_threshold = result_df["sector_z_posterior_mean"].fillna(
-                                self.distress_threshold,
-                                )
+                            self.distress_threshold
+                        )
                         result_df["sector_adjusted_distress"] = (
-                                result_df["altman_z_score"] < sector_threshold
+                            result_df["altman_z_score"] < sector_threshold
                         )
                         logger.info(
-                                "Sector-adjusted distress: %d / %d stocks flagged (vs %d with global threshold)",
-                                result_df["sector_adjusted_distress"].sum(),
-                                len(result_df),
+                            "Sector-adjusted distress: %d / %d stocks flagged (vs %d with global threshold)",
+                            result_df["sector_adjusted_distress"].sum(),
+                            len(result_df),
+                            (
                                 (result_df["altman_z_score"] < self.distress_threshold).sum()
                                 if "altman_z_score" in result_df.columns
-                                else 0,
-                                )
+                                else 0
+                            ),
+                        )
         except Exception as e:
             logger.warning("Hierarchical MCMC for credit risk failed: %s", e)
 
@@ -2811,16 +2840,16 @@ class DividendCutProbabilityModel:
     """
 
     def __init__(
-            self,
-            high_payout_threshold: float = 0.9,
-            min_coverage: float = 1.2,
-            n_mcmc_samples: int = 8000,
-            burn_in: int = 2000,
-            use_mcmc: bool = True,
-            # NEW: Leverage & Liquidity signals for dividend sustainability
-            use_leverage_signals: bool = True,
-            use_balance_sheet: bool = True,
-            ):
+        self,
+        high_payout_threshold: float = 0.9,
+        min_coverage: float = 1.2,
+        n_mcmc_samples: int = 8000,
+        burn_in: int = 2000,
+        use_mcmc: bool = True,
+        # NEW: Leverage & Liquidity signals for dividend sustainability
+        use_leverage_signals: bool = True,
+        use_balance_sheet: bool = True,
+    ):
         self.high_payout_threshold = high_payout_threshold
         self.min_coverage = min_coverage
         self.n_mcmc_samples = n_mcmc_samples
@@ -2943,19 +2972,19 @@ class DividendCutProbabilityModel:
 
             record = _extract_identifiers(row)
             record.update(
-                    {
-                        "high_yield_flag": high_yield_flag,
-                        "dividend_cut_probability": prob,
-                        "fcf_dividend_coverage": fcf_coverage,
-                        "payout_ratio": payout_ratio,
-                        "dividend_streak": streak,
-                        "dividend_consistency": consistency,
-                        "yield_vs_5y_avg": yield_vs_5y,
-                        "sustainable_flag": sustainable_flag,
-                        "safety_score": 100 * (1 - prob),
-                        "risk_category": risk_cat,
-                        },
-                    )
+                {
+                    "high_yield_flag": high_yield_flag,
+                    "dividend_cut_probability": prob,
+                    "fcf_dividend_coverage": fcf_coverage,
+                    "payout_ratio": payout_ratio,
+                    "dividend_streak": streak,
+                    "dividend_consistency": consistency,
+                    "yield_vs_5y_avg": yield_vs_5y,
+                    "sustainable_flag": sustainable_flag,
+                    "safety_score": 100 * (1 - prob),
+                    "risk_category": risk_cat,
+                }
+            )
             results.append(record)
 
         result_df = pd.DataFrame(results)
@@ -2967,30 +2996,32 @@ class DividendCutProbabilityModel:
         return result_df
 
     def _apply_mcmc_posteriors(
-            self, result_df: pd.DataFrame, source_df: pd.DataFrame,
-            ) -> pd.DataFrame:
+        self, result_df: pd.DataFrame, source_df: pd.DataFrame
+    ) -> pd.DataFrame:
         """Apply MCMC posterior estimation for dividend cut probability."""
         from analytics.statistical_analysis import (
             metropolis_hastings_sampler,
             mcmc_student_t,
-            )
+        )
 
         probs = []
 
         # Task 3.1: FCF coverage posterior
         fcf_prob = 0.5
         try:
-            fcf_data = source_df[
-                "fcf_dividend_coverage"].dropna().values if "fcf_dividend_coverage" in source_df.columns else np.array(
-                    [])
+            fcf_data = (
+                source_df["fcf_dividend_coverage"].dropna().values
+                if "fcf_dividend_coverage" in source_df.columns
+                else np.array([])
+            )
             if len(fcf_data) >= 10:
                 samples, _ = metropolis_hastings_sampler(
-                        fcf_data,
-                        n_samples=self.n_mcmc_samples,
-                        burn_in=self.burn_in,
-                        prior_mean=self.min_coverage,
-                        prior_std=1.0,
-                        )
+                    fcf_data,
+                    n_samples=self.n_mcmc_samples,
+                    burn_in=self.burn_in,
+                    prior_mean=self.min_coverage,
+                    prior_std=1.0,
+                )
                 fcf_prob = float(np.mean(samples < self.min_coverage))
                 probs.append(fcf_prob)
         except Exception as e:
@@ -2999,13 +3030,15 @@ class DividendCutProbabilityModel:
         # Task 3.2: Payout ratio posterior (Student-t)
         payout_prob = 0.5
         try:
-            payout_data = source_df[
-                "dividend_payout_ratio"].dropna().values if "dividend_payout_ratio" in source_df.columns else np.array(
-                    [])
+            payout_data = (
+                source_df["dividend_payout_ratio"].dropna().values
+                if "dividend_payout_ratio" in source_df.columns
+                else np.array([])
+            )
             if len(payout_data) >= 10:
                 mu_samples, _ = mcmc_student_t(
-                        payout_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in,
-                        )
+                    payout_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
+                )
                 payout_prob = float(np.mean(mu_samples > self.high_payout_threshold * 100))
                 probs.append(payout_prob)
         except Exception as e:
@@ -3018,24 +3051,24 @@ class DividendCutProbabilityModel:
             sector_col = "industry" if "industry" in source_df.columns else "sector"
             if sector_col in source_df.columns and "fcf_dividend_coverage" in source_df.columns:
                 sector_posteriors = hierarchical_mcmc_by_sector(
-                        source_df,
-                        feature="fcf_dividend_coverage",
-                        sector_col=sector_col,
-                        n_samples=self.n_mcmc_samples,
-                        )
+                    source_df,
+                    feature="fcf_dividend_coverage",
+                    sector_col=sector_col,
+                    n_samples=self.n_mcmc_samples,
+                )
                 sector_mean_map = {
                     s: v.get("posterior_mean", np.nan)
                     for s, v in sector_posteriors.items()
                     if isinstance(v, dict)
-                    }
+                }
                 if sector_col in result_df.columns:
                     result_df["sector_fcf_posterior_mean"] = result_df[sector_col].map(
-                            sector_mean_map,
-                            )
+                        sector_mean_map
+                    )
                     logger.info(
-                            "Hierarchical sector MCMC for dividend FCF coverage: %d sectors",
-                            len(sector_mean_map),
-                            )
+                        "Hierarchical sector MCMC for dividend FCF coverage: %d sectors",
+                        len(sector_mean_map),
+                    )
         except Exception as e:
             logger.warning("Hierarchical MCMC for dividend sectors failed: %s", e)
 
@@ -3079,15 +3112,15 @@ class PriceTargetAchievementModel:
     """
 
     def __init__(
-            self,
-            time_horizon_months: int = 12,
-            n_mcmc_samples: int = 10000,
-            burn_in: int = 2000,
-            use_mcmc: bool = True,
-            # NEW: Risk-adjusted achievement
-            use_risk_adjustment: bool = True,
-            use_financial_health: bool = True,
-            ):
+        self,
+        time_horizon_months: int = 12,
+        n_mcmc_samples: int = 10000,
+        burn_in: int = 2000,
+        use_mcmc: bool = True,
+        # NEW: Risk-adjusted achievement
+        use_risk_adjustment: bool = True,
+        use_financial_health: bool = True,
+    ):
         self.time_horizon_months = time_horizon_months
         self.n_mcmc_samples = n_mcmc_samples
         self.burn_in = burn_in
@@ -3203,22 +3236,22 @@ class PriceTargetAchievementModel:
 
             record = _extract_identifiers(row)
             record.update(
-                    {
-                        "bullish_pct": bullish_pct,
-                        "achievement_probability": prob,
-                        "upside_potential": upside,
-                        "price_target_spread_pct": spread,
-                        "analyst_conviction": conviction,
-                        "eps_revision_momentum": eps_revision,
-                        "analyst_rating_normalized": rating,
-                        "expected_return_prob_weighted": (upside or 0) * prob,
-                        "confidence_level": (
-                            "High"
-                            if spread and spread < 20
-                            else "Medium" if spread and spread < 35 else "Low"
-                        ),
-                        },
-                    )
+                {
+                    "bullish_pct": bullish_pct,
+                    "achievement_probability": prob,
+                    "upside_potential": upside,
+                    "price_target_spread_pct": spread,
+                    "analyst_conviction": conviction,
+                    "eps_revision_momentum": eps_revision,
+                    "analyst_rating_normalized": rating,
+                    "expected_return_prob_weighted": (upside or 0) * prob,
+                    "confidence_level": (
+                        "High"
+                        if spread and spread < 20
+                        else "Medium" if spread and spread < 35 else "Low"
+                    ),
+                }
+            )
             results.append(record)
 
         result_df = pd.DataFrame(results)
@@ -3230,17 +3263,20 @@ class PriceTargetAchievementModel:
         return result_df
 
     def _apply_mcmc_posteriors(
-            self, result_df: pd.DataFrame, source_df: pd.DataFrame,
-            ) -> pd.DataFrame:
+        self, result_df: pd.DataFrame, source_df: pd.DataFrame
+    ) -> pd.DataFrame:
         """Apply MCMC posterior estimation for price target achievement."""
         from analytics.statistical_analysis import (
             metropolis_hastings_sampler,
             mcmc_student_t,
             parallel_mcmc_chains,
-            )
+        )
 
-        returns_data = source_df[
-            "upside_potential"].dropna().values if "upside_potential" in source_df.columns else np.array([])
+        returns_data = (
+            source_df["upside_potential"].dropna().values
+            if "upside_potential" in source_df.columns
+            else np.array([])
+        )
         if len(returns_data) < 10:
             return result_df
 
@@ -3255,27 +3291,26 @@ class PriceTargetAchievementModel:
                 if pd.notna(vol_scale) and vol_scale > 0:
                     prior_std = prior_std * max(0.5, float(vol_scale))
             samples, acc_rate = metropolis_hastings_sampler(
-                    returns_data,
-                    n_samples=self.n_mcmc_samples,
-                    burn_in=self.burn_in,
-                    prior_mean=0.0,
-                    prior_std=prior_std,
-                    )
+                returns_data,
+                n_samples=self.n_mcmc_samples,
+                burn_in=self.burn_in,
+                prior_mean=0.0,
+                prior_std=prior_std,
+            )
             # Per-stock: P(achieving target) ≈ P(posterior mean > stock's required upside)
             stock_upside = (
                 result_df["upside_potential"].values
                 if "upside_potential" in result_df.columns
                 else np.full(len(result_df), 10.0)
             )
-            mh_achievement_prob = np.mean(
-                    samples[:, None] > stock_upside[None, :], axis=0,
-                    )
+            mh_achievement_prob = np.mean(samples[:, None] > stock_upside[None, :], axis=0)
             result_df["mh_achievement_probability"] = np.clip(mh_achievement_prob, 0, 1)
             result_df["mh_acceptance_rate"] = acc_rate
             logger.info(
-                    "MH sampler for price target: acceptance_rate=%.3f, mean_posterior=%.3f",
-                    acc_rate, float(samples.mean()),
-                    )
+                "MH sampler for price target: acceptance_rate=%.3f, mean_posterior=%.3f",
+                acc_rate,
+                float(samples.mean()),
+            )
         except Exception as e:
             logger.warning("MH sampler for price target failed: %s", e)
             result_df["mh_achievement_probability"] = np.nan
@@ -3284,8 +3319,8 @@ class PriceTargetAchievementModel:
         try:
             # Task 4.2: Student-t for heavy-tailed returns
             mu_samples, df_samples = mcmc_student_t(
-                    returns_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in,
-                    )
+                returns_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
+            )
             achievement_prob = float(np.mean(mu_samples > 0))
             result_df["mcmc_achievement_probability"] = achievement_prob
             result_df["mcmc_ci_lower"] = np.percentile(mu_samples, 2.5)
@@ -3294,7 +3329,7 @@ class PriceTargetAchievementModel:
             # Task 4.4: Posterior mean weighted return
             posterior_mean_return = float(mu_samples.mean())
             result_df["mcmc_expected_return_prob_weighted"] = (
-                    posterior_mean_return * achievement_prob
+                posterior_mean_return * achievement_prob
             )
         except Exception as e:
             logger.warning("MCMC price target posterior failed: %s", e)
@@ -3306,8 +3341,8 @@ class PriceTargetAchievementModel:
         # Task 4.3: Parallel MCMC with Gelman-Rubin
         try:
             mcmc_result = parallel_mcmc_chains(
-                    returns_data, n_chains=4, n_samples=self.n_mcmc_samples,
-                    )
+                returns_data, n_chains=4, n_samples=self.n_mcmc_samples
+            )
             result_df["mcmc_gelman_rubin"] = mcmc_result.get("r_hat", np.nan)
         except Exception as e:
             logger.warning("Parallel MCMC for price target failed: %s", e)
@@ -3322,9 +3357,9 @@ class PriceTargetAchievementModel:
 
 
 def create_earnings_probability_dashboard(
-        probability_df: pd.DataFrame,
-        title: str = "Earnings Beat Probability Analysis",
-        ) -> go.Figure:
+    probability_df: pd.DataFrame,
+    title: str = "Earnings Beat Probability Analysis",
+) -> go.Figure:
     """
     Create comprehensive dashboard for earnings beat probabilities.
 
@@ -3355,12 +3390,12 @@ def create_earnings_probability_dashboard(
             "Probability Classification",
             "Revision Momentum vs P(Beat)" if has_momentum else "Beat Streak Distribution",
             "GAAP-Norm Spread vs P(Beat)" if has_spread else "Beat Streak Distribution",
-            )
+        )
         specs = [
             [{"type": "histogram"}, {"type": "bar"}],
             [{"type": "scatter"}, {"type": "pie"}],
             [{"type": "scatter"}, {"type": "scatter"}],
-            ]
+        ]
     else:
         n_rows = 2
         subplot_titles = (
@@ -3368,20 +3403,20 @@ def create_earnings_probability_dashboard(
             "Confidence Score by Sector",
             "Historical vs Posterior Beat Rate",
             "Probability Classification",
-            )
+        )
         specs = [
             [{"type": "histogram"}, {"type": "bar"}],
             [{"type": "scatter"}, {"type": "pie"}],
-            ]
+        ]
 
     fig = make_subplots(
-            rows=n_rows,
-            cols=2,
-            subplot_titles=subplot_titles,
-            specs=specs,
-            vertical_spacing=0.12,
-            horizontal_spacing=0.1,
-            )
+        rows=n_rows,
+        cols=2,
+        subplot_titles=subplot_titles,
+        specs=specs,
+        vertical_spacing=0.12,
+        horizontal_spacing=0.1,
+    )
 
     # Color scheme matching Global Equity Research Dashboard theme
     colors = {
@@ -3390,20 +3425,20 @@ def create_earnings_probability_dashboard(
         "accent": "#6C63FF",
         "warning": "#FFD93D",
         "danger": "#E63946",
-        }
+    }
 
     # 1. Posterior probability histogram
     fig.add_trace(
-            go.Histogram(
-                    x=probability_df["posterior_beat_prob"],
-                    nbinsx=20,
-                    name="Posterior P(Beat)",
-                    marker_color=colors["primary"],
-                    opacity=0.8,
-                    ),
-            row=1,
-            col=1,
-            )
+        go.Histogram(
+            x=probability_df["posterior_beat_prob"],
+            nbinsx=20,
+            name="Posterior P(Beat)",
+            marker_color=colors["primary"],
+            opacity=0.8,
+        ),
+        row=1,
+        col=1,
+    )
 
     # Add vertical line at 0.5 threshold
     fig.add_vline(x=0.5, line_dash="dash", line_color=colors["danger"], row=1, col=1)
@@ -3414,108 +3449,108 @@ def create_earnings_probability_dashboard(
             probability_df.groupby("sector")["confidence_score"].mean().sort_values(ascending=True)
         )
         fig.add_trace(
-                go.Bar(
-                        y=sector_conf.index,
-                        x=sector_conf.values,
-                        orientation="h",
-                        name="Avg Confidence",
-                        marker_color=colors["secondary"],
-                        ),
-                row=1,
-                col=2,
-                )
+            go.Bar(
+                y=sector_conf.index,
+                x=sector_conf.values,
+                orientation="h",
+                name="Avg Confidence",
+                marker_color=colors["secondary"],
+            ),
+            row=1,
+            col=2,
+        )
 
     # 3. Historical vs Posterior scatter
     fig.add_trace(
-            go.Scatter(
-                    x=probability_df["historical_beat_rate"],
-                    y=probability_df["posterior_beat_prob"],
-                    mode="markers",
-                    name="Stocks",
-                    marker=dict(
-                            size=8,
-                            color=probability_df["confidence_score"],
-                            colorscale="Viridis",
-                            showscale=True,
-                            colorbar=dict(title="Confidence", x=0.45),
-                            ),
-                    text=probability_df["ticker"],
-                    hovertemplate="<b>%{text}</b><br>Historical: %{x:.1%}<br>Posterior: %{y:.1%}<extra></extra>",
-                    ),
-            row=2,
-            col=1,
-            )
+        go.Scatter(
+            x=probability_df["historical_beat_rate"],
+            y=probability_df["posterior_beat_prob"],
+            mode="markers",
+            name="Stocks",
+            marker=dict(
+                size=8,
+                color=probability_df["confidence_score"],
+                colorscale="Viridis",
+                showscale=True,
+                colorbar=dict(title="Confidence", x=0.45),
+            ),
+            text=probability_df["ticker"],
+            hovertemplate="<b>%{text}</b><br>Historical: %{x:.1%}<br>Posterior: %{y:.1%}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
 
     # Add diagonal reference line
     fig.add_trace(
-            go.Scatter(
-                    x=[0, 1],
-                    y=[0, 1],
-                    mode="lines",
-                    line=dict(dash="dash", color="gray"),
-                    showlegend=False,
-                    ),
-            row=2,
-            col=1,
-            )
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 1],
+            mode="lines",
+            line=dict(dash="dash", color="gray"),
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+    )
 
     # 4. Classification pie chart
     if "beat_classification" in probability_df.columns:
         classification_counts = probability_df["beat_classification"].value_counts()
         fig.add_trace(
-                go.Pie(
-                        labels=classification_counts.index,
-                        values=classification_counts.values,
-                        marker_colors=[colors["secondary"], colors["warning"]],
-                        hole=0.4,
-                        ),
-                row=2,
-                col=2,
-                )
+            go.Pie(
+                labels=classification_counts.index,
+                values=classification_counts.values,
+                marker_colors=[colors["secondary"], colors["warning"]],
+                hole=0.4,
+            ),
+            row=2,
+            col=2,
+        )
 
     # 5. Enhanced panel: Revision momentum vs posterior (row 3, col 1)
     if is_enhanced and has_momentum:
         plot_df = probability_df[["gaap_revision_momentum", "posterior_beat_prob"]].dropna()
         if len(plot_df) > 0:
             fig.add_trace(
-                    go.Scatter(
-                            x=plot_df["gaap_revision_momentum"],
-                            y=plot_df["posterior_beat_prob"],
-                            mode="markers",
-                            name="Momentum vs P(Beat)",
-                            marker=dict(
-                                    size=8,
-                                    color=colors["secondary"],
-                                    opacity=0.6,
-                                    ),
-                            text=(
-                                probability_df.loc[plot_df.index, "ticker"]
-                                if "ticker" in probability_df.columns
-                                else None
-                            ),
-                            hovertemplate=(
-                                "<b>%{text}</b><br>"
-                                "Momentum: %{x:.0f}<br>"
-                                "P(Beat): %{y:.1%}<extra></extra>"
-                            ),
-                            ),
-                    row=3,
-                    col=1,
-                    )
+                go.Scatter(
+                    x=plot_df["gaap_revision_momentum"],
+                    y=plot_df["posterior_beat_prob"],
+                    mode="markers",
+                    name="Momentum vs P(Beat)",
+                    marker=dict(
+                        size=8,
+                        color=colors["secondary"],
+                        opacity=0.6,
+                    ),
+                    text=(
+                        probability_df.loc[plot_df.index, "ticker"]
+                        if "ticker" in probability_df.columns
+                        else None
+                    ),
+                    hovertemplate=(
+                        "<b>%{text}</b><br>"
+                        "Momentum: %{x:.0f}<br>"
+                        "P(Beat): %{y:.1%}<extra></extra>"
+                    ),
+                ),
+                row=3,
+                col=1,
+            )
     elif is_enhanced and has_streak:
         streak_data = probability_df["quarterly_beat_streak"].dropna()
         if len(streak_data) > 0:
             streak_counts = streak_data.value_counts().sort_index()
             fig.add_trace(
-                    go.Bar(
-                            x=streak_counts.index.astype(str),
-                            y=streak_counts.values,
-                            name="Beat Streak",
-                            marker_color=colors["accent"],
-                            ),
-                    row=3,
-                    col=1,
-                    )
+                go.Bar(
+                    x=streak_counts.index.astype(str),
+                    y=streak_counts.values,
+                    name="Beat Streak",
+                    marker_color=colors["accent"],
+                ),
+                row=3,
+                col=1,
+            )
 
     # 6. Enhanced panel: GAAP spread vs posterior (row 3, col 2)
     if is_enhanced and has_spread:
@@ -3523,56 +3558,56 @@ def create_earnings_probability_dashboard(
         if len(plot_df) > 0:
             abs_spread = plot_df["gaap_norm_spread"].abs()
             fig.add_trace(
-                    go.Scatter(
-                            x=plot_df["gaap_norm_spread"],
-                            y=plot_df["posterior_beat_prob"],
-                            mode="markers",
-                            name="GAAP Spread vs P(Beat)",
-                            marker=dict(
-                                    size=8,
-                                    color=abs_spread,
-                                    colorscale="YlOrRd",
-                                    showscale=False,
-                                    opacity=0.7,
-                                    ),
-                            text=(
-                                probability_df.loc[plot_df.index, "ticker"]
-                                if "ticker" in probability_df.columns
-                                else None
-                            ),
-                            hovertemplate=(
-                                "<b>%{text}</b><br>"
-                                "Spread: %{x:.1f}%<br>"
-                                "P(Beat): %{y:.1%}<extra></extra>"
-                            ),
-                            ),
-                    row=3,
-                    col=2,
-                    )
+                go.Scatter(
+                    x=plot_df["gaap_norm_spread"],
+                    y=plot_df["posterior_beat_prob"],
+                    mode="markers",
+                    name="GAAP Spread vs P(Beat)",
+                    marker=dict(
+                        size=8,
+                        color=abs_spread,
+                        colorscale="YlOrRd",
+                        showscale=False,
+                        opacity=0.7,
+                    ),
+                    text=(
+                        probability_df.loc[plot_df.index, "ticker"]
+                        if "ticker" in probability_df.columns
+                        else None
+                    ),
+                    hovertemplate=(
+                        "<b>%{text}</b><br>"
+                        "Spread: %{x:.1f}%<br>"
+                        "P(Beat): %{y:.1%}<extra></extra>"
+                    ),
+                ),
+                row=3,
+                col=2,
+            )
     elif is_enhanced and has_streak:
         streak_data = probability_df["quarterly_beat_streak"].dropna()
         if len(streak_data) > 0:
             streak_counts = streak_data.value_counts().sort_index()
             fig.add_trace(
-                    go.Bar(
-                            x=streak_counts.index.astype(str),
-                            y=streak_counts.values,
-                            name="Beat Streak",
-                            marker_color=colors["accent"],
-                            ),
-                    row=3,
-                    col=2,
-                    )
+                go.Bar(
+                    x=streak_counts.index.astype(str),
+                    y=streak_counts.values,
+                    name="Beat Streak",
+                    marker_color=colors["accent"],
+                ),
+                row=3,
+                col=2,
+            )
 
     # Update layout
     height = 1000 if is_enhanced else 700
     fig.update_layout(
-            title=dict(text=title, font=dict(size=24, color="#1A2332")),
-            height=height,
-            showlegend=False,
-            template="plotly_dark",
-            font=dict(family="Inter, sans-serif"),
-            )
+        title=dict(text=title, font=dict(size=24, color="#1A2332")),
+        height=height,
+        showlegend=False,
+        template="plotly_dark",
+        font=dict(family="Inter, sans-serif"),
+    )
 
     # Update axes labels
     fig.update_xaxes(title_text="P(Beat)", row=1, col=1)
@@ -3593,8 +3628,8 @@ def create_earnings_probability_dashboard(
 
 
 def create_confidence_calibration_chart(
-        confidence_result: ModelConfidenceResult,
-        ) -> go.Figure:
+    confidence_result: ModelConfidenceResult,
+) -> go.Figure:
     """
     Create reliability diagram and confidence metrics chart.
 
@@ -3605,72 +3640,72 @@ def create_confidence_calibration_chart(
         Plotly Figure with calibration analysis
     """
     fig = make_subplots(
-            rows=1,
-            cols=2,
-            subplot_titles=("Reliability Diagram", "Model Confidence Metrics"),
-            specs=[[{"type": "scatter"}, {"type": "indicator"}]],
-            )
+        rows=1,
+        cols=2,
+        subplot_titles=("Reliability Diagram", "Model Confidence Metrics"),
+        specs=[[{"type": "scatter"}, {"type": "indicator"}]],
+    )
 
     reliability = confidence_result.reliability_diagram_data
 
     # Reliability diagram
     if reliability["bin_centers"]:
         fig.add_trace(
-                go.Scatter(
-                        x=reliability["bin_centers"],
-                        y=reliability["observed_freq"],
-                        mode="markers+lines",
-                        name="Observed",
-                        marker=dict(size=10, color="#0A7EA4"),
-                        ),
-                row=1,
-                col=1,
-                )
+            go.Scatter(
+                x=reliability["bin_centers"],
+                y=reliability["observed_freq"],
+                mode="markers+lines",
+                name="Observed",
+                marker=dict(size=10, color="#0A7EA4"),
+            ),
+            row=1,
+            col=1,
+        )
 
         # Perfect calibration line
         fig.add_trace(
-                go.Scatter(
-                        x=[0, 1],
-                        y=[0, 1],
-                        mode="lines",
-                        line=dict(dash="dash", color="gray"),
-                        name="Perfect Calibration",
-                        ),
-                row=1,
-                col=1,
-                )
+            go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                line=dict(dash="dash", color="gray"),
+                name="Perfect Calibration",
+            ),
+            row=1,
+            col=1,
+        )
 
     # Confidence gauge
     fig.add_trace(
-            go.Indicator(
-                    mode="gauge+number+delta",
-                    value=confidence_result.overall_confidence,
-                    title={"text": "Model Confidence"},
-                    delta={"reference": 70},
-                    gauge={
-                        "axis": {"range": [0, 100]},
-                        "bar": {"color": "#0A7EA4"},
-                        "steps": [
-                            {"range": [0, 40], "color": "#E63946"},
-                            {"range": [40, 70], "color": "#FFD93D"},
-                            {"range": [70, 100], "color": "#00A878"},
-                            ],
-                        "threshold": {
-                            "line": {"color": "black", "width": 4},
-                            "thickness": 0.75,
-                            "value": 70,
-                            },
-                        },
-                    ),
-            row=1,
-            col=2,
-            )
+        go.Indicator(
+            mode="gauge+number+delta",
+            value=confidence_result.overall_confidence,
+            title={"text": "Model Confidence"},
+            delta={"reference": 70},
+            gauge={
+                "axis": {"range": [0, 100]},
+                "bar": {"color": "#0A7EA4"},
+                "steps": [
+                    {"range": [0, 40], "color": "#E63946"},
+                    {"range": [40, 70], "color": "#FFD93D"},
+                    {"range": [70, 100], "color": "#00A878"},
+                ],
+                "threshold": {
+                    "line": {"color": "black", "width": 4},
+                    "thickness": 0.75,
+                    "value": 70,
+                },
+            },
+        ),
+        row=1,
+        col=2,
+    )
 
     fig.update_layout(
-            title=f"Model Calibration: {confidence_result.model_name}",
-            height=400,
-            template="plotly_dark",
-            )
+        title=f"Model Calibration: {confidence_result.model_name}",
+        height=400,
+        template="plotly_dark",
+    )
 
     fig.update_xaxes(title_text="Predicted Probability", row=1, col=1)
     fig.update_yaxes(title_text="Observed Frequency", row=1, col=1)
@@ -3679,9 +3714,9 @@ def create_confidence_calibration_chart(
 
 
 def create_eps_streak_analysis_chart(
-        streak_df: pd.DataFrame,
-        title: str = "EPS Streak Analysis & Predictions",
-        ) -> go.Figure:
+    streak_df: pd.DataFrame,
+    title: str = "EPS Streak Analysis & Predictions",
+) -> go.Figure:
     """
     Create visualization for EPS streak analysis.
 
@@ -3693,84 +3728,84 @@ def create_eps_streak_analysis_chart(
         Plotly Figure with streak analysis
     """
     fig = make_subplots(
-            rows=2,
-            cols=2,
-            subplot_titles=(
-                "Current Streak Distribution",
-                "Continuation vs Reversion Probability",
-                "Prediction Confidence by Streak Length",
-                "Expected Outcomes",
-                ),
-            specs=[
-                [{"type": "histogram"}, {"type": "scatter"}],
-                [{"type": "scatter"}, {"type": "pie"}],
-                ],
-            )
+        rows=2,
+        cols=2,
+        subplot_titles=(
+            "Current Streak Distribution",
+            "Continuation vs Reversion Probability",
+            "Prediction Confidence by Streak Length",
+            "Expected Outcomes",
+        ),
+        specs=[
+            [{"type": "histogram"}, {"type": "scatter"}],
+            [{"type": "scatter"}, {"type": "pie"}],
+        ],
+    )
 
     colors = {"beat": "#00A878", "miss": "#E63946", "meet": "#FFD93D"}
 
     # 1. Streak distribution
     fig.add_trace(
-            go.Histogram(
-                    x=streak_df["current_streak"],
-                    nbinsx=15,
-                    name="Streak Length",
-                    marker_color="#0A7EA4",
-                    ),
-            row=1,
-            col=1,
-            )
+        go.Histogram(
+            x=streak_df["current_streak"],
+            nbinsx=15,
+            name="Streak Length",
+            marker_color="#0A7EA4",
+        ),
+        row=1,
+        col=1,
+    )
 
     # 2. Continuation vs Reversion
     fig.add_trace(
-            go.Scatter(
-                    x=streak_df["continuation_probability"],
-                    y=streak_df["mean_reversion_probability"],
-                    mode="markers",
-                    marker=dict(
-                            size=8,
-                            color=[colors.get(t, "#0A7EA4") for t in streak_df["streak_type"]],
-                            ),
-                    text=streak_df["ticker"],
-                    hovertemplate="<b>%{text}</b><br>Continue: %{x:.1%}<br>Revert: %{y:.1%}<extra></extra>",
-                    ),
-            row=1,
-            col=2,
-            )
+        go.Scatter(
+            x=streak_df["continuation_probability"],
+            y=streak_df["mean_reversion_probability"],
+            mode="markers",
+            marker=dict(
+                size=8,
+                color=[colors.get(t, "#0A7EA4") for t in streak_df["streak_type"]],
+            ),
+            text=streak_df["ticker"],
+            hovertemplate="<b>%{text}</b><br>Continue: %{x:.1%}<br>Revert: %{y:.1%}<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
 
     # 3. Confidence by streak length
     streak_conf = streak_df.groupby("current_streak")["prediction_confidence"].mean()
     fig.add_trace(
-            go.Scatter(
-                    x=streak_conf.index,
-                    y=streak_conf.values,
-                    mode="markers+lines",
-                    marker=dict(size=10, color="#6C63FF"),
-                    name="Avg Confidence",
-                    ),
-            row=2,
-            col=1,
-            )
+        go.Scatter(
+            x=streak_conf.index,
+            y=streak_conf.values,
+            mode="markers+lines",
+            marker=dict(size=10, color="#6C63FF"),
+            name="Avg Confidence",
+        ),
+        row=2,
+        col=1,
+    )
 
     # 4. Expected outcomes pie
     outcome_counts = streak_df["expected_next_outcome"].value_counts()
     fig.add_trace(
-            go.Pie(
-                    labels=outcome_counts.index,
-                    values=outcome_counts.values,
-                    marker_colors=[colors.get(o, "#0A7EA4") for o in outcome_counts.index],
-                    hole=0.4,
-                    ),
-            row=2,
-            col=2,
-            )
+        go.Pie(
+            labels=outcome_counts.index,
+            values=outcome_counts.values,
+            marker_colors=[colors.get(o, "#0A7EA4") for o in outcome_counts.index],
+            hole=0.4,
+        ),
+        row=2,
+        col=2,
+    )
 
     fig.update_layout(
-            title=dict(text=title, font=dict(size=24)),
-            height=700,
-            showlegend=False,
-            template="plotly_dark",
-            )
+        title=dict(text=title, font=dict(size=24)),
+        height=700,
+        showlegend=False,
+        template="plotly_dark",
+    )
 
     return fig
 
@@ -3784,15 +3819,15 @@ class CategoryProbabilityAnalyzer:
     """
 
     def __init__(
-            self,
-            category_name: str,
-            prior_alpha: float = 2.0,
-            prior_beta: float = 2.0,
-            n_mcmc_samples: int = 5000,
-            burn_in: int = 1000,
-            use_mcmc: bool = True,
-            use_student_t: bool = False,
-            ):
+        self,
+        category_name: str,
+        prior_alpha: float = 2.0,
+        prior_beta: float = 2.0,
+        n_mcmc_samples: int = 5000,
+        burn_in: int = 1000,
+        use_mcmc: bool = True,
+        use_student_t: bool = False,
+    ):
         self.category_name = category_name
         self.prior_alpha = prior_alpha
         self.prior_beta = prior_beta
@@ -3802,10 +3837,10 @@ class CategoryProbabilityAnalyzer:
         self.use_student_t = use_student_t
 
     def analyze_view(
-            self,
-            df: pd.DataFrame,
-            feature_cols: list[str],
-            ) -> pd.DataFrame:
+        self,
+        df: pd.DataFrame,
+        feature_cols: list[str],
+    ) -> pd.DataFrame:
         """
         Analyze all features in a view and return probability metrics.
 
@@ -3857,14 +3892,12 @@ class CategoryProbabilityAnalyzer:
 
         return pd.concat(results, ignore_index=True)
 
-    def _compute_mcmc_posteriors(
-            self, df: pd.DataFrame, feature_cols: list[str],
-            ) -> dict:
+    def _compute_mcmc_posteriors(self, df: pd.DataFrame, feature_cols: list[str]) -> dict:
         """Compute MCMC posteriors per feature."""
         from analytics.statistical_analysis import (
             metropolis_hastings_sampler,
             mcmc_student_t,
-            )
+        )
 
         stats = {}
         for feat in feature_cols:
@@ -3877,22 +3910,22 @@ class CategoryProbabilityAnalyzer:
             try:
                 if self.use_student_t:
                     mu_samples, _ = mcmc_student_t(
-                            data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in,
-                            )
+                        data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
+                    )
                 else:
                     mu_samples, _ = metropolis_hastings_sampler(
-                            data,
-                            n_samples=self.n_mcmc_samples,
-                            burn_in=self.burn_in,
-                            prior_mean=self.prior_alpha,
-                            prior_std=self.prior_beta,
-                            )
+                        data,
+                        n_samples=self.n_mcmc_samples,
+                        burn_in=self.burn_in,
+                        prior_mean=self.prior_alpha,
+                        prior_std=self.prior_beta,
+                    )
                 stats[feat] = {
                     "posterior_mean": float(mu_samples.mean()),
                     "posterior_std": float(mu_samples.std()),
                     "ci_lower_95": float(np.percentile(mu_samples, 2.5)),
                     "ci_upper_95": float(np.percentile(mu_samples, 97.5)),
-                    }
+                }
             except Exception as e:
                 logger.warning("MCMC posterior for feature %s failed: %s", feat, e)
 
@@ -3951,34 +3984,34 @@ class ResampledBeatProbabilityModel:
         "price_momentum_6m",
         "range_52w_position",
         "ema_crossover_20_50",
-        ]
+    ]
     _TECHNICAL_COLS = [
         "ema_slope_20d",
         "ema_trend_consistency",
         "breakout_signal",
         "volatility_compression",
-        ]
+    ]
     _TEMPORAL_COLS = [
         "earnings_season_flag",
         "pre_earnings_window",
         "days_to_earnings",
         "reporting_freshness_score",
-        ]
+    ]
     _EARNINGS_COLS = [
         "eps_trajectory_score",
         "eps_positive_streak",
         "revision_quality_divergence",
-        ]
+    ]
 
     def __init__(
-            self,
-            base_model: Optional["EarningsBeatProbabilityModel"] = None,
-            momentum_weight: float = 0.3,
-            volatility_weight: float = 0.2,
-            n_posterior_samples: int = 4000,
-            n_chains: int = 4,
-            random_seed: int = 42,
-            ):
+        self,
+        base_model: Optional["EarningsBeatProbabilityModel"] = None,
+        momentum_weight: float = 0.3,
+        volatility_weight: float = 0.2,
+        n_posterior_samples: int = 4000,
+        n_chains: int = 4,
+        random_seed: int = 42,
+    ):
         self.base_model = base_model or EarningsBeatProbabilityModel()
         self.momentum_weight = np.clip(momentum_weight, 0, 1)
         self.volatility_weight = np.clip(volatility_weight, 0, 1)
@@ -4003,25 +4036,25 @@ class ResampledBeatProbabilityModel:
         if "volatility_compression" in row.index and pd.notna(row["volatility_compression"]):
             score = float(np.clip(row["volatility_compression"], 0, 1))
         elif "volatility_term_structure" in row.index and pd.notna(
-                row["volatility_term_structure"],
-                ):
+            row["volatility_term_structure"]
+        ):
             score = float(np.clip(1.0 - abs(row["volatility_term_structure"]) / 100, 0, 1))
         return score
 
     def _adjust_prior(
-            self,
-            base_alpha: float,
-            base_beta: float,
-            momentum_signal: float,
-            vol_regime: float,
-            ) -> tuple[float, float]:
+        self,
+        base_alpha: float,
+        base_beta: float,
+        momentum_signal: float,
+        vol_regime: float,
+    ) -> tuple[float, float]:
         """
         Adjust Beta prior parameters based on technical signals.
 
         Positive momentum + low volatility → shift prior toward higher beat rate.
         """
         adjustment = (
-                self.momentum_weight * momentum_signal + self.volatility_weight * (vol_regime - 0.5) * 2
+            self.momentum_weight * momentum_signal + self.volatility_weight * (vol_regime - 0.5) * 2
         )
         concentration = base_alpha + base_beta
         shift = adjustment * 0.2 * concentration
@@ -4031,15 +4064,15 @@ class ResampledBeatProbabilityModel:
         return adjusted_alpha, adjusted_beta
 
     def _run_analysis(
-            self,
-            df: pd.DataFrame,
-            sector_col: str = "sector",
-            ticker_col: str = "ticker",
-            ) -> list[ResampledBeatEstimate]:
+        self,
+        df: pd.DataFrame,
+        sector_col: str = "sector",
+        ticker_col: str = "ticker",
+    ) -> list[ResampledBeatEstimate]:
         """Core analysis loop returning a list of ResampledBeatEstimate."""
         base_results = self.base_model.analyze_dataframe_enhanced(
-                df, sector_col=sector_col, ticker_col=ticker_col,
-                )
+            df, sector_col=sector_col, ticker_col=ticker_col
+        )
         if base_results.empty:
             return []
 
@@ -4067,48 +4100,48 @@ class ResampledBeatProbabilityModel:
             ci_90 = (
                 float(stats.beta.ppf(0.05, adj_alpha, adj_beta)),
                 float(stats.beta.ppf(0.95, adj_alpha, adj_beta)),
-                )
+            )
             ci_95 = (
                 float(stats.beta.ppf(0.025, adj_alpha, adj_beta)),
                 float(stats.beta.ppf(0.975, adj_alpha, adj_beta)),
-                )
+            )
 
             results.append(
-                    ResampledBeatEstimate(
-                            ticker=str(ticker),
-                            name=str(row.get("name", "")),
-                            sector=str(row.get(sector_col, row.get("sector", ""))),
-                            base_posterior_mean=float(base_mean),
-                            resampled_posterior_mean=float(adj_mean),
-                            technical_adjustment=float(adj_mean - base_mean),
-                            momentum_signal=momentum,
-                            volatility_regime_score=vol_regime,
-                            credible_interval_90=ci_90,
-                            credible_interval_95=ci_95,
-                            prob_beat_given_momentum=float(1.0 - stats.beta.cdf(0.5, adj_alpha, adj_beta)),
-                            earnings_season_flag=(
-                                int(orig_row["earnings_season_flag"])
-                                if "earnings_season_flag" in orig_row.index
-                                   and pd.notna(orig_row.get("earnings_season_flag"))
-                                else None
-                            ),
-                            pre_earnings_window=(
-                                int(orig_row["pre_earnings_window"])
-                                if "pre_earnings_window" in orig_row.index
-                                   and pd.notna(orig_row.get("pre_earnings_window"))
-                                else None
-                            ),
-                            ),
-                    )
+                ResampledBeatEstimate(
+                    ticker=str(ticker),
+                    name=str(row.get("name", "")),
+                    sector=str(row.get(sector_col, row.get("sector", ""))),
+                    base_posterior_mean=float(base_mean),
+                    resampled_posterior_mean=float(adj_mean),
+                    technical_adjustment=float(adj_mean - base_mean),
+                    momentum_signal=momentum,
+                    volatility_regime_score=vol_regime,
+                    credible_interval_90=ci_90,
+                    credible_interval_95=ci_95,
+                    prob_beat_given_momentum=float(1.0 - stats.beta.cdf(0.5, adj_alpha, adj_beta)),
+                    earnings_season_flag=(
+                        int(orig_row["earnings_season_flag"])
+                        if "earnings_season_flag" in orig_row.index
+                        and pd.notna(orig_row.get("earnings_season_flag"))
+                        else None
+                    ),
+                    pre_earnings_window=(
+                        int(orig_row["pre_earnings_window"])
+                        if "pre_earnings_window" in orig_row.index
+                        and pd.notna(orig_row.get("pre_earnings_window"))
+                        else None
+                    ),
+                )
+            )
 
         return results
 
     def analyze_dataframe(
-            self,
-            df: pd.DataFrame,
-            sector_col: str = "sector",
-            ticker_col: str = "ticker",
-            ) -> pd.DataFrame:
+        self,
+        df: pd.DataFrame,
+        sector_col: str = "sector",
+        ticker_col: str = "ticker",
+    ) -> pd.DataFrame:
         """
         Run resampled beat probability analysis on equities DataFrame.
 
@@ -4148,11 +4181,11 @@ class ResampledBeatProbabilityModel:
         return result_df
 
     def build_inference_data(
-            self,
-            df: pd.DataFrame,
-            sector_col: str = "sector",
-            ticker_col: str = "ticker",
-            ) -> "az.InferenceData | xr.Dataset | None":
+        self,
+        df: pd.DataFrame,
+        sector_col: str = "sector",
+        ticker_col: str = "ticker",
+    ) -> "az.InferenceData | xr.Dataset | None":
         """
         Build ArviZ InferenceData from resampled beat probability posteriors.
 
@@ -4171,8 +4204,8 @@ class ResampledBeatProbabilityModel:
         n_equities = len(tickers)
 
         base_results = self.base_model.analyze_dataframe_enhanced(
-                df, sector_col=sector_col, ticker_col=ticker_col,
-                )
+            df, sector_col=sector_col, ticker_col=ticker_col
+        )
 
         adj_alphas = np.full(n_equities, 2.0)
         adj_betas = np.full(n_equities, 2.0)
@@ -4188,11 +4221,11 @@ class ResampledBeatProbabilityModel:
             adj_alphas[i], adj_betas[i] = self._adjust_prior(base_a, base_b, mom, vol)
 
         posterior_samples = np.stack(
-                [
-                    self.rng.beta(adj_alphas, adj_betas, size=(self.n_posterior_samples, n_equities))
-                    for _ in range(self.n_chains)
-                    ],
-                )
+            [
+                self.rng.beta(adj_alphas, adj_betas, size=(self.n_posterior_samples, n_equities))
+                for _ in range(self.n_chains)
+            ]
+        )
 
         pp_samples = (self.rng.random(posterior_samples.shape) < posterior_samples).astype(int)
 
@@ -4200,39 +4233,39 @@ class ResampledBeatProbabilityModel:
             "chain": np.arange(self.n_chains),
             "draw": np.arange(self.n_posterior_samples),
             "equity": tickers,
-            }
+        }
 
         if ARVIZ_AVAILABLE and az is not None:
             return az.from_dict(
-                    posterior={"beat_probability": posterior_samples},
-                    posterior_predictive={"beat_outcome": pp_samples},
-                    observed_data={
-                        "base_posterior_mean": result_df["base_posterior_mean"].values,
-                        "momentum_signal": result_df["momentum_signal"].values,
-                        },
-                    constant_data={
-                        "momentum_weight": np.array([self.momentum_weight]),
-                        "volatility_weight": np.array([self.volatility_weight]),
-                        },
-                    coords=coords,
-                    dims={
-                        "beat_probability": ["chain", "draw", "equity"],
-                        "beat_outcome": ["chain", "draw", "equity"],
-                        },
-                    )
+                posterior={"beat_probability": posterior_samples},
+                posterior_predictive={"beat_outcome": pp_samples},
+                observed_data={
+                    "base_posterior_mean": result_df["base_posterior_mean"].values,
+                    "momentum_signal": result_df["momentum_signal"].values,
+                },
+                constant_data={
+                    "momentum_weight": np.array([self.momentum_weight]),
+                    "volatility_weight": np.array([self.volatility_weight]),
+                },
+                coords=coords,
+                dims={
+                    "beat_probability": ["chain", "draw", "equity"],
+                    "beat_outcome": ["chain", "draw", "equity"],
+                },
+            )
         elif xr is not None:
             return xr.Dataset(
-                    {"beat_probability": (["chain", "draw", "equity"], posterior_samples)},
-                    coords=coords,
-                    )
+                {"beat_probability": (["chain", "draw", "equity"], posterior_samples)},
+                coords=coords,
+            )
         return None
 
 
 def create_view_probability_dashboard(
-        view_df: pd.DataFrame,
-        view_name: str,
-        category_name: str,
-        ) -> "go.Figure":
+    view_df: pd.DataFrame,
+    view_name: str,
+    category_name: str,
+) -> "go.Figure":
     """
     Create interactive probability dashboard for a feature view.
 
@@ -4275,29 +4308,29 @@ def create_view_probability_dashboard(
         data = pd.to_numeric(view_df[feat], errors="coerce").dropna()
         if len(data) > 10:
             fig.add_trace(
-                    go.Histogram(x=data, name=feat, showlegend=False, nbinsx=30),
-                    row=row,
-                    col=col,
-                    )
+                go.Histogram(x=data, name=feat, showlegend=False, nbinsx=30),
+                row=row,
+                col=col,
+            )
 
     fig.update_layout(
-            title=f"{category_name} - Probability Distributions",
-            height=300 * rows,
-            showlegend=False,
-            )
+        title=f"{category_name} - Probability Distributions",
+        height=300 * rows,
+        showlegend=False,
+    )
 
     return fig
 
 
 def export_probability_analytics_results(
-        probability_df: pd.DataFrame,
-        streak_df: pd.DataFrame,
-        output_dir: Path,
-        confidence_result: Optional[ModelConfidenceResult] = None,
-        credit_risk_df: Optional[pd.DataFrame] = None,
-        dividend_safety_df: Optional[pd.DataFrame] = None,
-        price_target_df: Optional[pd.DataFrame] = None,
-        ) -> dict:
+    probability_df: pd.DataFrame,
+    streak_df: pd.DataFrame,
+    output_dir: Path,
+    confidence_result: Optional[ModelConfidenceResult] = None,
+    credit_risk_df: Optional[pd.DataFrame] = None,
+    dividend_safety_df: Optional[pd.DataFrame] = None,
+    price_target_df: Optional[pd.DataFrame] = None,
+) -> dict:
     """
     Export all probability analytics results to database and files.
 
@@ -4326,9 +4359,9 @@ def export_probability_analytics_results(
         try:
             ordered = reorder_with_identifiers(df) if reorder else df
             cfg = ExportConfig(
-                    table_name=table_name,
-                    output_dir=str(output_dir),
-                    )
+                table_name=table_name,
+                output_dir=str(output_dir),
+            )
             export_to_db(ordered, cfg)
             export_to_csv(ordered, cfg)
             export_to_json(ordered, cfg)
@@ -4344,8 +4377,8 @@ def export_probability_analytics_results(
     for col in _INTEGER_CAST_COLS:
         if col in probability_df.columns:
             probability_df[col] = pd.to_numeric(probability_df[col], errors="coerce").astype(
-                    "Int64",
-                    )
+                "Int64"
+            )
 
     # Also cast streak_df columns to proper numeric dtypes
     for col in _NUMERIC_CAST_COLS:
@@ -4364,17 +4397,17 @@ def export_probability_analytics_results(
     # 3. Export confidence metrics
     if confidence_result:
         conf_df = pd.DataFrame(
-                [
-                    {
-                        "model_name": confidence_result.model_name,
-                        "brier_score": confidence_result.brier_score,
-                        "log_loss": confidence_result.log_loss,
-                        "calibration_error": confidence_result.calibration_error,
-                        "discrimination_auc": confidence_result.discrimination_auc,
-                        "overall_confidence": confidence_result.overall_confidence,
-                        },
-                    ],
-                )
+            [
+                {
+                    "model_name": confidence_result.model_name,
+                    "brier_score": confidence_result.brier_score,
+                    "log_loss": confidence_result.log_loss,
+                    "calibration_error": confidence_result.calibration_error,
+                    "discrimination_auc": confidence_result.discrimination_auc,
+                    "overall_confidence": confidence_result.overall_confidence,
+                }
+            ]
+        )
         _safe_export(conf_df, "model_confidence_metrics", reorder=False)
 
     # 4. Create and export summary statistics (Issue 6: validate columns first)
@@ -4386,15 +4419,15 @@ def export_probability_analytics_results(
     if missing_prob or missing_streak:
         if streak_df.empty:
             logger.warning(
-                    "Summary skipped — streak_df is empty (no valid EPS trajectory data). "
-                    "Ensure the input data contains 'eps_trajectory_score' values.",
-                    )
+                "Summary skipped — streak_df is empty (no valid EPS trajectory data). "
+                "Ensure the input data contains 'eps_trajectory_score' values."
+            )
         else:
             logger.warning(
-                    "Summary skipped — missing columns: prob=%s, streak=%s",
-                    missing_prob or "none",
-                    missing_streak or "none",
-                    )
+                "Summary skipped — missing columns: prob=%s, streak=%s",
+                missing_prob or "none",
+                missing_streak or "none",
+            )
     else:
         try:
             summary_data = {
@@ -4407,7 +4440,7 @@ def export_probability_analytics_results(
                     "Mean Streak Length",
                     "Stocks with Beat Streak",
                     "Stocks with Miss Streak",
-                    ],
+                ],
                 "value": [
                     float(len(probability_df)),
                     float(probability_df["posterior_beat_prob"].mean()),
@@ -4417,8 +4450,8 @@ def export_probability_analytics_results(
                     float(streak_df["current_streak"].abs().mean()),
                     float((streak_df["streak_type"] == "beat").sum()),
                     float((streak_df["streak_type"] == "miss").sum()),
-                    ],
-                }
+                ],
+            }
             summary_df = pd.DataFrame(summary_data)
             _safe_export(summary_df, "probability_analytics_summary", reorder=False)
         except Exception as e:

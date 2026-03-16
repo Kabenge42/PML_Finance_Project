@@ -43,6 +43,7 @@ except Exception as _az_err:
     az = None  # type: ignore[assignment]
     ARVIZ_AVAILABLE = False
 
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -286,9 +287,7 @@ def _build_posterior_samples_beta(
 
     Returns shape ``(n_chains, n_draws, n_vars)``.
     """
-    return np.stack(
-        [rng.beta(alpha, beta, size=(n_draws, n_vars)) for _ in range(n_chains)],
-    )
+    return np.stack([rng.beta(alpha, beta, size=(n_draws, n_vars)) for _ in range(n_chains)])
 
 
 def _build_posterior_samples_normal(
@@ -303,9 +302,7 @@ def _build_posterior_samples_normal(
 
     Returns shape ``(n_chains, n_draws, n_vars)``.
     """
-    return np.stack(
-        [rng.normal(means, stds, size=(n_draws, n_vars)) for _ in range(n_chains)],
-    )
+    return np.stack([rng.normal(means, stds, size=(n_draws, n_vars)) for _ in range(n_chains)])
 
 
 def _build_xarray_coords(
@@ -510,12 +507,7 @@ def build_beat_probability_inference_data(
     post_beta = _safe_values(beat_results_df["posterior_beta"])
 
     posterior_samples = _build_posterior_samples_beta(
-        rng,
-        post_alpha,
-        post_beta,
-        n_chains,
-        n_posterior_samples,
-        n_equities,
+        rng, post_alpha, post_beta, n_chains, n_posterior_samples, n_equities
     )
 
     beat_outcome_samples = (
@@ -645,12 +637,7 @@ def build_credit_risk_inference_data(
     alpha_ruin, beta_ruin = _moment_matched_beta_params(ruin_p, concentration=50.0)
 
     posterior_samples = _build_posterior_samples_beta(
-        rng,
-        alpha_ruin,
-        beta_ruin,
-        n_chains,
-        n_posterior_samples,
-        n_equities,
+        rng, alpha_ruin, beta_ruin, n_chains, n_posterior_samples, n_equities
     )
 
     coords = _build_xarray_coords(equity_coords, n_chains, n_posterior_samples)
@@ -666,7 +653,6 @@ def build_credit_risk_inference_data(
         coords=coords,
         dims=dims,
     )
-
 
 # =============================================================================
 # 3b. InferenceData Factory — Accounting Anomaly Detection
@@ -736,20 +722,11 @@ def build_accounting_anomaly_inference_data(
     equity_coords = EquityCoordinates.from_dataframe(anomaly_df)
     n_equities = len(equity_coords.tickers)
 
-    score_01 = np.clip(
-        _safe_values(anomaly_df["accounting_anomaly_score"]) / 100.0,
-        0.001,
-        0.999,
-    )
+    score_01 = np.clip(_safe_values(anomaly_df["accounting_anomaly_score"]) / 100.0, 0.001, 0.999)
     alpha, beta_shape = _moment_matched_beta_params(score_01, concentration=30.0)
 
     posterior_samples = _build_posterior_samples_beta(
-        rng,
-        alpha,
-        beta_shape,
-        n_chains,
-        n_posterior_samples,
-        n_equities,
+        rng, alpha, beta_shape, n_chains, n_posterior_samples, n_equities
     )
 
     coords = _build_xarray_coords(equity_coords, n_chains, n_posterior_samples)
@@ -850,9 +827,7 @@ def build_monte_carlo_inference_data(
     n_equities = len(equity_coords.tickers)
 
     last_prices, pt_low, pt_median, pt_high = _resolve_price_target_inputs(
-        mc_results_df,
-        observed_df,
-        equity_coords.tickers,
+        mc_results_df, observed_df, equity_coords.tickers
     )
 
     # Triangular distribution simulation
@@ -862,11 +837,7 @@ def build_monte_carlo_inference_data(
     simulated_prices = np.zeros((1, n_simulations, n_equities))
     for i in range(n_equities):
         simulated_prices[0, :, i] = sp_stats.triang.rvs(
-            c[i],
-            loc=pt_low[i],
-            scale=scale[i],
-            size=n_simulations,
-            random_state=rng,
+            c[i], loc=pt_low[i], scale=scale[i], size=n_simulations, random_state=rng
         )
 
     coords = _build_xarray_coords(equity_coords, n_chains=1, n_draws=n_simulations)
@@ -968,17 +939,11 @@ def build_category_analysis_inference_data(
         raise ValueError(f"No analysed features found for category '{category_name}'")
 
     posterior_means, posterior_stds = _extract_category_posterior_params(
-        analysis_results,
-        analysed_features,
+        analysis_results, analysed_features
     )
 
     posterior_samples = _build_posterior_samples_normal(
-        rng,
-        posterior_means,
-        posterior_stds,
-        n_chains,
-        n_posterior_samples,
-        n_features,
+        rng, posterior_means, posterior_stds, n_chains, n_posterior_samples, n_features
     )
 
     extra_coords: dict[str, Any] = {"feature": np.array(analysed_features)}
@@ -997,9 +962,7 @@ def build_category_analysis_inference_data(
 
     observed_matrix = _safe_values(observed_df[analysed_features])
     constant_data = _build_category_constant_data(
-        analysis_results,
-        analysed_features,
-        category_name,
+        analysis_results, analysed_features, category_name
     )
 
     return _build_arviz_or_xarray(
@@ -1064,8 +1027,7 @@ def load_equity_coordinates_from_db(
         raise ValueError("No identifier columns found in equities_schema_metadata")
 
     df = pd.read_sql(
-        f"SELECT {', '.join(available_cols)} FROM {schema}.mv_all_stock_features",
-        engine,
+        f"SELECT {', '.join(available_cols)} FROM {schema}.mv_all_stock_features", engine
     )
     return EquityCoordinates.from_dataframe(df)
 
@@ -1111,9 +1073,7 @@ def load_feature_coordinates_from_db(
     query += " ORDER BY category, feature_key"
 
     df = pd.read_sql(
-        text(query),
-        engine,
-        params={"cat": category_filter} if category_filter else None,
+        text(query), engine, params={"cat": category_filter} if category_filter else None
     )
     return FeatureCoordinates.from_dataframe(df)
 
@@ -1572,7 +1532,7 @@ def load_feature_view_spec_from_db(
     col_query = text(
         "SELECT column_name FROM information_schema.columns "
         "WHERE table_schema = :schema AND table_name = :view "
-        "ORDER BY ordinal_position",
+        "ORDER BY ordinal_position"
     )
     with engine.connect() as conn:
         all_cols = [
@@ -1581,7 +1541,7 @@ def load_feature_view_spec_from_db(
 
     id_query = text(
         "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema = :schema AND table_name = 'vw_identifier_columns'",
+        "WHERE table_schema = :schema AND table_name = 'vw_identifier_columns'"
     )
     with engine.connect() as conn:
         id_cols = {row[0] for row in conn.execute(id_query, {"schema": schema})}
@@ -1650,12 +1610,7 @@ def build_feature_view_inference_data(
         mu = vals
         sigma = np.abs(vals) * 0.1 + 1e-6
         samples = _build_posterior_samples_normal(
-            rng,
-            mu,
-            sigma,
-            n_chains,
-            n_posterior_samples,
-            n_equities,
+            rng, mu, sigma, n_chains, n_posterior_samples, n_equities
         )
         posterior_vars[col] = (["chain", "draw", "equity"], samples)
 

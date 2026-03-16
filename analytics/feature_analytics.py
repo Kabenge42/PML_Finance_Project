@@ -105,11 +105,7 @@ FEATURE_CATEGORIES = load_feature_categories_from_db()
 
 
 def ensure_subplot_data(
-    fig: go.Figure,
-    row: int,
-    col: int,
-    has_data: bool,
-    placeholder_text: str = "No data available",
+    fig: go.Figure, row: int, col: int, has_data: bool, placeholder_text: str = "No data available"
 ) -> None:
     """
     Add placeholder annotation if subplot has no data.
@@ -359,11 +355,7 @@ def create_interactive_momentum_dashboard(df: pd.DataFrame) -> Figure:
     if not panel4_has_data:
         fig.add_trace(
             go.Scatter(
-                x=[0],
-                y=[0],
-                mode="markers",
-                marker=dict(size=10, color="#adb5bd"),
-                name="No Data",
+                x=[0], y=[0], mode="markers", marker=dict(size=10, color="#adb5bd"), name="No Data"
             ),
             row=2,
             col=2,
@@ -432,7 +424,7 @@ def create_interactive_valuation_heatmap(df: pd.DataFrame) -> Figure:
             row_vals.append(median_val if pd.notna(median_val) else 0)
             row_hover.append(
                 f"<b>{sector}</b><br>{label}: {median_val:.1f}<br>"
-                + f"IQR: [{q25:.1f}, {q75:.1f}]<br>N={count}",
+                + f"IQR: [{q25:.1f}, {q75:.1f}]<br>N={count}"
             )
         heatmap_data.append(row_vals)
         hover_text.append(row_hover)
@@ -456,7 +448,7 @@ def create_interactive_valuation_heatmap(df: pd.DataFrame) -> Figure:
             hovertemplate="%{customdata}<extra></extra>",
             colorscale="RdYlGn_r",
             colorbar=dict(title="Relative<br>Valuation"),
-        ),
+        )
     )
 
     fig.update_layout(
@@ -529,46 +521,24 @@ def create_leverage_liquidity_quadrant(df: pd.DataFrame) -> Figure:
 
     # Add quadrant lines
     fig.add_hline(
-        y=1.5,
-        line_dash="dash",
-        line_color="#2ecc71",
-        annotation_text="Healthy Liquidity (CR=1.5)",
+        y=1.5, line_dash="dash", line_color="#2ecc71", annotation_text="Healthy Liquidity (CR=1.5)"
     )
     fig.add_vline(
-        x=1.0,
-        line_dash="dash",
-        line_color="#e74c3c",
-        annotation_text="High Leverage (D/E=1)",
+        x=1.0, line_dash="dash", line_color="#e74c3c", annotation_text="High Leverage (D/E=1)"
     )
 
     # Add quadrant labels
     fig.add_annotation(
-        x=0.3,
-        y=4.5,
-        text="✅ Low Risk",
-        showarrow=False,
-        font=dict(size=14, color="#2ecc71"),
+        x=0.3, y=4.5, text="✅ Low Risk", showarrow=False, font=dict(size=14, color="#2ecc71")
     )
     fig.add_annotation(
-        x=2.5,
-        y=0.5,
-        text="⚠️ High Risk",
-        showarrow=False,
-        font=dict(size=14, color="#e74c3c"),
+        x=2.5, y=0.5, text="⚠️ High Risk", showarrow=False, font=dict(size=14, color="#e74c3c")
     )
     fig.add_annotation(
-        x=2.5,
-        y=4.5,
-        text="🔄 Mixed",
-        showarrow=False,
-        font=dict(size=12, color="#f39c12"),
+        x=2.5, y=4.5, text="🔄 Mixed", showarrow=False, font=dict(size=12, color="#f39c12")
     )
     fig.add_annotation(
-        x=0.3,
-        y=0.5,
-        text="💧 Illiquid",
-        showarrow=False,
-        font=dict(size=12, color="#3498db"),
+        x=0.3, y=0.5, text="💧 Illiquid", showarrow=False, font=dict(size=12, color="#3498db")
     )
 
     fig.update_traces(marker=dict(size=6, opacity=0.6))
@@ -656,20 +626,10 @@ def analyze_distress_distribution_legacy(df: pd.DataFrame) -> Figure:
     )
     # Add risk thresholds
     fig.add_vline(
-        x=30,
-        line_dash="dot",
-        line_color="#e74c3c",
-        row=1,
-        col=2,
-        annotation_text="High Risk (<30)",
+        x=30, line_dash="dot", line_color="#e74c3c", row=1, col=2, annotation_text="High Risk (<30)"
     )
     fig.add_vline(
-        x=70,
-        line_dash="dot",
-        line_color="#2ecc71",
-        row=1,
-        col=2,
-        annotation_text="Low Risk (>70)",
+        x=70, line_dash="dot", line_color="#2ecc71", row=1, col=2, annotation_text="Low Risk (>70)"
     )
 
     # Panel 3: Q-Q Plot
@@ -1014,8 +974,7 @@ def main():
     """
     # Configure logging
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     print("=" * 80)
@@ -1052,7 +1011,7 @@ def main():
         # Summary dashboard
         print("  - Creating summary dashboard...")
         fig_summary = create_summary_dashboard(df)
-        output_dir = "outputs"
+        output_dir = "outputs/analytics"
         os.makedirs(output_dir, exist_ok=True)
         fig_summary.write_html(f"{output_dir}/feature_analytics_summary.html")
         print(f"    ✓ Saved to {output_dir}/feature_analytics_summary.html")
@@ -1206,7 +1165,7 @@ def main():
             if len(mc_results) > 0:
                 export_to_analytics_db(mc_results, "monte_carlo_simulation")
                 print(
-                    f"    ✓ Exported {len(mc_results)} simulations to analytics.monte_carlo_simulation",
+                    f"    ✓ Exported {len(mc_results)} simulations to analytics.monte_carlo_simulation"
                 )
                 print(f"    Top 5 by risk-reward ratio:")
                 top5 = mc_results.nlargest(5, "risk_reward_ratio")[
@@ -1224,7 +1183,7 @@ def main():
                         )
                         mc_summary = summarize_inference_data(idata_mc)
                         print(
-                            f"    ✓ InferenceData (MC): {mc_summary.get('n_draws', 0)} simulations",
+                            f"    ✓ InferenceData (MC): {mc_summary.get('n_draws', 0)} simulations"
                         )
                     except Exception as e:
                         logging.warning("InferenceData (MC) build failed: %s", e)
@@ -1236,7 +1195,7 @@ def main():
             if len(bayesian_results) > 0:
                 export_to_analytics_db(bayesian_results, "bayesian_earnings_model")
                 print(
-                    f"    ✓ Exported {len(bayesian_results)} predictions to analytics.bayesian_earnings_model",
+                    f"    ✓ Exported {len(bayesian_results)} predictions to analytics.bayesian_earnings_model"
                 )
 
                 # Build InferenceData for beat probability
@@ -1250,7 +1209,7 @@ def main():
                         )
                         beat_summary = summarize_inference_data(idata_beat)
                         print(
-                            f"    ✓ InferenceData (beat): {beat_summary.get('n_chains', 0)} chains × {beat_summary.get('n_draws', 0)} draws",
+                            f"    ✓ InferenceData (beat): {beat_summary.get('n_chains', 0)} chains × {beat_summary.get('n_draws', 0)} draws"
                         )
                     except Exception as e:
                         logging.warning("InferenceData (beat) build failed: %s", e)

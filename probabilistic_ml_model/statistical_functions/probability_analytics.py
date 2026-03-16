@@ -41,7 +41,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy import stats
 
-from analytics.data_utils import (
+from probabilistic_ml_model.data_utils import (
     load_identifier_columns,
     reorder_with_identifiers,
     ExportConfig,
@@ -216,12 +216,9 @@ class CreditRiskResult:
     altman_z_score: float
     risk_level: str  # 'Low', 'Medium', 'High', 'Distressed'
     confidence_interval: tuple[float, float]
-
-
 @dataclass
 class AccountingAnomalyResult:
     """Result container for per-stock accounting anomaly analysis."""
-
     ticker: str
     name: str
     sector: str
@@ -298,7 +295,7 @@ class AccountingAnomalyProbabilityModel:
         pd.DataFrame
             Enriched DataFrame with all anomaly detection and analytics columns.
         """
-        from analytics.statistical_analysis import (
+        from probabilistic_ml_model.statistical_functions.statistical_analysis import (
             detect_accounting_anomalies,
         )
 
@@ -441,7 +438,7 @@ class AccountingAnomalyProbabilityModel:
 
     def _apply_mcmc_posteriors(self, result: pd.DataFrame) -> pd.DataFrame:
         """Apply MCMC posterior estimation to anomaly scores."""
-        from analytics.statistical_analysis import (
+        from probabilistic_ml_model.statistical_functions.statistical_analysis import (
             mcmc_student_t,
             hierarchical_mcmc_by_sector,
             metropolis_hastings_sampler,
@@ -599,7 +596,6 @@ class DividendSafetyResult:
     dividend_streak: int
     safety_score: float
     risk_category: str  # 'Safe', 'Borderline', 'At Risk'
-
 
 @dataclass
 class PriceTargetResult:
@@ -2703,7 +2699,7 @@ class CreditRiskProbabilityModel:
         self, result_df: pd.DataFrame, source_df: pd.DataFrame
     ) -> pd.DataFrame:
         """Apply MCMC posterior estimation for distress probability."""
-        from analytics.statistical_analysis import (
+        from probabilistic_ml_model.statistical_functions.statistical_analysis import (
             metropolis_hastings_sampler,
             mcmc_student_t,
             hierarchical_mcmc_by_sector,
@@ -2945,7 +2941,7 @@ class DividendCutProbabilityModel:
         self, result_df: pd.DataFrame, source_df: pd.DataFrame
     ) -> pd.DataFrame:
         """Apply MCMC posterior estimation for dividend cut probability."""
-        from analytics.statistical_analysis import (
+        from probabilistic_ml_model.statistical_functions.statistical_analysis import (
             metropolis_hastings_sampler,
             mcmc_student_t,
         )
@@ -3185,7 +3181,7 @@ class PriceTargetAchievementModel:
         self, result_df: pd.DataFrame, source_df: pd.DataFrame
     ) -> pd.DataFrame:
         """Apply MCMC posterior estimation for price target achievement."""
-        from analytics.statistical_analysis import (
+        from probabilistic_ml_model.statistical_functions.statistical_analysis import (
             metropolis_hastings_sampler,
             mcmc_student_t,
             parallel_mcmc_chains,
@@ -3777,7 +3773,7 @@ class CategoryProbabilityAnalyzer:
 
     def _compute_mcmc_posteriors(self, df: pd.DataFrame, feature_cols: list[str]) -> dict:
         """Compute MCMC posteriors per feature."""
-        from analytics.statistical_analysis import (
+        from probabilistic_ml_model.statistical_functions.statistical_analysis import (
             metropolis_hastings_sampler,
             mcmc_student_t,
         )
@@ -4169,7 +4165,7 @@ def create_view_probability_dashboard(
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
-    from analytics.data_utils import get_identifier_cols_set
+    from probabilistic_ml_model.data_utils import get_identifier_cols_set
 
     identifier_cols = get_identifier_cols_set()
 

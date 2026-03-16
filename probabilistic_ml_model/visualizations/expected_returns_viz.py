@@ -19,12 +19,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy import stats as sp_stats
 
-from analytics.visualizations._shared import (
+from probabilistic_ml_model.visualizations._shared import (
     PLOTLY_TEMPLATE,
     COLORS,
     create_no_data_figure,
 )
-from analytics.inference_schema import (
+from probabilistic_ml_model.data_utils.inference_schema import (
     IdentifierCoordinates,
     EquitiesMaterializedViewSpec,
     EquitiesSchemaMetadata,

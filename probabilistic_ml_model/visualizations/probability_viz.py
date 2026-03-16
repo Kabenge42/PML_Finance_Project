@@ -46,12 +46,12 @@ import xarray as xr
 from plotly.subplots import make_subplots
 from scipy import stats
 
-from analytics.visualizations._shared import (
+from probabilistic_ml_model.visualizations._shared import (
     PLOTLY_TEMPLATE,
     COLORS,
     create_no_data_figure,
 )
-from analytics.inference_schema import (
+from probabilistic_ml_model.data_utils.inference_schema import (
     FeatureViewSpec,
     IdentifierCoordinates,
 )
@@ -76,12 +76,10 @@ _CI_HOVER_TEMPLATE = (
 # ---------------------------------------------------------------------------
 try:
     import arviz as az
-
     ARVIZ_AVAILABLE = hasattr(az, "InferenceData")
 except ImportError:  # pragma: no cover
     az = None  # type: ignore[assignment]
     ARVIZ_AVAILABLE = False
-
 
 def float_array(x) -> np.ndarray:
     """Convert to a float64 numpy array (handles xarray scalars gracefully)."""
@@ -96,7 +94,6 @@ def _ci_bounds(credible_interval: float) -> tuple[float, float]:
     """
     tail = (1.0 - credible_interval) / 2.0
     return tail, 1.0 - tail
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Posterior Return Forest Plot
@@ -1249,7 +1246,7 @@ def create_anomaly_conditional_probability_chart(
 
     # Compute conditional probabilities if not supplied
     if cond_probs is None:
-        from analytics.probability_analytics import (
+        from probabilistic_ml_model.statistical_functions.probability_analytics import (
             AccountingAnomalyProbabilityModel,
         )
 

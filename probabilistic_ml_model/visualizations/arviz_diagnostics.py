@@ -523,7 +523,9 @@ def create_hierarchical_shrinkage_diagnostic(
     if not ARVIZ_AVAILABLE:
         return None
 
-    from analytics.statistical_analysis import hierarchical_mcmc_by_sector
+    from probabilistic_ml_model.statistical_functions.statistical_analysis import (
+        hierarchical_mcmc_by_sector,
+    )
 
     hier = hierarchical_mcmc_by_sector(summary, return_col, sector_col=sector_col)
     if not isinstance(hier, dict):

@@ -251,13 +251,13 @@ from analytics.screening import create_enhanced_screener
 from analytics.statistical_analysis import bayesian_category_analysis, hierarchical_mcmc_multi_level
 
 # Schema (finance_ml)
-from finance_ml.core.schema import COLUMN_SCHEMA, normalize_column_name, list_price_cols
+from core.schema import COLUMN_SCHEMA, normalize_column_name, list_price_cols
 
 # ETL
-from finance_ml.etl import run_etl_pipeline, ETLConfig
+from etl import run_etl_pipeline, ETLConfig
 
 # Features
-from finance_ml.ml_workflow.features.api import build_features
+from ml_workflow.features.api import build_features
 ```
 
 ### Data Sources (v3.4)
@@ -272,22 +272,22 @@ from finance_ml.ml_workflow.features.api import build_features
 
 ### Design Principles
 
-- **Unified Schema**: `finance_ml.core.schema` (`COLUMN_SCHEMA`) is the single source of truth for column definitions.
+- **Unified Schema**: `core.schema` (`COLUMN_SCHEMA`) is the single source of truth for column definitions.
 - **Optional-dependency stubs**: `analytics/__init__.py` generates stub functions for unavailable optional modules (ArviZ, probability_analytics) so imports never fail at the package level.
 - **Modular ETL**: Configuration and pipeline stages are decoupled in `finance_ml/etl/`.
 
 ## 8-Phase ML Workflow
 
-| Phase   | Description                                      | Key Module                              |
-|:--------|:-------------------------------------------------|:----------------------------------------|
-| **9.1** | Loading and preprocessing with 6-step imputation | `finance_ml.etl`                        |
-| **9.2** | Enhanced exploratory data analysis               | `finance_ml.ml_workflow.eda`            |
-| **9.3** | Advanced feature engineering                     | `finance_ml.ml_workflow.features`       |
-| **9.4** | Multi-class event classification                 | `finance_ml.ml_workflow.classification` |
-| **9.5** | Sector-optimized regression with quantile models | `finance_ml.ml_workflow.regression`     |
-| **9.6** | Model evaluation and error analysis              | `finance_ml.ml_workflow.evaluation`     |
-| **9.7** | Identification of under/overvalued stocks        | `finance_ml.ml_workflow.analytics`      |
-| **9.8** | Comprehensive analytics and reporting            | `finance_ml.ml_workflow.reporting`      |
+| Phase   | Description                                      | Key Module                   |
+|:--------|:-------------------------------------------------|:-----------------------------|
+| **9.1** | Loading and preprocessing with 6-step imputation | `etl`                        |
+| **9.2** | Enhanced exploratory data analysis               | `ml_workflow.eda`            |
+| **9.3** | Advanced feature engineering                     | `ml_workflow.features`       |
+| **9.4** | Multi-class event classification                 | `ml_workflow.classification` |
+| **9.5** | Sector-optimized regression with quantile models | `ml_workflow.regression`     |
+| **9.6** | Model evaluation and error analysis              | `ml_workflow.evaluation`     |
+| **9.7** | Identification of under/overvalued stocks        | `ml_workflow.analytics`      |
+| **9.8** | Comprehensive analytics and reporting            | `ml_workflow.reporting`      |
 
 ## Code Style
 

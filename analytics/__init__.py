@@ -17,7 +17,7 @@ The new ExportConfig class centralizes all export settings (database, CSV, JSON)
 for consistent handling across the analytics pipeline. All export functions
 accept ExportConfig for unified configuration:
   - export_to_db(): PostgreSQL analytics schema
-  - export_to_csv(): Comma-separated values to outputs
+  - export_to_csv(): Comma-separated values to outputs/analytics/views
   - export_to_json(): JSON format with configurable orientation/indentation
 """
 
@@ -121,10 +121,8 @@ from analytics.statistical_analysis import (  # noqa: F401
 
 def _unavailable_stub(module_label: str):
     """Return a function that raises ImportError with a clear message."""
-
     def _stub(*args, **kwargs):
         raise ImportError(f"{module_label} is not available")
-
     return _stub
 
 

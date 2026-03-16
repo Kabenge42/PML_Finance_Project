@@ -28,7 +28,6 @@ from analytics.visualizations._shared import (
     resolve_column,
 )
 
-
 def create_earnings_calendar_heatmap(
     df: pd.DataFrame,
     date_col: str = "next_earnings",
@@ -101,7 +100,7 @@ def create_earnings_calendar_heatmap(
     daily_counts = (
         plot_df.groupby([date_col])
         .agg(
-            {"ticker": "count", quality_col: "mean" if quality_col in plot_df.columns else "count"},
+            {"ticker": "count", quality_col: "mean" if quality_col in plot_df.columns else "count"}
         )
         .reset_index()
     )
@@ -191,10 +190,7 @@ def create_earnings_calendar_heatmap(
     # 4. Weekly heatmap (week vs weekday)
     if quality_col in plot_df.columns:
         heatmap_data = plot_df.pivot_table(
-            values=quality_col,
-            index="weekday",
-            columns="week",
-            aggfunc="mean",
+            values=quality_col, index="weekday", columns="week", aggfunc="mean"
         ).fillna(0)
 
         fig.add_trace(
@@ -212,10 +208,7 @@ def create_earnings_calendar_heatmap(
     else:
         # Show count heatmap instead
         heatmap_data = plot_df.pivot_table(
-            values="ticker",
-            index="weekday",
-            columns="week",
-            aggfunc="count",
+            values="ticker", index="weekday", columns="week", aggfunc="count"
         ).fillna(0)
 
         fig.add_trace(
@@ -325,9 +318,7 @@ def create_inventory_cycle_analysis(df: pd.DataFrame, group_col: str = "industry
             sector_data = sector_data[sector_data.between(0, 50)]  # Filter outliers
             if len(sector_data) > 5:
                 fig.add_trace(
-                    go.Box(y=sector_data, name=sector[:12], boxpoints="outliers"),
-                    row=2,
-                    col=1,
+                    go.Box(y=sector_data, name=sector[:12], boxpoints="outliers"), row=2, col=1
                 )
 
     # 3. Inventory YoY change scatter
@@ -649,8 +640,7 @@ def create_dividend_streak_timeline(df: pd.DataFrame, top_n: int = 30) -> go.Fig
             font=dict(size=16),
         )
         fig.update_layout(
-            title="Dividend Streak Timeline - No Dividend Stocks",
-            template=PLOTLY_TEMPLATE,
+            title="Dividend Streak Timeline - No Dividend Stocks", template=PLOTLY_TEMPLATE
         )
         return fig
 
@@ -782,7 +772,7 @@ def create_dividend_streak_timeline(df: pd.DataFrame, top_n: int = 30) -> go.Fig
                     "dividend_payout_ratio": (
                         "mean" if "dividend_payout_ratio" in div_df.columns else "count"
                     ),
-                },
+                }
             )
             .dropna()
         )

@@ -14,6 +14,7 @@ from typing import Optional
 
 import pandas as pd
 
+
 # =============================================================================
 # Dynamic threshold computation from statistical distributions
 # =============================================================================
@@ -93,9 +94,7 @@ def _compute_dynamic_thresholds(
                 dist_obj = dist_map.get(dist_name)
                 if dist_obj is not None:
                     try:
-                        thresholds[feat] = float(
-                            dist_obj.ppf(target_pct / 100.0, *params),
-                        )
+                        thresholds[feat] = float(dist_obj.ppf(target_pct / 100.0, *params))
                         continue
                     except Exception:
                         pass
@@ -108,9 +107,7 @@ def _compute_dynamic_thresholds(
             if post_std > 0:
                 from scipy import stats as sp_stats
 
-                thresholds[feat] = float(
-                    sp_stats.norm.ppf(target_pct / 100.0, post_mean, post_std),
-                )
+                thresholds[feat] = float(sp_stats.norm.ppf(target_pct / 100.0, post_mean, post_std))
                 continue
 
         # Strategy 3: Empirical percentile fallback
@@ -879,9 +876,7 @@ def screen_financial_health(
 
 
 def rank_stocks_by_composite_score(
-    df: pd.DataFrame,
-    weights: Optional[dict] = None,
-    export: bool = False,
+    df: pd.DataFrame, weights: Optional[dict] = None, export: bool = False
 ) -> pd.DataFrame:
     """
     Rank stocks by composite quality score with customizable weights.
@@ -944,9 +939,7 @@ def rank_stocks_by_composite_score(
 
 
 def create_sector_relative_ranking(
-    df: pd.DataFrame,
-    metric: str,
-    sector_col: str = "industry",
+    df: pd.DataFrame, metric: str, sector_col: str = "industry"
 ) -> pd.DataFrame:
     """
     Create sector-relative rankings for a metric.

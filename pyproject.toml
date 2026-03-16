@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pml-finance-project"
+name = "finance-ml-analytics-platform"
 version = "0.9.5"
 description = "PML Finance Project - Machine Learning for Financial Analysis"
 readme = "README.md"
@@ -35,9 +35,9 @@ dependencies = [
     # --- Machine Learning: Gradient Boosting ---
     "xgboost>=2.1.0,<4.0.0",
     "lightgbm>=4.5.0,<5.0.0",
-    "catboost>=1.2.5,<2.0.0; python_version < '3.15'",
+    "catboost>=1.2.5,<2.0.0; python_version < '3.14'",
     # --- Model Interpretability ---
-    "shap>=0.50.0,<1.0.0; python_version < '3.15'",
+    "shap>=0.50.0,<1.0.0; python_version < '3.14'",
     # --- Data Visualization ---
     "matplotlib>=3.9.0,<4.0.0",
     "seaborn>=0.13.0,<1.0.0",
@@ -67,7 +67,7 @@ dev = [
 
 # Interactive web dashboards (Python <3.14 for Streamlit)
 dashboards = [
-    "streamlit>=1.40.0,<6.0.0; python_version < '3.15'",
+    "streamlit>=1.40.0,<6.0.0; python_version < '3.14'",
     "dash>=2.18.0,<7.0.0",
 ]
 
@@ -79,19 +79,20 @@ database = [
 
 # Deep learning (Python <3.14 only)
 tensorflow = [
-    "tensorflow>=2.15.0,<3.0.0; python_version < '3.15'",
-    "scikeras>=0.13.0,<1.0.0; python_version < '3.15'",
+    "tensorflow>=2.15.0,<3.0.0; python_version < '3.14'",
+    "scikeras>=0.13.0,<1.0.0; python_version < '3.14'",
 ]
 
 # Performance optimizations (Python <3.14 only)
 performance = [
-    "numba>=0.60.0,<1.0.0; python_version < '3.15'",
+    "numba>=0.60.0,<1.0.0; python_version < '3.14'",
 ]
 
 [project.scripts]
 finance-ml = "cli:main"
 finance-ml-analyze = "cli:analyze"
 finance-ml-validate = "cli:validate"
+finance-ml-v4 = "expected_returns_v4:main"
 
 [project.urls]
 Homepage = "https://github.com/finance-ml/analytics-platform"

@@ -76,12 +76,10 @@ _CI_HOVER_TEMPLATE = (
 # ---------------------------------------------------------------------------
 try:
     import arviz as az
-
     ARVIZ_AVAILABLE = hasattr(az, "InferenceData")
 except ImportError:  # pragma: no cover
     az = None  # type: ignore[assignment]
     ARVIZ_AVAILABLE = False
-
 
 def float_array(x) -> np.ndarray:
     """Convert to a float64 numpy array (handles xarray scalars gracefully)."""
@@ -96,7 +94,6 @@ def _ci_bounds(credible_interval: float) -> tuple[float, float]:
     """
     tail = (1.0 - credible_interval) / 2.0
     return tail, 1.0 - tail
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Posterior Return Forest Plot
@@ -191,7 +188,7 @@ def _build_forest_figure(
                     lo=ci_lower[i],
                     hi=ci_upper[i],
                 ),
-            ),
+            )
         )
 
     fig.add_trace(
@@ -201,7 +198,7 @@ def _build_forest_figure(
             mode="markers",
             marker=dict(size=_MEDIAN_MARKER_SIZE, color=COLORS[2], symbol="diamond"),
             name="Median",
-        ),
+        )
     )
 
     fig.add_vline(x=0, line_dash="dash", line_color=_ZERO_LINE_COLOR, opacity=_ZERO_LINE_OPACITY)
@@ -347,7 +344,7 @@ def _forest_from_dataframe(
                     f"Upside: {row['expected_upside_pct']:.1f}%<br>"
                     f"{credible_interval:.0%} CI: [{row['lo']:.1f}%, {row['hi']:.1f}%]<extra></extra>"
                 ),
-            ),
+            )
         )
     fig.add_trace(
         go.Scatter(
@@ -356,7 +353,7 @@ def _forest_from_dataframe(
             mode="markers",
             marker=dict(size=_MEDIAN_MARKER_SIZE, color=COLORS[2], symbol="diamond"),
             name="Expected Upside",
-        ),
+        )
     )
     fig.add_vline(x=0, line_dash="dash", line_color="red", opacity=0.6)
     fig.update_layout(
@@ -448,7 +445,7 @@ def _beat_density_from_idata(idata, tickers, top_n, title) -> go.Figure:
                 line=dict(width=2),
                 fill="tozeroy",
                 opacity=0.3,
-            ),
+            )
         )
     fig.add_vline(x=0.5, line_dash="dash", line_color="gray", annotation_text="50%")
     fig.update_layout(
@@ -497,7 +494,7 @@ def _beat_density_from_dataframe(df, tickers, top_n, title) -> go.Figure:
                 line=dict(width=2),
                 fill="tozeroy",
                 opacity=0.3,
-            ),
+            )
         )
     fig.add_vline(x=0.5, line_dash="dash", line_color="gray", annotation_text="50%")
     fig.update_layout(
@@ -526,7 +523,7 @@ def _beat_bar_fallback(df, tickers, top_n, title) -> go.Figure:
                 COLORS[2] if v > 0.5 else COLORS[3] for v in plot_df["posterior_beat_prob"]
             ],
             hovertemplate="<b>%{y}</b><br>P(Beat): %{x:.2%}<extra></extra>",
-        ),
+        )
     )
     fig.add_vline(x=0.5, line_dash="dash", line_color="gray")
     fig.update_layout(
@@ -707,7 +704,7 @@ def _ruin_diagnostic_from_idata(idata, top_n, title) -> go.Figure:
         {
             "ticker": tickers,
             "ruin_probability": medians,
-        },
+        }
     )
     # Classify risk tiers
     summary_df["risk_tier"] = pd.cut(
@@ -801,7 +798,7 @@ def create_mcse_convergence_panel(
                 mode="lines",
                 name=f"Chain {c}",
                 line=dict(width=2),
-            ),
+            )
         )
 
     # Annotate ESS & R-hat
@@ -914,7 +911,7 @@ def create_bayesian_category_ridge(
                     f"95% CI: [{info.get('ci_95_low', 0):.3f}, {info.get('ci_95_high', 0):.3f}]<br>"
                     f"P(>0): {info.get('prob_positive', 0):.1%}<extra></extra>"
                 ),
-            ),
+            )
         )
         # Baseline for each ridge
         fig.add_hline(y=offset, line_dash="dot", line_color="gray", opacity=0.2)
@@ -1244,7 +1241,7 @@ def create_anomaly_conditional_probability_chart(
 
     if "anomaly_conditional_probability" not in df.columns:
         return create_no_data_figure(
-            f"{title} — run AccountingAnomalyProbabilityModel.analyze_dataframe first",
+            f"{title} — run AccountingAnomalyProbabilityModel.analyze_dataframe first"
         )
 
     # Compute conditional probabilities if not supplied
@@ -1252,7 +1249,6 @@ def create_anomaly_conditional_probability_chart(
         from analytics.probability_analytics import (
             AccountingAnomalyProbabilityModel,
         )
-
         cond_probs = AccountingAnomalyProbabilityModel().calculate_conditional_probabilities(df)
 
     has_tier = "accounting_anomaly_tier" in df.columns
@@ -2113,7 +2109,7 @@ def create_mcmc_category_posterior_chart(
                 thickness=2,
             ),
             hovertemplate="<b>%{y}</b><br>Mean: %{x:.3f}<br>CI: [%{error_x.arrayminus:.3f}, +%{error_x.array:.3f}]<extra></extra>",
-        ),
+        )
     )
 
     # Zero reference line

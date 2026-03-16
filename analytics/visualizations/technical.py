@@ -20,17 +20,11 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from analytics.visualizations._shared import (
-    PLOTLY_TEMPLATE,
-    COLORS,
-    create_no_data_figure,
-)
+from analytics.visualizations._shared import PLOTLY_TEMPLATE, COLORS, create_no_data_figure
 
 
 def create_momentum_ribbon_chart(
-    df: pd.DataFrame,
-    top_n: int = 30,
-    sort_by: str = "price_momentum_1y",
+    df: pd.DataFrame, top_n: int = 30, sort_by: str = "price_momentum_1y"
 ) -> go.Figure:
     """
     Multi-period momentum ribbon: 1m, 3m, 6m, 1y, 3y, 5y overlaid.
@@ -118,7 +112,7 @@ def create_momentum_ribbon_chart(
                 y=plot_df[col].values,
                 marker_color=colors.get(col, "gray"),
                 opacity=0.7,
-            ),
+            )
         )
 
     # Add zero line
@@ -210,9 +204,7 @@ def create_52w_range_distribution(df: pd.DataFrame, group_col: str = "industry")
             if len(sector_data) > 5:
                 fig.add_trace(
                     go.Box(
-                        y=sector_data,
-                        name=sector[:15],
-                        boxpoints="outliers",  # Truncate long names
+                        y=sector_data, name=sector[:15], boxpoints="outliers"  # Truncate long names
                     ),
                     row=2,
                     col=1,
@@ -328,7 +320,7 @@ def create_trend_strength_matrix(
             f"{trend_col}_median": "median_trend_score",
             f"{trend_col}_std": "trend_volatility",
             f"{trend_col}_count": "stock_count",
-        },
+        }
     )
 
     if f"{flag_col}_mean" in stats.columns:
@@ -377,7 +369,7 @@ def create_trend_strength_matrix(
             hovertemplate=(
                 "<b>%{y}</b><br>" + "%{x}: %{text}<br>" + "Z-score: %{z:.2f}<extra></extra>"
             ),
-        ),
+        )
     )
 
     fig.update_layout(

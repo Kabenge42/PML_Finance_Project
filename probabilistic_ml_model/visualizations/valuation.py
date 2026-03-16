@@ -22,7 +22,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from analytics.visualizations._shared import (
+from probabilistic_ml_model.visualizations._shared import (
     PLOTLY_TEMPLATE,
     COLORS,
     create_no_data_figure,
