@@ -25,17 +25,20 @@ classifiers = [
 
 dependencies = [
     # --- Numerical Computing & Data Structures ---
-    "numpy>=1.26.0,<3.0.0",
+    "numpy>=1.26.0,<4.0.0",
+    "cython>3.2.0",
     "pandas>=2.2.0,<4.0.0",
-    "scipy>=1.14.0,<2.0.0",
-    "statsmodels>=0.14.0,<1.0.0",
+    "scipy>=1.14.0,<4.0.0",
+    "statsmodels>=0.14.0,<3.0.0",
+    # --- Database Connectivity ---
+    "SQLAlchemy>=2.0.25,<3.0.0",
     # --- Machine Learning: Core Frameworks ---
-    "scikit-learn>=1.6.0,<2.0.0",
+    "scikit-learn>=1.6.0,<4.0.0",
     "imbalanced-learn>=0.12.0,<1.0.0",
     # --- Machine Learning: Gradient Boosting ---
     "xgboost>=2.1.0,<4.0.0",
     "lightgbm>=4.5.0,<5.0.0",
-    "catboost>=1.2.5,<2.0.0; python_version < '3.14'",
+    "catboost>=1.2.5,<4.0.0; python_version < '3.14'",
     # --- Model Interpretability ---
     "shap>=0.50.0,<1.0.0; python_version < '3.14'",
     # --- Data Visualization ---
@@ -44,13 +47,23 @@ dependencies = [
     "plotly>=5.18.0,<7.0.0",
     # --- Utilities & Performance ---
     "tqdm>=4.66.0,<5.0.0",
-    "joblib>=1.4.0,<2.0.0",
+    "joblib>=1.4.0,<4.0.0",
     "xlsxwriter>=3.2.0,<4.0.0",
     "psutil>=6.0.0,<8.0.0",
-    # --- Bayesian Diagnostics ---
-    "arviz>=0.19.0,<=1.0.0",
+    "PyYAML>=6.0.0,<7.0.0",
+    # --- Bayesian / Probabilistic ---
+    "arviz>=1.0.0,<2.0.0",
+    "arviz-base>=1.0.0,<2.0.0",
+    "arviz-stats>=1.0.0,<2.0.0",
+    "arviz-plots>=1.0.0,<2.0.0",
+    "bambi>=0.14.0,<1.0.0",
+    "xarray>=2025.0.0,<2027.0.0",
+    "pymc>=5.0.0,<8.0.0",
+    "pytensor>=2.38.0,<5.0.0",
     # --- Hyperparameter Optimization ---
     "optuna>=4.1.0,<5.0.0",
+    # --- Networking ---
+    "requests>=2.32.0",
 ]
 
 [project.optional-dependencies]
@@ -60,7 +73,7 @@ dev = [
     "pytest-cov>=5.0.0,<20.0.0",
     "black>=24.0.0,<30.0.0",
     "flake8>=7.1.0,<19.0.0",
-    "mypy>=1.11.0,<1.30.0.0",
+    "mypy>=1.11.0,<1.30.0",
     "isort>=5.13.0,<11.0.0",
     "pip-tools>=7.4.0,<30.0.0",
 ]
@@ -69,12 +82,13 @@ dev = [
 dashboards = [
     "streamlit>=1.40.0,<6.0.0; python_version < '3.14'",
     "dash>=2.18.0,<7.0.0",
+    "dash-bootstrap-components>=1.6.0,<4.0.0",
+    "flask>=3.0.0,<4.0.0",
 ]
 
 # Database connectivity
 database = [
     "psycopg2-binary>=2.9.9,<3.0.0",
-    "SQLAlchemy>=2.0.25,<3.0.0",
 ]
 
 # Deep learning (Python <3.14 only)
@@ -86,6 +100,24 @@ tensorflow = [
 # Performance optimizations (Python <3.14 only)
 performance = [
     "numba>=0.60.0,<1.0.0; python_version < '3.14'",
+]
+
+# Jupyter notebook support
+notebooks = [
+    "jupyter>=1.0.0,<4.0.0",
+    "notebook>=7.2.0,<8.0.0",
+    "ipykernel>=6.29.0,<8.0.0",
+    "ipython>=8.28.0,<11.0.0",
+]
+
+# Additional utilities (used in feature_factory, dashboards, etc.)
+extras = [
+    "openpyxl>=3.1.0,<4.0.0",
+    "boruta>=0.3.0,<1.0.0",
+    "networkx>=3.3.0,<4.0.0",
+    "Pillow>=10.4.0,<15.0.0",
+    "forex-python>=1.8,<4.0.0",
+    "python-dotenv",
 ]
 
 [project.scripts]
@@ -101,18 +133,18 @@ Repository = "https://github.com/finance-ml/analytics-platform"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["finance_ml*"]
+include = ["probabilistic_ml_model*"]
 
 [tool.black]
 line-length = 100
-target-version = ["py312", "py313"]
+target-version = ["py314"]
 
 [tool.isort]
 profile = "black"
 line_length = 100
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 

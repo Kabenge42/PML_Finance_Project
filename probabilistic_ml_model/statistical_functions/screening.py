@@ -10,10 +10,12 @@ This module provides functions for:
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import pandas as pd
 
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Dynamic threshold computation from statistical distributions
@@ -46,7 +48,7 @@ def _compute_dynamic_thresholds(
     dict[str, float]
         Mapping of feature name -> computed threshold value.
     """
-    from probabilistic_ml_model.statistical_functions.statistical_analysis import (
+    from probabilistic_ml_model.statistical_functions.statistical_models import (
         run_category_probability_analytics,
     )
 
@@ -98,7 +100,7 @@ def _compute_dynamic_thresholds(
                     try:
                         thresholds[feat] = float(dist_obj.ppf(target_pct / 100.0, *params))
                         continue
-                    except Exception:
+                    except (ValueError, TypeError):
                         pass
 
         # Strategy 2: Use Bayesian posterior credible interval
@@ -138,8 +140,8 @@ def create_enhanced_screener(
     max_distress_risk: float | None = None,
     min_eps_trajectory: float | None = None,
     min_fcf_positive_years: int | None = None,
-    require_deleveraging: bool = False,
-    require_secular_trend: bool = False,
+    require_deleveraging: bool = True,
+    require_secular_trend: bool = True,
     sector_filter: str = "All",
 ) -> pd.DataFrame:
     """
@@ -176,12 +178,11 @@ def create_enhanced_screener(
     Examples
     --------
     >>> screened = create_enhanced_screener(df)  # fully dynamic thresholds
-    >>> screened = create_enhanced_screener(df, min_fscore=7)  # override one param
     """
     # Ensure necessary columns exist
     required_cols = [
         "piotroski_f_score",
-        "combined_distress_risk_score",
+        "combined_distress_score",
         "eps_trajectory_score",
         "fcf_positive_years",
     ]
@@ -196,7 +197,7 @@ def create_enhanced_screener(
     if min_fscore is None:
         specs["piotroski_f_score"] = {"direction": "min", "percentile": 25, "fallback": 5}
     if max_distress_risk is None:
-        specs["combined_distress_risk_score"] = {
+        specs["combined_distress_score"] = {
             "direction": "min",
             "percentile": 25,
             "fallback": 30,
@@ -219,7 +220,7 @@ def create_enhanced_screener(
     eff_max_distress = (
         max_distress_risk
         if max_distress_risk is not None
-        else dynamic.get("combined_distress_risk_score", 30)
+        else dynamic.get("combined_distress_score", 30)
     )
     eff_min_eps_traj = (
         min_eps_trajectory
@@ -240,7 +241,7 @@ def create_enhanced_screener(
     # Apply filters
     mask = (
         (df["piotroski_f_score"] >= eff_min_fscore)
-        & (df["combined_distress_risk_score"] >= (100 - eff_max_distress))
+        & (df["combined_distress_score"] >= (100 - eff_max_distress))
         & (df["eps_trajectory_score"] >= eff_min_eps_traj)
         & (df["fcf_positive_years"] >= eff_min_fcf_yrs)
     )
@@ -396,7 +397,11 @@ def screen_value_opportunities(
     if max_pe_ratio is None:
         specs["p_e_ratio"] = {"direction": "max", "percentile": 75, "fallback": 30}
     if min_upside_potential is None:
-        specs["upside_potential"] = {"direction": "min", "percentile": 25, "fallback": 15}
+        specs["expected_upside_pt"] = {
+            "direction": "min",
+            "percentile": 25,
+            "fallback": 15,
+        }
     if max_price_to_tangible_book is None:
         specs["price_to_tangible_book"] = {"direction": "max", "percentile": 75, "fallback": 2.0}
     if min_quality_score is None:
@@ -408,7 +413,7 @@ def screen_value_opportunities(
     eff_min_upside = (
         min_upside_potential
         if min_upside_potential is not None
-        else dynamic.get("upside_potential", 15)
+        else dynamic.get("expected_upside_pt", 15)
     )
     eff_max_ptb = (
         max_price_to_tangible_book
@@ -426,8 +431,8 @@ def screen_value_opportunities(
     if "p_e_ratio" in df.columns:
         mask &= (df["p_e_ratio"] > 0) & (df["p_e_ratio"] <= eff_max_pe)
 
-    if "upside_potential" in df.columns:
-        mask &= df["upside_potential"] >= eff_min_upside
+    if "expected_upside_pt" in df.columns:
+        mask &= df["expected_upside_pt"] >= eff_min_upside
 
     if "price_to_tangible_book" in df.columns:
         mask &= (df["price_to_tangible_book"] > 0) & (df["price_to_tangible_book"] <= eff_max_ptb)
@@ -440,8 +445,8 @@ def screen_value_opportunities(
 
     result = df[mask].copy()
 
-    if "upside_potential" in result.columns:
-        result = result.sort_values("upside_potential", ascending=False)
+    if "expected_upside_pt" in result.columns:
+        result = result.sort_values("expected_upside_pt", ascending=False)
 
     return result
 
@@ -662,7 +667,7 @@ def screen_valuation_reversion_candidates(
     if min_quality_score is None:
         specs["piotroski_f_score"] = {"direction": "min", "percentile": 25, "fallback": 5}
     if max_distress_risk is None:
-        specs["combined_distress_risk_score"] = {
+        specs["combined_distress_score"] = {
             "direction": "min",
             "percentile": 25,
             "fallback": 60,
@@ -684,7 +689,7 @@ def screen_valuation_reversion_candidates(
     eff_max_distress = (
         max_distress_risk
         if max_distress_risk is not None
-        else 100 - dynamic.get("combined_distress_risk_score", 60)
+        else 100 - dynamic.get("combined_distress_score", 60)
     )
 
     mask = pd.Series([True] * len(df), index=df.index)
@@ -698,8 +703,8 @@ def screen_valuation_reversion_candidates(
     if "piotroski_f_score" in df.columns:
         mask &= df["piotroski_f_score"] >= (eff_min_quality / 10)
 
-    if "combined_distress_risk_score" in df.columns:
-        mask &= df["combined_distress_risk_score"] >= (100 - eff_max_distress)
+    if "combined_distress_score" in df.columns:
+        mask &= df["combined_distress_score"] >= (100 - eff_max_distress)
 
     result = df[mask].copy()
 
@@ -820,7 +825,7 @@ def screen_financial_health(
 
     specs: dict[str, dict] = {}
     if min_distress_score is None:
-        specs["combined_distress_risk_score"] = {
+        specs["combined_distress_score"] = {
             "direction": "min",
             "percentile": 25,
             "fallback": 70,
@@ -837,7 +842,7 @@ def screen_financial_health(
     eff_min_distress = (
         min_distress_score
         if min_distress_score is not None
-        else dynamic.get("combined_distress_risk_score", 70)
+        else dynamic.get("combined_distress_score", 70)
     )
     eff_max_dte = (
         max_debt_to_equity if max_debt_to_equity is not None else dynamic.get("debt_to_equity", 1.0)
@@ -853,8 +858,8 @@ def screen_financial_health(
 
     mask = pd.Series([True] * len(df), index=df.index)
 
-    if "combined_distress_risk_score" in df.columns:
-        mask &= df["combined_distress_risk_score"] >= eff_min_distress
+    if "combined_distress_score" in df.columns:
+        mask &= df["combined_distress_score"] >= eff_min_distress
 
     if "debt_to_equity" in df.columns:
         mask &= df["debt_to_equity"] <= eff_max_dte
@@ -871,14 +876,47 @@ def screen_financial_health(
 
     result = df[mask].copy()
 
-    if "combined_distress_risk_score" in result.columns:
-        result = result.sort_values("combined_distress_risk_score", ascending=False)
+    if "combined_distress_score" in result.columns:
+        result = result.sort_values("combined_distress_score", ascending=False)
 
     return result
 
 
+# Issue 5: Default weights for fundamental-only scoring (legacy)
+_FUNDAMENTAL_WEIGHTS: dict[str, float] = {
+    "piotroski_f_score": 0.25,
+    "combined_distress_score": 0.25,
+    "earnings_quality_composite": 0.25,
+    "cash_flow_quality_score": 0.25,
+}
+
+# Issue 5: Model-aware weights blending fundamentals + probabilistic outputs
+_MODEL_AWARE_WEIGHTS: dict[str, float] = {
+    "piotroski_f_score": 0.20,
+    "combined_distress_score": 0.10,
+    "earnings_quality_composite": 0.10,
+    "cash_flow_quality_score": 0.10,
+    "prob_positive_upside": 0.10,
+    "achievement_probability": 0.10,
+    "prob_beat_given_momentum": 0.15,
+    "confidence_score": 0.15,
+}
+
+# Normalization specs: column -> (min_val, max_val) for 0-100 scaling
+_NORMALIZATION_SPECS: dict[str, tuple[float, float]] = {
+    "piotroski_f_score": (0.0, 9.0),
+    "prob_positive_upside": (0.0, 100.0),
+    "achievement_probability": (0.0, 1.0),
+    "prob_beat_given_momentum": (0.0, 1.0),
+    "confidence_score": (0.0, 1.0),
+}
+
+
 def rank_stocks_by_composite_score(
-    df: pd.DataFrame, weights: Optional[dict] = None, export: bool = False
+    df: pd.DataFrame,
+    weights: Optional[dict] = None,
+    export: bool = False,
+    use_model_aware: bool = True,
 ) -> pd.DataFrame:
     """
     Rank stocks by composite quality score with customizable weights.
@@ -888,11 +926,15 @@ def rank_stocks_by_composite_score(
     df : pd.DataFrame
         Input DataFrame
     weights : dict, optional
-        Dictionary of score weights. Default weights:
-        - piotroski_f_score: 0.25
-        - combined_distress_risk_score: 0.25
-        - earnings_quality_composite: 0.25
-        - cash_flow_quality_score: 0.25
+        Dictionary of score weights. When ``None`` the function auto-selects
+        model-aware weights (if probabilistic columns are present) or falls
+        back to fundamental-only weights.
+    export : bool
+        Export results to analytics DB.
+    use_model_aware : bool
+        When ``True`` (default) and *weights* is ``None``, prefer
+        ``_MODEL_AWARE_WEIGHTS`` when at least one probabilistic column
+        is available in *df*.
 
     Returns
     -------
@@ -905,24 +947,29 @@ def rank_stocks_by_composite_score(
     >>> top_10 = ranked.head(10)
     """
     if weights is None:
-        weights = {
-            "piotroski_f_score": 0.25,
-            "combined_distress_risk_score": 0.25,
-            "earnings_quality_composite": 0.25,
-            "cash_flow_quality_score": 0.25,
+        _prob_cols = {
+            "prob_positive_upside",
+            "achievement_probability",
+            "prob_beat_given_momentum",
+            "confidence_score",
         }
+        if use_model_aware and _prob_cols & set(df.columns):
+            weights = dict(_MODEL_AWARE_WEIGHTS)
+        else:
+            weights = dict(_FUNDAMENTAL_WEIGHTS)
 
     result = df.copy()
-    result["composite_score"] = 0
+    result["composite_score"] = 0.0
 
     for score_col, weight in weights.items():
         if score_col in result.columns:
-            # Normalize to 0-100 scale
-            if score_col == "piotroski_f_score":
-                normalized = result[score_col] / 9 * 100
+            col_vals = result[score_col]
+            # Normalize to 0-100 scale using known specs or percentile-based
+            if score_col in _NORMALIZATION_SPECS:
+                lo, hi = _NORMALIZATION_SPECS[score_col]
+                normalized = (col_vals - lo) / (hi - lo) * 100 if hi > lo else col_vals
             else:
-                normalized = result[score_col]
-
+                normalized = col_vals
             result["composite_score"] += normalized.fillna(50) * weight
 
     result = result.sort_values("composite_score", ascending=False)
@@ -934,8 +981,8 @@ def rank_stocks_by_composite_score(
             export_cols = ["ticker", "name", "sector", "industry", "composite_score"]
             available = [c for c in export_cols if c in result.columns]
             export_to_analytics_db(result[available], "composite_scores_statistics")
-        except Exception:
-            pass
+        except (ImportError, OSError) as e:
+            logger.debug("Export to analytics DB failed: %s", e)
 
     return result
 
@@ -1094,7 +1141,7 @@ def screen_high_yield_safe_dividends(
     if max_payout is None:
         specs["dividend_payout_ratio"] = {"direction": "max", "percentile": 75, "fallback": 100}
     if min_distress_score is None:
-        specs["combined_distress_risk_score"] = {
+        specs["combined_distress_score"] = {
             "direction": "min",
             "percentile": 25,
             "fallback": 60,
@@ -1111,7 +1158,7 @@ def screen_high_yield_safe_dividends(
     eff_min_distress = (
         min_distress_score
         if min_distress_score is not None
-        else dynamic.get("combined_distress_risk_score", 60)
+        else dynamic.get("combined_distress_score", 60)
     )
     eff_min_fcf_cov = (
         min_fcf_coverage
@@ -1127,8 +1174,8 @@ def screen_high_yield_safe_dividends(
     if "dividend_payout_ratio" in df.columns:
         mask &= df["dividend_payout_ratio"] <= eff_max_payout
 
-    if "combined_distress_risk_score" in df.columns:
-        mask &= df["combined_distress_risk_score"] >= eff_min_distress
+    if "combined_distress_score" in df.columns:
+        mask &= df["combined_distress_score"] >= eff_min_distress
 
     if "fcf_dividend_coverage" in df.columns:
         mask &= df["fcf_dividend_coverage"] >= eff_min_fcf_cov

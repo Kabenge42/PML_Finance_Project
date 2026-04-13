@@ -86,13 +86,7 @@ from __future__ import annotations
 import logging
 import os
 import warnings
-from pathlib import Path
-from typing import Optional
 from dataclasses import dataclass
-import numpy as np
-import pandas as pd
-import plotly.express as px
-from scipy import stats as sp_stats
 from requests.exceptions import RequestsDependencyWarning
 
 warnings.filterwarnings("ignore", category=RequestsDependencyWarning)
@@ -136,10 +130,10 @@ class PipelineConfig:
 
     mc_simulations: int = 50_000
     mc_max_stocks: int = 10_000
-    mcmc_chains: int = 6
+    mcmc_chains: int = 8
     mcmc_samples: int = 50_000
     beat_threshold: float = 0.6
-    output_dir: str = "outputs/analytics"
+    output_dir: str = "outputs"
     log_file: str | None = "logs/expected_returns_pipeline.log"
     log_level: int = logging.INFO
 
@@ -151,7 +145,7 @@ class PipelineConfig:
             mc_max_stocks=int(os.environ.get("ER_MC_MAX_STOCKS", 10_000)),
             mcmc_chains=int(os.environ.get("ER_MCMC_CHAINS", 6)),
             mcmc_samples=int(os.environ.get("ER_MCMC_SAMPLES", 50_000)),
-            output_dir=os.environ.get("ER_OUTPUT_DIR", "outputs/analytics"),
+            output_dir=os.environ.get("ER_OUTPUT_DIR", "outputs"),
             log_file=os.environ.get("ER_LOG_FILE", "logs/expected_returns_pipeline.log"),
         )
 
@@ -161,5 +155,5 @@ class PipelineConfig:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def main(config: PipelineConfig | None = None):
+def main(config: PipelineConfig | None = None):  # noqa: ARG001
     return

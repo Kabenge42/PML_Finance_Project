@@ -4,17 +4,31 @@ Dividend Safety Bayesian Model — Cut probability with FCF coverage.
 Models dividend cut probability with Beta priors and conditional risk
 adjustments based on payout ratio thresholds.
 
-Reference: DividendCutProbabilityModel in probability_analytics.py (line 2793).
+Reference: DividendCutProbabilityModel in probability_models.py (line 2793).
 """
 
 from __future__ import annotations
 
 import logging
 
-import arviz as az
+try:
+    import arviz as az
+except ImportError:
+    try:
+        import arviz_base as az
+    except ImportError:
+        az = None  # type: ignore[assignment]
+
 import numpy as np
-import pymc as pm
-import pytensor.tensor as pt
+
+try:
+    import pymc as pm
+    import pytensor.tensor as pt
+except ImportError:
+    pm = None  # type: ignore[assignment]
+    pt = None  # type: ignore[assignment]
+
+from probabilistic_ml_model.pml_models._pytensor_compat import get_pytensor_compile_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +90,7 @@ class DividendSafetyBayesian:
 
         coords = {"ticker": tickers}
 
-        with pm.Model(coords=coords) as model:
+        with pm.Model(coords=coords):
             payout_data = pm.Data("payout_data", payout_ratios, dims="ticker")
 
             cut_prob = pm.Beta(
@@ -102,7 +116,7 @@ class DividendSafetyBayesian:
 
             expected_coverage = pm.Deterministic(
                 "expected_coverage",
-                1.0 / (risk_adj + 0.01),
+                pt.clip(1.0 / (risk_adj + 0.01), 0.0, 20.0),
                 dims="ticker",
             )
 
@@ -122,8 +136,8 @@ class DividendSafetyBayesian:
                 chains=chains,
                 target_accept=target_accept,
                 random_seed=random_seed,
-                return_inferencedata=True,
                 progressbar=False,
+                compile_kwargs=get_pytensor_compile_kwargs(),
             )
 
         return idata

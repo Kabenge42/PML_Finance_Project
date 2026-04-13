@@ -23,18 +23,24 @@ from typing import Sequence
 # ---------------------------------------------------------------------------
 from probabilistic_ml_model.visualizations._shared import (  # noqa: E402
     PLOTLY_TEMPLATE,
+    ARVIZ_TEMPLATE,
     COLORS,
     MV_COLUMN_ALIASES,
     resolve_column,
     create_no_data_figure,
+    apply_arviz_theme,
+    _pc_add_title,
 )
 
 _shared_exports: list[str] = [
     "PLOTLY_TEMPLATE",
+    "ARVIZ_TEMPLATE",
     "COLORS",
     "MV_COLUMN_ALIASES",
     "resolve_column",
     "create_no_data_figure",
+    "apply_arviz_theme",
+    "_pc_add_title",
 ]
 
 # ---------------------------------------------------------------------------
@@ -87,6 +93,7 @@ _IMPORT_REGISTRY: Sequence[tuple[str, Sequence[str]]] = (
             "create_mcse_convergence_panel",
             "create_bayesian_category_ridge",
             "create_tri_model_posterior_comparison",
+            "create_tri_model_posterior_price_target_comparison",
             "create_feature_view_posterior_panel",
             "create_anomaly_conditional_probability_chart",
             "create_mcmc_anomaly_posterior_chart",
@@ -94,6 +101,7 @@ _IMPORT_REGISTRY: Sequence[tuple[str, Sequence[str]]] = (
             "create_mcmc_dividend_cut_chart",
             "create_mcmc_price_target_chart",
             "create_mcmc_category_posterior_chart",
+            "create_mcmc_category_posterior_arviz",
         ],
     ),
     # Expected returns pipeline visualization functions
@@ -134,6 +142,16 @@ _IMPORT_REGISTRY: Sequence[tuple[str, Sequence[str]]] = (
             "build_category_analytics_idata",
             "create_category_posterior_diagnostics",
             "create_cross_category_summary",
+            "create_screening_ppc_rootogram",
+            "create_hierarchical_dot_comparison",
+            "create_cross_model_ecdf_with_references",
+        ],
+    ),
+    # Convergence diagnostics module
+    (
+        ".convergence_diagnostics",
+        [
+            "create_unified_convergence_dashboard",
         ],
     ),
 )

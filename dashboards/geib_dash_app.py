@@ -212,21 +212,21 @@ TABLE_STYLE_DATA_CONDITIONAL = [
     },
     {
         "if": {
-            "column_id": "filtered_upside",
-            "filter_query": "{filtered_upside} > 15",
+            "column_id": "expected_upside_kalman",
+            "filter_query": "{expected_upside_kalman} > 15",
         },
         "color": COLORS["success"],
         "fontWeight": "bold",
     },
     {
-        "if": {"column_id": "filtered_upside", "filter_query": "{filtered_upside} < 0"},
+        "if": {"column_id": "expected_upside_kalman", "filter_query": "{expected_upside_kalman} < 0"},
         "color": COLORS["danger"],
         "fontWeight": "bold",
     },
     {
         "if": {
-            "column_id": "expected_return_prob_weighted",
-            "filter_query": "{expected_return_prob_weighted} > 10",
+            "column_id": "implied_return_pt",
+            "filter_query": "{implied_return_pt} > 10",
         },
         "color": COLORS["success"],
         "fontWeight": "bold",
@@ -275,16 +275,16 @@ TABLE_STYLE_DATA_CONDITIONAL = [
     },
     {
         "if": {
-            "column_id": "filtered_upside_zscore",
-            "filter_query": "{filtered_upside_zscore} > 1.5",
+            "column_id": "expected_upside_kalman_zscore",
+            "filter_query": "{expected_upside_kalman_zscore} > 1.5",
         },
         "color": COLORS["success"],
         "fontWeight": "bold",
     },
     {
         "if": {
-            "column_id": "filtered_upside_zscore",
-            "filter_query": "{filtered_upside_zscore} < -1.5",
+            "column_id": "expected_upside_kalman_zscore",
+            "filter_query": "{expected_upside_kalman_zscore} < -1.5",
         },
         "color": COLORS["danger"],
         "fontWeight": "bold",
@@ -623,8 +623,8 @@ _FALLBACK_CURRENCY_COLS = {
 }
 _FALLBACK_PCT_100_COLS = {
     "expected_upside_pct",
-    "filtered_upside",
-    "expected_return_prob_weighted",
+    "expected_upside_kalman",
+    "implied_return_pt",
     "var_5_pct",
     "accounting_anomaly_score",
     "anomaly_severity_score",
@@ -663,14 +663,14 @@ _FALLBACK_PROB_COLS = {
 }
 _FALLBACK_PCTILE_COLS = {
     "expected_upside_pct_pctile",
-    "filtered_upside_pctile",
-    "expected_return_prob_weighted_pctile",
+    "expected_upside_kalman_pctile",
+    "implied_return_pt_pctile",
     "anomaly_risk_rank",
 }
 _FALLBACK_ZSCORE_COLS = {
     "expected_upside_pct_zscore",
-    "filtered_upside_zscore",
-    "expected_return_prob_weighted_zscore",
+    "expected_upside_kalman_zscore",
+    "implied_return_pt_zscore",
     "sector_relative_anomaly",
     "altman_z_score",
     "altman_z_trend",
@@ -949,9 +949,9 @@ COLUMN_TOOLTIPS = {
     "piotroski_f_score": "Piotroski F-Score (0-9): higher = stronger fundamentals",
     "beneish_m_score": "Beneish M-Score: > -2.22 suggests earnings manipulation",
     "expected_upside_pct_zscore": "Z-score of expected upside within the universe",
-    "filtered_upside_zscore": "Z-score of filtered upside within the universe",
+    "expected_upside_kalman_zscore": "Z-score of filtered upside within the universe",
     "expected_upside_pct_pctile": "Percentile rank of expected upside",
-    "filtered_upside_pctile": "Percentile rank of filtered upside",
+    "expected_upside_kalman_pctile": "Percentile rank of filtered upside",
     "composite_score": "Weighted composite quality score (0-1)",
     "confidence_score": "Model confidence score (0-1)",
     "risk_reward_ratio": "Expected return / risk ratio",
@@ -1325,7 +1325,7 @@ def calculate_kelly_metrics(
 
     Uses columns from analytics.expected_returns_summary:
       - prob_positive_upside  (0-100 scale)
-      - filtered_upside       (percentage)
+      - expected_upside_kalman       (percentage)
       - confidence_score      (0-1 scale)
       - achievement_probability (0-1 scale)
 
@@ -1336,7 +1336,7 @@ def calculate_kelly_metrics(
 
     for col in [
         "prob_positive_upside",
-        "filtered_upside",
+        "expected_upside_kalman",
         "confidence_score",
         "achievement_probability",
     ]:
@@ -1345,7 +1345,7 @@ def calculate_kelly_metrics(
     # Kelly formula: f* = (p*b - q) / b  where p=win prob, q=1-p, b=win/loss ratio
     p = result["prob_positive_upside"] / 100.0
     q = 1.0 - p
-    b = result["filtered_upside"] / 100.0
+    b = result["expected_upside_kalman"] / 100.0
 
     result["kelly_raw"] = np.where(b != 0, (p * b - q) / b, 0)
     result["kelly_raw"] = result["kelly_raw"].clip(lower=0)
@@ -1527,7 +1527,7 @@ def load_plotly_figure_from_html(html_path):
 
 def get_artifact_path(artifact_name: str, artifact_type: str = "html") -> Path:
     """
-    Get the path to an artifact file in the outputs/analytics directory.
+    Get the path to an artifact file in the outputs directory.
 
     Parameters
     ----------
@@ -1624,8 +1624,8 @@ VIZ_REQUIRED_COLUMNS = {
     ],
     "create_model_dispersion_dashboard": [
         "expected_upside_pct",
-        "filtered_upside",
-        "expected_return_prob_weighted",
+        "expected_upside_kalman",
+        "implied_return_pt",
     ],
     "create_accounting_anomaly_dashboard": [
         "accounting_anomaly_score",
@@ -1721,7 +1721,7 @@ def load_geib_data():
         query_summary = f"""
             SELECT * FROM {analytics_schema}.expected_returns_summary
             WHERE expected_upside_pct IS NOT NULL
-            ORDER BY expected_return_prob_weighted DESC
+            ORDER BY implied_return_pt DESC
         """
         data["summary"] = pd.read_sql(query_summary, engine)
 
@@ -2047,10 +2047,10 @@ app = dash.Dash(
 server = app.server
 
 
-# Flask route to serve HTML artifacts from outputs/analytics
+# Flask route to serve HTML artifacts from outputs
 @server.route("/artifacts/<path:filename>")
 def serve_artifact(filename):
-    """Serve HTML artifact files from the outputs/analytics directory."""
+    """Serve HTML artifact files from the outputs directory."""
     artifacts_dir = str(PROJECT_ROOT / "outputs" / "analytics")
     return send_from_directory(artifacts_dir, filename)
 
@@ -2576,8 +2576,8 @@ app.layout = html.Div(
                                             "price_target_prob_weighted",
                                             "kalman_estimate",
                                             "expected_upside_pct",
-                                            "filtered_upside",
-                                            "expected_return_prob_weighted",
+                                            "expected_upside_kalman",
+                                            "implied_return_pt",
                                             "var_5_pct",
                                             "risk_reward_ratio",
                                             "achievement_probability",
@@ -2591,7 +2591,7 @@ app.layout = html.Div(
                                             "accounting_anomaly_tier",
                                             "risk_level",
                                             "expected_upside_pct_pctile",
-                                            "filtered_upside_zscore",
+                                            "expected_upside_kalman_zscore",
                                         ]
                                     ),
                                     page_size=500,
@@ -2746,11 +2746,11 @@ app.layout = html.Div(
                                                         },
                                                         {
                                                             "label": "Filtered Upside",
-                                                            "value": "filtered_upside",
+                                                            "value": "expected_upside_kalman",
                                                         },
                                                         {
                                                             "label": "Prob-Weighted Return",
-                                                            "value": "expected_return_prob_weighted",
+                                                            "value": "implied_return_pt",
                                                         },
                                                     ],
                                                     value="expected_upside_pct",
@@ -2928,11 +2928,11 @@ app.layout = html.Div(
                                                     "expected_upside_pct",
                                                     "expected_upside_pct_zscore",
                                                     "expected_upside_pct_pctile",
-                                                    "filtered_upside",
-                                                    "filtered_upside_zscore",
-                                                    "filtered_upside_pctile",
-                                                    "expected_return_prob_weighted_zscore",
-                                                    "expected_return_prob_weighted_pctile",
+                                                    "expected_upside_kalman",
+                                                    "expected_upside_kalman_zscore",
+                                                    "expected_upside_kalman_pctile",
+                                                    "implied_return_pt_zscore",
+                                                    "implied_return_pt_pctile",
                                                     "posterior_beat_prob",
                                                     "beat_classification",
                                                     "agreement_score",
@@ -4801,8 +4801,8 @@ app.layout = html.Div(
                                                     "price_target_mc",
                                                     "price_target_prob_weighted",
                                                     "expected_upside_pct",
-                                                    "expected_return_prob_weighted",
-                                                    "filtered_upside",
+                                                    "implied_return_pt",
+                                                    "expected_upside_kalman",
                                                     "achievement_probability",
                                                     "composite_score",
                                                     "confidence_level",
@@ -5319,12 +5319,12 @@ def run_monte_carlo_simulation(sim_df, num_simulations, loss_ratio, weighting, t
 
     sim_df = sim_df.copy()
     sim_df["prob_positive_upside"] = pd.to_numeric(sim_df["prob_positive_upside"], errors="coerce")
-    sim_df["filtered_upside"] = pd.to_numeric(sim_df["filtered_upside"], errors="coerce")
+    sim_df["expected_upside_kalman"] = pd.to_numeric(sim_df["expected_upside_kalman"], errors="coerce")
     sim_df["achievement_probability"] = pd.to_numeric(
         sim_df["achievement_probability"], errors="coerce"
     )
     sim_df = sim_df.dropna(
-        subset=["prob_positive_upside", "filtered_upside", "achievement_probability"]
+        subset=["prob_positive_upside", "expected_upside_kalman", "achievement_probability"]
     )
 
     if sim_df.empty:
@@ -5339,7 +5339,7 @@ def run_monte_carlo_simulation(sim_df, num_simulations, loss_ratio, weighting, t
         kelly_fractions = []
         for _, row in sim_df.iterrows():
             p = row["prob_positive_upside"] / 100.0
-            b = row["filtered_upside"] / 100.0
+            b = row["expected_upside_kalman"] / 100.0
             if b > 0 and p > 0 and p < 1:
                 kelly = (p * b - (1 - p) * loss_ratio * b) / (b * b) if b != 0 else 0
                 kelly = max(0, min(kelly, 0.25))
@@ -5357,7 +5357,7 @@ def run_monte_carlo_simulation(sim_df, num_simulations, loss_ratio, weighting, t
         "achievement_probability"
     ].values
     prob_wins = np.clip(prob_wins, 0, 1.0)
-    upside_returns = sim_df["filtered_upside"].values / 100.0
+    upside_returns = sim_df["expected_upside_kalman"].values / 100.0
 
     # Run simulations
     portfolio_returns = np.zeros(num_simulations)
@@ -5540,8 +5540,8 @@ def update_dashboard(*args):
     ranking_df = filtered_df.copy()
     if not ranking_df.empty:
         # Scoring methods
-        ev_base = (ranking_df["filtered_upside"] / 100) * (ranking_df["prob_positive_upside"] / 100)
-        ev_prob = ranking_df["expected_return_prob_weighted"] / 100
+        ev_base = (ranking_df["expected_upside_kalman"] / 100) * (ranking_df["prob_positive_upside"] / 100)
+        ev_prob = ranking_df["implied_return_pt"] / 100
         ev_conf = ev_base * ranking_df["confidence_score"]
         ev_achieve = ev_base * ranking_df["achievement_probability"]
         ev_final = (
@@ -5569,11 +5569,11 @@ def update_dashboard(*args):
         disagreement_penalty = 1 - (ranking_df["agreement_score"] / 4)
         ranking_df["risk_score"] = uncertainty_penalty * (1 + disagreement_penalty)
 
-        upside_potential = (ranking_df["filtered_upside"] / 100) * ranking_df[
+        expected_upside_pt = (ranking_df["expected_upside_kalman"] / 100) * ranking_df[
             "achievement_probability"
         ]
         beat_probability_bonus = 1 + ranking_df["posterior_beat_prob"]
-        ranking_df["reward_score"] = upside_potential * beat_probability_bonus
+        ranking_df["reward_score"] = expected_upside_pt * beat_probability_bonus
 
         # Risk-adjusted return & Sharpe-like ratio
         ranking_df["risk_adjusted_return"] = ranking_df["reward_score"] / (
@@ -5581,7 +5581,7 @@ def update_dashboard(*args):
         )
         risk_free_rate_decimal = risk_free_rate or 0
         ranking_df["sharpe_like_ratio"] = (
-            ranking_df["expected_return_prob_weighted"] / 100 - risk_free_rate_decimal
+            ranking_df["implied_return_pt"] / 100 - risk_free_rate_decimal
         ) / (ranking_df["risk_score"] + 1e-6)
 
         # Apply ranking-specific filters
@@ -5594,7 +5594,7 @@ def update_dashboard(*args):
     kpi_cards = []
     if not filtered_df.empty:
         total_stocks = len(filtered_df)
-        avg_expected_return = filtered_df["expected_return_prob_weighted"].mean()
+        avg_expected_return = filtered_df["implied_return_pt"].mean()
         _conf_level = safe_get_column(filtered_df, "confidence_level", default=pd.Series(dtype=str))
         high_confidence = int((_conf_level == "high").sum()) if len(_conf_level) else 0
         _signal_col = safe_get_column(filtered_df, "signal", default=pd.Series(dtype=str))
@@ -5698,12 +5698,12 @@ def update_dashboard(*args):
     returns_scatter = fig_scatter
     if not filtered_df.empty and all(
         col in filtered_df.columns
-        for col in ["expected_return_prob_weighted", "achievement_probability"]
+        for col in ["implied_return_pt", "achievement_probability"]
     ):
         returns_scatter = px.scatter(
             filtered_df,
             x="achievement_probability",
-            y="expected_return_prob_weighted",
+            y="implied_return_pt",
             color="signal" if "signal" in filtered_df.columns else None,
             size="confidence_score" if "confidence_score" in filtered_df.columns else None,
             hover_data=(
@@ -5717,7 +5717,7 @@ def update_dashboard(*args):
             title="Expected Return vs Achievement Probability",
             labels={
                 "achievement_probability": "Achievement Probability",
-                "expected_return_prob_weighted": "Expected Return (%)",
+                "implied_return_pt": "Expected Return (%)",
             },
             template="plotly_dark",
         )
@@ -5789,9 +5789,9 @@ def update_dashboard(*args):
             "beat_classification",
             "price_target_prob_weighted",
             "expected_upside_pct",
-            "expected_return_prob_weighted",
-            "filtered_upside",
-            "expected_return_prob_weighted",
+            "implied_return_pt",
+            "expected_upside_kalman",
+            "implied_return_pt",
             "achievement_probability",
             "composite_score",
             "confidence_level",
@@ -5800,13 +5800,13 @@ def update_dashboard(*args):
             "weighted_agreement",
             "expected_upside_pct_zscore",
             "expected_upside_pct_pctile",
-            "filtered_upside_zscore",
-            "filtered_upside_pctile",
+            "expected_upside_kalman_zscore",
+            "expected_upside_kalman_pctile",
         ]
         cols_available = [c for c in cols_to_show if c in filtered_df.columns]
         sort_col = (
-            "expected_return_prob_weighted"
-            if "expected_return_prob_weighted" in filtered_df.columns
+            "implied_return_pt"
+            if "implied_return_pt" in filtered_df.columns
             else filtered_df.columns[0]
         )
         top_opportunities_data = filtered_df.nlargest(20, sort_col)[cols_available].to_dict(
@@ -5836,10 +5836,10 @@ def update_dashboard(*args):
     if (
         not filtered_df.empty
         and "unit" in filtered_df.columns
-        and "expected_return_prob_weighted" in filtered_df.columns
+        and "implied_return_pt" in filtered_df.columns
     ):
         unit_stats = (
-            filtered_df.groupby("unit")["expected_return_prob_weighted"]
+            filtered_df.groupby("unit")["implied_return_pt"]
             .agg(["mean", "median", "count"])
             .reset_index()
         )
@@ -6678,10 +6678,10 @@ def update_zscore_tab(*args):
             "expected_upside_pct_zscore",
             "expected_upside_pct_pctile",
         ),
-        "filtered_upside": ("filtered_upside_zscore", "filtered_upside_pctile"),
-        "expected_return_prob_weighted": (
-            "expected_return_prob_weighted_zscore",
-            "expected_return_prob_weighted_pctile",
+        "expected_upside_kalman": ("expected_upside_kalman_zscore", "expected_upside_kalman_pctile"),
+        "implied_return_pt": (
+            "implied_return_pt_zscore",
+            "implied_return_pt_pctile",
         ),
     }
     zscore_col, pctile_col = metric_map.get(
@@ -6886,12 +6886,12 @@ def update_zscore_tab(*args):
         "expected_upside_pct_zscore",
         "expected_upside_pct_pctile",
         "expected_upside_pct",
-        "expected_return_prob_weighted",
-        "filtered_upside",
-        "filtered_upside_zscore",
-        "filtered_upside_pctile",
-        "expected_return_prob_weighted_zscore",
-        "expected_return_prob_weighted_pctile",
+        "implied_return_pt",
+        "expected_upside_kalman",
+        "expected_upside_kalman_zscore",
+        "expected_upside_kalman_pctile",
+        "implied_return_pt_zscore",
+        "implied_return_pt_pctile",
         "posterior_beat_prob",
         "beat_classification",
         "agreement_score",
@@ -7950,12 +7950,12 @@ def update_uncertainty_calibration(*args):
 
     # 2. Prediction Interval Coverage
     coverage_fig = go.Figure()
-    if all(col in filtered_df.columns for col in ["expected_upside_pct", "filtered_upside"]):
+    if all(col in filtered_df.columns for col in ["expected_upside_pct", "expected_upside_kalman"]):
         spread = filtered_df["expected_upside_pct"].std() if len(filtered_df) > 1 else 10
         lower = filtered_df["expected_upside_pct"] - 1.96 * spread
         upper = filtered_df["expected_upside_pct"] + 1.96 * spread
         in_interval = (
-            (filtered_df["filtered_upside"] >= lower) & (filtered_df["filtered_upside"] <= upper)
+            (filtered_df["expected_upside_kalman"] >= lower) & (filtered_df["expected_upside_kalman"] <= upper)
         ).mean() * 100
 
         coverage_fig = go.Figure(
@@ -8155,8 +8155,8 @@ def update_safety_rails(*args):
     completeness_data = []
     key_columns = [
         "expected_upside_pct",
-        "filtered_upside",
-        "expected_return_prob_weighted",
+        "expected_upside_kalman",
+        "implied_return_pt",
         "achievement_probability",
         "posterior_beat_prob",
         "confidence_score",
@@ -8169,8 +8169,8 @@ def update_safety_rails(*args):
         "weighted_agreement",
         "expected_upside_pct_zscore",
         "expected_upside_pct_pctile",
-        "filtered_upside_zscore",
-        "filtered_upside_pctile",
+        "expected_upside_kalman_zscore",
+        "expected_upside_kalman_pctile",
         "next_earnings",
         "next_earnings_status",
         "price_target_high",
@@ -8228,12 +8228,12 @@ def update_safety_rails(*args):
     outlier_fig = go.Figure()
     numeric_cols = [
         "expected_upside_pct",
-        "filtered_upside",
+        "expected_upside_kalman",
         "prob_positive_upside",
         "composite_score",
         "weighted_agreement",
         "expected_upside_pct_zscore",
-        "filtered_upside_zscore",
+        "expected_upside_kalman_zscore",
     ]
     outlier_data = []
     for col in numeric_cols:
@@ -9070,10 +9070,10 @@ def update_kelly_criterion(*args):
         # ----- Scatter Chart: Kelly % vs Expected Upside -----
         scatter_kwargs = dict(
             data_frame=kelly_df,
-            x="filtered_upside",
+            x="expected_upside_kalman",
             y="kelly_pct",
             labels={
-                "filtered_upside": "Expected Upside (%)",
+                "expected_upside_kalman": "Expected Upside (%)",
                 "kelly_pct": "Kelly % (Position Size)",
             },
             template="plotly_dark",
@@ -9081,7 +9081,7 @@ def update_kelly_criterion(*args):
 
         hover_cols = (
             _safe_hover_data(
-                {"ticker": True, "filtered_upside": ":.2f", "kelly_pct": ":.2f"},
+                {"ticker": True, "expected_upside_kalman": ":.2f", "kelly_pct": ":.2f"},
                 kelly_df,
             )
             or {}
@@ -9125,8 +9125,8 @@ def update_kelly_criterion(*args):
             "price_target",
             "price_target_mc",
             "expected_upside_pct",
-            "expected_return_prob_weighted",
-            "filtered_upside",
+            "implied_return_pt",
+            "expected_upside_kalman",
             "prob_positive_upside",
             "confidence_score",
             "composite_score",
@@ -9143,8 +9143,8 @@ def update_kelly_criterion(*args):
         # Round numeric columns for display
         for col in [
             "expected_upside_pct",
-            "expected_return_prob_weighted",
-            "filtered_upside",
+            "implied_return_pt",
+            "expected_upside_kalman",
             "prob_positive_upside",
             "confidence_score",
             "achievement_probability",
@@ -9598,7 +9598,7 @@ def update_screening_explorer(selected_strategy, *filter_args):
                 "industry",
                 "country",
                 "expected_upside_pct",
-                "filtered_upside",
+                "expected_upside_kalman",
                 "confidence_score",
                 "composite_score",
                 "achievement_probability",

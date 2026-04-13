@@ -33,6 +33,15 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 
+try:
+    import pytensor
+    # Use 'py' linker on Windows to avoid g++ / march=native issues
+    import os
+    if os.name == 'nt':
+        pytensor.config.linker = 'py'
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -310,8 +319,8 @@ def reduce_memory_usage(
         col_type = df[col].dtype
 
         if col_type != object:
-            c_min = df[col].min()
-            c_max = df[col].max()
+            c_min = float(df[col].min())
+            c_max = float(df[col].max())
 
             if str(col_type)[:3] == "int":
                 if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:

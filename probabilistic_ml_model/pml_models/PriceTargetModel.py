@@ -5,7 +5,7 @@ Models the probability of achieving analyst price targets using a Beta prior
 on achievement probability and a Normal model for expected returns with
 risk adjustment.
 
-Reference: PriceTargetAchievementModel in probability_analytics.py (line 3057);
+Reference: PriceTargetAchievementModel in probability_models.py (line 3057);
            _resolve_price_target_inputs() in inference_schema.py (line 746).
 """
 
@@ -13,10 +13,24 @@ from __future__ import annotations
 
 import logging
 
-import arviz as az
+try:
+    import arviz as az
+except ImportError:
+    try:
+        import arviz_base as az
+    except ImportError:
+        az = None  # type: ignore[assignment]
+
 import numpy as np
-import pymc as pm
-import pytensor.tensor as pt
+
+try:
+    import pymc as pm
+    import pytensor.tensor as pt
+except ImportError:
+    pm = None  # type: ignore[assignment]
+    pt = None  # type: ignore[assignment]
+
+from probabilistic_ml_model.pml_models._pytensor_compat import get_pytensor_compile_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +94,7 @@ class PriceTargetAchievement:
 
         coords = {"ticker": tickers}
 
-        with pm.Model(coords=coords) as model:
+        with pm.Model(coords=coords):
             achieve_prob = pm.Beta(
                 "achieve_prob",
                 alpha=self.prior_alpha,
@@ -101,7 +115,7 @@ class PriceTargetAchievement:
                 dims="ticker",
             )
 
-            sigma = pm.HalfNormal("sigma", sigma=0.1)
+            sigma = pm.HalfNormal("sigma", sigma=0.5)
 
             pm.Normal(
                 "upside_obs",
@@ -118,6 +132,7 @@ class PriceTargetAchievement:
                 cores=cores,
                 target_accept=target_accept,
                 random_seed=random_seed,
+                compile_kwargs=get_pytensor_compile_kwargs(),
             )
 
         return idata

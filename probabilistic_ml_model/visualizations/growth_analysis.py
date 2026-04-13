@@ -29,6 +29,7 @@ from probabilistic_ml_model.visualizations._shared import (
     create_no_data_figure,
     resolve_column,
 )
+from probabilistic_ml_model.data_utils.feature_catalog import columns_for_viz
 
 # Metric display names - aligned with actual MV column names
 METRIC_LABELS = {
@@ -74,13 +75,16 @@ def create_growth_waterfall_chart(
     >>> fig = create_growth_waterfall_chart(df, ticker='AAPL')
     >>> fig.show()
     """
-    growth_cols = [
+    # Waterfall-specific growth columns — resolved from catalog fallbacks
+    _waterfall_cols = [
         "revenue_growth_yoy",
         "ebitda_growth_yoy",
         "operating_income_growth",
         "net_income_growth_yoy",
         "eps_yoy_growth",
     ]
+    _catalog_cols = columns_for_viz("growth_analysis")
+    growth_cols = [c for c in _catalog_cols if c in _waterfall_cols] or _waterfall_cols
     available_cols = []
     for col in growth_cols:
         rc = resolve_column(df, col)
@@ -105,9 +109,6 @@ def create_growth_waterfall_chart(
     # Build waterfall data
     labels = [METRIC_LABELS.get(col, col) for col in available_cols]
     vals = [values.get(col, 0) for col in available_cols]
-
-    # Color based on positive/negative
-    colors = ["#00A878" if v >= 0 else "#E63946" for v in vals]
 
     fig = go.Figure(
         go.Waterfall(
@@ -162,13 +163,16 @@ def create_growth_consistency_matrix(
     >>> fig = create_growth_consistency_matrix(df, group_col='sector')
     >>> fig.show()
     """
-    growth_cols = [
+    # Consistency matrix columns — resolved from catalog fallbacks
+    _consistency_cols = [
         "revenue_growth_yoy",
         "revenue_cagr_3y",
         "revenue_cagr_5y",
         "eps_yoy_growth",
         "eps_cagr_3y",
     ]
+    _catalog_cols = columns_for_viz("growth_analysis")
+    growth_cols = [c for c in _catalog_cols if c in _consistency_cols] or _consistency_cols
     available_cols = []
     for col in growth_cols:
         rc = resolve_column(df, col)

@@ -8,6 +8,9 @@
   <component name="ProjectRootManager" version="2" languageLevel="JDK_25" project-jdk-name="Python 3.14 (PML_Finance_Project)" project-jdk-type="Python SDK">
     <output url="file://$PROJECT_DIR$/sdk_ouputs" />
   </component>
+  <component name="PyCharmDSProjectLayout">
+    <option name="id" value="JupyterRightHiddenStructureLayout" />
+  </component>
   <component name="RuffConfiguration">
     <option name="enabled" value="true" />
   </component>

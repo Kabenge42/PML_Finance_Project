@@ -210,7 +210,7 @@ class PMLConfig:
         if not path.exists():
             raise FileNotFoundError(f"Config file not found: {path}")
 
-        with open(path, "r") as f:
+        with open(path) as f:
             data = json.load(f)
 
         return cls(**data)
@@ -229,7 +229,7 @@ class PMLConfig:
         if not path.exists():
             raise FileNotFoundError(f"Config file not found: {path}")
 
-        with open(path, "r") as f:
+        with open(path) as f:
             data = yaml.safe_load(f)
 
         return cls(**data)
@@ -267,7 +267,7 @@ class PMLConfig:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(path, "w") as f:
-            yaml.dump(self.to_dict(), f, default_flow_style=False)
+            yaml.dump(self.to_dict(), f)
 
         logger.info(f"Configuration saved to {path}")
 

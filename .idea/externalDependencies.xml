@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ExternalDependencies">
+    <plugin id="Pythonid" />
+    <plugin id="com.intellij.ml.llm" />
+    <plugin id="intellij.jupyter" />
+    <plugin id="mobi.hsz.idea.gitignore" />
+    <plugin id="org.intellij.plugins.markdown" />
+    <plugin id="org.jetbrains.junie" />
+    <plugin id="org.jetbrains.plugins.terminal" />
+    <plugin id="ru.adelf.idea.dotenv" />
+  </component>
+</project>

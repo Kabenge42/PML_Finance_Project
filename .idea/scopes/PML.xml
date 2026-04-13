@@ -1,0 +1,3 @@
+<component name="DependencyValidationManager">
+  <scope name="PML" pattern="(!file[PML_Finance_Project]:*||file[PML_Finance_Project]:*/)&amp;&amp;!ext[&lt; Python 3.14 (PML_Finance_Project) &gt;]:*" />
+</component>

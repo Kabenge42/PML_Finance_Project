@@ -14,6 +14,7 @@ This module provides advanced statistical analysis including:
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -62,6 +63,12 @@ def _normal_normal_conjugate_posterior(
     tuple[float, float]
         (posterior_mean, posterior_var)
     """
+    if sample_var == 0 and prior_var == 0:
+        return prior_mean, 0.0
+    if prior_var == 0:
+        return prior_mean, 0.0
+    if sample_var == 0:
+        return sample_mean, 0.0
     posterior_var = 1.0 / (1.0 / prior_var + n / sample_var)
     posterior_mean = posterior_var * (prior_mean / prior_var + n * sample_mean / sample_var)
     return posterior_mean, posterior_var
@@ -254,7 +261,7 @@ class BayesianTechnicalResampler:
         prior_return_mean: float = 0.05,
         prior_return_std: float = 0.20,
         n_posterior_samples: int = 4000,
-        n_chains: int = 4,
+        n_chains: int = 8,
         random_seed: int = 42,
     ):
         self.prior_return_mean = prior_return_mean
@@ -599,52 +606,85 @@ def bayesian_category_analysis(
         if feature not in df.columns:
             continue
 
-        data = df[feature].dropna()
-        if len(data) < 50:
-            continue
+        try:
+            data = df[feature].dropna()
+            if len(data) < 50:
+                continue
 
-        n = len(data)
-        sample_mean = data.mean()
-        sample_var = data.var()
+            n = len(data)
+            sample_mean = data.mean()
+            sample_var = data.var()
 
-        # Posterior parameters (Normal-Normal conjugate)
-        prior_var = prior_std**2
-        posterior_mean, posterior_var = _normal_normal_conjugate_posterior(
-            sample_mean,
-            sample_var,
-            n,
-            prior_mean,
-            prior_var,
-        )
-        posterior_std = np.sqrt(posterior_var)
+            # Skip features with near-zero variance (constant or degenerate data)
+            if not np.isfinite(sample_var) or sample_var < 1e-12:
+                logger.debug(
+                    "Skipping feature %s: near-zero or invalid variance (%.2e)",
+                    feature,
+                    sample_var,
+                )
+                continue
 
-        # 95% Credible Interval
-        ci_low = posterior_mean - 1.96 * posterior_std
-        ci_high = posterior_mean + 1.96 * posterior_std
-
-        # Probability that true mean > 0
-        prob_positive = 1 - stats.norm.cdf(0, posterior_mean, posterior_std)
-
-        # Generate posterior samples for downstream use
-        samples = np.random.normal(posterior_mean, posterior_std, 4000)
-
-        feature_result = {
-            "n_obs": n,
-            "sample_mean": sample_mean,
-            "sample_std": np.sqrt(sample_var),
-            "posterior_mean": posterior_mean,
-            "posterior_std": posterior_std,
-            "ci_95_low": ci_low,
-            "ci_95_high": ci_high,
-            "prob_positive": prob_positive,
-        }
-
-        if ARVIZ_AVAILABLE and az is not None:
-            feature_result["inference_data"] = az.from_dict(
-                posterior={"mu": samples.reshape(1, -1)},  # single chain
+            # Posterior parameters (Normal-Normal conjugate)
+            prior_var = prior_std**2
+            posterior_mean, posterior_var = _normal_normal_conjugate_posterior(
+                sample_mean,
+                sample_var,
+                n,
+                prior_mean,
+                prior_var,
             )
+            posterior_std = np.sqrt(posterior_var)
 
-        results[feature] = feature_result
+            # Skip features with zero / near-zero posterior variance
+            if posterior_std < 1e-12:
+                logger.debug(
+                    "Skipping feature %s: near-zero posterior std (%.2e)",
+                    feature,
+                    posterior_std,
+                )
+                continue
+
+            # 95% Credible Interval
+            ci_low = posterior_mean - 1.96 * posterior_std
+            ci_high = posterior_mean + 1.96 * posterior_std
+
+            # Probability that true mean > 0
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                prob_positive = 1 - stats.norm.cdf(0, posterior_mean, posterior_std)
+
+            if not np.isfinite(prob_positive):
+                prob_positive = 0.5
+
+            # Generate posterior samples for downstream use
+            samples = np.random.normal(posterior_mean, posterior_std, 4000)
+
+            feature_result = {
+                "n_obs": n,
+                "sample_mean": sample_mean,
+                "sample_std": np.sqrt(sample_var),
+                "posterior_mean": posterior_mean,
+                "posterior_std": posterior_std,
+                "ci_95_low": ci_low,
+                "ci_95_high": ci_high,
+                "prob_positive": prob_positive,
+            }
+
+            if ARVIZ_AVAILABLE and az is not None:
+                feature_result["inference_data"] = az.from_dict(
+                    posterior={"mu": samples.reshape(1, -1)},  # single chain
+                )
+
+            results[feature] = feature_result
+
+        except Exception as e:
+            logger.warning(
+                "Bayesian analysis failed for feature %s in %s: %s",
+                feature,
+                category_name,
+                e,
+            )
+            continue
 
     return results
 
@@ -694,6 +734,15 @@ def metropolis_hastings_sampler(
     data_mean = np.mean(data)
     data_std = np.std(data)
     n = len(data)
+
+    # Guard against zero variance (constant data) to prevent divide-by-zero
+    if data_std == 0:
+        logger.debug(
+            "metropolis_hastings_sampler: data has zero variance (all values identical). "
+            "Returning constant samples at data mean=%.4f.",
+            data_mean,
+        )
+        return np.full(n_samples, data_mean), 0.0
 
     # Initialize
     current = data_mean
@@ -867,8 +916,11 @@ def hierarchical_mcmc_by_sector(
         sector_names = list(results.keys())
         sector_samples = [results[s]["samples"] for s in sector_names]
         try:
+            # Shape: (1 chain, n_samples draws, n_sectors) so ArviZ
+            # correctly maps the "sector" dimension.
+            stacked = np.stack(sector_samples, axis=-1)[np.newaxis, :]
             idata = az.from_dict(
-                posterior={"sector_mu": np.stack(sector_samples)},
+                posterior={"sector_mu": stacked},
                 coords={"sector": sector_names},
                 dims={"sector_mu": ["sector"]},
             )
@@ -1071,8 +1123,9 @@ def hierarchical_mcmc_multi_level(
         # Collect for InferenceData
         if level_results:
             names = list(level_results.keys())
+            # Shape: (n_groups, n_samples) → (1 chain, n_samples draws, n_groups)
             stacked = np.stack([level_results[s]["samples"] for s in names])
-            all_samples_for_idata[f"{col}_mu"] = stacked
+            all_samples_for_idata[f"{col}_mu"] = stacked.T[np.newaxis, :, :]
             all_coords_for_idata[col] = names
 
     result: dict = {
@@ -1140,70 +1193,104 @@ def fit_distributions_by_category(
         if feature not in df.columns:
             continue
 
-        data = df[feature].dropna()
-        if len(data) < 100:
+        try:
+            data = df[feature].dropna()
+            if len(data) < 100:
+                continue
+
+            # Skip features with near-zero variance (constant / degenerate data)
+            data_var = data.var()
+            if not np.isfinite(data_var) or data_var < 1e-12:
+                logger.debug(
+                    "Skipping distribution fit for %s: near-zero variance (%.2e)",
+                    feature,
+                    data_var,
+                )
+                continue
+
+            # Remove extreme outliers for fitting
+            q01, q99 = data.quantile([0.01, 0.99])
+            data_clean = data[(data >= q01) & (data <= q99)]
+
+            if len(data_clean) < 30:
+                continue
+
+            # Fit distributions — suppress scipy RuntimeWarnings for
+            # near-identical data (catastrophic cancellation, divide by zero)
+            fits = {}
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+
+                # Normal
+                try:
+                    params_norm = norm.fit(data_clean)
+                    ll_norm = norm.logpdf(data_clean, *params_norm).sum()
+                    if np.isfinite(ll_norm):
+                        fits["normal"] = {"params": params_norm, "aic": 2 * 2 - 2 * ll_norm}
+                except (ValueError, RuntimeError):
+                    pass
+
+                # Student's t
+                try:
+                    params_t = t.fit(data_clean)
+                    ll_t = t.logpdf(data_clean, *params_t).sum()
+                    if np.isfinite(ll_t):
+                        fits["student_t"] = {"params": params_t, "aic": 2 * 3 - 2 * ll_t}
+                except (ValueError, RuntimeError):
+                    pass
+
+                # Skew Normal
+                try:
+                    params_skew = skewnorm.fit(data_clean)
+                    ll_skew = skewnorm.logpdf(data_clean, *params_skew).sum()
+                    if np.isfinite(ll_skew):
+                        fits["skew_normal"] = {
+                            "params": params_skew,
+                            "aic": 2 * 3 - 2 * ll_skew,
+                        }
+                except (ValueError, RuntimeError):
+                    pass
+
+            if not fits:
+                continue
+
+            # Select best fit by AIC
+            best_dist = min(fits.keys(), key=lambda k: fits[k]["aic"])
+            best_params = fits[best_dist]["params"]
+
+            # Simulate from best distribution
+            if best_dist == "normal":
+                simulations = norm.rvs(*best_params, size=n_simulations)
+            elif best_dist == "student_t":
+                simulations = t.rvs(*best_params, size=n_simulations)
+            else:
+                simulations = skewnorm.rvs(*best_params, size=n_simulations)
+
+            # Calculate VaR and CVaR
+            var_5 = np.percentile(simulations, 5)
+            tail = simulations[simulations <= var_5]
+            cvar_5 = tail.mean() if len(tail) > 0 else var_5
+
+            results[feature] = {
+                "best_distribution": best_dist,
+                "params": best_params,
+                "aic": fits[best_dist]["aic"],
+                "simulated_mean": simulations.mean(),
+                "simulated_std": simulations.std(),
+                "var_5_pct": var_5,
+                "cvar_5_pct": cvar_5,
+                "simulations": simulations,
+            }
+
+        except Exception as e:
+            logger.warning(
+                "Distribution fitting failed for feature %s in %s: %s",
+                feature,
+                category,
+                e,
+            )
             continue
-
-        # Remove extreme outliers for fitting
-        q01, q99 = data.quantile([0.01, 0.99])
-        data_clean = data[(data >= q01) & (data <= q99)]
-
-        # Fit distributions
-        fits = {}
-
-        # Normal
-        try:
-            params_norm = norm.fit(data_clean)
-            ll_norm = norm.logpdf(data_clean, *params_norm).sum()
-            fits["normal"] = {"params": params_norm, "aic": 2 * 2 - 2 * ll_norm}
-        except (ValueError, RuntimeError):
-            pass
-
-        # Student's t
-        try:
-            params_t = t.fit(data_clean)
-            ll_t = t.logpdf(data_clean, *params_t).sum()
-            fits["student_t"] = {"params": params_t, "aic": 2 * 3 - 2 * ll_t}
-        except (ValueError, RuntimeError):
-            pass
-
-        # Skew Normal
-        try:
-            params_skew = skewnorm.fit(data_clean)
-            ll_skew = skewnorm.logpdf(data_clean, *params_skew).sum()
-            fits["skew_normal"] = {"params": params_skew, "aic": 2 * 3 - 2 * ll_skew}
-        except (ValueError, RuntimeError):
-            pass
-
-        if not fits:
-            continue
-
-        # Select best fit by AIC
-        best_dist = min(fits.keys(), key=lambda k: fits[k]["aic"])
-        best_params = fits[best_dist]["params"]
-
-        # Simulate from best distribution
-        if best_dist == "normal":
-            simulations = norm.rvs(*best_params, size=n_simulations)
-        elif best_dist == "student_t":
-            simulations = t.rvs(*best_params, size=n_simulations)
-        else:
-            simulations = skewnorm.rvs(*best_params, size=n_simulations)
-
-        # Calculate VaR and CVaR
-        var_5 = np.percentile(simulations, 5)
-        cvar_5 = simulations[simulations <= var_5].mean()
-
-        results[feature] = {
-            "best_distribution": best_dist,
-            "params": best_params,
-            "aic": fits[best_dist]["aic"],
-            "simulated_mean": simulations.mean(),
-            "simulated_std": simulations.std(),
-            "var_5_pct": var_5,
-            "cvar_5_pct": cvar_5,
-            "simulations": simulations,
-        }
 
     return results
 

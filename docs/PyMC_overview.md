@@ -1,0 +1,1197 @@
+{
+"cells": [
+{
+"cell_type": "markdown",
+"id": "78d5ca5f4a0415ed",
+"metadata": {},
+"source": [
+"(pymc_overview)=\n",
+"\n",
+"# Introductory Overview of PyMC\n",
+"\n",
+"Note: This text is partly based on the [PeerJ CS publication on PyMC](https://peerj.com/articles/cs-55/) by John Salvatier, Thomas V. Wiecki, and Christopher Fonnesbeck.\n",
+"\n",
+":::{post} 21 December, 2021\n",
+":tags: exploratory analysis, glm, mcmc, pymc.Data, pymc.Deterministic, pymc.DiscreteUniform, pymc.Exponential, pymc.HalfStudentT, pymc.InverseGamma, pymc.HalfNormal, pymc.Model, pymc.Normal, pymc.Poisson, pymc.Slice, pymc.StudentT\n",
+":category: beginner\n",
+":::"
+]
+},
+{
+"cell_type": "markdown",
+"id": "75e8b5a8c41f0fc1",
+"metadata": {},
+"source": [
+"## Abstract\n",
+"\n",
+"Probabilistic Programming allows for automatic Bayesian inference on user-defined probabilistic models. Gradient-based algorithms for Markov chain Monte Carlo (MCMC) sampling, known as Hamiltonian Monte Carlo (HMC), allow inference on increasingly complex models but requires gradient information that is often not trivial to calculate. PyMC is an open source probabilistic programming framework written in Python that uses PyTensor to compute gradients via automatic differentiation, as well as compiling probabilistic programs on-the-fly to one of a suite of computational backends for increased speed. PyMC allows for model specification in Python code, rather than in a domain-specific language, making it easy to learn, customize, and debug. This paper is a tutorial-style introduction to this software package for those already somewhat familiar with Bayesian statistics.\n",
+"\n",
+"## Introduction\n",
+"\n",
+"Probabilistic programming (PP) allows flexible specification of Bayesian statistical models in code. PyMC is a PP framework with an intuitive and readable, yet powerful, syntax that is close to the natural syntax statisticians use to describe models. It features next-generation Markov chain Monte Carlo (MCMC) sampling algorithms such as the No-U-Turn Sampler (NUTS; Hoffman, 2014), a self-tuning variant of Hamiltonian Monte Carlo (HMC; Duane, 1987). This class of samplers works well on high-dimensional and complex posterior distributions and allows many complex models to be fit without specialized knowledge about fitting algorithms. HMC and NUTS take advantage of gradient information from the likelihood to achieve much faster convergence than traditional sampling methods, especially for larger models. NUTS also has several self-tuning strategies for adaptively setting the tunable parameters of Hamiltonian Monte Carlo, which means you usually don't need to have specialized knowledge about how the algorithms work.\n",
+"\n",
+"Probabilistic programming in Python confers a number of advantages including multi-platform compatibility, an expressive yet clean and readable syntax, easy integration with other scientific libraries, and extensibility via C, C++, Fortran or Cython. These features make it relatively straightforward to write and use custom statistical distributions, samplers and transformation functions, as required by Bayesian analysis.\n",
+"\n",
+"While most of PyMC's user-facing features are written in pure Python, it leverages PyTensor (a fork of the Theano project) to transparently transcode models to C and compile them to machine code, thereby boosting performance. PyTensor is a library that allows expressions to be defined using generalized vector data structures called
+*tensors*, which are tightly integrated with the popular NumPy {class}
+`~numpy.ndarray` data structure, and similarly allow for broadcasting and advanced indexing, just as NumPy arrays do. PyTensor also automatically optimizes the likelihood's computational graph for speed and allows for compilation to a suite of computational backends, including Jax and Numba.\n",
+"\n",
+"Here, we present a primer on the use of PyMC for solving general Bayesian statistical inference and prediction problems. We will first see the basics of how to use PyMC, motivated by a simple example: installation, data creation, model definition, model fitting and posterior analysis. Then we will cover two case studies and use them to show how to define and fit more sophisticated models. Finally we will discuss a couple of other useful features: custom distributions and arbitrary deterministic nodes."
+]
+},
+{
+"cell_type": "markdown",
+"id": "b64b1b4a89e096ad",
+"metadata": {},
+"source": [
+"## Installation\n",
+"\n",
+"Running PyMC requires a relatively recent Python interpreter, preferably version 3.8 or greater. A complete Python installation for macOS, Linux and Windows can most easily be obtained by downloading and installing the free [
+`Anaconda Python Distribution`](https://store.continuum.io/cshop/anaconda/) by ContinuumIO or the open source [Miniforge](https://github.com/conda-forge/miniforge).\n",
+"\n",
+"Once Python is installed, follow the {ref}`installation guide <installation>` on the PyMC documentation site.\n",
+"\n",
+"PyMC is distributed under the liberal [Apache License 2.0](https://github.com/pymc-devs/pymc/blob/master/LICENSE). On the GitHub site, users may also report bugs and other issues, as well as contribute documentation or code to the project, which we actively encourage."
+]
+},
+{
+"cell_type": "markdown",
+"id": "349df4053f2a9e97",
+"metadata": {},
+"source": [
+"## A Motivating Example: Linear Regression\n",
+"\n",
+"To introduce model definition, fitting, and posterior analysis, we first consider a simple Bayesian linear regression model with normally-distributed priors for the parameters. We are interested in predicting outcomes $Y$ as normally-distributed observations with an expected value $\\mu$ that is a linear function of two predictor variables, $X_1$ and $X_2$:\n",
+"\n",
+"$$\\begin{aligned}\n",
+"Y &\\sim \\mathcal{N}(\\mu, \\sigma^2) \\\\\n",
+"\\mu &= \\alpha + \\beta_1 X_1 + \\beta_2 X_2\n",
+"\\end{aligned}$$\n",
+"\n",
+"where $\\alpha$ is the intercept, and $\\beta_i$ is the coefficient for covariate $X_i$, while $\\sigma$ represents the observation error. Since we are constructing a Bayesian model, we must assign a prior distribution to the unknown variables in the model. We choose zero-mean normal priors with variance of 100 for both regression coefficients, which corresponds to
+*weak* information regarding the true parameter values. We choose a half-normal distribution (normal distribution bounded at zero) as the prior for $\\sigma$.\n",
+"\n",
+"$$\\begin{aligned}\n",
+"\\alpha &\\sim \\mathcal{N}(0, 100) \\\\\n",
+"\\beta_i &\\sim \\mathcal{N}(0, 100) \\\\\n",
+"\\sigma &\\sim \\lvert\\mathcal{N}(0, 1){\\rvert}\n",
+"\\end{aligned}$$\n",
+"\n",
+"### Generating data\n",
+"\n",
+"We can simulate some artificial data from this model using only NumPy's {mod}
+`~numpy.random` module, and then use PyMC to try to recover the corresponding parameters. We are intentionally generating the data to closely correspond to the PyMC model structure."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "2465423f99ec5388",
+"metadata": {},
+"outputs": [],
+"source": [
+"import arviz as az\n",
+"import matplotlib.pyplot as plt\n",
+"import numpy as np\n",
+"import pandas as pd"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "8bd1166606e7afd1",
+"metadata": {},
+"outputs": [],
+"source": [
+"%config InlineBackend.figure_format = 'retina'\n",
+"# Initialize random number generator\n",
+"RANDOM_SEED = 8927\n",
+"rng = np.random.default_rng(RANDOM_SEED)\n",
+"az.style.use(\"arviz-darkgrid\")"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "9558f1c3501c79fe",
+"metadata": {},
+"outputs": [],
+"source": [
+"# True parameter values\n",
+"alpha, sigma = 1, 1\n",
+"beta = [1, 2.5]\n",
+"\n",
+"# Size of dataset\n",
+"size = 100\n",
+"\n",
+"# Predictor variable\n",
+"X1 = np.random.randn(size)\n",
+"X2 = np.random.randn(size) * 0.2\n",
+"\n",
+"# Simulate outcome variable\n",
+"Y = alpha + beta[0] * X1 + beta[1] * X2 + rng.normal(size=size) * sigma"
+]
+},
+{
+"cell_type": "markdown",
+"id": "daef77a46a02b462",
+"metadata": {},
+"source": "Here is what the simulated data look like. We use the plotting library matplotlib to visualize the data."
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "d5968bb22ebe3456",
+"metadata": {},
+"outputs": [],
+"source": [
+"fig, axes = plt.subplots(1, 2, sharex=True, figsize=(10, 4))\n",
+"axes[0].scatter(X1, Y, alpha=0.6)\n",
+"axes[1].scatter(X2, Y, alpha=0.6)\n",
+"axes[0].set_ylabel(\"Y\")\n",
+"axes[0].set_xlabel(\"X1\")\n",
+"axes[1].set_xlabel(\"X2\");"
+]
+},
+{
+"cell_type": "markdown",
+"id": "d65f2982dec192a0",
+"metadata": {},
+"source": [
+"### Model Specification\n",
+"\n",
+"Specifying this model in PyMC is straightforward because the syntax is similar to the statistical notation. For the most part, each line of Python code corresponds to a line in the model notation above.\n",
+"\n",
+"First, we import PyMC. We use the convention of importing it as `pm`."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "be68cfb899d827ce",
+"metadata": {},
+"outputs": [],
+"source": [
+"import pymc as pm\n",
+"\n",
+"print(f\"Running on PyMC v{pm.__version__}\")"
+]
+},
+{
+"cell_type": "markdown",
+"id": "3cdd1382830bb067",
+"metadata": {},
+"source": "Now we build our model, which we will present in full first, then explain each part line-by-line."
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "4dcdbb894e4d5e49",
+"metadata": {},
+"outputs": [],
+"source": [
+"basic_model = pm.Model()\n",
+"\n",
+"with basic_model:\n",
+"    # Priors for unknown model parameters\n",
+"    alpha = pm.Normal(\"alpha\", mu=0, sigma=10)\n",
+"    beta = pm.Normal(\"beta\", mu=0, sigma=10, shape=2)\n",
+"    sigma = pm.HalfNormal(\"sigma\", sigma=1)\n",
+"\n",
+"    # Expected value of outcome\n",
+"    mu = alpha + beta[0] * X1 + beta[1] * X2\n",
+"\n",
+"    # Likelihood (sampling distribution) of observations\n",
+"    Y_obs = pm.Normal(\"Y_obs\", mu=mu, sigma=sigma, observed=Y)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "6e593d76a3ae018c",
+"metadata": {},
+"source": [
+"The first line,\n",
+"\n",
+"```python\n",
+    "basic_model = pm.Model()\n",
+    "```\n",
+"\n",
+"creates a new {class}`~pymc.Model` object which is a container for the model random variables.\n",
+"\n",
+"Following instantiation of the model, the subsequent specification of the model components is performed inside a
+`with` statement:\n",
+"\n",
+"```\n",
+    "with basic_model:\n",
+    "```\n",
+"This creates a *context manager*, with our
+`basic_model` as the context, that includes all statements until the indented block ends. This means all PyMC objects introduced in the indented code block below the
+`with` statement are added to the model behind the scenes. Absent this context manager idiom, we would be forced to manually associate each of the variables with
+`basic_model` right after we create them. If you try to create a new random variable without a
+`with model:` statement, it will raise an error since there is no obvious model for the variable to be added to.\n",
+"\n",
+"The first three statements in the context manager:\n",
+"\n",
+"```python\n",
+    "alpha = pm.Normal('alpha', mu=0, sigma=10)\n",
+    "beta = pm.Normal('beta', mu=0, sigma=10, shape=2)\n",
+    "sigma = pm.HalfNormal('sigma', sigma=1)\n",
+    "```\n",
+"create **stochastic
+** random variables with normally-distributed prior distributions for the regression coefficients with a mean of 0 and standard deviation of 10, and a half-normal distribution for the standard deviation of the observations, $\\sigma$. These are stochastic because their values are partly determined by their parents in the dependency graph of random variables, which for priors are simple constants, and partly random (or stochastic).\n",
+"\n",
+"We call the
+`pm.Normal` constructor to create a random variable to use as a normal prior. The first argument is always the
+*name* of the random variable, which should almost always match the name of the Python variable being assigned to, since it is sometimes used to retrieve the variable from the model for summarizing output. The remaining required arguments for a stochastic object are the parameters, in this case
+`mu`, the mean, and
+`sigma`, the standard deviation, which we assign hyperparameter values for the model. In general, a distribution's parameters are values that determine the location, shape or scale of the random variable, depending on the parameterization of the distribution. Most commonly-used distributions, such as
+`Beta`, `Exponential`, `Categorical`, `Gamma`, `Binomial` and many others, are available in PyMC.\n",
+"\n",
+"The `beta` variable has an additional `shape` argument to denote it as a vector-valued parameter of size 2. The
+`shape` argument is available for all distributions and specifies the length or shape of the random variable, but is optional for scalar variables, since it defaults to a value of one. It can be an integer to specify an array, or a tuple to specify a multidimensional array (
+*e.g.* `shape=(5,7)` makes a random variable that takes on 5 by 7 matrix values).\n",
+"\n",
+"Detailed notes about distributions, sampling methods and other PyMC functions are available in the {ref}
+`API documentation <api>`."
+]
+},
+{
+"cell_type": "markdown",
+"id": "432877dae5dbfb5e",
+"metadata": {},
+"source": [
+"Having defined the priors, the next statement creates the expected value
+`mu` of the outcomes, specifying the linear relationship:\n",
+"\n",
+"```python\n",
+    "mu = alpha + beta[0]*X1 + beta[1]*X2\n",
+    "```\n",
+"This creates a **deterministic** random variable, which implies that its value is
+*completely* determined by its parents' values. That is, there is no uncertainty beyond that which is inherent in the parents' values. Here,
+`mu` is just the sum of the intercept `alpha` and the two products of the coefficients in
+`beta` and the predictor variables, whatever their values may be.\n",
+"\n",
+"PyMC random variables and data can be arbitrarily added, subtracted, divided, multiplied together and indexed-into to create new random variables. This allows for great model expressivity. Many common mathematical functions like
+`sum`, `sin`, `exp` and linear algebra functions like `dot` (for inner product) and
+`inv` (for inverse) are also provided.\n",
+"\n",
+"The final line of the model defines `Y_obs`, the sampling distribution of the outcomes in the dataset.\n",
+"\n",
+"```python\n",
+    "Y_obs = Normal('Y_obs', mu=mu, sigma=sigma, observed=Y)\n",
+    "```\n",
+"\n",
+"This is a special case of a stochastic variable that we call an **observed stochastic
+**, and represents the data likelihood of the model. It is identical to a standard stochastic, except that its
+`observed` argument, which passes the data to the variable, indicates that the values for this variable were observed, and should not be changed by any fitting algorithm applied to the model. The data can be passed in the form of either a {class}
+`~numpy.ndarray` or {class}`~pandas.DataFrame` object.\n",
+"\n",
+"Notice that, unlike for the priors of the model, the parameters for the normal distribution of
+`Y_obs` are not fixed values, but rather are the deterministic object `mu` and the stochastic
+`sigma`. This creates parent-child relationships between the likelihood and these two variables."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "de18057d6e21d7d7",
+"metadata": {},
+"outputs": [],
+"source": [
+"with basic_model:\n",
+"    # draw 1000 posterior samples\n",
+"    idata = pm.sample()"
+]
+},
+{
+"cell_type": "markdown",
+"id": "12a7966ad6363e34",
+"metadata": {},
+"source": "The {mod}`~pymc.sample` function runs the step method(s) assigned (or passed) to it for the given number of
+iterations and returns an {class}`~arviz.InferenceData` object containing the samples collected, along with other useful
+attributes like statistics of the sampling run and a copy of the observed data. Notice that `sample` generated a set of
+parallel chains, depending on how many compute cores are on your machine."
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "fc00a9d50c04f2e2",
+"metadata": {},
+"outputs": [],
+"source": [
+"idata"
+]
+},
+{
+"cell_type": "markdown",
+"id": "4a23afd87c80eba7",
+"metadata": {},
+"source": "The various attributes of the `InferenceData` object can be queried in a similar way to a `dict` containing a
+map from variable names to `numpy.array`s. For example, we can retrieve the sampling trace from the `alpha` latent
+variable by using the variable name as an index to the `idata.posterior` attribute. The first dimension of the returned
+array is the chain index, the second dimension is the sampling index, while the later dimensions match the shape of the
+variable. We can see the first 5 values for the `alpha` variable in each chain as follows:"
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "33524ca70c3e2f26",
+"metadata": {},
+"outputs": [],
+"source": [
+"idata.posterior[\"alpha\"].sel(draw=slice(0, 4))"
+]
+},
+{
+"cell_type": "markdown",
+"id": "756219f7e68cb3ad",
+"metadata": {},
+"source": "If we wanted to use the slice sampling algorithm to sample our parameters instead of NUTS (which was assigned
+automatically), we could have specified this as the `step` argument for `sample`."
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "2495c749470fa822",
+"metadata": {},
+"outputs": [],
+"source": [
+"with basic_model:\n",
+"    # instantiate sampler\n",
+"    step = pm.Slice()\n",
+"\n",
+"    # draw 5000 posterior samples\n",
+"    slice_idata = pm.sample(5000, step=step)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "b11682b46f57b62c",
+"metadata": {},
+"source": [
+"### Posterior analysis\n",
+"
+`PyMC`'s plotting and diagnostics functionalities are now taken care of by a dedicated, platform-agnostic package named {doc}
+`Arviz <arviz:index>`. A simple posterior plot can be created using {mod}`~arviz.plot_trace`."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "a9ab80052638d75d",
+"metadata": {},
+"outputs": [],
+"source": [
+"az.plot_trace(idata, combined=True);"
+]
+},
+{
+"cell_type": "markdown",
+"id": "9d85672163f33b9a",
+"metadata": {},
+"source": [
+"The left column consists of a smoothed histogram (using kernel density estimation) of the marginal posteriors of each stochastic random variable while the right column contains the samples of the Markov chain plotted in sequential order. The
+`beta` variable, being vector-valued, produces two density plots and two trace plots, corresponding to both predictor coefficients.\n",
+"\n",
+"In addition, the {mod}`~arviz.summary` function provides a text-based output of common posterior statistics:"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "727e8fd810d89a04",
+"metadata": {},
+"outputs": [],
+"source": [
+"az.summary(idata, round_to=2)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "20f5cfeabe8a8d99",
+"metadata": {},
+"source": [
+"## Case study 1: Educational Outcomes for Hearing-impaired Children\n",
+"\n",
+"As a motivating example, we will use a dataset of educational outcomes for children with hearing impairment. Here, we are interested in determining factors that are associated with better or poorer learning outcomes."
+]
+},
+{
+"cell_type": "markdown",
+"id": "c1da1746a6a4cbea",
+"metadata": {},
+"source": [
+"### The Data\n",
+"\n",
+"This anonymized dataset is taken from the Listening and Spoken Language Data Repository (LSL-DR), an international data repository that tracks the demographics and longitudinal outcomes for children who have hearing loss and are enrolled in programs focused on supporting listening and spoken language development. Researchers are interested in discovering factors related to improvements in educational outcomes within these programs.\n",
+"\n",
+"There is a suite of available predictors, including:\n",
+"\n",
+"* gender (`male`)\n",
+"* number of siblings in the household (`siblings`)\n",
+"* index of family involvement (`family_inv`)\n",
+"* whether the primary household language is not English (`non_english`)\n",
+"* presence of a previous disability (`prev_disab`)\n",
+"* non-white race (`non_white`)\n",
+"* age at the time of testing (in months, `age_test`)\n",
+"* whether hearing loss is not severe (`non_severe_hl`)\n",
+"* whether the subject's mother obtained a high school diploma or better (`mother_hs`)\n",
+"* whether the hearing impairment was identified by 3 months of age (`early_ident`).\n",
+"\n",
+"The outcome variable is a standardized test score in one of several learning domains."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "fe645a13be952c2b",
+"metadata": {},
+"outputs": [],
+"source": [
+"test_scores = pd.read_csv(pm.get_data(\"test_scores.csv\"), index_col=0)\n",
+"test_scores.head()"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "b1de5e732cbdedd5",
+"metadata": {},
+"outputs": [],
+"source": [
+"test_scores[\"score\"].hist();"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "b7a6f0a4d97d9f07",
+"metadata": {},
+"outputs": [],
+"source": [
+"# Dropping missing values is a very bad idea in general, but we do so here for simplicity\n",
+"X = test_scores.dropna().astype(float)\n",
+"y = X.pop(\"score\")\n",
+"\n",
+"# Standardize the features\n",
+"X -= X.mean()\n",
+"X /= X.std()\n",
+"\n",
+"N, D = X.shape"
+]
+},
+{
+"cell_type": "markdown",
+"id": "2ecc5a90f2906f2c",
+"metadata": {},
+"source": [
+"### The Model\n",
+"\n",
+"This is a more realistic problem than the first regression example, as we are now dealing with a **multivariate
+regression** model. However, while there are several potential predictors in the LSL-DR dataset, it is difficult *a
+priori* to determine which ones are relevant for constructing an effective statistical model. There are a number of approaches for conducting variable selection, but a popular automated method is
+*regularization*, whereby ineffective covariates are shrunk towards zero via regularization (a form of penalization) if they do not contribute to predicting outcomes.\n",
+"\n",
+"You may have heard of regularization from machine learning or classical statistics applications, where methods like the lasso or ridge regression shrink parameters towards zero by applying a penalty to the size of the regression parameters. In a Bayesian context, we apply an appropriate prior distribution to the regression coefficients. One such prior is the
+*hierarchical regularized
+horseshoe*, which uses two regularization strategies, one global and a set of local parameters, one for each coefficient. The key to making this work is by selecting a long-tailed distribution as the shrinkage priors, which allows some to be nonzero, while pushing the rest towards zero.\n",
+"\n",
+"The horseshoe prior for each regression coefficient $\\beta_i$ looks like this:\n",
+"\n",
+"$$\\beta_i \\sim N\\left(0, \\tau^2 \\cdot \\tilde{\\lambda}_i^2\\right)$$\n",
+"\n",
+"where $\\sigma$ is the prior on the error standard deviation that will also be used for the model likelihood. Here, $\\tau$ is the global shrinkage parameter and $\\tilde{\\lambda}_i$ is the local shrinkage parameter. Let's start global: for the prior on $\\tau$ we will use a Half-StudentT distribution, which is a reasonable choice becuase it is heavy-tailed.\n",
+"\n",
+"$$\n",
+"\\tau \\sim \\textrm{Half-StudentT}_{2} \\left(\\frac{D_0}{D - D_0} \\cdot \\frac{\\sigma}{\\sqrt{N}}\\right).\n",
+"$$\n",
+"\n",
+"One catch is that the parameterization of the prior requires a pre-specified value $D_0$, which represents the true number of non-zero coefficients. Fortunately, a reasonable guess at this value is all that is required, and it need only be within an order of magnitude of the true number. Let's use half the number of predictors as our guess:"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "31447d4c18c9121b",
+"metadata": {},
+"outputs": [],
+"source": [
+"D0 = int(D / 2)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "13ce56ac267c16aa",
+"metadata": {},
+"source": [
+"Meanwhile, the local shrinkage parameters are defined by the ratio:\n",
+"\n",
+"$$\\tilde{\\lambda}_i^2 = \\frac{c^2 \\lambda_i^2}{c^2 + \\tau^2 \\lambda_i^2}.$$\n",
+"\n",
+"To complete this specification, we need priors on $\\lambda_i$ and $c$; as with the global shrinkage, we use a long-tailed $\\textrm{Half-StudentT}_5(1)$  on the $\\lambda_i$. We need $c^2$ to be strictly positive, but not necessarily long-tailed, so an inverse gamma prior on $c^2$, $c^2 \\sim \\textrm{InverseGamma}(1, 1)$ fits the bill.\n",
+"\n",
+"Finally, to allow the NUTS sampler to sample the $\\beta_i$ more efficiently, we will re-parameterize it as follows:\n",
+"\n",
+"$$\n",
+"\\begin{align*}\n",
+"    z_i\n",
+"        & \\sim N(0, 1), \\\\\n",
+"     \\beta_i\n",
+"         & = z_i \\cdot \\tau \\cdot \\tilde{\\lambda_i}.\n",
+"\\end{align*}\n",
+"$$\n",
+"\n",
+"You will run into this reparameterization a lot in practice.\n"
+]
+},
+{
+"cell_type": "markdown",
+"id": "cdfab9f973f56d45",
+"metadata": {},
+"source": [
+"### Model Specification\n",
+"\n",
+"Specifying the model in PyMC mirrors its statistical specification. This model employs a couple of new distributions: the {class}
+`~pymc.HalfStudentT` distribution for the $\\tau$ and $\\lambda$ priors, and the
+`InverseGamma` distribution for the $c^2$ variable.\n",
+"\n",
+"In PyMC, variables with purely positive priors like {class}
+`~pymc.InverseGamma` are transformed with a log transform. This makes sampling more robust. Behind the scenes, a variable in the unconstrained space (named
+`<variable-name>_log`) is added to the model for sampling. Variables with priors that constrain them on two sides, like {class}
+`~pymc.Beta` or {class}`~pymc.Uniform`, are also transformed to be unconstrained but with a log odds transform.\n",
+"\n",
+"We are also going to take advantage of named dimensions in PyMC and ArviZ by passing the input variable names into the model as coordinates called \"predictors\". This will allow us to pass this vector of names as a replacement for the
+`shape` integer argument in the vector-valued parameters. The model will then associate the appropriate name with each latent parameter that it is estimating. This is a little more work to set up, but will pay dividends later when we are working with our model output.\n",
+"\n",
+"Let's encode this model in PyMC:"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "24fe8ae924e0fb3f",
+"metadata": {},
+"outputs": [],
+"source": [
+"import pytensor.tensor as pt\n",
+"\n",
+"with pm.Model(coords={\"predictors\": X.columns.values}) as test_score_model:\n",
+"    # Prior on error SD\n",
+"    sigma = pm.HalfNormal(\"sigma\", 25)\n",
+"\n",
+"    # Global shrinkage prior\n",
+"    tau = pm.HalfStudentT(\"tau\", 2, D0 / (D - D0) * sigma / np.sqrt(N))\n",
+"    # Local shrinkage prior\n",
+"    lam = pm.HalfStudentT(\"lam\", 5, dims=\"predictors\")\n",
+"    c2 = pm.InverseGamma(\"c2\", 1, 1)\n",
+"    z = pm.Normal(\"z\", 0.0, 1.0, dims=\"predictors\")\n",
+"    # Shrunken coefficients\n",
+"    beta = pm.Deterministic(\n",
+"        \"beta\", z * tau * lam * pt.sqrt(c2 / (c2 + tau**2 * lam**2)), dims=\"predictors\"\n",
+"    )\n",
+"    # No shrinkage on intercept\n",
+"    beta0 = pm.Normal(\"beta0\", 100, 25.0)\n",
+"\n",
+"    scores = pm.Normal(\"scores\", beta0 + pt.dot(X.values, beta), sigma, observed=y.values)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "b96305074df5d872",
+"metadata": {},
+"source": [
+"Notice that we have wrapped the calculation of `beta` in a {class}
+`~pymc.Deterministic` PyMC class. You can read more about this in detail below, but this ensures that the values of this deterministic variable is retained in the sample trace.\n",
+"\n",
+"Also note that we have declared the {class}`~pymc.Model` name
+`test_score_model` in the first occurrence of the context manager, rather than splitting it into two lines, as we did for the first example.\n",
+"\n",
+"Once the model is complete, we can look at its structure using GraphViz, which plots the model graph. It's useful to ensure that the relationships in the model you have coded are correct, as it's easy to make coding mistakes."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "40a5550ec1eab5e8",
+"metadata": {},
+"outputs": [],
+"source": [
+"pm.model_to_graphviz(test_score_model)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "7852c60dd81f5596",
+"metadata": {},
+"source": "Before we proceed further, let's see what the model does before it sees any data. We can conduct *prior
+predictive sampling* to generate simulated data from the model. Then, let's compare these simulations to the actual test
+scores in the dataset."
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "aa95ed7440d95d5f",
+"metadata": {},
+"outputs": [],
+"source": [
+"with test_score_model:\n",
+"    prior_samples = pm.sample_prior_predictive(100)"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "29d68abbd92e0fa4",
+"metadata": {},
+"outputs": [],
+"source": [
+"az.plot_dist(\n",
+"    test_scores[\"score\"].values,\n",
+"    kind=\"hist\",\n",
+"    color=\"C1\",\n",
+"    hist_kwargs={\"alpha\": 0.6},\n",
+"    label=\"observed\",\n",
+")\n",
+"az.plot_dist(\n",
+"    prior_samples.prior_predictive[\"scores\"],\n",
+"    kind=\"hist\",\n",
+"    hist_kwargs={\"alpha\": 0.6},\n",
+"    label=\"simulated\",\n",
+")\n",
+"plt.xticks(rotation=45);"
+]
+},
+{
+"cell_type": "markdown",
+"id": "23b8dbce08d01691",
+"metadata": {},
+"source": "How do we know if this is reasonable or not? This requires some domain knowledge of the problem. Here, we are
+trying to predict the outcomes of test scores. If our model was predicting values in the thousands, or lots of negative
+values, while excluding scores that are plausible, then we have misspecified our model. You can see here that the
+support of the distribution of simulated data completely overlaps the support of the observed distribution of scores;
+this is a good sign! There are a few negative values and a few that are probably too large to be plausible, but nothing
+to worry about."
+},
+{
+"cell_type": "markdown",
+"id": "d0ad1f726ba9b41",
+"metadata": {},
+"source": [
+"### Model Fitting\n",
+"\n",
+"Now for the easy part: PyMC's \"Inference Button\" is the call to
+`sample`. We will let this model tune for a little longer than the default value (1000 iterations). This gives the NUTS sampler a little more time to tune itself adequately."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "abe7e5af25df99e0",
+"metadata": {},
+"outputs": [],
+"source": [
+"with test_score_model:\n",
+"    idata = pm.sample(1000, tune=2000, random_seed=42)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "60921cf8fc354237",
+"metadata": {},
+"source": "Notice that we have a few warnings here about divergences. These are samples where NUTS was not able to make
+a valid move across the posterior distribution, so the resulting points are probably not representative samples from the
+posterior. There aren't many in this example, so it's nothing to worry about, but let's go ahead and follow the advice
+and increase `target_accept` from its default value of 0.9 to 0.99."
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "c602eda9ef1b77e5",
+"metadata": {},
+"outputs": [],
+"source": [
+"with test_score_model:\n",
+"    idata = pm.sample(1000, tune=2000, random_seed=42, target_accept=0.99)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "3bdee1520a222a82",
+"metadata": {},
+"source": "Since the target acceptance rate is larger, the algorithm is being more conservative with its leapfrog steps,
+making them smaller. The price we pay for this is that each sample takes longer to complete. However, the warnings are
+now gone, and we have a clean posterior sample!"
+},
+{
+"cell_type": "markdown",
+"id": "d78b8304509402c6",
+"metadata": {},
+"source": [
+"#### Model Checking\n",
+"\n",
+"A simple first step in model checking is to visually inspect our samples by looking at the traceplot for the univariate latent parameters to check for obvious problems. These names can be passed to
+`plot_trace` in the `var_names` argument."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "320d08fabab21c3f",
+"metadata": {},
+"outputs": [],
+"source": [
+"az.plot_trace(idata, var_names=[\"tau\", \"sigma\", \"c2\"]);"
+]
+},
+{
+"cell_type": "markdown",
+"id": "e5c6f43ba0ed08e9",
+"metadata": {},
+"source": [
+"Do these look okay? Well, each of the densities on the left side for each parameter look pretty similar to the others, which means they have converged to the same posterior distribution (be it the correct one or not). The homogeneity of the trace plots on the right are also a good sign; there is no trend or pattern to the time series of sampled values. Note that
+`c2` and `tau` occasionally sample extreme values, but this is expected from heavy-tailed distributions.\n",
+"\n",
+"The next easy model-checking step is to see if the NUTS sampler performed as expected. An energy plot is a way of checking if the NUTS algorithm was able to adequately explore the posterior distribution. If it was not, one runs the risk of biased posterior estimates when parts of the posterior are not visited with adequate frequency. The plot shows two density estimates: one is the marginal energy distribution of the sampling run and the other is the distribution of the energy transitions between steps. This is all a little abstract, but all we are looking for is for the distributions to be similar to one another. Ours does not look too bad."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "20a5ff0ef324bedb",
+"metadata": {},
+"outputs": [],
+"source": [
+"az.plot_energy(idata);"
+]
+},
+{
+"cell_type": "markdown",
+"id": "97306d55a00084be",
+"metadata": {},
+"source": "Ultimately, we are interested in the estimates of `beta`, the set of predictor coefficients. Passing `beta`
+to `plot_trace` would generate a very crowded plot, so we will use `plot_forest` instead, which is designed to handle
+vector-valued parameters."
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "e8ae969d67dc0751",
+"metadata": {},
+"outputs": [],
+"source": [
+"az.plot_forest(idata, var_names=[\"beta\"], combined=True, hdi_prob=0.95, r_hat=True);"
+]
+},
+{
+"cell_type": "markdown",
+"id": "64dcb8433d382ece",
+"metadata": {},
+"source": "The posterior distribution of coefficients reveal some factors that appear to be important in predicting test
+scores. Family involvement (`family_inv`) is large and negative, meaning a larger score (which is related to poorer
+involvement) results in much worse test scores. On the other end, early identification of hearing impairment is
+positive, meaning that detecting a problem early results in better educational outcomes down the road, which is also
+intuitive. Notice that other variables, notably gender (`male`), age at testing (`age_test`), and the mother's
+educational status (`mother_hs`) have all been shrunk essentially to zero."
+},
+{
+"cell_type": "markdown",
+"id": "7e44c50026842a0d",
+"metadata": {},
+"source": [
+"## Case study 2: Coal mining disasters\n",
+"\n",
+"Consider the following time series of recorded coal mining disasters in the UK from 1851 to 1962 (Jarrett, 1979). The number of disasters is thought to have been affected by changes in safety regulations during this period. Unfortunately, we also have a pair of years with missing data, identified as missing by a
+`nan` in the pandas `Series`. These missing values will be automatically imputed by PyMC.\n",
+"\n",
+"Next we will build a model for this series and attempt to estimate when the change occurred. At the same time, we will see how to handle missing data, use multiple samplers and sample from discrete random variables."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "a718ccde312cde0f",
+"metadata": {},
+"outputs": [],
+"source": [
+"# fmt: off\n",
+"disaster_data = pd.Series(\n",
+"    [4, 5, 4, 0, 1, 4, 3, 4, 0, 6, 3, 3, 4, 0, 2, 6,\n",
+"    3, 3, 5, 4, 5, 3, 1, 4, 4, 1, 5, 5, 3, 4, 2, 5,\n",
+"    2, 2, 3, 4, 2, 1, 3, np.nan, 2, 1, 1, 1, 1, 3, 0, 0,\n",
+"    1, 0, 1, 1, 0, 0, 3, 1, 0, 3, 2, 2, 0, 1, 1, 1,\n",
+"    0, 1, 0, 1, 0, 0, 0, 2, 1, 0, 0, 0, 1, 1, 0, 2,\n",
+"    3, 3, 1, np.nan, 2, 1, 1, 1, 1, 2, 4, 2, 0, 0, 1, 4,\n",
+"    0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1]\n",
+")\n",
+"# fmt: on\n",
+"years = np.arange(1851, 1962)\n",
+"\n",
+"plt.plot(years, disaster_data, \"o\", markersize=8, alpha=0.4)\n",
+"plt.ylabel(\"Disaster count\")\n",
+"plt.xlabel(\"Year\");"
+]
+},
+{
+"cell_type": "markdown",
+"id": "2d179b8d0d945e7f",
+"metadata": {},
+"source": [
+"Occurrences of disasters in the time series is thought to follow a Poisson process with a large rate parameter in the early part of the time series, and from one with a smaller rate in the later part. We are interested in locating the change point in the series, which is perhaps related to changes in mining safety regulations.\n",
+"\n",
+"In our model,\n",
+"\n",
+"$$\n",
+"\\begin{aligned}\n",
+"  D_t &\\sim \\text{Pois}(r_t), r_t= \\begin{cases}\n",
+"   e, & \\text{if } t \\le s \\\\\n",
+"   l, & \\text{if } t \\gt s\n",
+"   \\end{cases} \\\\\n",
+"  s &\\sim \\text{Unif}(t_l, t_h)\\\\\n",
+"  e &\\sim \\text{exp}(1)\\\\\n",
+"  l &\\sim \\text{exp}(1)\n",
+"\\end{aligned}\n",
+"$$\n",
+"\n",
+"the parameters are defined as follows:\n",
+"   * $D_t$: The number of disasters in year $t$\n",
+"   * $r_t$: The rate parameter of the Poisson distribution of disasters in year $t$.\n",
+"   * $s$: The year in which the rate parameter changes (the switchpoint).\n",
+"   * $e$: The rate parameter before the switchpoint $s$.\n",
+"   * $l$: The rate parameter after the switchpoint $s$.\n",
+"   * $t_l$, $t_h$: The lower and upper boundaries of year $t$.\n",
+"\n",
+"This model is built much like our previous models. The major differences are the introduction of discrete variables with the Poisson and discrete-uniform priors and the novel form of the deterministic random variable
+`rate`."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "a7652bb6dd8e1cb2",
+"metadata": {},
+"outputs": [],
+"source": [
+"with pm.Model() as disaster_model:\n",
+"    switchpoint = pm.DiscreteUniform(\"switchpoint\", lower=years.min(), upper=years.max())\n",
+"\n",
+"    # Priors for pre- and post-switch rates number of disasters\n",
+"    early_rate = pm.Exponential(\"early_rate\", 1.0)\n",
+"    late_rate = pm.Exponential(\"late_rate\", 1.0)\n",
+"\n",
+"    # Allocate appropriate Poisson rates to years before and after current\n",
+"    rate = pm.math.switch(switchpoint >= years, early_rate, late_rate)\n",
+"\n",
+"    disasters = pm.Poisson(\"disasters\", rate, observed=disaster_data)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "a28e9bbc8aeb4d85",
+"metadata": {},
+"source": [
+"The logic for the rate random variable,\n",
+"```python\n",
+    "rate = switch(switchpoint >= year, early_rate, late_rate)\n",
+    "```\n",
+"is implemented using
+`switch`, a function that works like an if statement. It uses the first argument to switch between the next two arguments.\n",
+"\n",
+"Missing values are handled transparently by passing a NumPy {class}`~numpy.MaskedArray` or a {class}
+`~pandas.DataFrame` with NaN values to the
+`observed` argument when creating an observed stochastic random variable. Behind the scenes, another random variable,
+`disasters.missing_values` is created to model the missing values."
+]
+},
+{
+"cell_type": "markdown",
+"id": "6bbbda62d43ed8f0",
+"metadata": {},
+"source": "Unfortunately, because they are discrete variables and thus have no meaningful gradient, we cannot use NUTS
+for sampling `switchpoint` or the missing disaster observations. Instead, we will sample using a {class}
+`~pymc.Metropolis` step method, which implements adaptive Metropolis-Hastings, because it is designed to handle discrete
+values. PyMC automatically assigns the correct sampling algorithms."
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "f65a9b03a2ce9b3b",
+"metadata": {},
+"outputs": [],
+"source": [
+"with disaster_model:\n",
+"    idata = pm.sample(10000)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "c11be8e00e3ec075",
+"metadata": {},
+"source": "In the trace plot below we can see that there's about a 10 year span that's plausible for a significant
+change in safety, but a 5 year span that contains most of the probability mass. The distribution is jagged because of
+the jumpy relationship between the year switchpoint and the likelihood; the jaggedness is not due to sampling error."
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "c862747acd216c35",
+"metadata": {},
+"outputs": [],
+"source": [
+"axes_arr = az.plot_trace(idata)\n",
+"plt.draw()\n",
+"for ax in axes_arr.flatten():\n",
+"    if ax.get_title() == \"switchpoint\":\n",
+"        labels = [label.get_text() for label in ax.get_xticklabels()]\n",
+"        ax.set_xticklabels(labels, rotation=45, ha=\"right\")\n",
+"        break\n",
+"plt.draw()"
+]
+},
+{
+"cell_type": "markdown",
+"id": "c401f916584f94a0",
+"metadata": {},
+"source": [
+"Note that the
+`rate` random variable does not appear in the trace. That is fine in this case, because it is not of interest in itself. Remember from the previous example, we would trace the variable by wrapping it in a {class}
+`~pymc.Deterministic` class, and giving it a name.\n",
+"\n",
+"The following plot shows the switch point as an orange vertical line, together with its highest posterior density (HPD) as a semitransparent band. The dashed black line shows the accident rate."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "190ee80df1eb445a",
+"metadata": {},
+"outputs": [],
+"source": [
+"plt.figure(figsize=(10, 8))\n",
+"plt.plot(years, disaster_data, \".\", alpha=0.6)\n",
+"plt.ylabel(\"Number of accidents\", fontsize=16)\n",
+"plt.xlabel(\"Year\", fontsize=16)\n",
+"\n",
+"trace = idata.posterior.stack(draws=(\"chain\", \"draw\"))\n",
+"\n",
+"plt.vlines(trace[\"switchpoint\"].mean(), disaster_data.min(), disaster_data.max(), color=\"C1\")\n",
+"average_disasters = np.zeros_like(disaster_data, dtype=\"float\")\n",
+"for i, year in enumerate(years):\n",
+"    idx = year < trace[\"switchpoint\"]\n",
+"    average_disasters[i] = np.mean(np.where(idx, trace[\"early_rate\"], trace[\"late_rate\"]))\n",
+"\n",
+"sp_hpd = az.hdi(idata, var_names=[\"switchpoint\"])[\"switchpoint\"].values\n",
+"plt.fill_betweenx(\n",
+"    y=[disaster_data.min(), disaster_data.max()],\n",
+"    x1=sp_hpd[0],\n",
+"    x2=sp_hpd[1],\n",
+"    alpha=0.5,\n",
+"    color=\"C1\",\n",
+")\n",
+"plt.plot(years, average_disasters, \"k--\", lw=2);"
+]
+},
+{
+"cell_type": "markdown",
+"id": "bc585f5e692d74d4",
+"metadata": {},
+"source": [
+"## Arbitrary deterministics\n",
+"\n",
+"Due to its reliance on PyTensor, PyMC provides many mathematical functions and operators for transforming random variables into new random variables. However, the library of functions in PyTensor is not exhaustive, therefore PyTensor and PyMC provide functionality for creating arbitrary functions in pure Python, and including these functions in PyMC models. This is supported with the
+`as_op` function decorator.\n",
+"\n",
+"PyTensor needs to know the types of the inputs and outputs of a function, which are specified for `as_op` by
+`itypes` for inputs and `otypes` for outputs."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "50e0528ff3f0623a",
+"metadata": {},
+"outputs": [],
+"source": [
+"from pytensor.compile.ops import as_op\n",
+"\n",
+"\n",
+"@as_op(itypes=[pt.lscalar], otypes=[pt.lscalar])\n",
+"def crazy_modulo3(value):\n",
+"    if value > 0:\n",
+"        return value % 3\n",
+"    else:\n",
+"        return (-value + 1) % 3\n",
+"\n",
+"\n",
+"with pm.Model() as model_deterministic:\n",
+"    a = pm.Poisson(\"a\", 1)\n",
+"    b = crazy_modulo3(a)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "38caec886cbf9431",
+"metadata": {},
+"source": "An important drawback of this approach is that it is not possible for `pytensor` to inspect these functions
+in order to compute the gradient required for the Hamiltonian-based samplers. Therefore, it is not possible to use the
+HMC or NUTS samplers for a model that uses such an operator. However, it is possible to add a gradient if we inherit
+from {class}`~pytensor.Op` instead of using `as_op`. The PyMC example set
+includes [a more elaborate example of the usage of as_op](https://github.com/pymc-devs/pymc-examples/blob/main/examples/case_studies/disaster_model_theano_op.py)."
+},
+{
+"cell_type": "markdown",
+"id": "9444d0d580e524a8",
+"metadata": {},
+"source": [
+"## Arbitrary distributions\n",
+"\n",
+"Similarly, the library of statistical distributions in PyMC is not exhaustive, but PyMC allows for the creation of user-defined functions for an arbitrary probability distribution. For simple statistical distributions, the {class}
+`~pymc.CustomDist` class takes as an argument any function that calculates a log-probability $log(p(x))$. This function may employ other random variables in its calculation. Here is an example inspired by a blog post by Jake Vanderplas on which priors to use for a linear regression (Vanderplas, 2014).\n",
+"\n",
+"```python\n",
+    "import pytensor.tensor as pt\n",
+    "\n",
+    "with pm.Model() as model:\n",
+    "    alpha = pm.Uniform('intercept', -100, 100)\n",
+    "\n",
+    "    # Create variables with custom log-densities\n",
+    "    beta = pm.CustomDist('beta', logp=lambda value: -1.5 * pt.log(1 + value**2))\n",
+    "    eps = pm.CustomDist('eps', logp=lambda value: -pt.log(pt.abs_(value)))\n",
+    "\n",
+    "    # Create likelihood\n",
+    "    like = pm.Normal('y_est', mu=alpha + beta * X, sigma=eps, observed=Y)\n",
+    "```"
+]
+},
+{
+"cell_type": "markdown",
+"id": "fd02e4d9c03e0064",
+"metadata": {},
+"source": [
+"For more complex distributions, one can create a subclass of {class}`~pymc.Continuous` or {class}
+`~pymc.Discrete` and provide the custom
+`logp` function, as required. This is how the built-in distributions in PyMC are specified. As an example, fields like psychology and astrophysics have complex likelihood functions for particular processes that may require numerical approximation.\n",
+"\n",
+"Implementing the `beta` variable above as a `Continuous` subclass is shown below, along with an associated {class}
+`~pytensor.RandomVariable` object, an instance of which becomes an attribute of the distribution."
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "a8d3574572035fb",
+"metadata": {},
+"outputs": [],
+"source": [
+"class BetaRV(pt.random.op.RandomVariable):\n",
+"    name = \"beta\"\n",
+"    ndim_supp = 0\n",
+"    ndims_params = []\n",
+"    dtype = \"floatX\"\n",
+"\n",
+"    @classmethod\n",
+"    def rng_fn(cls, rng, size):\n",
+"        raise NotImplementedError(\"Cannot sample from beta variable\")\n",
+"\n",
+"\n",
+"beta = BetaRV()"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "be48285632c3ed50",
+"metadata": {},
+"outputs": [],
+"source": [
+"class Beta(pm.Continuous):\n",
+"    rv_op = beta\n",
+"\n",
+"    @classmethod\n",
+"    def dist(cls, mu=0, **kwargs):\n",
+"        mu = pt.as_tensor_variable(mu)\n",
+"        return super().dist([mu], **kwargs)\n",
+"\n",
+"    def logp(self, value):\n",
+"        mu = self.mu\n",
+"        return beta_logp(value - mu)\n",
+"\n",
+"\n",
+"def beta_logp(value):\n",
+"    return -1.5 * pt.log(1 + (value) ** 2)\n",
+"\n",
+"\n",
+"with pm.Model() as model:\n",
+"    beta = Beta(\"beta\", mu=0)"
+]
+},
+{
+"cell_type": "markdown",
+"id": "90a41c2722a90700",
+"metadata": {},
+"source": "If your logp cannot be expressed in PyTensor, you can decorate the function with `as_op` as follows:
+`@as_op(itypes=[pt.dscalar], otypes=[pt.dscalar])`. Note, that this will create a blackbox Python function that will be
+much slower and not provide the gradients necessary for e.g. NUTS."
+},
+{
+"cell_type": "markdown",
+"id": "8cb2133e79de8f02",
+"metadata": {},
+"source": [
+"## Discussion\n",
+"\n",
+"Probabilistic programming is an emerging paradigm in statistical learning, of which Bayesian modeling is an important sub-discipline. The signature characteristics of probabilistic programming--specifying variables as probability distributions and conditioning variables on other variables and on observations--makes it a powerful tool for building models in a variety of settings, and over a range of model complexity. Accompanying the rise of probabilistic programming has been a burst of innovation in fitting methods for Bayesian models that represent notable improvement over existing MCMC methods. Yet, despite this expansion, there are few software packages available that have kept pace with the methodological innovation, and still fewer that allow non-expert users to implement models.\n",
+"\n",
+"PyMC provides a probabilistic programming platform for quantitative researchers to implement statistical models flexibly and succinctly. A large library of statistical distributions and several pre-defined fitting algorithms allows users to focus on the scientific problem at hand, rather than the implementation details of Bayesian modeling. The choice of Python as a development language, rather than a domain-specific language, means that PyMC users are able to work interactively to build models, introspect model objects, and debug or profile their work, using a dynamic, high-level programming language that is easy to learn. The modular, object-oriented design of PyMC means that adding new fitting algorithms or other features is straightforward. In addition, PyMC comes with several features not found in most other packages, most notably Hamiltonian-based samplers as well as automatic transforms of constrained random variables which is only offered by Stan. Unlike Stan, however, PyMC supports discrete variables as well as non-gradient based sampling algorithms like Metropolis-Hastings and Slice sampling.\n",
+"\n",
+"Development of PyMC is an ongoing effort and several features are planned for future versions. Most notably, variational inference techniques are often more efficient than MCMC sampling, at the cost of generalizability. More recently, however, black-box variational inference algorithms have been developed, such as automatic differentiation variational inference (ADVI; Kucukelbir et al., 2017). This algorithm is slated for addition to PyMC. As an open-source scientific computing toolkit, we encourage researchers developing new fitting algorithms for Bayesian models to provide reference implementations in PyMC. Since samplers can be written in pure Python code, they can be implemented generally to make them work on arbitrary PyMC models, giving authors a larger audience to put their methods into use."
+]
+},
+{
+"cell_type": "markdown",
+"id": "b337d08b39f9455f",
+"metadata": {},
+"source": [
+"## References\n",
+"\n",
+"Bastien, F., Lamblin, P., Pascanu, R., Bergstra, J., Goodfellow, I., Bergeron, A., Bouchard, N., Warde-Farley, D., and Bengio, Y. (2012) “Theano: new features and speed improvements”. NIPS 2012 deep learning workshop.\n",
+"\n",
+"Bergstra, J., Breuleux, O., Bastien, F., Lamblin, P., Pascanu, R., Desjardins, G., Turian, J., Warde-Farley, D., and Bengio, Y. (2010) “Theano: A CPU and GPU Math Expression Compiler”. Proceedings of the Python for Scientific Computing Conference (SciPy) 2010. June 30 - July 3, Austin, TX\n",
+"\n",
+"Duane, S., Kennedy, A. D., Pendleton, B. J., and Roweth, D. (1987) “Hybrid Monte Carlo”, Physics Letters, vol. 195, pp. 216-222.\n",
+"\n",
+"Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler: Adaptively Setting Path Lengths in Hamiltonian Monte Carlo. The Journal of Machine Learning Research, 30.\n",
+"\n",
+"Jarrett, R.G. A note on the intervals between coal mining disasters. Biometrika, 66:191–193, 1979.\n",
+"\n",
+"[Kucukelbir A, Dustin Tran, Ranganath R, Gelman A, and Blei DM. Automatic differentiation variational inference, The Journal of Machine Learning Research. 18 , pp. 430-474.](http://arxiv.org/abs/1506.03431)\n",
+"\n",
+"Lunn, D.J., Thomas, A., Best, N., and Spiegelhalter, D. (2000) WinBUGS -- a Bayesian modelling framework: concepts, structure, and extensibility. Statistics and Computing, 10:325--337.\n",
+"\n",
+"Neal, R.M. Slice sampling. Annals of Statistics. (2003). doi:10.2307/3448413.\n",
+"Patil, A., D. Huard and C.J. Fonnesbeck. (2010) PyMC: Bayesian Stochastic Modelling in Python. Journal of Statistical Software, 35(4), pp. 1-81\n",
+"\n",
+"[Piironen, J., & Vehtari, A. (2017). Sparsity information and regularization in the horseshoe and other shrinkage priors.
+_Electronic Journal of
+Statistics_, 11(2), 5018-5051.](https://projecteuclid.org/journals/electronic-journal-of-statistics/volume-11/issue-2/Sparsity-information-and-regularization-in-the-horseshoe-and-other-shrinkage/10.1214/17-EJS1337SI.full)\n",
+"\n",
+"[Stan Development Team. (2014). Stan: A C++ Library for Probability and Sampling, Version 2.5.0.](http://mc-stan.org)\n",
+"\n",
+"[Vanderplas, Jake. \"Frequentism and Bayesianism IV: How to be a Bayesian in Python.\" Pythonic Perambulations. N.p., 14 Jun 2014. Web. 27 May. 2015.](https://jakevdp.github.io/blog/2014/06/14/frequentism-and-bayesianism-4-bayesian-in-python)\n"
+]
+},
+{
+"cell_type": "code",
+"execution_count": null,
+"id": "f3271f3e24c067ab",
+"metadata": {},
+"outputs": [],
+"source": [
+"%load_ext watermark\n",
+"%watermark -n -u -v -iv -w -p xarray"
+]
+}
+],
+"metadata": {},
+"nbformat": 4,
+"nbformat_minor": 5
+}

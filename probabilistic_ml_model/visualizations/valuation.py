@@ -24,13 +24,19 @@ from plotly.subplots import make_subplots
 
 from probabilistic_ml_model.visualizations._shared import (
     PLOTLY_TEMPLATE,
-    COLORS,
     create_no_data_figure,
     resolve_column,
 )
+from probabilistic_ml_model.data_utils.feature_catalog import columns_for_viz
 
-# Default valuation metrics for analysis
+# Default valuation metrics — derived from the catalog fallback list,
+# trimmed to the core multiples used by the radar/comparison charts.
+_CATALOG_VALUATION_COLS = columns_for_viz("valuation")
 DEFAULT_VALUATION_METRICS = [
+    c
+    for c in _CATALOG_VALUATION_COLS
+    if c in ("p_e_ratio", "p_b_ratio", "ev_ebitda_ratio", "ev_sales_ratio", "peg_ratio")
+] or [
     "p_e_ratio",
     "p_b_ratio",
     "ev_ebitda_ratio",
@@ -224,13 +230,12 @@ def create_valuation_distribution_dashboard(
 
     n_metrics = len(available_metrics)
     n_rows = n_metrics
-    n_cols = 2
+    n_cols = 1
 
     fig = make_subplots(
         rows=n_rows,
         cols=n_cols,
         subplot_titles=[METRIC_LABELS.get(m, m) for m in available_metrics],
-        vertical_spacing=0.06,
     )
 
     groups = df[group_col].dropna().unique()

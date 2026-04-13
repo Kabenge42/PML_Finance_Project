@@ -30,6 +30,10 @@ from probabilistic_ml_model.visualizations._shared import (
     create_no_data_figure,
     resolve_column,
 )
+from probabilistic_ml_model.data_utils.feature_catalog import columns_for_viz
+
+# Quality & Risk columns derived from catalog (used for availability checks)
+_QUALITY_RISK_COLS = columns_for_viz("quality_risk")
 
 # Metric display names
 METRIC_LABELS = {
@@ -38,7 +42,7 @@ METRIC_LABELS = {
     "beneish_m_score": "Beneish M-Score",
     "distress_risk_score": "Distress Risk Score",
     "quality_momentum_score": "Quality Momentum Score",
-    "combined_distress_risk_score": "Combined Distress Risk Score",
+    "combined_distress_score": "Combined Distress Risk Score",
     "accounting_quality_score": "Accounting Quality Score",
 }
 
@@ -176,7 +180,7 @@ def create_piotroski_fscore_breakdown(
         template=PLOTLY_TEMPLATE,
         height=800,
         width=1000,
-        showlegend=False,
+        showlegend=True,
         margin=dict(l=80, r=40, t=60, b=60),
     )
 
@@ -621,7 +625,7 @@ def create_beneish_mscore_analysis(
         template=PLOTLY_TEMPLATE,
         height=800,
         width=1000,
-        showlegend=False,
+        showlegend=True,
         margin=dict(l=80, r=40, t=60, b=60),
     )
 
@@ -880,7 +884,7 @@ def create_distress_early_warning_dashboard(
         template=PLOTLY_TEMPLATE,
         height=1400,
         width=1000,
-        showlegend=False,
+        showlegend=True,
         barmode="overlay",
         margin=dict(l=80, r=40, t=60, b=60),
     )
@@ -1180,7 +1184,7 @@ def create_anomaly_severity_dashboard(
             x=top["anomaly_severity_score"],
             orientation="h",
             marker_color=bar_colors,
-            showlegend=False,
+            showlegend=True,
             hovertemplate="<b>%{y}</b><br>Severity: %{x:.1f}<extra></extra>",
         ),
         row=1,
@@ -1202,7 +1206,7 @@ def create_anomaly_severity_dashboard(
                     y=sec_data,
                     name=sector[:20],
                     marker_color="#6C63FF",
-                    showlegend=False,
+                    showlegend=True,
                 ),
                 row=2,
                 col=1,
@@ -1246,7 +1250,7 @@ def create_anomaly_severity_dashboard(
                         name=f"{tier} P(A)",
                         marker_color=tier_colors.get(tier, "#0A7EA4"),
                         opacity=0.6,
-                        showlegend=False,
+                        showlegend=True,
                     ),
                     row=3,
                     col=1,
@@ -1257,7 +1261,7 @@ def create_anomaly_severity_dashboard(
                 x=df["anomaly_conditional_probability"].dropna(),
                 marker_color="#0A7EA4",
                 opacity=0.7,
-                showlegend=False,
+                showlegend=True,
             ),
             row=3,
             col=1,
@@ -1277,7 +1281,7 @@ def create_anomaly_severity_dashboard(
                     mode="markers",
                     marker=dict(size=4, color="#0A7EA4", opacity=0.3),
                     name="Normal",
-                    showlegend=False,
+                    showlegend=True,
                 ),
                 row=3,
                 col=2,
@@ -1295,7 +1299,7 @@ def create_anomaly_severity_dashboard(
                             opacity=0.8,
                         ),
                         name="Multi-Flag",
-                        showlegend=False,
+                        showlegend=True,
                     ),
                     row=3,
                     col=2,
@@ -1307,7 +1311,7 @@ def create_anomaly_severity_dashboard(
                     y=df["anomaly_risk_rank"],
                     mode="markers",
                     marker=dict(size=4, color="#0A7EA4", opacity=0.4),
-                    showlegend=False,
+                    showlegend=True,
                 ),
                 row=3,
                 col=2,

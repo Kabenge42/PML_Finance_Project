@@ -4,7 +4,7 @@ Accounting Anomaly Bayesian Model — Multi-layer anomaly detection.
 Models z-score components for Mahalanobis-style anomaly detection, producing
 a sigmoid-based anomaly probability per stock.
 
-Reference: AccountingAnomalyProbabilityModel in probability_analytics.py (line 237);
+Reference: AccountingAnomalyProbabilityModel in probability_models.py (line 237);
            build_accounting_anomaly_inference_data() in inference_schema.py (line 676).
 """
 
@@ -12,10 +12,24 @@ from __future__ import annotations
 
 import logging
 
-import arviz as az
+try:
+    import arviz as az
+except ImportError:
+    try:
+        import arviz_base as az
+    except ImportError:
+        az = None  # type: ignore[assignment]
+
 import numpy as np
-import pymc as pm
-import pytensor.tensor as pt
+
+try:
+    import pymc as pm
+    import pytensor.tensor as pt
+except ImportError:
+    pm = None  # type: ignore[assignment]
+    pt = None  # type: ignore[assignment]
+
+from probabilistic_ml_model.pml_models._pytensor_compat import get_pytensor_compile_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +89,7 @@ class AccountingAnomalyBayesian:
             "feature": feature_names,
         }
 
-        with pm.Model(coords=coords) as model:
+        with pm.Model(coords=coords):
             z_scores = pm.Normal(
                 "z_scores",
                 mu=0,
@@ -90,10 +104,12 @@ class AccountingAnomalyBayesian:
                 dims="ticker",
             )
 
+            obs_sigma = pm.HalfNormal("obs_sigma", sigma=1.0)
+
             pm.Normal(
                 "feature_obs",
                 mu=z_scores,
-                sigma=1.0,
+                sigma=obs_sigma,
                 observed=feature_values,
                 dims=("ticker", "feature"),
             )
@@ -104,6 +120,7 @@ class AccountingAnomalyBayesian:
                 chains=chains,
                 target_accept=target_accept,
                 random_seed=random_seed,
+                compile_kwargs=get_pytensor_compile_kwargs(),
             )
 
         return idata

@@ -35,6 +35,7 @@ from probabilistic_ml_model.visualizations._shared import (
     create_no_data_figure,
     resolve_column,
 )
+from probabilistic_ml_model.data_utils.feature_catalog import columns_for_viz
 
 # Metric display names
 METRIC_LABELS = {
@@ -366,13 +367,16 @@ def create_earnings_quality_decomposition(
     >>> fig.show()
     """
     # Map to columns that actually exist in mv_all_stock_features
-    quality_cols = [
+    # Decomposition-specific subset resolved from catalog fallbacks
+    _decomp_cols = [
         "earnings_quality_composite",
         "ni_adjustment_ratio",
         "eps_adjustment_ratio",
         "accounting_quality_score",
         "earnings_quality_impact",
     ]
+    _catalog_cols = columns_for_viz("earnings_quality")
+    quality_cols = [c for c in _catalog_cols if c in _decomp_cols] or _decomp_cols
     col_labels = {
         "earnings_quality_composite": "Earnings Quality Composite",
         "ni_adjustment_ratio": "NI Adjustment Ratio",
@@ -693,7 +697,7 @@ def create_revision_momentum_chart(
         return create_no_data_figure("Revision Momentum Chart - No Data")
 
     has_trends = "revision_trend_short" in df.columns and "revision_trend_medium" in df.columns
-    has_posterior = "posterior_beat_prob" in df.columns
+    _has_posterior = "posterior_beat_prob" in df.columns  # reserved for future posterior panel
     has_group = group_col in df.columns
 
     n_rows = 2 + int(has_trends)

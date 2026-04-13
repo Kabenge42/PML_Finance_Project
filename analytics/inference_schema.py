@@ -388,14 +388,21 @@ def _build_arviz_or_xarray(
         Dimension names for the fallback variable.
     """
     if ARVIZ_AVAILABLE:
+        kwargs: dict[str, Any] = {}
+        if posterior is not None:
+            kwargs["posterior"] = posterior
+        if posterior_predictive is not None:
+            kwargs["posterior_predictive"] = posterior_predictive
+        if observed_data is not None:
+            kwargs["observed_data"] = observed_data
+        if log_likelihood is not None:
+            kwargs["log_likelihood"] = log_likelihood
+        if constant_data is not None:
+            kwargs["constant_data"] = constant_data
         return az.from_dict(
-            posterior=posterior,
-            posterior_predictive=posterior_predictive,
-            observed_data=observed_data,
-            log_likelihood=log_likelihood,
-            constant_data=constant_data,
             coords=coords,
             dims=dims,
+            **kwargs,
         )
 
     # xr.Dataset fallback — single posterior variable
@@ -461,7 +468,7 @@ def build_beat_probability_inference_data(
     beat_results_df: pd.DataFrame,
     observed_df: pd.DataFrame,
     n_posterior_samples: int = 4000,
-    n_chains: int = 4,
+    n_chains: int = 8,
     random_seed: int = 42,
 ) -> "az.InferenceData | xr.Dataset":
     """
@@ -1175,13 +1182,9 @@ def build_resampled_technical_inference_data(
     """
     from analytics.statistical_analysis import BayesianTechnicalResampler
 
-    resampler = BayesianTechnicalResampler(
-        prior_return_mean=prior_return_mean,
-        prior_return_std=prior_return_std,
-        n_posterior_samples=n_posterior_samples,
-        n_chains=n_chains,
-        random_seed=random_seed,
-    )
+    resampler = BayesianTechnicalResampler(prior_return_mean=prior_return_mean, prior_return_std=prior_return_std,
+                                           n_posterior_samples=n_posterior_samples, n_chains=n_chains,
+                                           random_seed=random_seed)
     result_df = resampler.resample_returns(equities_df, freq=freq)
     return resampler.build_inference_data(equities_df, freq=freq, result_df=result_df)
 
@@ -1617,8 +1620,9 @@ def build_feature_view_inference_data(
     posterior_ds = xr.Dataset(posterior_vars, coords=coords)
 
     if ARVIZ_AVAILABLE:
-        return az.InferenceData(
-            posterior=posterior_ds,
-            observed_data=observed_ds,
+        return az.from_dict(
+            posterior={v: posterior_ds[v].values for v in posterior_ds.data_vars},
+            observed_data={v: observed_ds[v].values for v in observed_ds.data_vars},
+            coords={k: v.values for k, v in posterior_ds.coords.items()},
         )
     return posterior_ds

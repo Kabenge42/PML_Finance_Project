@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional, TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
 
 import pandas as pd
 
@@ -123,6 +123,7 @@ def aggregate_probability_results(
         # Keep first occurrence of useful identifier columns
         id_first = {}
         for c in [
+            "isin",
             "ticker",
             "name",
             "sector",
@@ -164,44 +165,23 @@ def aggregate_probability_results(
 try:
     from sqlalchemy import create_engine, text
 except ImportError:  # pragma: no cover
-    create_engine = None  # type: ignore
-    text = None  # type: ignore
+    create_engine = None  # type: ignore[assignment]
+    text = None  # type: ignore[assignment]
 
 
-# Default identifier columns (fallback when DB is unreachable)
-_DEFAULT_IDENTIFIER_COLS = [
-    "isin",
-    "ticker",
-    "name",
-    "region",
-    "country",
-    "trading_country",
-    "exchange",
-    "sector",
-    "industry",
-    "dividend_record_frequency",
-    "earnings_report_frequency",
-    "fy_end",
-    "next_earnings_report",
-    "next_earnings_status",
-    "next_earnings_when",
-    "next_fiscal_quarter",
-    "reporting_interval",
-    "size_class",
-    "style_class",
-    "unit",
-    "dividend_record_announce_date",
-    "dividend_record_ex_date",
-    "dividend_record_payable_date",
-    "dividend_record_record_date",
-    "fy_end_date",
-    "income_statement_report_date",
-    "last_updated",
-    "next_earnings",
-    "next_fy_end_date",
-    "next_income_statement_report_date",
-    "reference_date",
-]
+# Default identifier columns — imported from the canonical source in feature_catalog
+from probabilistic_ml_model.data_utils.feature_catalog import (
+    DEFAULT_IDENTIFIER_COLUMNS as _DEFAULT_IDENTIFIER_COLS,
+)
+from probabilistic_ml_model.data_utils.feature_catalog import (
+    FEATURE_VIEW_REGISTRY as _CATALOG_FEATURE_VIEW_REGISTRY,
+)
+from probabilistic_ml_model.data_utils.feature_catalog import (
+    VW_FEATURES_VIEWS as _CATALOG_VW_FEATURES_VIEWS,
+)
+from probabilistic_ml_model.data_utils.feature_catalog import (
+    get_fallback_feature_categories as _catalog_get_fallback_feature_categories,
+)
 
 # Module-level cache for identifier columns loaded from the DB
 _identifier_cols_cache: list[str] | None = None
@@ -263,6 +243,9 @@ def load_equities_schema_from_db(
     """)
 
     try:
+        if create_engine is None:
+            logging.warning("SQLAlchemy not available, cannot load equities schema metadata")
+            return {}
         engine = create_engine(resolved_url)
         with engine.connect() as conn:
             result = conn.execute(query)
@@ -390,6 +373,10 @@ def load_identifier_columns(
         return _identifier_cols_cache
 
     try:
+        if create_engine is None:
+            logging.warning("SQLAlchemy not available, using default identifier columns")
+            _identifier_cols_cache = list(_DEFAULT_IDENTIFIER_COLS)
+            return _identifier_cols_cache
         engine = create_engine(resolved_url)
         query = text(f"SELECT * FROM {schema}.vw_identifier_columns LIMIT 0")
         with engine.connect() as conn:
@@ -452,25 +439,8 @@ ANALYTICS_EXPORT_TABLES: list[str] = [
     "accounting_anomaly_analysis",
 ]
 
-VW_FEATURES_VIEWS = [
-    "vw_features_analyst_sentiment",
-    "vw_features_balance_sheet",
-    "vw_features_cashflow",
-    "vw_features_composite_scores",
-    "vw_features_cost_structure",
-    "vw_features_dividends",
-    "vw_features_earnings",
-    "vw_features_employment",
-    "vw_features_growth",
-    "vw_features_leverage_liquidity",
-    "vw_features_momentum",
-    "vw_features_profitability",
-    "vw_features_quality_risk",
-    "vw_features_technical_analysis",
-    "vw_features_temporal",
-    "vw_features_unusual_items",
-    "vw_features_valuation_ratios",
-]
+# View list derived from the canonical registry in feature_catalog
+VW_FEATURES_VIEWS = _CATALOG_VW_FEATURES_VIEWS
 
 
 def get_analytics_engine() -> "Engine":
@@ -555,7 +525,7 @@ class ExportConfig:
     if_exists : str, default "replace"
         Behaviour when a DB table already exists: 'fail', 'replace',
         'append', or 'delete_rows'.
-    output_dir : str, default "outputs/analytics/views"
+    output_dir : str, default "outputs/views"
         Base directory for file-based exports (CSV / JSON).
     orient : str, default "records"
         Pandas ``to_json`` *orient* parameter.
@@ -576,7 +546,7 @@ class ExportConfig:
 
     table_name: str = ""
     if_exists: str = "replace"
-    output_dir: str = "outputs/analytics/views"
+    output_dir: str = "outputs/views"
     orient: str = "records"
     json_indent: int = 2
     csv_sep: str = ","
@@ -670,7 +640,7 @@ def export_to_json(
     """
     Export DataFrame to a JSON file.
 
-    The default output directory is ``outputs/analytics/views``.
+    The default output directory is ``outputs/views``.
 
     Parameters
     ----------
@@ -706,17 +676,15 @@ _VIEW_NAME = "mv_all_stock_features"
 _EARNINGS_LOOKAHEAD_DAYS = 20
 
 
-def _resolve_db_url(db_url: Optional[str]) -> str:
-    """Return an explicit DB URL, falling back to the DB_URL environment variable."""
+def _resolve_db_url(db_url: Optional[str]) -> Optional[str]:
+    """Return an explicit DB URL, falling back to the DB_URL environment variable.
+
+    Returns ``None`` when no URL is available so that callers can degrade
+    gracefully instead of crashing.
+    """
     if db_url is not None:
         return db_url
-    db_url = os.environ.get("DB_URL")
-    if db_url is None:
-        raise ValueError(
-            "db_url parameter not provided and DB_URL environment variable not set. "
-            "Please provide a database URL or set the DB_URL environment variable."
-        )
-    return db_url
+    return os.environ.get("DB_URL")
 
 
 def _resolve_schema(schema: Optional[str]) -> str:
@@ -727,13 +695,13 @@ def _resolve_schema(schema: Optional[str]) -> str:
 
 
 def _build_feature_query(
-    view_ref: str,
+    view_ref: str = "public.mv_all_stock_features",
     limit: Optional[int] = None,
 ) -> text:
     """Build a parameterised SQL query for the feature materialized view."""
     base_sql = f"""
         SELECT *
-        FROM {view_ref} WHERE next_earnings >= CURRENT_DATE - INTERVAL '10 days' ORDER BY next_earnings ASC
+        FROM {view_ref} WHERE next_earnings >= '2026-01-01' ORDER BY next_earnings ASC
     """
     if limit is not None:
         base_sql += f" LIMIT {int(limit)}"
@@ -779,14 +747,21 @@ def load_feature_data_from_db(
     Examples
     --------
     >>> df = load_feature_data_from_db()
-    >>> df = load_feature_data_from_db(db_url="postgresql+psycopg2://user:pass@host:5432/db")
     """
     if create_engine is None:
-        raise ImportError(
+        logging.warning(
             "SQLAlchemy not available. Install psycopg2-binary and SQLAlchemy to use database loading."
         )
+        return pd.DataFrame()
 
     db_url = _resolve_db_url(db_url)
+    if db_url is None:
+        logging.warning(
+            "db_url parameter not provided and DB_URL environment variable not set. "
+            "Returning empty DataFrame."
+        )
+        return pd.DataFrame()
+
     schema = _resolve_schema(schema)
     view_ref = f"{schema}.{_VIEW_NAME}"
 
@@ -797,6 +772,10 @@ def load_feature_data_from_db(
         view_ref,
         earnings_date_filter,
     )
+
+    if create_engine is None:
+        logging.warning("SQLAlchemy not available.")
+        return pd.DataFrame()
 
     engine = create_engine(db_url)
     query = _build_feature_query(view_ref, limit)
@@ -811,6 +790,7 @@ def load_feature_data_from_db(
     )
 
     logging.info("Loaded %d rows from %s", len(df), view_ref)
+    df = fillna_numeric_columns(df)
     return df
 
 
@@ -821,7 +801,7 @@ def _build_equities_query(
     """Build a parameterised SQL query for the equities materialized view."""
     base_sql = f"""
         SELECT *
-        FROM {view_ref} WHERE next_earnings >= CURRENT_DATE - INTERVAL '10 days' ORDER BY next_earnings ASC
+        FROM {view_ref} WHERE next_earnings >= '2026-01-01' ORDER BY next_earnings ASC
     """
     if limit is not None:
         base_sql += f" LIMIT {int(limit)}"
@@ -869,15 +849,22 @@ def load_equities_data_from_db(
     Examples
     --------
     >>> df = load_equities_data_from_db()
-    >>> df = load_equities_data_from_db(db_url="postgresql+psycopg2://user:pass@host:5432/db")
     >>> df = load_equities_data_from_db(limit=1000)
     """
     if create_engine is None:
-        raise ImportError(
+        logging.warning(
             "SQLAlchemy not available. Install psycopg2-binary and SQLAlchemy to use database loading."
         )
+        return pd.DataFrame()
 
     db_url = _resolve_db_url(db_url)
+    if db_url is None:
+        logging.warning(
+            "db_url parameter not provided and DB_URL environment variable not set. "
+            "Returning empty DataFrame."
+        )
+        return pd.DataFrame()
+
     schema = _resolve_schema(schema)
     view_ref = f"{schema}.mv_equities"
 
@@ -888,9 +875,13 @@ def load_equities_data_from_db(
         view_ref,
     )
 
+    if create_engine is None:
+        logging.warning("SQLAlchemy not available.")
+        return pd.DataFrame()
+
     engine = create_engine(db_url)
 
-    base_sql = f"SELECT * FROM {view_ref} WHERE next_earnings >= CURRENT_DATE - INTERVAL '10 days' ORDER BY next_earnings ASC"
+    base_sql = f"SELECT * FROM {view_ref} WHERE next_earnings >= '2026-01-01' ORDER BY next_earnings ASC"
     if limit is not None:
         base_sql += f" LIMIT {int(limit)}"
     query = text(base_sql)
@@ -898,6 +889,34 @@ def load_equities_data_from_db(
     df = pd.read_sql(query, engine)
 
     logging.info("Loaded %d rows from %s", len(df), view_ref)
+    df = fillna_numeric_columns(df)
+    return df
+
+
+def fillna_numeric_columns(df: pd.DataFrame, fill_value: float = 0.0) -> pd.DataFrame:
+    """
+    Fill NaN values in all numeric columns with a specified value.
+
+    Ensures downstream statistical functions (distribution fitting,
+    Bayesian analysis) do not encounter unexpected NaN values that
+    cause division-by-zero or invalid-value warnings in scipy.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame.
+    fill_value : float, default 0.0
+        Value to use for filling NaN in numeric columns.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with NaN in numeric columns replaced by *fill_value*.
+    """
+    numeric_cols = df.select_dtypes(include="number").columns
+    if len(numeric_cols) > 0:
+        df[numeric_cols] = df[numeric_cols].fillna(fill_value)
+        logging.debug("Filled NaN in %d numeric columns with %s", len(numeric_cols), fill_value)
     return df
 
 
@@ -931,37 +950,42 @@ def backfill_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             return df
 
+    # Collect all new columns here to avoid repeated frame.insert calls
+    new_cols: dict[str, pd.Series] = {}
+
     # Backfill analyst_neutral_pct if missing
     if "analyst_neutral_pct" not in df.columns:
         bullish = df.get("analyst_bullish_pct")
         bearish = df.get("analyst_bearish_pct")
         if bullish is not None and bearish is not None:
             neutral = 100 - bullish - bearish
-            df["analyst_neutral_pct"] = neutral.clip(lower=0, upper=100)
+            new_cols["analyst_neutral_pct"] = neutral.clip(lower=0, upper=100)
 
     # Map inventory_turnover to expected column name
     if "inventory_turnover" not in df.columns:
         for src_col in ["inventory_turnover_mv", "inventory_turnover_ltm", "inventory_turnover_fy"]:
             if src_col in df.columns:
-                df["inventory_turnover"] = df[src_col]
+                new_cols["inventory_turnover"] = df[src_col]
                 break
 
     # Also keep inventory_turnover_mv for backward compatibility if needed
-    if "inventory_turnover_mv" not in df.columns and "inventory_turnover" in df.columns:
-        df["inventory_turnover_mv"] = df["inventory_turnover"]
+    if "inventory_turnover_mv" not in df.columns:
+        inv_src = new_cols.get("inventory_turnover", df.get("inventory_turnover"))
+        if inv_src is not None:
+            new_cols["inventory_turnover_mv"] = inv_src
 
     # Map asset_turnover
     if "asset_turnover" not in df.columns:
         for src_col in ["asset_turnover_ltm", "asset_turnover_fy", "asset_turnover_ratio"]:
             if src_col in df.columns:
-                df["asset_turnover"] = df[src_col]
+                new_cols["asset_turnover"] = df[src_col]
                 break
 
     # Map receivables_turnover
     if "receivables_turnover" not in df.columns:
         for src_col in ["receivables_turnover_ltm", "receivables_turnover_fy"]:
             if src_col in df.columns:
-                df["receivables_turnover"] = df[src_col]
+                new_cols["receivables_turnover"] = df[src_col]
                 break
 
     # Map revenue_per_employee
@@ -972,68 +996,70 @@ def backfill_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
             "revenue_per_employee_1fy",
         ]:
             if src_col in df.columns:
-                df["revenue_per_employee"] = df[src_col]
+                new_cols["revenue_per_employee"] = df[src_col]
                 break
 
     # Map retention_ratio / retention_rate
     if "retention_ratio" not in df.columns:
         for src_col in ["retention_rate", "earnings_retention_rate", "retention_ratio_ltm"]:
             if src_col in df.columns:
-                df["retention_ratio"] = df[src_col]
+                new_cols["retention_ratio"] = df[src_col]
                 break
-    if "retention_rate" not in df.columns and "retention_ratio" in df.columns:
-        df["retention_rate"] = df["retention_ratio"]
+    if "retention_rate" not in df.columns:
+        rr_src = new_cols.get("retention_ratio", df.get("retention_ratio"))
+        if rr_src is not None:
+            new_cols["retention_rate"] = rr_src
 
     # Map ev_ebitda
     if "ev_ebitda" not in df.columns:
         for src_col in ["ev_to_ebitda", "ev_ebitda_ltm", "ev_ebitda_fy"]:
             if src_col in df.columns:
-                df["ev_ebitda"] = df[src_col]
+                new_cols["ev_ebitda"] = df[src_col]
                 break
 
     # Map eps_actual / eps_estimate
     if "eps_actual" not in df.columns:
         for src_col in ["eps_adj_ltm", "net_eps_basic_ltm", "eps_ltm", "eps_actual_ltm_fy"]:
             if src_col in df.columns:
-                df["eps_actual"] = df[src_col]
+                new_cols["eps_actual"] = df[src_col]
                 break
     if "eps_estimate" not in df.columns:
         for src_col in ["eps_est_avg_fy1e", "eps_est_avg_ntm", "eps_estimate_fy1"]:
             if src_col in df.columns:
-                df["eps_estimate"] = df[src_col]
+                new_cols["eps_estimate"] = df[src_col]
                 break
 
     # Map earnings_beat / eps_growth_yoy
     if "earnings_beat" not in df.columns:
         for src_col in ["earnings_beat_indicator", "surprise_flag", "is_beat"]:
             if src_col in df.columns:
-                df["earnings_beat"] = df[src_col]
+                new_cols["earnings_beat"] = df[src_col]
                 break
     if "eps_growth_yoy" not in df.columns:
         for src_col in ["earnings_growth_yoy", "ebitda_growth_yoy", "net_income_growth_yoy"]:
             if src_col in df.columns:
-                df["eps_growth_yoy"] = df[src_col]
+                new_cols["eps_growth_yoy"] = df[src_col]
                 break
 
     # Map missing composite scores / counts
-    if "combined_distress_risk_score" not in df.columns:
+    if "combined_distress_score" not in df.columns:
         for src_col in [
             "distress_probability_composite",
             "risk_score_combined",
             "combined_risk_score",
         ]:
             if src_col in df.columns:
-                df["combined_distress_risk_score"] = df[src_col]
+                new_cols["combined_distress_score"] = df[src_col]
                 break
     if "eps_trajectory_score" not in df.columns:
         for src_col in ["eps_trend_score", "eps_momentum_score", "trajectory_score"]:
             if src_col in df.columns:
-                df["eps_trajectory_score"] = df[src_col]
+                new_cols["eps_trajectory_score"] = df[src_col]
                 break
     if "fcf_positive_years" not in df.columns:
         for src_col in ["fcf_positive_count", "years_positive_fcf", "fcf_pos_years"]:
             if src_col in df.columns:
-                df["fcf_positive_years"] = df[src_col]
+                new_cols["fcf_positive_years"] = df[src_col]
                 break
 
     # Calculate inventory_days from turnover
@@ -1041,30 +1067,35 @@ def backfill_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
         turnover_col = df.get("inventory_turnover_mv")
         if turnover_col is not None:
             turnover = turnover_col.replace(0, pd.NA)
-            df["inventory_days"] = 365 / turnover
+            new_cols["inventory_days"] = 365 / turnover
 
     # Map R&D intensity columns
     if "rnd_intensity_ltm" not in df.columns:
         for src_col in ["rnd_intensity", "rnd_to_revenue"]:
             if src_col in df.columns:
-                df["rnd_intensity_ltm"] = df[src_col]
+                new_cols["rnd_intensity_ltm"] = df[src_col]
                 break
 
     # Map tangible book value columns
     if "tangible_book_value_ltm" not in df.columns:
         if "tangible_book_value" in df.columns:
-            df["tangible_book_value_ltm"] = df["tangible_book_value"]
+            new_cols["tangible_book_value_ltm"] = df["tangible_book_value"]
 
     # Map goodwill concentration
     if "goodwill_concentration" not in df.columns:
         for src_col in ["goodwill_to_equity", "goodwill_to_assets_pct"]:
             if src_col in df.columns:
-                df["goodwill_concentration"] = df[src_col]
+                new_cols["goodwill_concentration"] = df[src_col]
                 break
 
     # Ensure industry column exists
     if "industry" not in df.columns and "sector" in df.columns:
-        df["industry"] = df["sector"]
+        new_cols["industry"] = df["sector"]
+
+    # Assign all new columns at once to avoid DataFrame fragmentation
+    if new_cols:
+        new_df = pd.DataFrame(new_cols, index=df.index)
+        df = pd.concat([df, new_df], axis=1)
 
     logging.info("Backfill complete. Columns: %d", len(df.columns))
 
@@ -1196,6 +1227,9 @@ def load_all_feature_views(
         if db_url is None:
             raise ValueError("DB_URL environment variable not set.")
 
+    if create_engine is None:
+        raise ImportError("SQLAlchemy not available.")
+
     engine = create_engine(db_url)
     target_views = views or VW_FEATURES_VIEWS
 
@@ -1209,7 +1243,7 @@ def load_all_feature_views(
         try:
             query = f"""
         SELECT *
-        FROM {view_ref} WHERE next_earnings >= CURRENT_DATE - INTERVAL '10 days' ORDER BY next_earnings ASC
+        FROM {view_ref} WHERE next_earnings >= '2026-01-01' ORDER BY next_earnings ASC
         
     """
             df_view = pd.read_sql(query, engine)
@@ -1302,6 +1336,11 @@ def _load_view_category_mapping_from_db(
         raise ImportError("SQLAlchemy not available")
 
     url = _resolve_db_url(db_url)
+    if url is None:
+        raise ValueError("DB URL not available")
+    
+    if create_engine is None:
+        raise ImportError("SQLAlchemy not available")
     engine = create_engine(url)
     identifier_cols = set(load_identifier_columns(db_url=url, schema=schema))
 
@@ -1339,33 +1378,14 @@ def _load_view_category_mapping_from_db(
     for table_name, column_name in col_rows:
         view_columns[table_name].append(column_name)
 
-    # ── Derive category label per view ──
-    # Map from view suffix to human-readable label
-    _VIEW_CATEGORY_LABELS = {
-        "analyst_sentiment": "Analyst Sentiment",
-        "balance_sheet": "Balance Sheet",
-        "cashflow": "Cash Flow",
-        "composite_scores": "Composite Scores",
-        "cost_structure": "Cost Structure",
-        "dividends": "Dividend Features",
-        "earnings": "Earnings Quality",
-        "employment": "Employment Metrics",
-        "growth": "Growth Metrics",
-        "leverage_liquidity": "Leverage & Liquidity",
-        "momentum": "Momentum",
-        "profitability": "Profitability",
-        "quality_risk": "Quality & Risk",
-        "technical_analysis": "Technical Analysis",
-        "temporal": "Temporal Features",
-        "unusual_items": "Unusual Items",
-        "valuation_ratios": "Valuation Ratios",
-    }
-
+    # ── Derive category label per view from canonical FEATURE_VIEW_REGISTRY ──
     mapping: dict[str, dict[str, str | list[str]]] = {}
     for view_name, columns in view_columns.items():
         feature_cols = [c for c in columns if c not in identifier_cols]
-        suffix = view_name.replace("vw_features_", "")
-        category = _VIEW_CATEGORY_LABELS.get(suffix, suffix.replace("_", " ").title())
+        category = _CATALOG_FEATURE_VIEW_REGISTRY.get(
+            view_name,
+            view_name.replace("vw_features_", "").replace("_", " ").title(),
+        )
 
         mapping[view_name] = {
             "category": category,
@@ -1396,7 +1416,7 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "analyst_bearish_pct",
                 "analyst_neutral_pct",
                 "analyst_conviction",
-                "upside_potential",
+                "expected_upside_pt",
                 "price_target_spread_pct",
                 "price_target_revision_1m",
                 "price_target_revision_3m",
@@ -2086,7 +2106,7 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "low_beta_flag",
                 "beta_stability_score",
                 # calc_financial_distress_features
-                "combined_distress_risk_score",
+                "combined_distress_score",
                 "liquidity_stress_score",
                 "working_capital_trend",
                 "cash_runway_months",
@@ -2389,6 +2409,9 @@ def load_feature_categories_from_db(
 
     # Attempts to load feature categories from database
     try:
+        if create_engine is None:
+            logging.warning("SQLAlchemy not available, using fallback feature categories")
+            return _get_fallback_feature_categories()
         engine = create_engine(connection_string)
         with engine.connect() as conn:
             result = conn.execute(query)
@@ -2409,352 +2432,12 @@ def load_feature_categories_from_db(
 
 
 def _get_fallback_feature_categories() -> dict[str, list[str]]:
-    """Fallback hardcoded categories if database is unavailable."""
-    return {
-        "Valuation Ratios": [
-            "p_e_ratio",
-            "p_b_ratio",
-            "ev_ebitda_ratio",
-            "ev_sales_ratio",
-            "valuation_dividend_yield",
-            "peg_ratio",
-            "price_to_tangible_book",
-            "tangible_book_value_ltm",
-        ],
-        "Valuation Timeseries": [
-            "ev_sales_trend_1y",
-            "ev_ebitda_momentum",
-            "p_e_momentum_yoy",
-            "p_e_momentum_qoq",
-            "ev_sales_vs_3y_avg",
-            "ev_ebitda_vs_3y_avg",
-            "p_e_vs_3y_avg",
-            "p_e_vs_5y_avg",
-            "p_b_vs_5y_avg",
-            "valuation_mean_reversion",
-            "valuation_compression",
-            "forward_pe_premium",
-        ],
-        "Momentum & Technical": [
-            "price_momentum_1m",
-            "price_momentum_3m",
-            "price_momentum_6m",
-            "price_momentum_1y",
-            "price_momentum_3y",
-            "price_momentum_5y",
-            "price_momentum_5d",
-            "range_52w_position",
-            "long_term_trend_score",
-            "secular_trend_flag",
-            "beta_momentum",
-            "volatility_regime",
-        ],
-        "Technical Analysis": [
-            "ema_slope_20d",
-            "ema_trend_consistency",
-            "price_vs_ema_100d",
-            "near_52w_high_flag",
-            "near_52w_low_flag",
-            "volume_momentum_score",
-            "breakout_signal",
-            "volatility_compression",
-            "volatility_term_structure",
-        ],
-        "Profitability": [
-            "roe",
-            "roa",
-            "gross_margin_pct",
-            "operating_margin_pct",
-            "net_margin_pct",
-            "ebitda_margin_pct",
-            "roic",
-            "rnd_intensity",
-            "equity_multiplier",
-            "gross_margin_trend_yoy",
-            "operating_margin_trend",
-            "net_margin_trend_yoy",
-            "ebitda_margin_trend",
-            "margin_expansion_flag",
-            "margin_stability_score",
-        ],
-        "Earnings Quality": [
-            "eps_surprise_pct",
-            "revenue_surprise_pct",
-            "eps_adjustment_ratio",
-            "gaap_adj_eps_gap_pct",
-            "ebitda_adjustment_ratio",
-            "eps_quarterly_trend",
-            "eps_yoy_growth",
-            "earnings_quality_score",
-            "earnings_quality_warning",
-            "earnings_quality_composite",
-            "gaap_revision_momentum",
-            "revision_quality_divergence",
-        ],
-        "EPS Trajectory": [
-            "eps_qoq_growth",
-            "eps_yoy_quarterly",
-            "eps_positive_streak",
-            "eps_cagr_3y",
-            "eps_cagr_5y",
-            "eps_growth_accel",
-            "eps_vs_5y_avg",
-            "eps_trajectory_score",
-            "eps_stability",
-        ],
-        "Growth Metrics": [
-            "revenue_growth_yoy",
-            "growth_ebitda_growth_yoy",
-            "operating_income_growth",
-            "fcf_growth",
-            "revenue_cagr_5y",
-            "forward_revenue_growth",
-            "revenue_vs_5y_avg",
-            "revenue_acceleration",
-        ],
-        "Quality & Risk": [
-            "piotroski_f_score",
-            "altman_z_score",  # ensure always present
-            "altman_z_score_fy",  # temporal aliases used as fallbacks
-            "altman_z_trend",
-            "has_goodwill_impairment",
-            "has_asset_writedown",
-            "has_restructuring",
-            "goodwill_to_assets_pct",
-            "intangible_intensity",
-            "exceptional_items_to_ebitda",
-            "current_ratio",
-            "quick_ratio",
-            "accounting_quality_score",
-            "beta_stability_score",
-        ],
-        "Financial Distress": [
-            "combined_distress_risk_score",
-            "liquidity_stress_score",
-            "working_capital_trend",
-            "cash_runway_months",
-            "wc_deteriorating_flag",
-            "accumulated_deficit_flag",
-            "adequate_cash_buffer",
-        ],
-        "Accounting Quality": [
-            "goodwill_change_rate",
-            "restructuring_intensity",
-            "exceptional_items_frequency",
-            "merger_impact_ratio",
-            "asset_sale_boost",
-            "accounting_quality_score",
-        ],
-        "Leverage & Liquidity": [
-            "debt_to_equity",
-            "debt_to_assets",
-            "equity_ratio",
-            "interest_coverage",
-            "cash_ratio",
-            "working_capital_ratio",
-            "debt_deleveraging",
-            "debt_to_equity_trend",
-        ],
-        "Efficiency Ratios": [
-            "asset_turnover",
-            "inventory_turnover",
-            "receivables_days",
-            "working_capital_turns",
-        ],
-        "Balance Sheet": [
-            "assets_fq",
-            "assets_yoy_growth",
-            "assets_3y_cagr",
-            "asset_quality_score",
-            "balance_sheet_strength",
-            "cash_to_assets_pct",
-            "cash_vs_5y_avg",
-            "inventory_yoy_change",
-            "receivables_change_yoy",
-            "retained_earnings_vs_5y",
-        ],
-        "Analyst Sentiment": [
-            "analyst_bullish_pct",
-            "analyst_neutral_pct",
-            "analyst_bearish_pct",
-            "analyst_conviction",
-            "upside_potential",
-            "price_target_spread_pct",
-            "price_target_revision_1m",
-            "price_target_revision_3m",
-            "analyst_rating_normalized",
-            "analyst_coverage_quality",
-            "eps_revision_momentum",
-        ],
-        "Price Target Dynamics": [
-            "pt_momentum_1w",
-            "pt_momentum_1m",
-            "pt_momentum_3m",
-            "pt_momentum_6m",
-            "pt_momentum_1y",
-            "pt_consensus_convergence",
-            "analyst_coverage_change_1m",
-            "analyst_coverage_change_3m",
-            "analyst_coverage_trend",
-        ],
-        "Dividend Reliability": [
-            "dividend_streak",
-            "dividend_yield_ltm",
-            "dividend_yield_ntm",
-            "dividend_payout_ratio",
-            "fcf_dividend_coverage",
-            "buyback_yield",
-            "total_shareholder_yield",
-            "dividend_consistency",
-            "dividend_yield_vs_5y_avg",
-            "sustainable_dividend_flag",
-        ],
-        "Cash Flow": [
-            "cfo_to_net_income",
-            "fcf_to_net_income",
-            "fcf_margin",
-            "cfo_growth_yoy",
-            "fcf_positive_ratio",
-            "self_funding_ratio",
-            "fcf_positive_years",
-            "fcf_yield",
-            "cash_flow_quality_score",
-        ],
-        "Employee Productivity": [
-            "revenue_per_employee",
-            "profit_per_employee",
-            "ebitda_per_employee",
-            "assets_per_employee",
-            "fte_growth_1y_pct",
-            "fte_growth_3y_pct",
-            "workforce_stability",
-            "productivity_trend",
-        ],
-        "Efficiency": [
-            "asset_turnover",
-            "inventory_turnover",
-            "receivables_days",
-            "working_capital_turns",
-            "cost_efficiency_score",
-            "wc_efficiency_score",
-        ],
-        "Composite Scores": [
-            "piotroski_f_score",
-            "dilution_score",
-            "quality_momentum_score",
-            "earnings_quality_composite",
-        ],
-        "Volatility Surface": [
-            "volatility_1m",
-            "volatility_3m",
-            "volatility_6m",
-            "volatility_1y",
-            "volatility_trend_short",
-            "volatility_trend_long",
-            "vol_ratio_3m_1y",
-            "vol_hump",
-            "beta_2y",
-            "beta_term_structure",
-            "beta_convexity",
-            "realized_vs_implied_proxy",
-            "beta_short_term_shift",
-        ],
-        "Tax Rate": [
-            "effective_tax_rate_ltm",
-            "effective_tax_rate_fy",
-            "tax_rate_yoy_change",
-            "tax_rate_qoq_change",
-            "tax_rate_stability",
-            "low_tax_flag",
-            "tax_rate_trend_4q",
-        ],
-        "OpEx Temporal": [
-            "opex_fq",
-            "opex_ltm",
-            "opex_fy",
-            "opex_qoq_growth",
-            "opex_yoy_growth",
-            "opex_vs_revenue_trend",
-            "sga_qoq_growth",
-            "sga_yoy_growth",
-            "operating_leverage_score",
-        ],
-        "Asset Sales": [
-            "asset_sale_gain_loss_ltm",
-            "asset_sale_frequency",
-            "asset_sale_trend",
-        ],
-        "FCF Estimates": [
-            "fcf_est_avg_fy1e",
-            "fcf_est_avg_fy2e",
-            "fcf_est_avg_fy3e",
-            "fcf_est_avg_fy4e",
-            "fcf_est_avg_fy5e",
-            "fcf_est_cagr_5y",
-            "fcf_est_trend",
-        ],
-        "Dividend History": [
-            "div_yield_2fyind",
-            "div_yield_3fyind",
-            "div_yield_4fyind",
-            "div_yield_5fyind",
-            "div_yield_5y_trend",
-            "div_yield_stability",
-        ],
-        "Interest Income Temporal": [
-            "interest_income_fq",
-            "interest_income_fy",
-            "interest_income_qoq_growth",
-            "interest_income_yoy_growth",
-            "interest_income_to_revenue_trend",
-        ],
-        "Share Dilution": [
-            "shares_yoy_change_pct",
-            "net_buyback_flag",
-            "shrs_out_1fy",
-        ],
-        "Forward Consensus": [
-            "pe_ntm",
-            "pe_est_fy1",
-            "pe_forward_discount",
-            "eps_gaap_vs_norm_ntm",
-            "eps_gaap_vs_norm_fy1e",
-            "forward_adjustment_trend",
-            "ebitda_est_ntm",
-            "ebitda_est_fy1e",
-            "ev_ebitda_est_fy1",
-            "ebitda_forward_growth",
-            "earnings_revision_divergence",
-            "forward_pe_vs_sector_proxy",
-        ],
-        "Direct Reference": [
-            "current_fiscal_quarter",
-            "dividend_record_currency",
-            "dividend_record_amount",
-            "dividend_per_share_ltm",
-            "market_cap_country_r",
-            "rel_volume",
-            "one_day_pct",
-            "total_return_ytd",
-            "total_return_5y",
-            "total_return_10y",
-            "tot_return_pct_cagr_3y",
-            "tot_return_pct_cagr_10y",
-            "total_revenues_cagr_5y_fy",
-            "analyst_rating",
-            "price_target_count",
-            "num_strong_buys_ratings",
-            "num_buys_ratings",
-            "num_hold_ratings",
-            "num_sell_ratings",
-            "num_strong_sell_ratings",
-            "eps_norm_est_num_fy1e",
-            "eps_gaap_est_avg_ntm",
-            "eps_gaap_est_avg_fy1e",
-            "eps_norm_est_avg_ntm",
-            "eps_norm_est_avg_fy1e",
-        ],
-    }
+    """Fallback hardcoded categories if database is unavailable.
+
+    Delegates to the canonical source in
+    ``feature_catalog.FALLBACK_FEATURE_CATEGORIES``.
+    """
+    return _catalog_get_fallback_feature_categories()
 
 
 def validate_feature_registry_alignment(
@@ -2791,8 +2474,9 @@ def validate_feature_registry_alignment(
     if not url:
         return {"error": "DB_URL not configured"}
 
+    if create_engine is None:
+        return {"error": "SQLAlchemy not available"}
     engine = create_engine(url)
-
     try:
         with engine.connect() as conn:
             # All feature registry entries

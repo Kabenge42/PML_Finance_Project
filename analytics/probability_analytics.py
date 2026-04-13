@@ -123,6 +123,52 @@ def _extract_identifiers(row: pd.Series) -> dict:
     }
 
 
+def _safe_get(
+    row: pd.Series, col: str, default: float | int
+) -> tuple[float | int, float]:
+    """Return ``(value_for_calculation, raw_value_for_output)`` from *row*.
+
+    When *col* is missing from the row or its value is null, the first
+    element is *default* (safe for arithmetic) and the second is ``NaN``
+    (preserves the fact that the source data lacked the value).  When
+    the column is present and non-null both elements equal the actual value.
+    """
+    raw = row.get(col)
+    try:
+        missing = raw is None or pd.isna(raw)
+    except (TypeError, ValueError):
+        missing = raw is None
+    if missing:
+        return default, np.nan
+    return raw, raw
+
+
+def _compute_analyst_conviction(row: pd.Series) -> float:
+    """Derive ``analyst_conviction`` from bullish/bearish percentages.
+
+    Mirrors the SQL definition in ``calc_sentiment_features``::
+
+        ABS((bullish - bearish) / total * 100)
+
+    Since ``analyst_bullish_pct`` and ``analyst_bearish_pct`` are already
+    expressed as percentages of total ratings, conviction simplifies to
+    ``abs(bullish_pct - bearish_pct)``.
+
+    Returns ``NaN`` when the required source columns are missing or null.
+    """
+    bullish = row.get("analyst_bullish_pct")
+    bearish = row.get("analyst_bearish_pct")
+    try:
+        b_missing = bullish is None or pd.isna(bullish)
+        s_missing = bearish is None or pd.isna(bearish)
+    except (TypeError, ValueError):
+        b_missing = bullish is None
+        s_missing = bearish is None
+    if b_missing or s_missing:
+        return np.nan
+    return abs(float(bullish) - float(bearish))
+
+
 # Columns that must be cast to numeric before export (Issue 7)
 _NUMERIC_CAST_COLS = [
     "gaap_revision_momentum",
@@ -263,9 +309,9 @@ class AccountingAnomalyProbabilityModel:
     anomaly_z_threshold: float | None = None
     tier_bins: list[float] | None = None
     tier_labels: list[str] | None = None
-    severity_anomaly_weight: float = 0.7
-    severity_feature_weight: float = 0.3
-    multi_flag_threshold: int = 10
+    severity_anomaly_weight: float = 0.65
+    severity_feature_weight: float = 0.35
+    multi_flag_threshold: int = 5
     n_mcmc_samples: int = 5000
     burn_in: int = 1000
     use_mcmc: bool = True
@@ -524,7 +570,7 @@ class AccountingAnomalyProbabilityModel:
             from analytics.statistical_analysis import parallel_mcmc_chains
 
             mcmc_convergence = parallel_mcmc_chains(
-                anomaly_scores, n_chains=4, n_samples=self.n_mcmc_samples
+                anomaly_scores, n_chains=8, n_samples=self.n_mcmc_samples
             )
             r_hat = mcmc_convergence.get("r_hat", 2.0)
             result["anomaly_mcmc_r_hat"] = r_hat
@@ -1744,6 +1790,7 @@ class EarningsBeatProbabilityModel:
             "piotroski_f_score": "piotroski_f_score",
             "eps_revision_momentum": "eps_revision_momentum",
             "altman_z_score": "altman_z_score",
+            "analyst_conviction": "analyst_conviction",
         }
 
         # Check which rows have forward data available
@@ -1833,6 +1880,8 @@ class EarningsBeatProbabilityModel:
                     val = row.get(src_col, None)
                     if val is not None and not (isinstance(val, float) and np.isnan(val)):
                         record[out_key] = val
+                    elif out_key == "analyst_conviction":
+                        record[out_key] = _compute_analyst_conviction(row)
                     else:
                         record[out_key] = None
 
@@ -1946,6 +1995,8 @@ class EarningsBeatProbabilityModel:
                     val = row.get(src_col, None)
                     if val is not None and not (isinstance(val, float) and np.isnan(val)):
                         record[out_key] = val
+                    elif out_key == "analyst_conviction":
+                        record[out_key] = _compute_analyst_conviction(row)
                     else:
                         record[out_key] = None
 
@@ -2530,44 +2581,50 @@ class CreditRiskProbabilityModel:
         results = []
 
         for _, row in df.iterrows():
-            # Core distress indicators
-            z_score = row.get("altman_z_score", 3.0)
-            z_trend = row.get("altman_z_trend", 0)  # NEW: Z-score trajectory
-            liquidity_stress = row.get("liquidity_stress_score", 50)
-            cash_runway = row.get("cash_runway_months", 24)
-            accumulated_deficit = row.get("accumulated_deficit_flag", 0)
+            # Core distress indicators — _safe_get returns (calc_value, raw_value)
+            z_score, z_score_raw = _safe_get(row, "altman_z_score", 3.0)
+            z_trend, z_trend_raw = _safe_get(row, "altman_z_trend", 0)
+            liquidity_stress, liquidity_stress_raw = _safe_get(row, "liquidity_stress_score", 50)
+            cash_runway, cash_runway_raw = _safe_get(row, "cash_runway_months", 24)
+            accumulated_deficit, _ = _safe_get(row, "accumulated_deficit_flag", 0)
 
-            # NEW: Additional risk factors from views
-            combined_distress = row.get("combined_distress_risk_score", 50)
-            wc_deteriorating = row.get("wc_deteriorating_flag", 0)
-            debt_deleveraging = row.get("debt_deleveraging", 0)  # Negative = more debt
-            interest_coverage = row.get("interest_coverage", 5.0)
-            quick_ratio = row.get("quick_ratio", 1.5)
-            beta_stability = row.get("beta_stability_score", 50)
+            # Additional risk factors from views
+            combined_distress, combined_distress_raw = _safe_get(row, "combined_distress_risk_score", 50)
+            wc_deteriorating, _ = _safe_get(row, "wc_deteriorating_flag", 0)
+            debt_deleveraging, _ = _safe_get(row, "debt_deleveraging", 0)
+            interest_coverage, interest_coverage_raw = _safe_get(row, "interest_coverage", 5.0)
+            quick_ratio, quick_ratio_raw = _safe_get(row, "quick_ratio", 1.5)
+            beta_stability, beta_stability_raw = _safe_get(row, "beta_stability_score", 50)
 
-            # NEW: Debt trajectory signals (calc_total_debt_temporal)
-            debt_3y_cagr = row.get("debt_3y_cagr", 0)
-            debt_4q_trend = row.get("debt_4q_trend", 0)
-            debt_yoy_change = row.get("debt_yoy_change", 0)
+            # Debt trajectory signals (calc_total_debt_temporal)
+            debt_3y_cagr, debt_3y_cagr_raw = _safe_get(row, "debt_3y_cagr", 0)
+            debt_4q_trend, _ = _safe_get(row, "debt_4q_trend", 0)
+            debt_yoy_change, _ = _safe_get(row, "debt_yoy_change", 0)
 
-            # NEW: Cash buffer signals (calc_financial_distress_features + calc_balance_sheet_dynamics)
-            adequate_cash_buffer = row.get("adequate_cash_buffer", 1)
-            cash_vs_5y_avg = row.get("cash_vs_5y_avg", 1.0)
+            # Cash buffer signals (calc_financial_distress_features + calc_balance_sheet_dynamics)
+            adequate_cash_buffer, _ = _safe_get(row, "adequate_cash_buffer", 1)
+            cash_vs_5y_avg, _ = _safe_get(row, "cash_vs_5y_avg", 1.0)
 
-            # NEW: Balance sheet quality (calc_balance_sheet_dynamics)
-            balance_sheet_strength = row.get("balance_sheet_strength", 50)
-            debt_maturity_risk = row.get("debt_maturity_risk", 0)
-            equity_ratio = row.get("equity_ratio", 0.5)
+            # Balance sheet quality (calc_balance_sheet_dynamics)
+            balance_sheet_strength, balance_sheet_strength_raw = _safe_get(
+                row, "balance_sheet_strength", 50
+            )
+            debt_maturity_risk, debt_maturity_risk_raw = _safe_get(row, "debt_maturity_risk", 0)
+            equity_ratio, _ = _safe_get(row, "equity_ratio", 0.5)
 
-            # NEW: Working capital deep (calc_working_capital_deep_features + temporal)
-            wc_volatility = row.get("wc_volatility", 0)
-            wc_efficiency_score = row.get("wc_efficiency_score", 50)
-            retained_earnings_vs_5y = row.get("retained_earnings_vs_5y", 1.0)
+            # Working capital deep (calc_working_capital_deep_features + temporal)
+            wc_volatility, _ = _safe_get(row, "wc_volatility", 0)
+            wc_efficiency_score, wc_efficiency_score_raw = _safe_get(
+                row, "wc_efficiency_score", 50
+            )
+            retained_earnings_vs_5y, _ = _safe_get(row, "retained_earnings_vs_5y", 1.0)
 
-            # NEW: Quality & Risk flags
-            distress_risk_score = row.get("distress_risk_score", 50)
-            retained_earnings_growth = row.get("retained_earnings_growth", 0)
-            beta_trend = row.get("beta_trend", 0)
+            # Quality & Risk flags
+            distress_risk_score, distress_risk_score_raw = _safe_get(
+                row, "distress_risk_score", 50
+            )
+            retained_earnings_growth, _ = _safe_get(row, "retained_earnings_growth", 0)
+            beta_trend, _ = _safe_get(row, "beta_trend", 0)
 
             # Bayesian-style probability estimation with enhanced inputs
             # Prior based on Z-Score zones
@@ -2702,23 +2759,23 @@ class CreditRiskProbabilityModel:
             record = _extract_identifiers(row)
             record.update(
                 {
-                    "beta_stability_score": beta_stability,
-                    "combined_distress_risk_score": combined_distress,
+                    "beta_stability_score": beta_stability_raw,
+                    "combined_distress_risk_score": combined_distress_raw,
                     "distress_probability": prob,
-                    "liquidity_stress_score": liquidity_stress,
-                    "cash_runway_months": cash_runway,
-                    "altman_z_score": z_score,
-                    "altman_z_trend": z_trend,
-                    "interest_coverage": interest_coverage,
-                    "quick_ratio": quick_ratio,
+                    "liquidity_stress_score": liquidity_stress_raw,
+                    "cash_runway_months": cash_runway_raw,
+                    "altman_z_score": z_score_raw,
+                    "altman_z_trend": z_trend_raw,
+                    "interest_coverage": interest_coverage_raw,
+                    "quick_ratio": quick_ratio_raw,
                     "risk_level": risk_level,
                     "ci_lower": max(0, prob - ci_width),
                     "ci_upper": min(1, prob + ci_width),
-                    "debt_3y_cagr": debt_3y_cagr,
-                    "debt_maturity_risk": debt_maturity_risk,
-                    "balance_sheet_strength": balance_sheet_strength,
-                    "wc_efficiency_score": wc_efficiency_score,
-                    "distress_risk_score": distress_risk_score,
+                    "debt_3y_cagr": debt_3y_cagr_raw,
+                    "debt_maturity_risk": debt_maturity_risk_raw,
+                    "balance_sheet_strength": balance_sheet_strength_raw,
+                    "wc_efficiency_score": wc_efficiency_score_raw,
+                    "distress_risk_score": distress_risk_score_raw,
                     "data_quality_score": data_points / 11.0,
                 }
             )
@@ -2861,30 +2918,32 @@ class DividendCutProbabilityModel:
     def analyze_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         results = []
         for _, row in df.iterrows():
-            # Core dividend metrics
-            fcf_coverage = row.get("fcf_dividend_coverage", 2.0)
-            payout_ratio = row.get("dividend_payout_ratio", 50)
-            streak = row.get("dividend_streak", 10)
-            growth_exp = row.get("dividend_growth_expectation", 0)
+            # Core dividend metrics — _safe_get returns (calc_value, raw_value)
+            fcf_coverage, fcf_coverage_raw = _safe_get(row, "fcf_dividend_coverage", 2.0)
+            payout_ratio, payout_ratio_raw = _safe_get(row, "dividend_payout_ratio", 50)
+            streak, streak_raw = _safe_get(row, "dividend_streak", 10)
+            growth_exp, _ = _safe_get(row, "dividend_growth_expectation", 0)
 
-            # NEW: Enhanced metrics from vw_features_dividends
-            sustainable_flag = row.get("sustainable_dividend_flag", 1)
-            consistency = row.get("dividend_consistency", 0.8)
-            yield_vs_5y = row.get("dividend_yield_vs_5y_avg", 1.0)
-            recent_change = row.get("recent_dividend_change", 0)
-            high_yield_flag = row.get("high_yield_flag", 0)
+            # Enhanced metrics from vw_features_dividends
+            sustainable_flag, sustainable_flag_raw = _safe_get(
+                row, "sustainable_dividend_flag", 1
+            )
+            consistency, consistency_raw = _safe_get(row, "dividend_consistency", 0.8)
+            yield_vs_5y, yield_vs_5y_raw = _safe_get(row, "dividend_yield_vs_5y_avg", 1.0)
+            recent_change, _ = _safe_get(row, "recent_dividend_change", 0)
+            high_yield_flag, high_yield_flag_raw = _safe_get(row, "high_yield_flag", 0)
 
-            # NEW: Leverage signals (calc_leverage_features)
-            interest_coverage = row.get("interest_coverage", 5.0)
-            debt_to_equity = row.get("debt_to_equity", 0.5)
-            cash_ratio_val = row.get("cash_ratio", 0.5)
-            working_capital_ratio = row.get("working_capital_ratio", 1.0)
+            # Leverage signals (calc_leverage_features)
+            interest_coverage, _ = _safe_get(row, "interest_coverage", 5.0)
+            debt_to_equity, _ = _safe_get(row, "debt_to_equity", 0.5)
+            cash_ratio_val, _ = _safe_get(row, "cash_ratio", 0.5)
+            working_capital_ratio, _ = _safe_get(row, "working_capital_ratio", 1.0)
 
-            # NEW: Balance sheet health (calc_balance_sheet_dynamics + distress)
-            balance_sheet_strength = row.get("balance_sheet_strength", 50)
-            cash_runway = row.get("cash_runway_months", 24)
-            retained_earnings_growth = row.get("retained_earnings_growth", 0)
-            debt_3y_cagr = row.get("debt_3y_cagr", 0)
+            # Balance sheet health (calc_balance_sheet_dynamics + distress)
+            balance_sheet_strength, _ = _safe_get(row, "balance_sheet_strength", 50)
+            cash_runway, _ = _safe_get(row, "cash_runway_months", 24)
+            retained_earnings_growth, _ = _safe_get(row, "retained_earnings_growth", 0)
+            debt_3y_cagr, _ = _safe_get(row, "debt_3y_cagr", 0)
 
             # Base probability with more granular assessment
             prob = 0.05  # Low base rate for established dividend payers
@@ -2918,19 +2977,19 @@ class DividendCutProbabilityModel:
                 elif streak >= 5:
                     prob -= 0.02
 
-            # NEW: Sustainability flag from comprehensive calc
+            # Sustainability flag from comprehensive calc
             if sustainable_flag == 0:
                 prob += 0.12
 
-            # NEW: Consistency score
+            # Consistency score
             if consistency is not None and consistency < 0.5:
                 prob += 0.10
 
-            # NEW: Yield vs historical average (abnormally high = warning)
+            # Yield vs historical average (abnormally high = warning)
             if yield_vs_5y is not None and yield_vs_5y > 1.5:
                 prob += 0.08  # Price has dropped, yield spiked
 
-            # NEW: Recent dividend changes
+            # Recent dividend changes
             if recent_change is not None and recent_change < -10:
                 prob += 0.15  # Already cutting
 
@@ -2938,7 +2997,7 @@ class DividendCutProbabilityModel:
             if growth_exp is not None and growth_exp < -5:
                 prob += 0.12
 
-            # NEW: Leverage stress signals
+            # Leverage stress signals
             if self.use_leverage_signals:
                 if interest_coverage is not None and interest_coverage < 2.0:
                     prob += 0.12
@@ -2949,7 +3008,7 @@ class DividendCutProbabilityModel:
                 if working_capital_ratio is not None and working_capital_ratio < 0.5:
                     prob += 0.06
 
-            # NEW: Balance sheet deterioration
+            # Balance sheet deterioration
             if self.use_balance_sheet:
                 if balance_sheet_strength is not None and balance_sheet_strength < 25:
                     prob += 0.10
@@ -2973,14 +3032,14 @@ class DividendCutProbabilityModel:
             record = _extract_identifiers(row)
             record.update(
                 {
-                    "high_yield_flag": high_yield_flag,
+                    "high_yield_flag": high_yield_flag_raw,
                     "dividend_cut_probability": prob,
-                    "fcf_dividend_coverage": fcf_coverage,
-                    "payout_ratio": payout_ratio,
-                    "dividend_streak": streak,
-                    "dividend_consistency": consistency,
-                    "yield_vs_5y_avg": yield_vs_5y,
-                    "sustainable_flag": sustainable_flag,
+                    "fcf_dividend_coverage": fcf_coverage_raw,
+                    "payout_ratio": payout_ratio_raw,
+                    "dividend_streak": streak_raw,
+                    "dividend_consistency": consistency_raw,
+                    "yield_vs_5y_avg": yield_vs_5y_raw,
+                    "sustainable_flag": sustainable_flag_raw,
                     "safety_score": 100 * (1 - prob),
                     "risk_category": risk_cat,
                 }
@@ -3131,28 +3190,32 @@ class PriceTargetAchievementModel:
     def analyze_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         results = []
         for _, row in df.iterrows():
-            # Core metrics
-            upside = row.get("upside_potential", 10)
-            spread = row.get("price_target_spread_pct", 20)
-            pt_momentum = row.get("pt_momentum_1m", 0)
-            rating = row.get("analyst_rating_normalized", 50)
+            # Core metrics — _safe_get returns (calc_value, raw_value)
+            upside, upside_raw = _safe_get(row, "upside_potential", 10)
+            spread, spread_raw = _safe_get(row, "price_target_spread_pct", 20)
+            pt_momentum, _ = _safe_get(row, "pt_momentum_1m", 0)
+            rating, rating_raw = _safe_get(row, "analyst_rating_normalized", 50)
 
-            # NEW: Enhanced analyst sentiment features
-            conviction = row.get("analyst_conviction", 50)
-            consensus_convergence = row.get("pt_consensus_convergence", 0)
-            pt_accel = row.get("pt_acceleration_short", 0)
-            eps_revision = row.get("eps_revision_momentum", 0)
-            coverage_trend = row.get("analyst_coverage_trend", 0)
-            bullish_pct = row.get("analyst_bullish_pct", 50)
+            # Enhanced analyst sentiment features
+            conviction, conviction_raw = _safe_get(row, "analyst_conviction", 50)
+            if pd.isna(conviction_raw):
+                derived = _compute_analyst_conviction(row)
+                if not pd.isna(derived):
+                    conviction, conviction_raw = derived, derived
+            consensus_convergence, _ = _safe_get(row, "pt_consensus_convergence", 0)
+            pt_accel, _ = _safe_get(row, "pt_acceleration_short", 0)
+            eps_revision, eps_revision_raw = _safe_get(row, "eps_revision_momentum", 0)
+            coverage_trend, _ = _safe_get(row, "analyst_coverage_trend", 0)
+            bullish_pct, bullish_pct_raw = _safe_get(row, "analyst_bullish_pct", 50)
 
-            # NEW: Risk adjustment (calc_beta_risk_features)
-            beta_1y = row.get("beta_1y", 1.0)
-            beta_stability = row.get("beta_stability_score", 50)
-            distress_risk = row.get("distress_risk_score", 50)
+            # Risk adjustment (calc_beta_risk_features)
+            beta_1y, _ = _safe_get(row, "beta_1y", 1.0)
+            beta_stability, _ = _safe_get(row, "beta_stability_score", 50)
+            distress_risk, _ = _safe_get(row, "distress_risk_score", 50)
 
-            # NEW: Financial health (calc_balance_sheet_dynamics)
-            bs_strength = row.get("balance_sheet_strength", 50)
-            debt_mat_risk = row.get("debt_maturity_risk", 0)
+            # Financial health (calc_balance_sheet_dynamics)
+            bs_strength, _ = _safe_get(row, "balance_sheet_strength", 50)
+            debt_mat_risk, _ = _safe_get(row, "debt_maturity_risk", 0)
 
             # Base probability - inversely related to upside magnitude
             if upside is None or pd.isna(upside):
@@ -3184,31 +3247,31 @@ class PriceTargetAchievementModel:
             elif spread is not None and spread > 40:
                 adjustments -= 0.08
 
-            # NEW: Analyst conviction score
+            # Analyst conviction score
             if conviction is not None and conviction > 70:
                 adjustments += 0.07
             elif conviction is not None and conviction < 30:
                 adjustments -= 0.05
 
-            # NEW: Consensus converging (analysts agreeing)
+            # Consensus converging (analysts agreeing)
             if consensus_convergence is not None and consensus_convergence > 0:
                 adjustments += 0.05
 
-            # NEW: PT acceleration (momentum building)
+            # PT acceleration (momentum building)
             if pt_accel is not None and pt_accel > 0.02:
                 adjustments += 0.06
 
-            # NEW: EPS revisions supporting the price target
+            # EPS revisions supporting the price target
             if eps_revision is not None and eps_revision > 5:
                 adjustments += 0.08
             elif eps_revision is not None and eps_revision < -5:
                 adjustments -= 0.10
 
-            # NEW: Growing analyst coverage = more attention
+            # Growing analyst coverage = more attention
             if coverage_trend is not None and coverage_trend > 0:
                 adjustments += 0.03
 
-            # NEW: Risk-adjusted achievement probability
+            # Risk-adjusted achievement probability
             if self.use_risk_adjustment:
                 if beta_1y is not None and beta_1y > 1.5:
                     adjustments -= 0.08
@@ -3219,7 +3282,7 @@ class PriceTargetAchievementModel:
                 if distress_risk is not None and distress_risk > 70:
                     adjustments -= 0.12
 
-            # NEW: Financial health supports target achievement
+            # Financial health supports target achievement
             if self.use_financial_health:
                 if bs_strength is not None and bs_strength > 75:
                     adjustments += 0.05
@@ -3237,13 +3300,13 @@ class PriceTargetAchievementModel:
             record = _extract_identifiers(row)
             record.update(
                 {
-                    "bullish_pct": bullish_pct,
+                    "bullish_pct": bullish_pct_raw,
                     "achievement_probability": prob,
-                    "upside_potential": upside,
-                    "price_target_spread_pct": spread,
-                    "analyst_conviction": conviction,
-                    "eps_revision_momentum": eps_revision,
-                    "analyst_rating_normalized": rating,
+                    "upside_potential": upside_raw,
+                    "price_target_spread_pct": spread_raw,
+                    "analyst_conviction": conviction_raw,
+                    "eps_revision_momentum": eps_revision_raw,
+                    "analyst_rating_normalized": rating_raw,
                     "expected_return_prob_weighted": (upside or 0) * prob,
                     "confidence_level": (
                         "High"

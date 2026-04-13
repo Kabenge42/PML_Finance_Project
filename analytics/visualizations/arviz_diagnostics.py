@@ -61,7 +61,7 @@ def build_screening_inference_data(
     screens: dict[str, pd.DataFrame],
     return_col: str = "expected_upside_pct",
     n_bootstrap: int = 4_000,
-    n_chains: int = 4,
+    n_chains: int = 8,
 ) -> "az.InferenceData":
     """
     Build InferenceData with posterior-like bootstrap distributions
@@ -153,7 +153,7 @@ def create_productivity_frontier_posterior(
         labels=[f"Q{i + 1}" for i in range(n_quantiles)],
     )
 
-    n_chains, n_draws = 4, 4_000
+    n_chains, n_draws = 8, 4_000
     rng = np.random.default_rng(42)
     posterior_dict: dict[str, tuple] = {}
     for q_label, group in df.groupby("prod_quintile", observed=True):
@@ -196,7 +196,7 @@ def create_productivity_frontier_posterior(
 
 def build_resampled_posterior_idata(
     resampled_df: pd.DataFrame,
-    n_chains: int = 4,
+    n_chains: int = 8,
     n_draws: int = 4_000,
 ) -> "az.InferenceData":
     """

@@ -1201,12 +1201,8 @@ def main():
                 # Build InferenceData for beat probability
                 if ARVIZ_AVAILABLE and "posterior_alpha" in bayesian_results.columns:
                     try:
-                        idata_beat = build_beat_probability_inference_data(
-                            bayesian_results,
-                            df,
-                            n_posterior_samples=4000,
-                            n_chains=4,
-                        )
+                        idata_beat = build_beat_probability_inference_data(bayesian_results, df,
+                                                                           n_posterior_samples=4000, n_chains=8)
                         beat_summary = summarize_inference_data(idata_beat)
                         print(
                             f"    ✓ InferenceData (beat): {beat_summary.get('n_chains', 0)} chains × {beat_summary.get('n_draws', 0)} draws"

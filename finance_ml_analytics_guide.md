@@ -636,9 +636,7 @@ from analytics.inference_schema import (
 )
 
 # Build InferenceData for beat probability posteriors
-idata = build_beat_probability_inference_data(
-    beat_results_df=beat, observed_df=df, n_posterior_samples=4000
-)
+idata = build_beat_probability_inference_data(beat_results_df=beat, observed_df=df, n_posterior_samples=4000)
 print(summarize_inference_data(idata))
 
 # Load identifier coordinates

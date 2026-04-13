@@ -5,7 +5,7 @@ Uses PyMC GaussianRandomWalk for latent price state with an observation model
 for noisy price targets.
 
 Reference: run_kalman_filter() in expected_returns_v3.py (line 1519);
-           probability_analytics.py Kalman references.
+           probability_models.py Kalman references.
 """
 
 from __future__ import annotations
@@ -13,11 +13,22 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-import arviz as az
+try:
+    import arviz as az
+except ImportError:
+    try:
+        import arviz_base as az
+    except ImportError:
+        az = None  # type: ignore[assignment]
 import numpy as np
 import pandas as pd
-import pymc as pm
-import pytensor.tensor as pt
+
+try:
+    import pymc as pm
+except ImportError:
+    pm = None  # type: ignore[assignment]
+
+from probabilistic_ml_model.pml_models._pytensor_compat import get_pytensor_compile_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +47,7 @@ class KalmanFilterPriceTarget:
         self,
         price_targets: np.ndarray,
         dates: Optional[pd.DatetimeIndex] = None,
-        ticker: str = "UNKNOWN",
+        ticker: str = "UNKNOWN",  # noqa: ARG002 — reserved for labelling
         samples: int = 2000,
         tune: int = 1000,
         chains: int = 4,
@@ -52,7 +63,7 @@ class KalmanFilterPriceTarget:
         dates : DatetimeIndex, optional
             Time index for coordinates.
         ticker : str
-            Ticker symbol for labelling.
+            Ticker symbol for labeling.
         samples, tune, chains, target_accept, random_seed
             MCMC sampling parameters.
 
@@ -97,8 +108,8 @@ class KalmanFilterPriceTarget:
                 chains=chains,
                 target_accept=target_accept,
                 random_seed=random_seed,
-                return_inferencedata=True,
                 progressbar=False,
+                compile_kwargs=get_pytensor_compile_kwargs(),
             )
 
         return idata

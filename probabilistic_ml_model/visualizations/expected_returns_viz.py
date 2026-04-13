@@ -29,6 +29,7 @@ from probabilistic_ml_model.data_utils.inference_schema import (
     EquitiesMaterializedViewSpec,
     EquitiesSchemaMetadata,
 )
+from probabilistic_ml_model.data_utils.feature_catalog import columns_for_viz
 
 # Signal labels for tri-model agreement (duplicated from expected_returns_v3
 # to avoid circular imports)
@@ -42,7 +43,7 @@ _SIGNAL_LABELS = {
 
 def create_mc_return_distribution(mc: pd.DataFrame) -> go.Figure:
     """Two-panel figure: expected upside histogram + P(positive) bar chart."""
-    if mc.empty or "expected_upside_pct" not in mc.columns:
+    if mc.empty or "implied_return_mc" not in mc.columns:
         return create_no_data_figure("MC Return Distribution — No Data")
 
     fig = make_subplots(
@@ -55,7 +56,7 @@ def create_mc_return_distribution(mc: pd.DataFrame) -> go.Figure:
         vertical_spacing=0.12,
     )
 
-    upside = mc["expected_upside_pct"].clip(-100, 300)
+    upside = mc["implied_return_mc"].clip(-100, 300)
     fig.add_trace(
         go.Histogram(
             x=upside,
@@ -68,7 +69,7 @@ def create_mc_return_distribution(mc: pd.DataFrame) -> go.Figure:
         col=1,
     )
     fig.add_vline(x=0, line_dash="dash", line_color="red", row=1, col=1)
-    median_val = mc["expected_upside_pct"].median()
+    median_val = mc["implied_return_mc"].median()
     fig.add_vline(
         x=median_val,
         line_dash="dot",
@@ -121,7 +122,7 @@ def create_sector_risk_reward_scatter(
     sector = (
         mc.groupby("industry")
         .agg(
-            mean_upside=("expected_upside_pct", "mean"),
+            mean_upside=("implied_return_mc", "mean"),
             mean_var5=("var_5_pct", "mean"),
             mean_prob=("prob_positive_upside", "mean"),
             count=("ticker", "count"),
@@ -160,17 +161,22 @@ def create_kalman_vs_raw_scatter(kal: pd.DataFrame) -> go.Figure:
         )
 
     sample = plot_df.sample(min(2000, len(plot_df)), random_state=42).copy()
-    sample["filtered_log"] = np.sign(sample["filtered_upside"]) * np.log1p(
-        np.abs(sample["filtered_upside"])
+    sample["filtered_log"] = np.sign(sample["implied_return_kalman"]) * np.log1p(
+        np.abs(sample["implied_return_kalman"])
     )
     sample["raw_log"] = np.sign(sample["raw_upside"]) * np.log1p(np.abs(sample["raw_upside"]))
+
+    # v3.5: Support both 'ticker' and 'isin' as identifiers for hover data
+    id_col = "ticker" if "ticker" in sample.columns else "isin"
+    hover_cols = [id_col, "implied_return_kalman", "raw_upside"]
+    hover_cols = [c for c in hover_cols if c in sample.columns]
 
     fig = px.scatter(
         sample,
         x="raw_log",
         y="filtered_log",
         color="industry" if "industry" in sample.columns else None,
-        hover_data=["ticker", "filtered_upside", "raw_upside"],
+        hover_data=hover_cols,
         title="Kalman Filtered vs Raw Analyst Upside (log scale)",
         labels={
             "raw_log": "Raw Upside (signed log)",
@@ -224,7 +230,7 @@ def create_strong_consensus_bar(strong: pd.DataFrame) -> go.Figure:
     fig.add_trace(
         go.Bar(
             x=strong["ticker"],
-            y=strong["expected_upside_pct"],
+            y=strong["implied_return_mc"],
             name="MC Expected Upside",
             marker_color=COLORS[0],
         )
@@ -232,7 +238,7 @@ def create_strong_consensus_bar(strong: pd.DataFrame) -> go.Figure:
     fig.add_trace(
         go.Bar(
             x=strong["ticker"],
-            y=strong["filtered_upside"],
+            y=strong["implied_return_kalman"],
             name="Kalman Filtered Upside",
             marker_color=COLORS[1],
         )
@@ -240,11 +246,29 @@ def create_strong_consensus_bar(strong: pd.DataFrame) -> go.Figure:
     fig.add_trace(
         go.Bar(
             x=strong["ticker"],
-            y=strong["expected_return_prob_weighted"],
+            y=strong["implied_return_pt"],
             name="Prob-Weighted Return",
             marker_color=COLORS[2],
         )
     )
+    if "price_target_mc" in strong.columns:
+        fig.add_trace(
+            go.Bar(
+                x=strong["ticker"],
+                y=strong["price_target_mc"],
+                name="MC Fair Value ($)",
+                marker_color=COLORS[3] if len(COLORS) > 3 else "#636EFA",
+            )
+        )
+    if "price_target_kalman" in strong.columns:
+        fig.add_trace(
+            go.Bar(
+                x=strong["ticker"],
+                y=strong["price_target_kalman"],
+                name="Kalman Fair Value ($)",
+                marker_color=COLORS[4] if len(COLORS) > 4 else "#EF553B",
+            )
+        )
     fig.update_layout(
         title=f"Top {len(strong)} Strong Consensus Picks (All 3 Models Bullish)",
         yaxis_title="Expected Return (%)",
@@ -259,7 +283,9 @@ def create_strong_consensus_bar(strong: pd.DataFrame) -> go.Figure:
 def create_sector_heatmap(
     tri: pd.DataFrame,
     compute_sector_fn=None,
-    schema_metadata: Optional[EquitiesSchemaMetadata] = None,
+    schema_metadata: Optional[
+        EquitiesSchemaMetadata
+    ] = None,  # noqa: ARG001 — reserved for column validation
 ) -> go.Figure:
     """Sector expected returns heatmap across all models.
 
@@ -273,7 +299,7 @@ def create_sector_heatmap(
     schema_metadata : EquitiesSchemaMetadata, optional
         Schema metadata for column validation.
     """
-    if compute_sector_fn is not None:
+    if callable(compute_sector_fn):
         sector = compute_sector_fn(tri)
     else:
         # Lightweight fallback aggregation
@@ -323,9 +349,11 @@ def _default_sector_aggregation(tri: pd.DataFrame) -> pd.DataFrame:
 
     agg_map = {}
     col_pairs = [
-        ("expected_upside_pct", "mc"),
-        ("filtered_upside", "kalman"),
-        ("expected_return_prob_weighted", "pt"),
+        ("implied_return_mc", "mc"),
+        ("price_target_mc", "mc_price"),
+        ("implied_return_kalman", "kalman"),
+        ("price_target_kalman", "kalman_price"),
+        ("implied_return_pt", "pt"),
     ]
     for col, prefix in col_pairs:
         if col in tri.columns:
@@ -350,7 +378,7 @@ def _default_sector_aggregation(tri: pd.DataFrame) -> pd.DataFrame:
 
 def create_var_analysis(mc: pd.DataFrame) -> go.Figure:
     """Two-panel VaR analysis: distribution + VaR vs upside scatter."""
-    if mc.empty or "var_5_pct" not in mc.columns or "expected_upside_pct" not in mc.columns:
+    if mc.empty or "var_5_pct" not in mc.columns or "implied_return_mc" not in mc.columns:
         return create_no_data_figure("VaR Analysis — No Data")
 
     fig = make_subplots(
@@ -378,7 +406,7 @@ def create_var_analysis(mc: pd.DataFrame) -> go.Figure:
     fig.add_trace(
         go.Scatter(
             x=sample["var_5_pct"],
-            y=sample["expected_upside_pct"],
+            y=sample["implied_return_mc"],
             mode="markers",
             marker=dict(
                 size=4,
@@ -414,20 +442,23 @@ def create_beat_vs_achievement_scatter(beat: pd.DataFrame, pt: pd.DataFrame) -> 
         return create_no_data_figure("Beat vs Achievement — Insufficient Data")
 
     merged = beat[["ticker", "posterior_beat_prob", "confidence_score"]].merge(
-        pt[["ticker", "achievement_probability", "expected_return_prob_weighted"]],
+        pt[["ticker", "achievement_probability", "implied_return_pt"]],
         on="ticker",
         how="inner",
     )
     if merged.empty:
         return create_no_data_figure("Beat vs Achievement — No Overlapping Tickers")
 
+    # v3.5: Support both 'ticker' and 'isin' as identifiers
+    id_col = "ticker" if "ticker" in merged.columns else "isin"
+
     fig = px.scatter(
         merged,
         x="posterior_beat_prob",
         y="achievement_probability",
-        color="expected_return_prob_weighted",
+        color="implied_return_pt",
         size="confidence_score",
-        hover_data=["ticker"],
+        hover_data=[id_col] if id_col in merged.columns else None,
         title="P(Beat Earnings) vs P(Reach Price Target)",
         labels={
             "posterior_beat_prob": "P(Beat Next Quarter)",
@@ -459,10 +490,23 @@ def create_model_dispersion_dashboard(summary: pd.DataFrame) -> go.Figure:
         horizontal_spacing=0.1,
     )
 
+    _catalog_return_cols = columns_for_viz("expected_returns")
     return_cols = [
-        "expected_upside_pct",
-        "filtered_upside",
-        "expected_return_prob_weighted",
+        c
+        for c in _catalog_return_cols
+        if c in (
+            "implied_return_mc",
+            "price_target_mc",
+            "implied_return_kalman",
+            "price_target_kalman",
+            "implied_return_pt",
+        )
+    ] or [
+        "implied_return_mc",
+        "price_target_mc",
+        "implied_return_kalman",
+        "price_target_kalman",
+        "implied_return_pt",
     ]
     available = [c for c in return_cols if c in summary.columns]
     dispersion = pd.Series(dtype=float)
@@ -557,7 +601,7 @@ def create_model_dispersion_dashboard(summary: pd.DataFrame) -> go.Figure:
 
 def create_return_distribution_fit_chart(mc: pd.DataFrame) -> go.Figure:
     """Overlay histogram of MC returns with fitted parametric distribution."""
-    upside = mc["expected_upside_pct"].dropna().clip(-100, 300)
+    upside = mc["implied_return_mc"].dropna().clip(-100, 300)
     fig = go.Figure()
 
     fig.add_trace(
@@ -589,7 +633,7 @@ def create_return_distribution_fit_chart(mc: pd.DataFrame) -> go.Figure:
                     name=label,
                 )
             )
-        except Exception:
+        except (ValueError, RuntimeError, TypeError):
             continue
 
     var_5 = float(np.percentile(upside, 5))
@@ -744,7 +788,7 @@ def create_price_target_drift_dashboard(
     fig = go.Figure()
     color_idx = 0
 
-    for base in base_cols[:3]:  # limit to 3 base metrics
+    for base in base_cols[:5]:  # limit to 5 base metrics
         # Current value
         if base in mv_equities_df.columns:
             median_val = mv_equities_df[base].median()

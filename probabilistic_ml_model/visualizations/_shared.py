@@ -3,14 +3,118 @@ Shared utilities for visualization modules.
 
 Centralizes common constants, helper functions, and column resolution logic
 to avoid duplication across visualization modules.
+
+Column alias resolution is driven by the ``FeatureViewCatalog`` in
+``feature_catalog.py``.  The legacy ``MV_COLUMN_ALIASES`` dict is now
+built from the catalog's ``VIZ_REQUIREMENTS`` at import time, ensuring
+a single source of truth.
 """
 
 from __future__ import annotations
 
+import logging
+
 import plotly.graph_objects as go
+
+from probabilistic_ml_model.data_utils.feature_catalog import (
+    get_column_aliases,
+    resolve_column_from_catalog,
+    columns_for_viz,
+    VIZ_REQUIREMENTS,
+)
 
 # Dark theme for Plotly (single source of truth)
 PLOTLY_TEMPLATE = "plotly_dark"
+
+# Dark theme for ArviZ / Matplotlib (single source of truth)
+# ArviZ 1.0 style system: "arviz-variat" (updated from "arviz-tumma")
+ARVIZ_TEMPLATE = "arviz-variat"
+
+logger = logging.getLogger(__name__)
+
+
+def apply_arviz_theme() -> None:
+    """Apply the global ArviZ 1.0 theme using arviz_plots.
+
+    Tries ``arviz_plots`` first, then legacy ``arviz``, falling back to
+    ``matplotlib.pyplot.style.use("dark_background")`` otherwise.
+    Call this once at import time in modules that produce ArviZ figures.
+    """
+    try:
+        import arviz_plots as azp
+
+        azp.style.use(ARVIZ_TEMPLATE)
+    except (ImportError, ValueError, TypeError):
+        try:
+            import arviz as az
+
+            az.style.use(ARVIZ_TEMPLATE)
+        except (ImportError, ValueError, TypeError):
+            try:
+                import matplotlib.pyplot as plt
+
+                plt.style.use("dark_background")
+            except ImportError:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# ArviZ 1.0 compatibility helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_datatree(**groups):
+    """Build an ``xr.DataTree`` from keyword groups (ArviZ 1.0 compat).
+
+    Replaces the old ``az.InferenceData(posterior=ds, ...)`` constructor.
+    Each keyword is a group name and its value an ``xr.Dataset``.
+    An empty call returns an empty DataTree.
+    """
+    import xarray as xr
+
+    if not groups:
+        return xr.DataTree()
+    return xr.DataTree.from_dict(
+        {name: xr.DataTree(ds) for name, ds in groups.items() if ds is not None}
+    )
+
+
+def _fig_from_pc(pc):
+    """Extract a matplotlib ``Figure`` from an ArviZ 1.0 ``PlotCollection``.
+
+    ArviZ 1.0 plot functions return ``PlotCollection`` instead of axes.
+    The figure is stored in ``pc.viz.ds['figure']``.
+    Handles both PlotCollection and raw Figure objects gracefully.
+    Returns ``None`` for ``None`` input.
+    """
+    if pc is None:
+        return None
+    # PlotCollection path
+    try:
+        return pc.viz.ds["figure"].item()
+    except (AttributeError, KeyError, TypeError):
+        pass
+    # Direct figure passthrough
+    try:
+        import matplotlib.pyplot as plt
+
+        if isinstance(pc, plt.Figure):
+            return pc
+    except ImportError:
+        pass
+    return pc
+
+
+def _pc_add_title(pc, title: str):
+    """Safely add title to a PlotCollection (ArviZ 1.0)."""
+    try:
+        pc.add_title(title)
+    except (AttributeError, TypeError):
+        fig = _fig_from_pc(pc)
+        if fig and hasattr(fig, "suptitle"):
+            fig.suptitle(title)
+    return pc
+
 
 # Shared color scheme
 COLORS = [
@@ -24,41 +128,40 @@ COLORS = [
     "#F38181",
 ]
 
-# Column alias map: logical_name → [mv_primary, mv_fallback_1, ...]
-MV_COLUMN_ALIASES: dict[str, list[str]] = {
-    "revenue_growth_yoy": ["revenue_yoy_growth", "revenue_growth_yoy"],
-    "revenue_growth_3y_cagr": ["revenue_cagr_3y", "revenue_growth_3y_cagr"],
-    "revenue_growth_5y_cagr": ["revenue_cagr_5y", "revenue_growth_5y_cagr"],
-    "eps_growth_3y_cagr": ["eps_cagr_3y", "eps_growth_3y_cagr"],
-    "net_income_growth": ["net_income_growth_yoy", "net_income_growth"],
+# Column alias map — now derived from FeatureViewCatalog VIZ_REQUIREMENTS.
+# The catalog merges all VisualizationFeatureRequirement.column_aliases into
+# a single dict at module load time.  Additional aliases that are not part of
+# any visualization requirement are appended here to maintain backward compat.
+MV_COLUMN_ALIASES: dict[str, list[str]] = get_column_aliases()
+
+# Append legacy aliases that aren't covered by VIZ_REQUIREMENTS yet
+_LEGACY_EXTRAS: dict[str, list[str]] = {
     "inventory_turnover": [
         "inventory_turnover_itf",
         "inventory_turnover_mv",
         "inventory_turnover",
     ],
     "beneish_m_score": ["accounting_quality_score", "accruals_quality"],
-    "eps_beat_count": ["eps_positive_years"],
-    "eps_total_reports": ["eps_positive_streak"],
-    "eps_growth_yoy": ["eps_yoy_growth", "eps_growth_yoy"],
-    "operating_income_growth": ["operating_income_growth_yoy", "operating_income_growth"],
-    "fcf_growth_yoy": ["fcf_growth_yoy", "fcf_yoy_growth"],
     "eps_qoq_growth": ["eps_qoq_growth"],
     "quality_composite_score": ["quality_momentum_score", "quality_composite_score"],
-    "ebitda_growth_yoy": ["growth_ebitda_growth_yoy", "ebitda_growth_yoy"],
-    "dividend_yield": ["valuation_dividend_yield", "dividend_yield", "dividend_yield_ltm"],
     "rnd_intensity": ["rnd_intensity", "rnd_intensity_ltm"],
-    "accounting_quality_score": ["accounting_quality_score", "accounting_quality_score_comp"],
-    "earnings_quality_composite": ["earnings_quality_composite", "earnings_quality_score"],
     "asset_turnover": ["asset_turnover", "total_asset_turnover"],
-    "piotroski_f_score": ["piotroski_f_score", "f_score"],
 }
+for _key, _aliases in _LEGACY_EXTRAS.items():
+    if _key not in MV_COLUMN_ALIASES:
+        MV_COLUMN_ALIASES[_key] = _aliases
+    else:
+        for _a in _aliases:
+            if _a not in MV_COLUMN_ALIASES[_key]:
+                MV_COLUMN_ALIASES[_key].append(_a)
 
 
 def resolve_column(df, logical_name: str) -> str | None:
     """Resolve a logical column name to an actual DataFrame column.
 
-    Checks if *logical_name* exists directly in *df*; if not, walks through
-    ``MV_COLUMN_ALIASES`` to find the first available fallback.
+    Delegates to the catalog-driven ``resolve_column_from_catalog`` and
+    falls back to ``MV_COLUMN_ALIASES`` for legacy aliases not yet
+    registered in ``VIZ_REQUIREMENTS``.
 
     Parameters
     ----------
@@ -72,8 +175,11 @@ def resolve_column(df, logical_name: str) -> str | None:
     str | None
         The resolved column name present in *df*, or ``None``.
     """
-    if logical_name in df.columns:
-        return logical_name
+    # Try catalog-driven resolution first
+    result = resolve_column_from_catalog(df, logical_name)
+    if result is not None:
+        return result
+    # Fall back to full MV_COLUMN_ALIASES (includes legacy extras)
     for alias in MV_COLUMN_ALIASES.get(logical_name, []):
         if alias in df.columns:
             return alias

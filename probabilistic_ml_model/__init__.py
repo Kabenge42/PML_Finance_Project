@@ -1,5 +1,13 @@
 import importlib as _importlib
 
+# ── Patch arviz for PyMC 5.x compatibility with arviz >= 1.0 ─────────────────
+try:
+    from probabilistic_ml_model._pymc_arviz_compat import patch as _patch_arviz
+
+    _patch_arviz()
+except Exception:
+    pass
+
 # ── Lazy-loaded PML model aliases ─────────────────────────────────────────────
 # Maps public alias → (relative module path, attribute name inside that module).
 # Each entry is resolved on first access via __getattr__.

@@ -72,14 +72,24 @@ import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 from requests.exceptions import RequestsDependencyWarning
 
+from probabilistic_ml_model.pipeline_runners import PipelineRunner
+
 warnings.filterwarnings("ignore", category=RequestsDependencyWarning)
 
 logger = logging.getLogger(__name__)
+
+# ── Patch arviz for PyMC 5.x compatibility with arviz >= 1.0 ─────────────────
+try:
+    from probabilistic_ml_model._pymc_arviz_compat import patch as _patch_arviz
+
+    _patch_arviz()
+except Exception:
+    pass
 
 # ── Configure pytensor to use Python-only mode ───────────────────────────────
 # On Windows with official CPython 3.14 (MSVC-built), MinGW g++ cannot reliably
@@ -136,13 +146,41 @@ class PipelineConfig:
     mcmc_samples: int = 50_000
     mcmc_burn_in: int = 2_000
     mcmc_tune: int = 2_000
-    beat_threshold: float = 0.6
+    beat_threshold: float = 0.5
     use_mcmc: bool = True
-    use_student_t: bool = False
+    use_student_t: bool = True
     anomaly_z_threshold: float | None = None
 
+    # Accounting anomaly model parameters
+    anomaly_severity_anomaly_weight: float = 0.33
+    anomaly_severity_feature_weight: float = 0.67
+    anomaly_multi_flag_threshold: int = 20
+    anomaly_tier_bins: list[float] | None = None
+    anomaly_tier_labels: list[str] | None = None
+    anomaly_n_mcmc_samples: int = 5_000
+    anomaly_burn_in: int = 1_000
+
+    # Credit risk / dividend safety MCMC parameters
+    credit_n_mcmc_samples: int = 5_000
+    credit_burn_in: int = 1_000
+    dividend_n_mcmc_samples: int = 5_000
+    dividend_burn_in: int = 1_000
+
+    # Earnings beat model parameters
+    beat_use_quality_adjustment: bool = True
+    beat_use_momentum_prior: bool = True
+    beat_momentum_prior_strength: float = 0.3
+
+    # Historical target drift
+    use_historical_targets: bool = True
+
+    # Hierarchical MCMC parameters
+    hier_mcmc_min_group_size: int = 20
+    hier_mcmc_shrinkage_strength: float = 10.0
+    hier_mcmc_group_cols: list[str] | None = None
+
     # Screening thresholds
-    screening_min_pct: float = 1.0
+    screening_min_pct: float = 0.01
 
     # Performance tuning
     n_jobs: int = -1
@@ -152,17 +190,19 @@ class PipelineConfig:
     export_max_workers: int = 4
 
     # Paths
-    output_dir: str = "outputs/analytics"
-    log_file: str | None = "logs/expected_returns_pipeline.log"
+    output_dir: str = "outputs"
+    log_file: str | None = "logs/expected_returns_pipeline_v4.log"
     log_level: int = logging.INFO
 
     # v4.0: Probabilistic linear regression / DCF model toggles
-    enable_plr_model: bool = True
-    enable_dcf_model: bool = True
-    plr_samples: int = 2_000
-    plr_tune: int = 1_000
+    enable_plr_model: bool = False
+    enable_dcf_model: bool = False
+    plr_samples: int = 500
+    plr_tune: int = 500
     plr_chains: int = 2
     plr_cores: int = 1
+    plr_max_obs: int = 500
+    plr_max_treedepth: int = 8
     dcf_samples: int = 2_000
     dcf_tune: int = 1_000
     dcf_chains: int = 2
@@ -179,8 +219,8 @@ class PipelineConfig:
             mcmc_burn_in=int(os.environ.get("ER_MCMC_BURN_IN", 2_000)),
             mcmc_tune=int(os.environ.get("ER_MCMC_TUNE", 2_000)),
             use_mcmc=os.environ.get("ER_USE_MCMC", "true").lower() == "true",
-            use_student_t=os.environ.get("ER_USE_STUDENT_T", "false").lower() == "true",
-            output_dir=os.environ.get("ER_OUTPUT_DIR", "outputs/analytics"),
+            use_student_t=os.environ.get("ER_USE_STUDENT_T", "true").lower() == "true",
+            output_dir=os.environ.get("ER_OUTPUT_DIR", "outputs"),
             log_file=os.environ.get("ER_LOG_FILE", "logs/expected_returns_pipeline.log"),
             n_jobs=int(os.environ.get("ER_N_JOBS", os.environ.get("N_JOBS", -1))),
             max_features_per_category=int(os.environ.get("ER_MAX_FEATURES_PER_CATEGORY", 100)),
@@ -190,15 +230,50 @@ class PipelineConfig:
             ),
             export_max_workers=int(os.environ.get("ER_EXPORT_MAX_WORKERS", 4)),
             enable_plr_model=os.environ.get("ER_ENABLE_PLR", "true").lower() == "true",
-            enable_dcf_model=os.environ.get("ER_ENABLE_DCF", "true").lower() == "true",
-            plr_samples=int(os.environ.get("ER_PLR_SAMPLES", 2_000)),
-            plr_tune=int(os.environ.get("ER_PLR_TUNE", 1_000)),
+            enable_dcf_model=os.environ.get("ER_ENABLE_DCF", "false").lower() == "false",
+            plr_samples=int(os.environ.get("ER_PLR_SAMPLES", 500)),
+            plr_tune=int(os.environ.get("ER_PLR_TUNE", 500)),
             plr_chains=int(os.environ.get("ER_PLR_CHAINS", 2)),
             plr_cores=int(os.environ.get("ER_PLR_CORES", 1)),
+            plr_max_obs=int(os.environ.get("ER_PLR_MAX_OBS", 500)),
+            plr_max_treedepth=int(os.environ.get("ER_PLR_MAX_TREEDEPTH", 8)),
             dcf_samples=int(os.environ.get("ER_DCF_SAMPLES", 2_000)),
             dcf_tune=int(os.environ.get("ER_DCF_TUNE", 1_000)),
             dcf_chains=int(os.environ.get("ER_DCF_CHAINS", 2)),
             dcf_cores=int(os.environ.get("ER_DCF_CORES", 1)),
+            anomaly_severity_anomaly_weight=float(
+                os.environ.get("ER_ANOMALY_SEVERITY_ANOMALY_WEIGHT", 0.33)
+            ),
+            anomaly_severity_feature_weight=float(
+                os.environ.get("ER_ANOMALY_SEVERITY_FEATURE_WEIGHT", 0.67)
+            ),
+            anomaly_multi_flag_threshold=int(
+                os.environ.get("ER_ANOMALY_MULTI_FLAG_THRESHOLD", 20)
+            ),
+            anomaly_n_mcmc_samples=int(os.environ.get("ER_ANOMALY_MCMC_SAMPLES", 5_000)),
+            anomaly_burn_in=int(os.environ.get("ER_ANOMALY_BURN_IN", 1_000)),
+            credit_n_mcmc_samples=int(os.environ.get("ER_CREDIT_MCMC_SAMPLES", 5_000)),
+            credit_burn_in=int(os.environ.get("ER_CREDIT_BURN_IN", 1_000)),
+            dividend_n_mcmc_samples=int(os.environ.get("ER_DIVIDEND_MCMC_SAMPLES", 5_000)),
+            dividend_burn_in=int(os.environ.get("ER_DIVIDEND_BURN_IN", 1_000)),
+            beat_use_quality_adjustment=os.environ.get(
+                "ER_BEAT_USE_QUALITY_ADJUSTMENT", "true"
+            ).lower() == "true",
+            beat_use_momentum_prior=os.environ.get(
+                "ER_BEAT_USE_MOMENTUM_PRIOR", "true"
+            ).lower() == "true",
+            beat_momentum_prior_strength=float(
+                os.environ.get("ER_BEAT_MOMENTUM_PRIOR_STRENGTH", 0.3)
+            ),
+            use_historical_targets=os.environ.get(
+                "ER_USE_HISTORICAL_TARGETS", "true"
+            ).lower() == "true",
+            hier_mcmc_min_group_size=int(
+                os.environ.get("ER_HIER_MCMC_MIN_GROUP_SIZE", 20)
+            ),
+            hier_mcmc_shrinkage_strength=float(
+                os.environ.get("ER_HIER_MCMC_SHRINKAGE_STRENGTH", 10.0)
+            ),
         )
 
 
@@ -208,13 +283,16 @@ class PipelineConfig:
 
 
 @dataclass
-class PipelineResult:
+class BaselinePipelineResult:
     """
     Structured container for all pipeline step outputs.
 
     Replaces loose variables, providing a single typed object flowing through
     all pipeline phases.
     """
+
+    # Catalog (was previously set in a custom __init__)
+    catalog: Any = None
 
     # Phase 1: Data sources
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -265,6 +343,9 @@ class PipelineResult:
     # Timing
     phase_timings: dict[str, float] = field(default_factory=dict)
 
+    # Per-model detailed statistics (populated during Phase 2/5)
+    model_statistics: dict[str, dict] = field(default_factory=dict)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pipeline Helpers
@@ -299,6 +380,187 @@ def _timed_phase(phase_name: str):
     return _Timer()
 
 
+def _run_model_step(step_num: int, label: str, runner: callable) -> None:
+    """Wrapper for running a model step with logging and error handling."""
+    try:
+        _log_and_print(f"  [{step_num}] {label}...")
+        runner()
+    except Exception as e:
+        logger.error("Step %d (%s) failed: %s", step_num, label, e, exc_info=True)
+        _log_and_print(f"  ⚠️ Step {step_num} ({label}) failed: {e}", logging.ERROR)
+
+
+def _as_float_series(series: pd.Series) -> pd.Series:
+    """Coerce a Series to float64, dropping non-numeric values."""
+    return pd.to_numeric(series, errors="coerce").dropna().astype(float)
+
+
+def compute_metric_statistics(series: pd.Series) -> dict | None:
+    """
+    Compute summary statistics for a numeric Series.
+
+    Returns a dict with count, mean, median, std, min, max, q25, q75,
+    positive_pct, and missing_pct.  Returns ``None`` if the series has
+    no valid numeric values.
+    """
+    numeric = _as_float_series(series)
+    if numeric.empty:
+        return None
+    total = len(series)
+    return {
+        "count": len(numeric),
+        "mean": float(numeric.mean()),
+        "median": float(numeric.median()),
+        "std": float(numeric.std()),
+        "min": float(numeric.min()),
+        "max": float(numeric.max()),
+        "q25": float(numeric.quantile(0.25)),
+        "q75": float(numeric.quantile(0.75)),
+        "positive_pct": float((numeric > 0).sum() / len(numeric) * 100),
+        "missing_pct": float((total - len(numeric)) / total * 100) if total else 0.0,
+    }
+
+
+def compute_model_detailed_statistics(
+    df: pd.DataFrame,
+    model_name: str,
+    key_columns: list[str],
+    group_col: str = "industry",
+) -> dict:
+    """
+    Compute granular statistics for a model's output DataFrame.
+
+    Uses ``compute_metric_statistics`` for each key column and adds
+    distribution shape metrics (skewness, kurtosis), inter-model
+    consistency indicators, and sector-level breakdowns.
+    """
+    if df.empty:
+        logger.warning(
+            "compute_model_detailed_statistics: %s — empty DataFrame", model_name
+        )
+        return {}
+
+    results = {}
+    for col in key_columns:
+        if col not in df.columns:
+            continue
+
+        base_stats = compute_metric_statistics(df[col])
+        if base_stats is None:
+            continue
+
+        series = _as_float_series(df[col])
+
+        shape_stats = {}
+        if len(series) > 3:
+            # Clip extreme values to prevent overflow in higher-moment calculations
+            safe_series = series.clip(-1e12, 1e12)
+            shape_stats["skewness"] = float(safe_series.skew())
+            shape_stats["kurtosis"] = float(safe_series.kurtosis())
+            shape_stats["iqr"] = float(base_stats["q75"] - base_stats["q25"])
+            shape_stats["coefficient_of_variation"] = (
+                float(series.std() / series.mean()) if series.mean() != 0 else None
+            )
+            mean, std = series.mean(), series.std()
+            if std > 0:
+                shape_stats["pct_beyond_2std"] = float(
+                    ((series < mean - 2 * std) | (series > mean + 2 * std)).sum()
+                    / len(series)
+                    * 100
+                )
+
+        sector_breakdown = {}
+        if group_col in df.columns:
+            for sector, group in df.groupby(group_col):
+                sector_stats = compute_metric_statistics(group[col])
+                if sector_stats:
+                    sector_breakdown[str(sector)] = {
+                        "count": sector_stats["count"],
+                        "mean": sector_stats["mean"],
+                        "median": sector_stats["median"],
+                        "std": sector_stats["std"],
+                    }
+
+        results[col] = {
+            "global": base_stats,
+            "distribution_shape": shape_stats,
+            "sector_breakdown": sector_breakdown,
+        }
+
+    logger.info(
+        "%s: computed detailed statistics for %d / %d columns",
+        model_name,
+        len(results),
+        len(key_columns),
+    )
+    return results
+
+
+def print_model_statistics(
+    stats: dict,
+    model_name: str,
+    show_sectors: bool = True,
+    top_n_sectors: int = 50,
+) -> None:
+    """Pretty-print the detailed statistics from compute_model_detailed_statistics."""
+    if not stats:
+        return
+
+    print(f"\n  📊 {model_name} — Detailed Statistics:")
+    for col, info in stats.items():
+        g = info["global"]
+        s = info.get("distribution_shape", {})
+        print(f"    ▸ {col}:")
+        print(
+            f"        Count: {g['count']:,}  |  Mean: {g['mean']:.2f}  |  "
+            f"Median: {g['median']:.2f}  |  Std: {g['std']:.2f}"
+        )
+        print(
+            f"        Min: {g['min']:.2f}  |  Max: {g['max']:.2f}  |  "
+            f"IQR: [{g['q25']:.2f}, {g['q75']:.2f}]"
+        )
+        print(
+            f"        Positive: {g['positive_pct']:.1f}%  |  "
+            f"Missing: {g['missing_pct']:.1f}%"
+        )
+        if s:
+            print(
+                f"        Skew: {s.get('skewness') or 0:.3f}  |  "
+                f"Kurtosis: {s.get('kurtosis') or 0:.3f}  |  "
+                f"CV: {s.get('coefficient_of_variation') or 0:.3f}"
+            )
+            if "pct_beyond_2std" in s:
+                print(f"        Outliers (>2σ): {s['pct_beyond_2std']:.1f}%")
+
+        if show_sectors and info.get("sector_breakdown"):
+            sorted_sectors = sorted(
+                info["sector_breakdown"].items(),
+                key=lambda x: x[1]["mean"],
+                reverse=True,
+            )[:top_n_sectors]
+            print(f"        Top {top_n_sectors} sectors by mean:")
+            for sector, sinfo in sorted_sectors:
+                print(
+                    f"          {sector}: mean={sinfo['mean']:.2f}, "
+                    f"median={sinfo['median']:.2f}, n={sinfo['count']}"
+                )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Per-Model Key Column Definitions (for statistics)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_MODEL_KEY_COLUMNS: dict[str, list[str]] = {
+    "Monte Carlo": ["expected_upside_mc", "prob_positive_upside", "implied_return_mc"],
+    "Price Target": ["achievement_probability", "expected_upside_pt", "implied_return_pt"],
+    "Kalman Filter": ["expected_upside_kalman", "implied_return_kalman"],
+    "Earnings Beat": ["prob_beat_given_momentum", "posterior_alpha", "posterior_beta"],
+    "Accounting Anomaly": ["accounting_anomaly_score", "anomaly_severity_score"],
+    "Credit Risk": ["distress_probability", "altman_z_score"],
+    "Dividend Safety": ["dividend_cut_probability", "fcf_coverage_ratio"],
+}
+
+
 class BaselinePipeline:
     """
     Orchestrates the full v4.0 expected returns pipeline.
@@ -309,7 +571,11 @@ class BaselinePipeline:
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
         self.cfg = config or PipelineConfig.from_env()
-        self.result = PipelineResult()
+        self.runner = PipelineRunner(self.cfg)
+        # Use our own BaselinePipelineResult which has all fields including phase_timings
+        self.result = BaselinePipelineResult()
+        # Synchronize back to the runner so they share the same dataframes/results
+        self.runner.r = self.result
 
     # ── Phase 1: Data Ingestion & Enrichment ──────────────────────────────────
 
@@ -320,11 +586,24 @@ class BaselinePipeline:
             load_equities_data_from_db,
             load_feature_data_from_db,
         )
-        from probabilistic_ml_model.statistical_functions.statistical_analysis import (
+        from probabilistic_ml_model.data_utils.feature_catalog import (
+            get_feature_catalog,
+        )
+        from probabilistic_ml_model.statistical_functions.statistical_models import (
             kalman_momentum_filter,
         )
 
         r = self.result
+
+        # Initialize the schema-driven feature catalog (singleton)
+        r.catalog = get_feature_catalog()
+        if r.catalog._loaded:
+            _log_and_print(
+                f"✓ FeatureViewCatalog: {len(r.catalog.category_columns)} categories, "
+                f"{len(r.catalog.view_columns)} views"
+            )
+        else:
+            _log_and_print("⚠️ FeatureViewCatalog: using fallback column lists (DB unavailable)")
 
         # Step 1: mv_equities
         _df = load_equities_data_from_db()
@@ -390,173 +669,105 @@ class BaselinePipeline:
 
     def phase_2_core_models(self) -> None:
         """Execute all core PML models from probabilistic_ml_model.pml_models."""
-        r, _cfg = self.result, self.cfg
+        from probabilistic_ml_model.pipeline_runners import (
+            compute_price_target_mc,
+            compute_price_target_prob_weighted,
+        )
 
+        r = self.result
         if r.df_enriched.empty:
             _log_and_print("⚠️ Phase 2 skipped — no enriched data available")
             return
 
-        # Step 7: Monte Carlo Simulation
-        self._run_model_step(
-            step_num=7,
-            label="Monte Carlo Simulation",
-            runner=self._run_monte_carlo,
-        )
+        # Model step definitions: (step_num, label, runner_method)
+        model_steps = [
+            (7, "Monte Carlo Simulation", self._run_monte_carlo),
+            (8, "Price Target Achievement", self._run_price_target),
+            (9, "Kalman Filter", self._run_kalman_filter),
+            (10, "Earnings Beat Analysis", self._run_earnings_beat),
+            (11, "Accounting Anomaly Detection", self._run_accounting_anomaly),
+            (12, "Credit Risk Analysis", self._run_credit_risk),
+            (13, "Dividend Safety Analysis", self._run_dividend_safety),
+        ]
 
-        # Step 8: Price Target Achievement
-        self._run_model_step(
-            step_num=8,
-            label="Price Target Achievement",
-            runner=self._run_price_target,
-        )
+        for step_num, label, runner_fn in model_steps:
+            _run_model_step(step_num, label, runner_fn)
 
-        # Step 9: Kalman Filter
-        self._run_model_step(
-            step_num=9,
-            label="Kalman Filter",
-            runner=self._run_kalman_filter,
-        )
-
-        # Step 10: Earnings Beat
-        self._run_model_step(
-            step_num=10,
-            label="Earnings Beat Analysis",
-            runner=self._run_earnings_beat,
-        )
-
-        # Step 11: Accounting Anomaly Detection
-        self._run_model_step(
-            step_num=11,
-            label="Accounting Anomaly Detection",
-            runner=self._run_accounting_anomaly,
-        )
-
-        # Step 12: Credit Risk
-        self._run_model_step(
-            step_num=12,
-            label="Credit Risk Analysis",
-            runner=self._run_credit_risk,
-        )
-
-        # Step 13: Dividend Safety
-        self._run_model_step(
-            step_num=13,
-            label="Dividend Safety Analysis",
-            runner=self._run_dividend_safety,
-        )
-
-    def _run_model_step(self, step_num: int, label: str, runner: callable) -> None:
-        """Wrapper for running a model step with logging and error handling."""
-        try:
-            _log_and_print(f"  [{step_num}] {label}...")
-            runner()
-        except Exception as e:
-            logger.error("Step %d (%s) failed: %s", step_num, label, e, exc_info=True)
-            _log_and_print(f"  ⚠️ Step {step_num} ({label}) failed: {e}", logging.ERROR)
-
-    def _run_monte_carlo(self) -> None:
-        from probabilistic_ml_model.pipeline_runners import (
-            compute_price_target_mc,
-            run_monte_carlo_analysis,
-        )
-
-        r = self.result
-        r.mc = run_monte_carlo_analysis(
-            r.df_enriched,
-            n_simulations=self.cfg.mc_simulations,
-            max_stocks=self.cfg.mc_max_stocks,
-            use_historical_targets=False,
-        )
+        # Post-processing: derived price targets
         if not r.mc.empty:
             r.mc = compute_price_target_mc(r.mc, r.df)
+        if not r.pt.empty:
+            r.pt = compute_price_target_prob_weighted(r.pt, r.df)
+
+        # Collect per-model detailed statistics
+        model_result_map = {
+            "Monte Carlo": r.mc,
+            "Price Target": r.pt,
+            "Kalman Filter": r.kal,
+            "Earnings Beat": r.beat,
+            "Accounting Anomaly": r.anomaly_results,
+            "Credit Risk": r.credit,
+            "Dividend Safety": r.div_safety,
+        }
+        for model_name, model_df in model_result_map.items():
+            if not model_df.empty:
+                key_cols = _MODEL_KEY_COLUMNS.get(model_name, [])
+                stats = compute_model_detailed_statistics(model_df, model_name, key_cols)
+                if stats:
+                    r.model_statistics[model_name] = stats
+                    print_model_statistics(stats, model_name, show_sectors=False)
+
+    def _run_monte_carlo(self) -> None:
+        r = self.result
+        self.runner.run_monte_carlo(r.df_enriched)
+        if not r.mc.empty:
             _log_and_print(
-                f"    ✓ {len(r.mc):,} stocks — mean upside: {r.mc['expected_upside_pct'].mean():.1f}%"
+                f"    ✓ {len(r.mc):,} stocks — mean upside: "
+                f"{r.mc.get('expected_upside_mc', pd.Series([0])).mean():.1f}%"
             )
 
     def _run_price_target(self) -> None:
-        from probabilistic_ml_model.pipeline_runners import (
-            compute_price_target_prob_weighted,
-            run_price_target_achievement,
-        )
-
         r = self.result
-        r.pt = run_price_target_achievement(
-            r.df_enriched,
-            use_historical_targets=False,
-            feature_df=r.df_all,
-        )
+        self.runner.run_price_target(r.df_enriched, r.df_all, r.catalog)
         if not r.pt.empty:
-            r.pt = compute_price_target_prob_weighted(r.pt, r.df)
             _log_and_print(
-                f"    ✓ {len(r.pt):,} stocks — mean P(achieve): {r.pt['achievement_probability'].mean():.3f}"
+                f"    ✓ {len(r.pt):,} stocks — mean P(achieve): "
+                f"{r.pt.get('achievement_probability', pd.Series([0])).mean():.3f}"
             )
 
     def _run_kalman_filter(self) -> None:
-        from probabilistic_ml_model.pipeline_runners import run_kalman_filter
-
         r = self.result
-        r.kal = run_kalman_filter(r.df_enriched, use_historical_targets=False)
+        self.runner.run_kalman_filter(r.df_enriched)
         if not r.kal.empty:
             _log_and_print(
-                f"    ✓ {len(r.kal):,} stocks — mean filtered upside: {r.kal['filtered_upside'].mean():.1f}%"
+                f"    ✓ {len(r.kal):,} stocks — mean filtered upside: "
+                f"{r.kal.get('expected_upside_kalman', pd.Series([0])).mean():.1f}%"
             )
 
     def _run_earnings_beat(self) -> None:
-        from probabilistic_ml_model.pipeline_runners import (
-            run_earnings_beat_analysis,
-        )
-
         r = self.result
-        source = r.df_all if not r.df_all.empty else r.df
-        r.beat = run_earnings_beat_analysis(source, feature_df=r.df_all)
+        self.runner.run_earnings_beat(r.df_enriched, r.df_all, r.catalog)
         if not r.beat.empty:
             _log_and_print(
-                f"    ✓ {len(r.beat):,} stocks — mean P(beat): {r.beat['prob_beat_given_momentum'].mean():.3f}"
+                f"    ✓ {len(r.beat):,} stocks — mean P(beat): "
+                f"{r.beat.get('prob_beat_given_momentum', pd.Series([0])).mean():.3f}"
             )
 
     def _run_accounting_anomaly(self) -> None:
-        from probabilistic_ml_model.pipeline_runners import (
-            run_accounting_anomaly_analysis,
-        )
-
-        r, cfg = self.result, self.cfg
-        r.anomaly_results = run_accounting_anomaly_analysis(
-            r.df,
-            feature_df=r.df_all,
-            anomaly_z_threshold=cfg.anomaly_z_threshold,
-            n_mcmc_samples=cfg.mcmc_burn_in * 5,
-            burn_in=cfg.mcmc_burn_in,
-        )
+        r = self.result
+        self.runner.run_accounting_anomaly(r.df_enriched, r.df_all, r.catalog)
         if not r.anomaly_results.empty:
             _log_and_print(f"    ✓ {len(r.anomaly_results):,} stocks analyzed")
 
     def _run_credit_risk(self) -> None:
-        from probabilistic_ml_model.pipeline_runners import (
-            run_credit_risk_analysis,
-        )
-
-        r, cfg = self.result, self.cfg
-        r.credit = run_credit_risk_analysis(
-            r.df,
-            feature_df=r.df_all,
-            n_mcmc_samples=cfg.mcmc_burn_in * 5,
-            burn_in=cfg.mcmc_burn_in,
-        )
+        r = self.result
+        self.runner.run_credit_risk(r.df_enriched, r.df_all, r.catalog)
         if not r.credit.empty:
             _log_and_print(f"    ✓ {len(r.credit):,} stocks — credit risk assessed")
 
     def _run_dividend_safety(self) -> None:
-        from probabilistic_ml_model.pipeline_runners import (
-            run_dividend_safety_analysis,
-        )
-
-        r, cfg = self.result, self.cfg
-        r.div_safety = run_dividend_safety_analysis(
-            r.df_all,
-            feature_df=r.df_all,
-            n_mcmc_samples=cfg.mcmc_burn_in * 5,
-            burn_in=cfg.mcmc_burn_in,
-        )
+        r = self.result
+        self.runner.run_dividend_safety(r.df_enriched, r.df_all, r.catalog)
         if not r.div_safety.empty:
             _log_and_print(f"    ✓ {len(r.div_safety):,} stocks — dividend safety assessed")
 
@@ -564,93 +775,85 @@ class BaselinePipeline:
 
     def phase_3_market_models(self) -> None:
         """Run ProbabilisticLinearRegressionModel and DCF_PriceTargetModel."""
-        r, cfg = self.result, self.cfg
+        cfg = self.cfg
 
-        # Step 14: Probabilistic Linear Regression
         if cfg.enable_plr_model:
-            try:
-                _log_and_print("  [14] Probabilistic Linear Regression...")
-                from probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel import (
-                    ProbabilisticLinearRegression,
-                )
+            _run_model_step(14, "Probabilistic Linear Regression", self._run_plr)
 
-                plr = ProbabilisticLinearRegression()
-                # Prepare feature matrix from available return/risk columns
-                feature_cols = [
-                    c
-                    for c in [
-                        "expected_upside_pct",
-                        "filtered_upside",
-                        "achievement_probability",
-                        "prob_positive_upside",
-                        "beta_1y",
-                        "altman_z_score",
-                    ]
-                    if c in r.summary.columns or c in r.df_all.columns
-                ]
-                source = r.summary if not r.summary.empty else r.df_all
-                if len(feature_cols) >= 2 and not source.empty:
-                    X = source[feature_cols].dropna()
-                    if len(X) > 50:
-                        # Use expected_upside_pct as target if available
-                        target_col = (
-                            "expected_upside_pct"
-                            if "expected_upside_pct" in X.columns
-                            else feature_cols[0]
-                        )
-                        y = X.pop(target_col).values
-                        r.plr_result = plr.fit(
-                            X=X.values,
-                            y=y,
-                            feature_names=list(X.columns),
-                            samples=cfg.plr_samples,
-                            tune=cfg.plr_tune,
-                            chains=cfg.plr_chains,
-                            cores=cfg.plr_cores,
-                        )
-                        _log_and_print(
-                            f"    ✓ PLR model fitted on {len(X)} observations, {len(X.columns)} features"
-                        )
-                    else:
-                        _log_and_print("    ⚠️ PLR skipped — insufficient data after dropna")
-                else:
-                    _log_and_print("    ⚠️ PLR skipped — insufficient feature columns")
-            except Exception as e:
-                logger.error("Step 14 (PLR) failed: %s", e, exc_info=True)
-                _log_and_print(f"    ⚠️ PLR failed: {e}", logging.ERROR)
-
-        # Step 15: DCF Price Target Model
         if cfg.enable_dcf_model:
-            try:
-                _log_and_print("  [15] DCF Price Target Model...")
-                from probabilistic_ml_model.pml_models.DCF_PriceTargetModel import (
-                    DCFPriceTarget,
-                )
+            _run_model_step(15, "DCF Price Target Model", self._run_dcf)
 
-                dcf = DCFPriceTarget()
-                dcf_cols = ["fcf_per_share", "wacc", "growth_rate", "last_price"]
-                source = r.df_all if not r.df_all.empty else r.df
-                available_dcf = [c for c in dcf_cols if c in source.columns]
-                if len(available_dcf) >= 3 and not source.empty:
-                    dcf_data = source.dropna(subset=available_dcf)
-                    if len(dcf_data) > 20:
-                        r.dcf_result = dcf.fit(
-                            data=dcf_data,
-                            samples=cfg.dcf_samples,
-                            tune=cfg.dcf_tune,
-                            chains=cfg.dcf_chains,
-                            cores=cfg.dcf_cores,
-                        )
-                        _log_and_print(f"    ✓ DCF model fitted on {len(dcf_data)} stocks")
-                    else:
-                        _log_and_print("    ⚠️ DCF skipped — insufficient data after dropna")
-                else:
-                    _log_and_print(
-                        f"    ⚠️ DCF skipped — need ≥3 of {dcf_cols}, found {available_dcf}"
-                    )
-            except Exception as e:
-                logger.error("Step 15 (DCF) failed: %s", e, exc_info=True)
-                _log_and_print(f"    ⚠️ DCF failed: {e}", logging.ERROR)
+    def _run_plr(self) -> None:
+        from probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel import (
+            ProbabilisticLinearRegression,
+        )
+
+        r, cfg = self.result, self.cfg
+        plr = ProbabilisticLinearRegression()
+        feature_cols = [
+            c
+            for c in [
+                "expected_upside_mc",
+                "expected_upside_kalman",
+                "achievement_probability",
+                "prob_positive_upside",
+                "beta_1y",
+                "altman_z_score",
+            ]
+            if c in r.summary.columns or c in r.df_all.columns
+        ]
+        source = r.summary if not r.summary.empty else r.df_all
+        if len(feature_cols) < 2 or source.empty:
+            _log_and_print("    ⚠️ PLR skipped — insufficient feature columns")
+            return
+        X = source[feature_cols].dropna()
+        if len(X) <= 50:
+            _log_and_print("    ⚠️ PLR skipped — insufficient data after dropna")
+            return
+        target_col = (
+            "expected_upside_mc" if "expected_upside_mc" in X.columns else feature_cols[0]
+        )
+        y = X.pop(target_col).values
+        r.plr_result = plr.fit(
+            X=X.values,
+            y=y,
+            feature_names=list(X.columns),
+            samples=cfg.plr_samples,
+            tune=cfg.plr_tune,
+            chains=cfg.plr_chains,
+            cores=cfg.plr_cores,
+            max_obs=cfg.plr_max_obs,
+            max_treedepth=cfg.plr_max_treedepth,
+        )
+        _log_and_print(
+            f"    ✓ PLR model fitted on {len(X)} observations, {len(X.columns)} features"
+        )
+
+    def _run_dcf(self) -> None:
+        from probabilistic_ml_model.pml_models.DCF_PriceTargetModel import (
+            DCFPriceTarget,
+        )
+
+        r, cfg = self.result, self.cfg
+        dcf = DCFPriceTarget()
+        fcf_col = "free_cash_flow" if "free_cash_flow" in r.df_all.columns else None
+        price_col = "current_price" if "current_price" in r.df_all.columns else None
+        if not (fcf_col and price_col):
+            _log_and_print("    ⚠️ DCF skipped — required columns not found")
+            return
+        dcf_data = r.df_all[[fcf_col, price_col]].dropna()
+        if len(dcf_data) <= 20:
+            _log_and_print("    ⚠️ DCF skipped — insufficient data after dropna")
+            return
+        r.dcf_result = dcf.fit(
+            historical_fcf=dcf_data[fcf_col].values,
+            market_prices=dcf_data[price_col].values,
+            samples=cfg.dcf_samples,
+            tune=cfg.dcf_tune,
+            chains=cfg.dcf_chains,
+            cores=cfg.dcf_cores,
+        )
+        _log_and_print(f"    ✓ DCF model fitted on {len(dcf_data)} observations")
 
     # ── Phase 4: Statistical Functions & Screening ────────────────────────────
 
@@ -665,28 +868,18 @@ class BaselinePipeline:
 
         r, cfg = self.result, self.cfg
 
-        # Step 16: Stock screening
-        _log_and_print("  [16] Stock screening strategies...")
-        try:
+        def _step_screening() -> None:
             r.screens = run_stock_screening(r.df_all, min_pct=cfg.screening_min_pct)
             for name, sdf in r.screens.items():
                 if not sdf.empty:
                     _log_and_print(f"    ✓ {name}: {len(sdf):,} stocks")
-        except Exception as e:
-            logger.error("Step 16 (Screening) failed: %s", e, exc_info=True)
 
-        # Step 17: Resampled posterior returns
-        _log_and_print("  [17] Resampled Bayesian posterior returns...")
-        try:
+        def _step_resampled() -> None:
             r.resampled_posterior = run_resampled_posterior_analysis(r.df)
             if not r.resampled_posterior.empty:
                 _log_and_print(f"    ✓ {len(r.resampled_posterior):,} stocks")
-        except Exception as e:
-            logger.error("Step 17 (Resampled Posterior) failed: %s", e, exc_info=True)
 
-        # Step 18: Per-category Bayesian probability analytics
-        _log_and_print("  [18] Per-category Bayesian probability analytics...")
-        try:
+        def _step_category() -> None:
             r.category_analytics = run_category_probability_analysis(
                 r.df_all,
                 use_mcmc=cfg.use_mcmc,
@@ -696,26 +889,24 @@ class BaselinePipeline:
                 max_features_per_category=cfg.max_features_per_category,
                 cache_dir=cfg.cache_dir,
                 enable_caching=cfg.enable_result_caching,
+                cache_ttl_hours=24,
             )
             _log_and_print(f"    ✓ {len(r.category_analytics)} categories analyzed")
-        except Exception as e:
-            logger.error("Step 18 (Category Analytics) failed: %s", e, exc_info=True)
 
-        # Step 19: Parallel MCMC return analysis
-        _log_and_print("  [19] Parallel MCMC return analysis...")
-        try:
+        def _step_mcmc() -> None:
             r.mcmc_result = run_parallel_mcmc_return_analysis(
-                r.mc,
-                n_chains=cfg.mcmc_chains,
-                n_samples=cfg.mcmc_samples,
+                r.mc, n_chains=cfg.mcmc_chains, n_samples=cfg.mcmc_samples
             )
             if r.mcmc_result:
                 _log_and_print(
                     f"    ✓ R̂={r.mcmc_result.get('r_hat', float('nan')):.4f}, "
                     f"converged={r.mcmc_result.get('converged', False)}"
                 )
-        except Exception as e:
-            logger.error("Step 19 (Parallel MCMC) failed: %s", e, exc_info=True)
+
+        _run_model_step(16, "Stock screening strategies", _step_screening)
+        _run_model_step(17, "Resampled Bayesian posterior returns", _step_resampled)
+        _run_model_step(18, "Per-category Bayesian probability analytics", _step_category)
+        _run_model_step(19, "Parallel MCMC return analysis", _step_mcmc)
 
     # ── Phase 5: Ensemble Alignment & Summary ─────────────────────────────────
 
@@ -726,13 +917,13 @@ class BaselinePipeline:
             compute_return_zscore_ranks,
             filter_quality_stocks,
         )
-        from probabilistic_ml_model.statistical_functions.ensemble import (
+        from probabilistic_ml_model.statistical_functions.ensemble_models import (
             build_expected_returns_summary,
             build_quad_model_alignment,
             build_tri_model_alignment,
             extract_strong_consensus,
         )
-        from probabilistic_ml_model.statistical_functions.statistical_analysis import (
+        from probabilistic_ml_model.statistical_functions.statistical_models import (
             hierarchical_mcmc_multi_level,
         )
 
@@ -773,21 +964,22 @@ class BaselinePipeline:
             )
 
         # Step 23: Multi-level hierarchical MCMC
-        if not r.summary.empty and "expected_upside_pct" in r.summary.columns:
+        if not r.summary.empty and "expected_upside_mc" in r.summary.columns:
             try:
+                group_cols = cfg.hier_mcmc_group_cols or [
+                    "region",
+                    "country",
+                    "sector",
+                    "industry",
+                    "style_class",
+                    "size_class",
+                ]
                 multi_hier = hierarchical_mcmc_multi_level(
                     r.summary,
-                    "expected_upside_pct",
-                    group_cols=[
-                        "region",
-                        "country",
-                        "sector",
-                        "industry",
-                        "style_class",
-                        "size_class",
-                    ],
-                    min_group_size=20,
-                    shrinkage_strength=10.0,
+                    "expected_upside_mc",
+                    group_cols=group_cols,
+                    min_group_size=cfg.hier_mcmc_min_group_size,
+                    shrinkage_strength=cfg.hier_mcmc_shrinkage_strength,
                 )
                 if multi_hier and "cross_level_summary" in multi_hier:
                     xls = multi_hier["cross_level_summary"]
@@ -803,7 +995,6 @@ class BaselinePipeline:
         if not r.summary.empty:
             if r.plr_result is not None:
                 try:
-
                     if hasattr(r.plr_result, "posterior"):
                         plr_mean = float(r.plr_result.posterior["intercept"].mean())
                         r.summary["plr_intercept_posterior"] = plr_mean
@@ -813,9 +1004,12 @@ class BaselinePipeline:
 
             if r.dcf_result is not None:
                 try:
-
                     if hasattr(r.dcf_result, "posterior"):
-                        _log_and_print("  ✓ DCF posterior merged into summary")
+                        dcf_iv_mean = float(r.dcf_result.posterior["intrinsic_value"].mean())
+                        r.summary["dcf_intrinsic_value_posterior"] = dcf_iv_mean
+                        _log_and_print(
+                            f"  ✓ DCF posterior intrinsic value merged: {dcf_iv_mean:.2f}"
+                        )
                 except Exception as e:
                     logger.debug("DCF posterior merge skipped: %s", e)
 
@@ -930,7 +1124,7 @@ class BaselinePipeline:
                 not r.tri.empty,
             ),
             (
-                lambda: create_sector_heatmap(r.tri, schema_metadata=r.schema_metadata),
+                lambda: create_sector_heatmap(r.tri, True, schema_metadata=r.schema_metadata),
                 "er_sector_heatmap.html",
                 not r.tri.empty,
             ),
@@ -987,7 +1181,7 @@ class BaselinePipeline:
             _log_and_print(f"  ✓ {name} → {dest}")
 
         # Pipeline summary
-        _log_and_print("")
+        _log_and_print()
         _log_and_print("=" * 80)
         _log_and_print("✅ EXPECTED RETURNS ANALYTICS v4.0 COMPLETE")
         _log_and_print("=" * 80)
@@ -996,7 +1190,6 @@ class BaselinePipeline:
             f"Beat={len(r.beat):,} | Credit={len(r.credit):,} | "
             f"Div={len(r.div_safety):,} | Anomaly={len(r.anomaly_results):,}"
         )
-        _log_and_print(f"  PLR={'✓' if r.plr_result else '—'} | DCF={'✓' if r.dcf_result else '—'}")
         _log_and_print(f"  Summary: {len(r.summary):,} stocks")
         if not r.summary.empty:
             _log_and_print(f"  Full consensus (4/4): {(r.summary['agreement_score'] == 4).sum()}")
@@ -1004,11 +1197,21 @@ class BaselinePipeline:
         _log_and_print(f"  Categories: {len(r.category_analytics)} analyzed")
         for phase, elapsed in r.phase_timings.items():
             _log_and_print(f"  ⏱ {phase}: {elapsed:.1f}s")
-        _log_and_print("")
+
+        # Print detailed model statistics collected during Phase 2
+        if r.model_statistics:
+            _log_and_print()
+            _log_and_print("─" * 80)
+            _log_and_print("Per-Model Detailed Statistics")
+            _log_and_print("─" * 80)
+            for model_name, stats in r.model_statistics.items():
+                print_model_statistics(stats, model_name)
+
+        _log_and_print()
 
     # ── Full Pipeline Orchestrator ────────────────────────────────────────────
 
-    def run(self) -> PipelineResult:
+    def run(self) -> BaselinePipelineResult:
         """Execute the full 8-phase pipeline."""
         from probabilistic_ml_model.logging_config import configure_logging
 
@@ -1019,21 +1222,18 @@ class BaselinePipeline:
         _log_and_print("Expected Returns Analytics Pipeline v4.0")
         _log_and_print("=" * 80)
 
+        runner = PipelineRunner(self.cfg)
+        runner.r = self.result
+
         Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
 
         phases = [
             ("Phase 1: Data Ingestion & Enrichment", self.phase_1_load_data),
             ("Phase 2: Core PML Model Execution", self.phase_2_core_models),
             ("Phase 3: Probabilistic Linear Market Models", self.phase_3_market_models),
-            (
-                "Phase 4: Statistical Functions & Screening",
-                self.phase_4_statistics_and_screening,
-            ),
+            ("Phase 4: Statistical Functions & Screening", self.phase_4_statistics_and_screening),
             ("Phase 5: Ensemble Alignment & Summary", self.phase_5_ensemble_alignment),
-            (
-                "Phase 6: Posterior Inference & InferenceData",
-                self.phase_6_inference_data,
-            ),
+            ("Phase 6: Posterior Inference & InferenceData", self.phase_6_inference_data),
             ("Phase 7: Visualization", self.phase_7_visualizations),
             ("Phase 8: Export & Reporting", self.phase_8_export),
         ]
@@ -1050,7 +1250,7 @@ class BaselinePipeline:
         return self.result
 
 
-def main(config: PipelineConfig | None = None) -> PipelineResult:
+def main(config: PipelineConfig | None = None) -> BaselinePipelineResult:
     """Entry point for the expected returns v4.0 pipeline."""
     pipeline = BaselinePipeline(config=config)
     return pipeline.run()

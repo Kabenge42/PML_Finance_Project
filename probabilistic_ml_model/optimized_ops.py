@@ -190,14 +190,14 @@ if NUMBA_AVAILABLE:
         Uses triangular distribution for price target sampling.
         """
         n_stocks = len(pt_low)
-        expected_upside = np.zeros(n_stocks)
+        expected_upside_pt = np.zeros(n_stocks)
         upside_std = np.zeros(n_stocks)
         var_5 = np.zeros(n_stocks)
         prob_positive = np.zeros(n_stocks)
 
         for i in prange(n_stocks):
             if pt_high[i] <= pt_low[i] or last_price[i] <= 0:
-                expected_upside[i] = 0.0
+                expected_upside_pt[i] = 0.0
                 upside_std[i] = 0.0
                 var_5[i] = 0.0
                 prob_positive[i] = 0.0
@@ -221,7 +221,7 @@ if NUMBA_AVAILABLE:
             # Calculate upside percentages
             upside = (simulated - last_price[i]) / last_price[i] * 100
 
-            expected_upside[i] = np.mean(upside)
+            expected_upside_pt[i] = np.mean(upside)
             upside_std[i] = np.std(upside)
 
             # VaR at 5%
@@ -235,7 +235,7 @@ if NUMBA_AVAILABLE:
                     positive_count += 1
             prob_positive[i] = positive_count / n_simulations * 100
 
-        return expected_upside, upside_std, var_5, prob_positive
+        return expected_upside_pt, upside_std, var_5, prob_positive
 
 else:
 
@@ -248,7 +248,7 @@ else:
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Pure Python fallback for Monte Carlo simulation."""
         n_stocks = len(pt_low)
-        expected_upside = np.zeros(n_stocks)
+        expected_upside_pt = np.zeros(n_stocks)
         upside_std = np.zeros(n_stocks)
         var_5 = np.zeros(n_stocks)
         prob_positive = np.zeros(n_stocks)
@@ -266,12 +266,12 @@ else:
             simulated = stats.triang.rvs(c, loc=pt_low[i], scale=scale, size=n_simulations)
             upside = (simulated - last_price[i]) / last_price[i] * 100
 
-            expected_upside[i] = np.mean(upside)
+            expected_upside_pt[i] = np.mean(upside)
             upside_std[i] = np.std(upside)
             var_5[i] = np.percentile(upside, 5)
             prob_positive[i] = (upside > 0).sum() / n_simulations * 100
 
-        return expected_upside, upside_std, var_5, prob_positive
+        return expected_upside_pt, upside_std, var_5, prob_positive
 
 
 def fast_monte_carlo_simulation(
@@ -308,7 +308,7 @@ def fast_monte_carlo_simulation(
     pd.DataFrame
         DataFrame with simulation results:
         - ticker: Stock identifier
-        - expected_upside: Mean simulated upside (%)
+        - expected_upside_pt: Mean simulated upside (%)
         - upside_std: Standard deviation of upside
         - var_5_pct: 5% Value at Risk
         - prob_positive: Probability of positive return (%)
@@ -326,7 +326,7 @@ def fast_monte_carlo_simulation(
         return pd.DataFrame(
             columns=[
                 "ticker",
-                "expected_upside",
+                "expected_upside_pt",
                 "upside_std",
                 "var_5_pct",
                 "prob_positive",
@@ -345,13 +345,13 @@ def fast_monte_carlo_simulation(
     pt_median = np.clip(pt_median, pt_low, pt_high)
 
     # Run simulation
-    expected_upside, upside_std, var_5, prob_positive = _fast_monte_carlo_core(
+    expected_upside_pt, upside_std, var_5, prob_positive = _fast_monte_carlo_core(
         pt_low, pt_median, pt_high, last_price, n_simulations
     )
 
     # Calculate risk-reward ratio
     risk_reward = np.where(
-        var_5 < 0, expected_upside / np.abs(var_5 + 1e-6), expected_upside / (upside_std + 1e-6)
+        var_5 < 0, expected_upside_pt / np.abs(var_5 + 1e-6), expected_upside_pt / (upside_std + 1e-6)
     )
 
     # Build result DataFrame with identifier columns
@@ -364,7 +364,7 @@ def fast_monte_carlo_simulation(
 
     result_data.update(
         {
-            "expected_upside": expected_upside,
+            "expected_upside_pt": expected_upside_pt,
             "upside_std": upside_std,
             "var_5_pct": var_5,
             "prob_positive": prob_positive,

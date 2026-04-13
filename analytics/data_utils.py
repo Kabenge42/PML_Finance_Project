@@ -176,6 +176,7 @@ _DEFAULT_IDENTIFIER_COLS = [
     "isin",
     "ticker",
     "name",
+    "description",
     "region",
     "country",
     "trading_country",
@@ -934,101 +935,108 @@ def backfill_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             return df
 
+    # Collect all new columns here to avoid repeated frame.insert calls
+    new_cols: dict[str, pd.Series] = {}
+
     # Backfill analyst_neutral_pct if missing
     if "analyst_neutral_pct" not in df.columns:
         bullish = df.get("analyst_bullish_pct")
         bearish = df.get("analyst_bearish_pct")
         if bullish is not None and bearish is not None:
             neutral = 100 - bullish - bearish
-            df["analyst_neutral_pct"] = neutral.clip(lower=0, upper=100)
+            new_cols["analyst_neutral_pct"] = neutral.clip(lower=0, upper=100)
 
     # Map inventory_turnover to expected column name
     if "inventory_turnover" not in df.columns:
         for src_col in ["inventory_turnover_mv", "inventory_turnover_ltm", "inventory_turnover_fy"]:
             if src_col in df.columns:
-                df["inventory_turnover"] = df[src_col]
+                new_cols["inventory_turnover"] = df[src_col]
                 break
 
     # Also keep inventory_turnover_mv for backward compatibility if needed
-    if "inventory_turnover_mv" not in df.columns and "inventory_turnover" in df.columns:
-        df["inventory_turnover_mv"] = df["inventory_turnover"]
+    if "inventory_turnover_mv" not in df.columns:
+        inv_src = new_cols.get("inventory_turnover", df.get("inventory_turnover"))
+        if inv_src is not None:
+            new_cols["inventory_turnover_mv"] = inv_src
 
     # Map asset_turnover
     if "asset_turnover" not in df.columns:
         for src_col in ["asset_turnover_ltm", "asset_turnover_fy", "asset_turnover_ratio"]:
             if src_col in df.columns:
-                df["asset_turnover"] = df[src_col]
+                new_cols["asset_turnover"] = df[src_col]
                 break
 
     # Map receivables_turnover
     if "receivables_turnover" not in df.columns:
         for src_col in ["receivables_turnover_ltm", "receivables_turnover_fy"]:
             if src_col in df.columns:
-                df["receivables_turnover"] = df[src_col]
+                new_cols["receivables_turnover"] = df[src_col]
                 break
 
     # Map revenue_per_employee
     if "revenue_per_employee" not in df.columns:
         for src_col in ["revenue_per_employee_ltm", "revenue_per_employee_fy", "revenue_per_employee_1fy"]:
             if src_col in df.columns:
-                df["revenue_per_employee"] = df[src_col]
+                new_cols["revenue_per_employee"] = df[src_col]
                 break
 
     # Map retention_ratio / retention_rate
     if "retention_ratio" not in df.columns:
         for src_col in ["retention_rate", "earnings_retention_rate", "retention_ratio_ltm"]:
             if src_col in df.columns:
-                df["retention_ratio"] = df[src_col]
+                new_cols["retention_ratio"] = df[src_col]
                 break
-    if "retention_rate" not in df.columns and "retention_ratio" in df.columns:
-        df["retention_rate"] = df["retention_ratio"]
+    if "retention_rate" not in df.columns:
+        rr_src = new_cols.get("retention_ratio", df.get("retention_ratio"))
+        if rr_src is not None:
+            new_cols["retention_rate"] = rr_src
 
     # Map ev_ebitda
     if "ev_ebitda" not in df.columns:
         for src_col in ["ev_to_ebitda", "ev_ebitda_ltm", "ev_ebitda_fy"]:
             if src_col in df.columns:
-                df["ev_ebitda"] = df[src_col]
+                new_cols["ev_ebitda"] = df[src_col]
                 break
 
     # Map eps_actual / eps_estimate
     if "eps_actual" not in df.columns:
         for src_col in ["eps_adj_ltm", "net_eps_basic_ltm", "eps_ltm", "eps_actual_ltm_fy"]:
             if src_col in df.columns:
-                df["eps_actual"] = df[src_col]
+                new_cols["eps_actual"] = df[src_col]
                 break
     if "eps_estimate" not in df.columns:
         for src_col in ["eps_est_avg_fy1e", "eps_est_avg_ntm", "eps_estimate_fy1"]:
             if src_col in df.columns:
-                df["eps_estimate"] = df[src_col]
+                new_cols["eps_estimate"] = df[src_col]
                 break
 
     # Map earnings_beat / eps_growth_yoy
     if "earnings_beat" not in df.columns:
         for src_col in ["earnings_beat_indicator", "surprise_flag", "is_beat"]:
             if src_col in df.columns:
-                df["earnings_beat"] = df[src_col]
+                new_cols["earnings_beat"] = df[src_col]
                 break
     if "eps_growth_yoy" not in df.columns:
         for src_col in ["earnings_growth_yoy", "ebitda_growth_yoy", "net_income_growth_yoy"]:
             if src_col in df.columns:
-                df["eps_growth_yoy"] = df[src_col]
+                new_cols["eps_growth_yoy"] = df[src_col]
                 break
 
     # Map missing composite scores / counts
     if "combined_distress_risk_score" not in df.columns:
         for src_col in ["distress_probability_composite", "risk_score_combined", "combined_risk_score"]:
             if src_col in df.columns:
-                df["combined_distress_risk_score"] = df[src_col]
+                new_cols["combined_distress_risk_score"] = df[src_col]
                 break
     if "eps_trajectory_score" not in df.columns:
         for src_col in ["eps_trend_score", "eps_momentum_score", "trajectory_score"]:
             if src_col in df.columns:
-                df["eps_trajectory_score"] = df[src_col]
+                new_cols["eps_trajectory_score"] = df[src_col]
                 break
     if "fcf_positive_years" not in df.columns:
         for src_col in ["fcf_positive_count", "years_positive_fcf", "fcf_pos_years"]:
             if src_col in df.columns:
-                df["fcf_positive_years"] = df[src_col]
+                new_cols["fcf_positive_years"] = df[src_col]
                 break
 
     # Calculate inventory_days from turnover
@@ -1036,30 +1044,35 @@ def backfill_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
         turnover_col = df.get("inventory_turnover_mv")
         if turnover_col is not None:
             turnover = turnover_col.replace(0, pd.NA)
-            df["inventory_days"] = 365 / turnover
+            new_cols["inventory_days"] = 365 / turnover
 
     # Map R&D intensity columns
     if "rnd_intensity_ltm" not in df.columns:
         for src_col in ["rnd_intensity", "rnd_to_revenue"]:
             if src_col in df.columns:
-                df["rnd_intensity_ltm"] = df[src_col]
+                new_cols["rnd_intensity_ltm"] = df[src_col]
                 break
 
     # Map tangible book value columns
     if "tangible_book_value_ltm" not in df.columns:
         if "tangible_book_value" in df.columns:
-            df["tangible_book_value_ltm"] = df["tangible_book_value"]
+            new_cols["tangible_book_value_ltm"] = df["tangible_book_value"]
 
     # Map goodwill concentration
     if "goodwill_concentration" not in df.columns:
         for src_col in ["goodwill_to_equity", "goodwill_to_assets_pct"]:
             if src_col in df.columns:
-                df["goodwill_concentration"] = df[src_col]
+                new_cols["goodwill_concentration"] = df[src_col]
                 break
 
     # Ensure industry column exists
     if "industry" not in df.columns and "sector" in df.columns:
-        df["industry"] = df["sector"]
+        new_cols["industry"] = df["sector"]
+
+    # Assign all new columns at once to avoid DataFrame fragmentation
+    if new_cols:
+        new_df = pd.DataFrame(new_cols, index=df.index)
+        df = pd.concat([df, new_df], axis=1)
 
     logging.info("Backfill complete. Columns: %d", len(df.columns))
 

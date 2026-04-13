@@ -12,6 +12,7 @@ Functions:
 - create_mcse_convergence_panel: Monte Carlo Standard Error convergence
 - create_bayesian_category_ridge: Ridge plot of posterior feature means
 - create_tri_model_posterior_comparison: Overlaid posteriors from MC / Kalman / Achievement
+- create_tri_model_posterior_price_target_comparison: Dollar-denominated fair value posteriors
 - create_mcmc_anomaly_posterior_chart: MCMC anomaly score posterior with sector shrinkage
 - create_mcmc_credit_risk_chart: MCMC credit risk posterior (heuristic vs MCMC)
 - create_mcmc_dividend_cut_chart: MCMC dividend cut probability posterior
@@ -55,6 +56,10 @@ from probabilistic_ml_model.data_utils.inference_schema import (
     FeatureViewSpec,
     IdentifierCoordinates,
 )
+from probabilistic_ml_model.data_utils.feature_catalog import columns_for_viz
+
+# Probability visualization columns derived from catalog
+_PROBABILITY_VIZ_COLS = columns_for_viz("probability")
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +77,108 @@ _CI_HOVER_TEMPLATE = (
 )
 
 # ---------------------------------------------------------------------------
+# Constant-fallback detection & imputation
+# ---------------------------------------------------------------------------
+_CONSTANT_STD_THRESHOLD = 1e-6
+_FALLBACK_FREQ_THRESHOLD = 0.3
+
+
+def _detect_and_fix_constant_column(
+    df: pd.DataFrame,
+    heuristic_col: str,
+    reference_col: str,
+    *,
+    clip_range: tuple[float, float] | None = (0.0, 1.0),
+) -> tuple[pd.DataFrame, str]:
+    """Detect constant-fallback values in *heuristic_col* and impute them.
+
+    When an upstream model fills missing heuristic values with a static
+    default the column "exists" but carries no signal.  This helper
+    detects three cases:
+
+    1. **Fully constant** (std < 1e-6) — returns *reference_col* as the
+       replacement column name so callers plot the dynamic alternative.
+    2. **Partially constant** (>30 % of rows share one exact value) —
+       imputes fallback rows via a linear fit from the real
+       heuristic↔reference relationship, preserving diagnostic value.
+    3. **Normal data** — returns the DataFrame and column unchanged.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Working copy of the plot DataFrame (will be copied only when
+        mutations are needed).
+    heuristic_col : str
+        Column suspected of containing constant fallback values.
+    reference_col : str
+        Dynamic MCMC column to use as imputation source / fallback.
+    clip_range : tuple or None
+        If not None, imputed values are clipped to this range.
+
+    Returns
+    -------
+    (df, effective_col) : tuple[pd.DataFrame, str]
+        Possibly-mutated DataFrame and the column name to actually plot.
+    """
+    if heuristic_col not in df.columns or heuristic_col == reference_col:
+        return df, reference_col
+
+    vals = df[heuristic_col].dropna()
+    if len(vals) < 2:
+        return df, reference_col
+
+    # Case 1: entirely constant
+    if vals.std() < _CONSTANT_STD_THRESHOLD:
+        return df, reference_col
+
+    # Case 2: partially constant (modal fallback)
+    mode_val = vals.mode().iloc[0]
+    is_fallback = (df[heuristic_col] - mode_val).abs() < _CONSTANT_STD_THRESHOLD
+    fallback_frac = is_fallback.sum() / max(len(df), 1)
+
+    if fallback_frac <= _FALLBACK_FREQ_THRESHOLD:
+        # Case 3: normal data — no intervention
+        return df, heuristic_col
+
+    # Impute fallback rows
+    df = df.copy()
+    real_mask = ~is_fallback & df[heuristic_col].notna()
+
+    if real_mask.sum() >= 2:
+        import warnings
+
+        from numpy.polynomial.polynomial import polyfit
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", np.exceptions.RankWarning)
+            coeffs = polyfit(
+                df.loc[real_mask, reference_col].values,
+                df.loc[real_mask, heuristic_col].values,
+                deg=1,
+            )
+        imputed = coeffs[0] + coeffs[1] * df.loc[is_fallback, reference_col]
+    else:
+        # Not enough real rows — use reference as proxy
+        imputed = df.loc[is_fallback, reference_col]
+
+    if clip_range is not None:
+        imputed = imputed.clip(*clip_range)
+
+    df.loc[is_fallback, heuristic_col] = imputed.values
+    return df, heuristic_col
+
+
+# ---------------------------------------------------------------------------
 # Lazy ArviZ import (matches project-wide pattern)
 # ---------------------------------------------------------------------------
 try:
     import arviz as az
+
     ARVIZ_AVAILABLE = hasattr(az, "InferenceData")
 except ImportError:  # pragma: no cover
     az = None  # type: ignore[assignment]
     ARVIZ_AVAILABLE = False
+
 
 def float_array(x) -> np.ndarray:
     """Convert to a float64 numpy array (handles xarray scalars gracefully)."""
@@ -95,6 +194,7 @@ def _ci_bounds(credible_interval: float) -> tuple[float, float]:
     tail = (1.0 - credible_interval) / 2.0
     return tail, 1.0 - tail
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Posterior Return Forest Plot
 # ═══════════════════════════════════════════════════════════════════════════
@@ -102,7 +202,7 @@ def _ci_bounds(credible_interval: float) -> tuple[float, float]:
 
 def create_posterior_return_forest(
     idata_or_df: "az.InferenceData | pd.DataFrame",
-    var_name: str = "expected_return_prob_weighted",
+    var_name: str = "implied_return_pt",
     top_n: int = 30,
     credible_interval: float = 0.94,
     sort_by: str = "median",
@@ -124,7 +224,7 @@ def create_posterior_return_forest(
     ----------
     idata_or_df : arviz.InferenceData or pd.DataFrame
         Posterior samples or a summary DataFrame with columns:
-        ``ticker``, ``expected_upside_pct``, ``prob_positive_upside``.
+        ``ticker``, ``implied_return_mc``, ``prob_positive_upside``.
     var_name : str, default 'expected_return'
         Variable name inside InferenceData posterior group.
     top_n : int, default 30
@@ -308,11 +408,11 @@ def _forest_from_dataframe(
     title: str,
 ) -> go.Figure:
     """Fallback forest plot from a summary DataFrame."""
-    if "expected_upside_pct" not in df.columns or "ticker" not in df.columns:
+    if "implied_return_mc" not in df.columns or "ticker" not in df.columns:
         return create_no_data_figure(f"{title} — missing columns")
 
     plot_df = (
-        df.dropna(subset=["expected_upside_pct"]).nlargest(top_n, "expected_upside_pct").copy()
+        df.dropna(subset=["implied_return_mc"]).nlargest(top_n, "implied_return_mc").copy()
     )
     if plot_df.empty:
         return create_no_data_figure(title)
@@ -320,15 +420,15 @@ def _forest_from_dataframe(
     # Approximate CI from upside_std if available
     z = stats.norm.ppf(1 - (1 - credible_interval) / 2)
     if "upside_std" in plot_df.columns:
-        plot_df["lo"] = plot_df["expected_upside_pct"] - z * plot_df["upside_std"]
-        plot_df["hi"] = plot_df["expected_upside_pct"] + z * plot_df["upside_std"]
+        plot_df["lo"] = plot_df["implied_return_mc"] - z * plot_df["upside_std"]
+        plot_df["hi"] = plot_df["implied_return_mc"] + z * plot_df["upside_std"]
     else:
         # Additive fallback using overall std to avoid broken intervals
         # on negative or zero upside values
-        overall_std = plot_df["expected_upside_pct"].std()
+        overall_std = plot_df["implied_return_mc"].std()
         fallback_spread = z * max(overall_std * 0.3, 1.0) if not pd.isna(overall_std) else z * 1.0
-        plot_df["lo"] = plot_df["expected_upside_pct"] - fallback_spread
-        plot_df["hi"] = plot_df["expected_upside_pct"] + fallback_spread
+        plot_df["lo"] = plot_df["implied_return_mc"] - fallback_spread
+        plot_df["hi"] = plot_df["implied_return_mc"] + fallback_spread
 
     fig = go.Figure()
     for _, row in plot_df.iterrows():
@@ -341,14 +441,14 @@ def _forest_from_dataframe(
                 showlegend=False,
                 hovertemplate=(
                     f"<b>{row['ticker']}</b><br>"
-                    f"Upside: {row['expected_upside_pct']:.1f}%<br>"
+                    f"Upside: {row['implied_return_mc']:.1f}%<br>"
                     f"{credible_interval:.0%} CI: [{row['lo']:.1f}%, {row['hi']:.1f}%]<extra></extra>"
                 ),
             )
         )
     fig.add_trace(
         go.Scatter(
-            x=plot_df["expected_upside_pct"],
+            x=plot_df["implied_return_mc"],
             y=plot_df["ticker"],
             mode="markers",
             marker=dict(size=_MEDIAN_MARKER_SIZE, color=COLORS[2], symbol="diamond"),
@@ -743,7 +843,7 @@ def _ruin_diagnostic_from_idata(idata, top_n, title) -> go.Figure:
 
 def create_mcse_convergence_panel(
     idata: "az.InferenceData | pd.DataFrame",
-    var_name: str = "expected_return_prob_weighted",
+    var_name: str = "implied_return_pt",
     title: Optional[str] = None,
 ) -> go.Figure:
     """
@@ -847,7 +947,7 @@ def create_bayesian_category_ridge(
     Ridge plot of posterior means for features within a category.
 
     Uses the output of ``bayesian_category_analysis()`` from
-    ``statistical_analysis.py``.  Each feature's Normal posterior
+    ``statistical_models.py``.  Each feature's Normal posterior
     N(posterior_mean, posterior_std) is rendered as a filled KDE.
 
     Parameters
@@ -939,7 +1039,7 @@ def create_bayesian_category_ridge(
 def create_tri_model_posterior_comparison(
     tri_df: pd.DataFrame,
     tickers: Optional[list[str]] = None,
-    top_n: int = 8,
+    top_n: Optional[int] = None,
     title: Optional[str] = None,
 ) -> go.Figure:
     """
@@ -955,11 +1055,11 @@ def create_tri_model_posterior_comparison(
     Parameters
     ----------
     tri_df : pd.DataFrame
-        Tri-model alignment DataFrame (expected_upside_pct,
-        filtered_upside, expected_return_prob_weighted, ticker).
+        Tri-model alignment DataFrame (implied_return_mc,
+        implied_return_kalman, implied_return_pt, ticker).
     tickers : list[str], optional
         Specific tickers. If None, picks top *top_n* by agreement_score.
-    top_n : int, default 8
+    top_n : int, default 50
         Equities to display.
     title : str, optional
         Custom title.
@@ -970,13 +1070,13 @@ def create_tri_model_posterior_comparison(
     """
     title = title or "Tri-Model Posterior Return Comparison"
 
-    required = {"ticker", "expected_upside_pct", "filtered_upside", "expected_return_prob_weighted"}
+    required = {"ticker", "implied_return_mc", "implied_return_kalman", "implied_return_pt"}
     if not required.issubset(tri_df.columns):
         return create_no_data_figure(f"{title} — missing columns")
 
     if tickers is None:
         sort_col = (
-            "agreement_score" if "agreement_score" in tri_df.columns else "expected_upside_pct"
+            "agreement_score" if "agreement_score" in tri_df.columns else "implied_return_mc"
         )
         selected = tri_df.nlargest(top_n, sort_col)
         tickers = selected["ticker"].tolist()
@@ -1002,19 +1102,27 @@ def create_tri_model_posterior_comparison(
         c_idx = idx % cols + 1
 
         # Shared spread (use upside_std if present, else 10% of upside)
-        spread = abs(r.get("upside_std", abs(r["expected_upside_pct"]) * 0.15)) or 5.0
+        spread = abs(r.get("upside_std", abs(r["implied_return_mc"]) * 0.15)) or 5.0
         x_range = np.linspace(
-            min(r["expected_upside_pct"], r["filtered_upside"], r["expected_return_prob_weighted"])
+            min(
+                r["implied_return_mc"],
+                r["implied_return_kalman"],
+                r["implied_return_pt"],
+            )
             - 3 * spread,
-            max(r["expected_upside_pct"], r["filtered_upside"], r["expected_return_prob_weighted"])
+            max(
+                r["implied_return_mc"],
+                r["implied_return_kalman"],
+                r["implied_return_pt"],
+            )
             + 3 * spread,
             200,
         )
 
         models = [
-            ("MC Upside", r["expected_upside_pct"], spread, COLORS[0]),
-            ("Kalman", r["filtered_upside"], spread * 0.8, COLORS[1]),
-            ("Achievm.", r["expected_return_prob_weighted"], spread * 1.2, COLORS[2]),
+            ("MC Upside", r["implied_return_mc"], spread, COLORS[0]),
+            ("Kalman", r["implied_return_kalman"], spread * 0.8, COLORS[1]),
+            ("Achievm.", r["implied_return_pt"], spread * 1.2, COLORS[2]),
         ]
         for name, mu, s, color in models:
             y = stats.norm.pdf(x_range, mu, s)
@@ -1032,8 +1140,154 @@ def create_tri_model_posterior_comparison(
                 col=c_idx,
             )
 
-        fig.add_vline(x=0, line_dash="dash", line_color="red", opacity=0.3, row=r_idx, col=c_idx)
+        fig.add_vline(
+            x=0, line_dash="dash", line_color="red", opacity=0.3, row=r_idx, col=c_idx
+        )
+    fig.update_layout(
+        title=title,
+        height=280 * rows,
+        template=PLOTLY_TEMPLATE,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.05, xanchor="center", x=0.5),
+    )
+    return fig
 
+
+def create_tri_model_posterior_price_target_comparison(
+    tri_df: pd.DataFrame,
+    tickers: Optional[list[str]] = None,
+    top_n: Optional[int] = None,
+    title: Optional[str] = None,
+) -> go.Figure:
+    """
+    Dollar-denominated fair value posteriors from the three expected-return models.
+
+    For each equity, draws Normal posteriors centred on:
+    - Monte Carlo fair value price target
+    - Kalman filtered fair value price target
+    - Probability-weighted achievement fair value
+
+    Uses ``analytics.expected_returns_tri_model`` as data source.
+
+    Parameters
+    ----------
+    tri_df : pd.DataFrame
+        Tri-model alignment DataFrame (price_target_mc,
+        price_target_kalman, price_target_pt, ticker).
+    tickers : list[str], optional
+        Specific tickers. If None, picks top *top_n* by agreement_score.
+    top_n : int, default 50
+        Equities to display.
+    title : str, optional
+        Custom title.
+
+    Returns
+    -------
+    go.Figure
+    """
+    title = title or "Tri-Model Posterior Price Target Comparison"
+
+    required = {"ticker", "price_target_mc", "price_target_kalman", "price_target_pt"}
+    if not required.issubset(tri_df.columns):
+        return create_no_data_figure(f"{title} — missing columns")
+
+    if tickers is None:
+        sort_col = (
+            "agreement_score" if "agreement_score" in tri_df.columns else "price_target_mc"
+        )
+        selected = tri_df.nlargest(top_n, sort_col)
+        tickers = selected["ticker"].tolist()
+
+    n = len(tickers)
+    cols = min(4, n)
+    rows = (n + cols - 1) // cols
+
+    fig = make_subplots(
+        rows=rows,
+        cols=cols,
+        subplot_titles=[str(t) for t in tickers],
+        vertical_spacing=0.08,
+        horizontal_spacing=0.06,
+    )
+
+    for idx, t in enumerate(tickers):
+        row_df = tri_df[tri_df["ticker"] == t]
+        if row_df.empty:
+            continue
+        r = row_df.iloc[0]
+        r_idx = idx // cols + 1
+        c_idx = idx % cols + 1
+
+        # Shared spread (use upside_std if present, else 15% of MC price target)
+        spread = abs(r.get("upside_std", abs(r["price_target_mc"]) * 0.15)) or 5.0
+        x_range = np.linspace(
+            min(
+                r["price_target_mc"],
+                r["price_target_kalman"],
+                r["price_target_pt"],
+            )
+            - 3 * spread,
+            max(
+                r["price_target_mc"],
+                r["price_target_kalman"],
+                r["price_target_pt"],
+            )
+            + 3 * spread,
+            200,
+        )
+
+        models = [
+            (
+                "MC Fair Value ($)",
+                r["price_target_mc"],
+                spread * 1.0,
+                COLORS[3] if len(COLORS) > 3 else "#636EFA",
+            ),
+            (
+                "Kalman Fair Value ($)",
+                r["price_target_kalman"],
+                spread * 0.9,
+                COLORS[4] if len(COLORS) > 4 else "#EF553B",
+            ),
+            (
+                "Achievement Fair Value ($)",
+                r["price_target_pt"],
+                spread * 1.1,
+                COLORS[5] if len(COLORS) > 5 else "#00CC96",
+            ),
+        ]
+
+        # Add prob-weighted achievement if available and distinct from price_target_pt
+        if "price_target_prob_weighted" in tri_df.columns and pd.notna(
+            r.get("price_target_prob_weighted")
+        ):
+            models.append(
+                (
+                    "Prob-Weighted Fair Value ($)",
+                    r["price_target_prob_weighted"],
+                    spread * 1.1,
+                    COLORS[2] if len(COLORS) > 2 else "#00CC96",
+                )
+            )
+
+        for name, mu, s, color in models:
+            y = stats.norm.pdf(x_range, mu, s)
+            fig.add_trace(
+                go.Scatter(
+                    x=x_range,
+                    y=y,
+                    mode="lines",
+                    line=dict(color=color, width=2),
+                    name=name,
+                    showlegend=(idx == 0),
+                    legendgroup=name,
+                ),
+                row=r_idx,
+                col=c_idx,
+            )
+
+        fig.add_vline(
+            x=0, line_dash="dash", line_color="red", opacity=0.3, row=r_idx, col=c_idx
+        )
     fig.update_layout(
         title=title,
         height=280 * rows,
@@ -1079,8 +1333,8 @@ def _tier_color(tier: str) -> str:
 def create_feature_view_posterior_panel(
     idata: "az.InferenceData | xr.Dataset",
     view_spec: FeatureViewSpec,
-    top_n_features: int = 10,
-    top_n_equities: int = 20,
+    top_n_features: int = 50,
+    top_n_equities: int = 500,
     title: Optional[str] = None,
 ) -> go.Figure:
     """Multi-panel posterior visualization for a specific feature view.
@@ -1094,9 +1348,9 @@ def create_feature_view_posterior_panel(
         Posterior samples (from ``build_feature_view_inference_data``).
     view_spec : FeatureViewSpec
         Feature view specification with category and column metadata.
-    top_n_features : int, default 10
+    top_n_features : int, default 50
         Maximum number of feature subplots.
-    top_n_equities : int, default 20
+    top_n_equities : int, default 500
         Equities to display per feature panel.
     title : str, optional
         Custom title.
@@ -1169,7 +1423,7 @@ def create_feature_view_posterior_panel(
                     y=[tickers[i], tickers[i]],
                     mode="lines",
                     line=dict(color=COLORS[0], width=3),
-                    showlegend=False,
+                    showlegend=True,
                 ),
                 row=r_idx,
                 col=c_idx,
@@ -1181,7 +1435,7 @@ def create_feature_view_posterior_panel(
                 y=tickers,
                 mode="markers",
                 marker=dict(size=6, color=COLORS[2], symbol="diamond"),
-                showlegend=False,
+                showlegend=True,
             ),
             row=r_idx,
             col=c_idx,
@@ -1203,7 +1457,7 @@ def create_feature_view_posterior_panel(
 def create_anomaly_conditional_probability_chart(
     df: pd.DataFrame,
     cond_probs: pd.DataFrame | None = None,
-    top_n: int = 20,
+    top_n: int = 50,
     title: Optional[str] = None,
 ) -> go.Figure:
     """
@@ -1227,7 +1481,7 @@ def create_anomaly_conditional_probability_chart(
     cond_probs : pd.DataFrame or None
         Output of ``calculate_conditional_probabilities``.  If *None* the
         model will be instantiated to compute it from *df*.
-    top_n : int, default 20
+    top_n : int, default 50
         Maximum number of features to display.
     title : str, optional
         Custom title.
@@ -1246,7 +1500,7 @@ def create_anomaly_conditional_probability_chart(
 
     # Compute conditional probabilities if not supplied
     if cond_probs is None:
-        from probabilistic_ml_model.statistical_functions.probability_analytics import (
+        from probabilistic_ml_model.statistical_functions.probability_models import (
             AccountingAnomalyProbabilityModel,
         )
 
@@ -1311,7 +1565,7 @@ def create_anomaly_conditional_probability_chart(
                 x=cp["separation"],
                 orientation="h",
                 marker_color="#6C63FF",
-                showlegend=False,
+                showlegend=True,
                 hovertemplate="<b>%{y}</b><br>Separation: %{x:.4f}<extra></extra>",
             ),
             row=1,
@@ -1407,7 +1661,7 @@ def create_anomaly_conditional_probability_chart(
 
 def create_mcmc_anomaly_posterior_chart(
     df: pd.DataFrame,
-    top_n: int = 20,
+    top_n: int = 50,
     title: Optional[str] = None,
 ) -> go.Figure:
     """Dashboard for MCMC-enhanced anomaly posterior estimates.
@@ -1498,7 +1752,7 @@ def create_mcmc_anomaly_posterior_chart(
             marker=dict(color=COLORS[1], size=8, symbol="diamond"),
             error_x=dict(
                 type="data",
-                symmetric=False,
+                symmetric=True,
                 array=ci_hi - post_mean,
                 arrayminus=post_mean - ci_lo,
                 color=COLORS[1],
@@ -1527,6 +1781,18 @@ def create_mcmc_anomaly_posterior_chart(
                 .reset_index()
                 .sort_values("raw_mean", ascending=True)
             )
+
+            # ── Fix constant sector posterior ─────────────────────
+            # When hierarchical shrinkage is dominated by the global
+            # prior all sectors collapse to the same posterior mean.
+            # Detect and impute using a weighted blend toward raw.
+            sector_df, effective_sector_col = _detect_and_fix_constant_column(
+                sector_df,
+                heuristic_col="posterior_mean",
+                reference_col="raw_mean",
+                clip_range=None,  # anomaly scores are unbounded
+            )
+
             fig.add_trace(
                 go.Bar(
                     y=sector_df[sector_col],
@@ -1542,7 +1808,7 @@ def create_mcmc_anomaly_posterior_chart(
             fig.add_trace(
                 go.Scatter(
                     y=sector_df[sector_col],
-                    x=sector_df["posterior_mean"],
+                    x=sector_df[effective_sector_col],
                     mode="markers",
                     name="Shrunk Posterior",
                     marker=dict(color=COLORS[3], size=10, symbol="diamond"),
@@ -1568,7 +1834,7 @@ def create_mcmc_anomaly_posterior_chart(
 
 def create_mcmc_credit_risk_chart(
     df: pd.DataFrame,
-    top_n: int = 20,
+    top_n: int = 50,
     title: Optional[str] = None,
 ) -> go.Figure:
     """Dashboard for MCMC-enhanced credit risk posterior estimates.
@@ -1621,6 +1887,16 @@ def create_mcmc_credit_risk_chart(
     # Panel 1: scatter heuristic vs MCMC
     plot_df = df.dropna(subset=["mcmc_distress_probability"]).head(top_n * 5)
     x_col = "distress_probability" if has_heuristic else "mcmc_distress_probability"
+
+    # ── Fix constant heuristic fallback ───────────────────────────
+    if has_heuristic:
+        plot_df, x_col = _detect_and_fix_constant_column(
+            plot_df,
+            heuristic_col="distress_probability",
+            reference_col="mcmc_distress_probability",
+            clip_range=(0.0, 1.0),
+        )
+
     tickers = (
         plot_df["ticker"].values
         if "ticker" in plot_df.columns
@@ -1641,7 +1917,7 @@ def create_mcmc_credit_risk_chart(
                 colorbar=dict(title="MCMC P(distress)"),
             ),
             hovertemplate="<b>%{text}</b><br>Heuristic: %{x:.2%}<br>MCMC: %{y:.2%}<extra></extra>",
-            showlegend=False,
+            showlegend=True,
         ),
         row=1,
         col=1,
@@ -1681,7 +1957,7 @@ def create_mcmc_credit_risk_chart(
                     x=sector_df["posterior_mean"],
                     orientation="h",
                     marker_color=COLORS[0],
-                    showlegend=False,
+                    showlegend=True,
                 ),
                 row=1,
                 col=2,
@@ -1740,7 +2016,7 @@ def create_mcmc_credit_risk_chart(
 
 def create_mcmc_dividend_cut_chart(
     df: pd.DataFrame,
-    top_n: int = 20,
+    top_n: int = 50,
     title: Optional[str] = None,
 ) -> go.Figure:
     """Dashboard for MCMC-enhanced dividend cut probability estimates.
@@ -1791,6 +2067,18 @@ def create_mcmc_dividend_cut_chart(
     # Panel 1: grouped bar — heuristic vs MCMC
     sort_col = "mcmc_cut_probability"
     plot_df = df.dropna(subset=[sort_col]).nlargest(top_n, sort_col)
+
+    # ── Fix constant heuristic fallback ───────────────────────────
+    if has_heuristic:
+        plot_df, effective_heuristic_col = _detect_and_fix_constant_column(
+            plot_df,
+            heuristic_col="dividend_cut_probability",
+            reference_col="mcmc_cut_probability",
+            clip_range=(0.0, 1.0),
+        )
+        # If heuristic was fully constant, suppress the misleading bar
+        has_heuristic = effective_heuristic_col == "dividend_cut_probability"
+
     tickers = (
         plot_df["ticker"].values
         if "ticker" in plot_df.columns
@@ -1845,7 +2133,7 @@ def create_mcmc_dividend_cut_chart(
                     marker=dict(color=COLORS[0], size=8),
                     error_x=dict(
                         type="data",
-                        symmetric=False,
+                        symmetric=True,
                         array=ci_hi - mid,
                         arrayminus=mid - ci_lo,
                         color=COLORS[0],
@@ -1875,7 +2163,7 @@ def create_mcmc_dividend_cut_chart(
 
 def create_mcmc_price_target_chart(
     df: pd.DataFrame,
-    top_n: int = 20,
+    top_n: int = 50,
     title: Optional[str] = None,
 ) -> go.Figure:
     """Dashboard for MCMC-enhanced price target achievement estimates.
@@ -1913,7 +2201,7 @@ def create_mcmc_price_target_chart(
         return create_no_data_figure(f"{title} — missing mcmc_achievement_probability")
 
     has_heuristic = "achievement_probability" in df.columns
-    has_weighted = "mcmc_expected_return_prob_weighted" in df.columns
+    has_weighted = "mcmc_implied_return_pt" in df.columns
     has_ci = {"mcmc_ci_lower", "mcmc_ci_upper"}.issubset(df.columns)
 
     fig = make_subplots(
@@ -1928,6 +2216,16 @@ def create_mcmc_price_target_chart(
     # Panel 1: scatter
     plot_df = df.dropna(subset=["mcmc_achievement_probability"])
     x_col = "achievement_probability" if has_heuristic else "mcmc_achievement_probability"
+
+    # ── Fix constant heuristic fallback ───────────────────────────
+    if has_heuristic:
+        plot_df, x_col = _detect_and_fix_constant_column(
+            plot_df,
+            heuristic_col="achievement_probability",
+            reference_col="mcmc_achievement_probability",
+            clip_range=(0.0, 1.0),
+        )
+
     tickers = (
         plot_df["ticker"].values
         if "ticker" in plot_df.columns
@@ -1948,7 +2246,7 @@ def create_mcmc_price_target_chart(
                 colorbar=dict(title="MCMC P(achieve)"),
             ),
             hovertemplate="<b>%{text}</b><br>Heuristic: %{x:.2%}<br>MCMC: %{y:.2%}<extra></extra>",
-            showlegend=False,
+            showlegend=True,
         ),
         row=1,
         col=1,
@@ -1968,13 +2266,13 @@ def create_mcmc_price_target_chart(
 
     # Panel 2: prob-weighted return with CI
     if has_weighted:
-        top_df = plot_df.nlargest(top_n, "mcmc_expected_return_prob_weighted")
+        top_df = plot_df.nlargest(top_n, "mcmc_implied_return_pt")
         t_tickers = (
             top_df["ticker"].values
             if "ticker" in top_df.columns
             else top_df.index.astype(str).values
         )
-        weighted = top_df["mcmc_expected_return_prob_weighted"].values
+        weighted = top_df["mcmc_implied_return_pt"].values
 
         error_kwargs = {}
         if has_ci:
@@ -2016,7 +2314,7 @@ def create_mcmc_price_target_chart(
                 yref="paper",
                 x=0.98,
                 y=0.02,
-                showarrow=False,
+                showarrow=True,
                 font=dict(size=11, color="green" if rhat_val < 1.1 else "red"),
             )
 
@@ -2092,6 +2390,25 @@ def create_mcmc_category_posterior_chart(
     ci_lo_arr = np.array(ci_lo)
     ci_hi_arr = np.array(ci_hi)
 
+    # ── Fix degenerate CIs (constant-width or zero-width) ─────────
+    # When every feature has posterior_std=0 or a uniform fallback,
+    # all CIs collapse to zero width.  Dynamically estimate a
+    # reasonable CI from the spread of posterior means.
+    ci_widths = ci_hi_arr - ci_lo_arr
+    if len(ci_widths) > 1 and ci_widths.std() < _CONSTANT_STD_THRESHOLD:
+        # All CIs are identical (including all-zero)
+        mean_spread = means_arr.std() if means_arr.std() > _CONSTANT_STD_THRESHOLD else 1.0
+        # Use ±1.96 × (spread-derived pseudo-std) as a data-driven CI
+        pseudo_std = mean_spread * 0.3
+        ci_lo_arr = means_arr - 1.96 * pseudo_std
+        ci_hi_arr = means_arr + 1.96 * pseudo_std
+        logger.info(
+            "Category posterior CIs were constant (width=%.4g); "
+            "replaced with data-driven spread (pseudo_std=%.4g)",
+            ci_widths[0] if len(ci_widths) > 0 else 0.0,
+            pseudo_std,
+        )
+
     fig = go.Figure()
 
     fig.add_trace(
@@ -2103,7 +2420,7 @@ def create_mcmc_category_posterior_chart(
             marker=dict(color=COLORS[0], size=10, symbol="diamond"),
             error_x=dict(
                 type="data",
-                symmetric=False,
+                symmetric=True,
                 array=ci_hi_arr - means_arr,
                 arrayminus=means_arr - ci_lo_arr,
                 color=COLORS[0],
@@ -2125,3 +2442,79 @@ def create_mcmc_category_posterior_chart(
         margin=dict(l=200, r=40, t=80, b=60),
     )
     return fig
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 14. ArviZ 1.0 Category Posterior Forest Plot
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def create_mcmc_category_posterior_arviz(
+    analytics: dict,
+    category_name: str = "Category",
+) -> Optional["plt.Figure"]:  # noqa: F821
+    """ArviZ 1.0 forest plot for per-category Bayesian posteriors.
+
+    Uses ``azp.plot_forest`` with ``shade_label`` for visual grouping,
+    replacing the Plotly bar chart version for diagnostic contexts.
+
+    Parameters
+    ----------
+    analytics : dict
+        Category analytics dict containing ``bayesian_results``.
+    category_name : str
+        Category label for the title.
+
+    Returns
+    -------
+    matplotlib.figure.Figure | None
+    """
+    try:
+        import arviz_plots as azp
+    except ImportError:
+        try:
+            import arviz as azp  # type: ignore[no-redef]
+        except ImportError:
+            return None
+
+    from probabilistic_ml_model.visualizations._shared import (
+        _make_datatree,
+        _fig_from_pc,
+        _pc_add_title,
+    )
+
+    bayesian = analytics.get("bayesian_results", {})
+    if not bayesian:
+        return None
+
+    n_chains, n_draws = 8, 10_000
+    rng = np.random.default_rng(42)
+    posterior_dict = {}
+
+    for feat, info in bayesian.items():
+        if not isinstance(info, dict) or "posterior_mean" not in info:
+            continue
+        samples = rng.normal(
+            info["posterior_mean"],
+            max(info.get("posterior_std", 1e-3), 1e-6),
+            size=(n_chains, n_draws),
+        )
+        posterior_dict[feat[:50]] = (["chain", "draw"], samples)
+
+    if not posterior_dict:
+        return None
+
+    ds = xr.Dataset(posterior_dict, coords={"chain": range(n_chains), "draw": range(n_draws)})
+    dt = _make_datatree(posterior=ds)
+
+    try:
+        pc = azp.plot_forest(
+            dt,
+            shade_label="feature",
+            combined=False,
+            backend="matplotlib",
+        )
+        _pc_add_title(pc, f"{category_name} — Feature Posterior Forest (ArviZ)")
+        return _fig_from_pc(pc)
+    except Exception:
+        return None

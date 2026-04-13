@@ -4,7 +4,7 @@ Earnings Beat Bayesian Model — Hierarchical Beta-Binomial.
 Replaces scipy Beta with PyMC Beta-Binomial, supports optional sector-level
 hierarchical structure and forward-adjustment deterministics.
 
-Reference: EarningsBeatProbabilityModel in probability_analytics.py (line 1131);
+Reference: EarningsBeatProbabilityModel in probability_models.py (line 1131);
            build_beat_probability_inference_data() in inference_schema.py (line 459).
 """
 
@@ -13,10 +13,21 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-import arviz as az
+try:
+    import arviz as az
+except ImportError:
+    try:
+        import arviz_base as az
+    except ImportError:
+        az = None  # type: ignore[assignment]
 import numpy as np
-import pymc as pm
-import pytensor.tensor as pt
+
+try:
+    import pymc as pm
+except ImportError:
+    pm = None  # type: ignore[assignment]
+
+from probabilistic_ml_model.pml_models._pytensor_compat import get_pytensor_compile_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +82,12 @@ class EarningsBeatBayesian:
         -------
         az.InferenceData
         """
-        n_stocks = len(tickers)
         n_beats = np.asarray(n_beats, dtype="int32")
         n_total = np.asarray(n_total, dtype="int32")
 
         coords = {"ticker": tickers}
         hierarchical = sectors is not None
+        sector_idx = None
 
         if hierarchical:
             unique_sectors = np.unique(sectors)
@@ -120,8 +131,8 @@ class EarningsBeatBayesian:
                 chains=chains,
                 target_accept=target_accept,
                 random_seed=random_seed,
-                return_inferencedata=True,
                 progressbar=False,
+                compile_kwargs=get_pytensor_compile_kwargs(),
             )
 
         return idata

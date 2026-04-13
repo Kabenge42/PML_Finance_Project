@@ -1,8 +1,8 @@
 """
 InferenceData schema specification for finance_ml analytics.
 
-Provides a standardised bridge between the Bayesian probability models
-in probability_analytics.py / statistical_analysis.py and the ArviZ
+Provides a standardized bridge between the Bayesian probability models
+in probability_models.py / statistical_models.py and the ArviZ
 InferenceData schema (xarray-backed, NetCDF-compatible).
 
 The schema is anchored to the postgres.public metadata tables:
@@ -37,7 +37,8 @@ except ImportError as _xr_err:
 try:
     import arviz as az
 
-    ARVIZ_AVAILABLE = hasattr(az, "InferenceData")
+    # ArviZ 1.0 replaced InferenceData with xr.DataTree; check for from_dict
+    ARVIZ_AVAILABLE = hasattr(az, "from_dict") or hasattr(az, "InferenceData")
 except Exception as _az_err:
     logger.warning("ArviZ import failed in inference_schema: %s", _az_err)
     az = None  # type: ignore[assignment]
@@ -49,19 +50,12 @@ except Exception as _az_err:
 # ---------------------------------------------------------------------------
 _VALID_SCHEMA_RE = None  # lazy-compiled
 
-# Identifier columns shared across builders and specs
-_IDENTIFIER_COLS: frozenset[str] = frozenset(
-    {
-        "ticker",
-        "isin",
-        "name",
-        "sector",
-        "industry",
-        "country",
-        "trading_country",
-        "region",
-        "exchange",
-    }
+# Identifier columns — imported from the canonical source in feature_catalog
+from probabilistic_ml_model.data_utils.feature_catalog import (
+    FEATURE_VIEW_REGISTRY,
+)
+from probabilistic_ml_model.data_utils.feature_catalog import (
+    IDENTIFIER_COLUMNS_SET as _IDENTIFIER_COLS,
 )
 
 
@@ -388,12 +382,19 @@ def _build_arviz_or_xarray(
         Dimension names for the fallback variable.
     """
     if ARVIZ_AVAILABLE:
+        groups: dict[str, Any] = {}
+        if posterior is not None:
+            groups["posterior"] = posterior
+        if posterior_predictive is not None:
+            groups["posterior_predictive"] = posterior_predictive
+        if observed_data is not None:
+            groups["observed_data"] = observed_data
+        if log_likelihood is not None:
+            groups["log_likelihood"] = log_likelihood
+        if constant_data is not None:
+            groups["constant_data"] = constant_data
         return az.from_dict(
-            posterior=posterior,
-            posterior_predictive=posterior_predictive,
-            observed_data=observed_data,
-            log_likelihood=log_likelihood,
-            constant_data=constant_data,
+            groups,
             coords=coords,
             dims=dims,
         )
@@ -459,9 +460,9 @@ def _build_beat_constant_data(
 
 def build_beat_probability_inference_data(
     beat_results_df: pd.DataFrame,
-    observed_df: pd.DataFrame,
+    observed_beat: pd.DataFrame,
     n_posterior_samples: int = 4000,
-    n_chains: int = 4,
+    n_chains: int = 8,
     random_seed: int = 42,
 ) -> "az.InferenceData | xr.Dataset":
     """
@@ -479,11 +480,11 @@ def build_beat_probability_inference_data(
     beat_results_df : pd.DataFrame
         Output from ``EarningsBeatProbabilityModel.analyze_dataframe_enhanced()``
         containing posterior_alpha, posterior_beta, prior_alpha, prior_beta, etc.
-    observed_df : pd.DataFrame
+    observed_beat : pd.DataFrame
         Source feature DataFrame with observed financial data.
     n_posterior_samples : int, default 4000
         Number of posterior draws per chain.
-    n_chains : int, default 4
+    n_chains : int, default 8
         Number of MCMC chains to simulate.
     random_seed : int, default 42
         Random seed for reproducibility.
@@ -551,13 +552,13 @@ def build_beat_probability_inference_data(
 
 
 def _build_credit_observed_data(
-    observed_df: pd.DataFrame,
-    tickers: np.ndarray,
+        observed_df: pd.DataFrame,
+        tickers: np.ndarray,
 ) -> dict[str, np.ndarray]:
     """Extract observed financial health indicators aligned to equity tickers."""
     observed: dict[str, np.ndarray] = {}
     obs_cols = (
-        "combined_distress_risk_score",
+        "combined_distress_score",
         "altman_z_score",
         "cash_runway_months",
         # NEW: v3.4 leverage/liquidity and quality/risk observed variables
@@ -571,10 +572,15 @@ def _build_credit_observed_data(
     if not available_obs:
         return observed
 
-    if "ticker" in observed_df.columns:
-        obs_indexed = observed_df.set_index("ticker")
+    if "isin" in observed_df.columns and "ticker" in observed_df.columns:
+        obs_dedup = observed_df.drop_duplicates(subset="isin")
+        ticker_map = obs_dedup.set_index("ticker")
+        obs_indexed = ticker_map[~ticker_map.index.duplicated(keep="first")]
+    elif "ticker" in observed_df.columns:
+        obs_indexed = observed_df[~observed_df.set_index("ticker").index.duplicated(keep="first")]
+        obs_indexed = observed_df.drop_duplicates(subset="ticker").set_index("ticker")
     elif observed_df.index.name is not None:
-        obs_indexed = observed_df
+        obs_indexed = observed_df[~observed_df.index.duplicated(keep="first")]
     else:
         return observed
 
@@ -600,7 +606,7 @@ def build_credit_risk_inference_data(
     ruin_results_df: pd.DataFrame,
     observed_df: pd.DataFrame,
     n_posterior_samples: int = 4000,
-    n_chains: int = 4,
+    n_chains: int = 8,
     random_seed: int = 42,
 ) -> "az.InferenceData | xr.Dataset":
     """
@@ -608,7 +614,7 @@ def build_credit_risk_inference_data(
 
     Groups:
       - **posterior**: Ruin probability samples per equity
-      - **observed_data**: combined_distress_risk_score, altman_z_score
+      - **observed_data**: combined_distress_score, altman_z_score
       - **constant_data**: Capital, cash_burn, volatility inputs
       - **sample_stats**: Divergence flags
 
@@ -654,6 +660,7 @@ def build_credit_risk_inference_data(
         dims=dims,
     )
 
+
 # =============================================================================
 # 3b. InferenceData Factory — Accounting Anomaly Detection
 # =============================================================================
@@ -683,8 +690,8 @@ def _build_anomaly_constant_data(
 
 def build_accounting_anomaly_inference_data(
     anomaly_df: pd.DataFrame,
-    n_posterior_samples: int = 4000,
-    n_chains: int = 4,
+    n_posterior_samples: int = 10000,
+    n_chains: int = 8,
     random_seed: int = 42,
 ) -> "az.InferenceData | xr.Dataset":
     """
@@ -764,7 +771,7 @@ def _resolve_price_target_inputs(
     tuple
         (last_prices, pt_low, pt_median, pt_high)
     """
-    last_prices = _safe_values(mc_results_df["last_price"])
+    last_prices = np.nan_to_num(_safe_values(mc_results_df["last_price"]), nan=0.0)
     pt_low = last_prices * 0.8
     pt_high = last_prices * 1.5
     pt_median = _safe_column_values(
@@ -786,6 +793,13 @@ def _resolve_price_target_inputs(
                     pt_high[i] = val_high
                 if pd.notna(val_median) and val_median > 0:
                     pt_median[i] = val_median
+
+    # Sanitise: replace any remaining NaN and ensure pt_high > pt_low
+    pt_low = np.nan_to_num(pt_low, nan=0.0)
+    pt_high = np.nan_to_num(pt_high, nan=0.0)
+    pt_median = np.nan_to_num(pt_median, nan=0.0)
+    pt_high = np.maximum(pt_high, pt_low + 0.01)
+    pt_median = np.clip(pt_median, pt_low, pt_high)
 
     return last_prices, pt_low, pt_median, pt_high
 
@@ -831,7 +845,7 @@ def build_monte_carlo_inference_data(
     )
 
     # Triangular distribution simulation
-    scale = np.maximum(pt_high - pt_low, 0.01)
+    scale = pt_high - pt_low  # guaranteed > 0 by _resolve_price_target_inputs
     c = np.clip((pt_median - pt_low) / scale, 0.01, 0.99)
 
     simulated_prices = np.zeros((1, n_simulations, n_equities))
@@ -843,9 +857,12 @@ def build_monte_carlo_inference_data(
     coords = _build_xarray_coords(equity_coords, n_chains=1, n_draws=n_simulations)
     dims = {"simulated_price": ["chain", "draw", "equity"]}
 
+    # expected_return_mc: mean simulated price per equity (dollar-denominated)
+    expected_return_mc = simulated_prices[0].mean(axis=0)  # (n_equities,)
+
     return _build_arviz_or_xarray(
         posterior_predictive={"simulated_price": simulated_prices},
-        observed_data={"last_price": last_prices},
+        observed_data={"last_price": last_prices, "expected_return_mc": expected_return_mc},
         constant_data={"pt_low": pt_low, "pt_median": pt_median, "pt_high": pt_high},
         coords=coords,
         dims=dims,
@@ -895,7 +912,7 @@ def build_category_analysis_inference_data(
     category_name: str,
     features: Sequence[str],
     n_posterior_samples: int = 4000,
-    n_chains: int = 4,
+    n_chains: int = 8,
     random_seed: int = 42,
     feature_coords: Optional[FeatureCoordinates] = None,
 ) -> "az.InferenceData | xr.Dataset":
@@ -1001,6 +1018,7 @@ def load_equity_coordinates_from_db(
     EquityCoordinates
     """
     import os
+
     from sqlalchemy import create_engine, text
 
     schema = _validate_schema_name(schema)
@@ -1054,6 +1072,7 @@ def load_feature_coordinates_from_db(
     FeatureCoordinates
     """
     import os
+
     from sqlalchemy import create_engine, text
 
     schema = _validate_schema_name(schema)
@@ -1094,16 +1113,16 @@ def summarize_inference_data(idata: Any) -> dict[str, Any]:
     """
     summary: dict[str, Any] = {}
 
-    if ARVIZ_AVAILABLE and isinstance(idata, az.InferenceData):
-        summary["groups"] = list(idata.groups())
+    # ArviZ 1.0: DataTree replaces InferenceData
+    if ARVIZ_AVAILABLE and isinstance(idata, xr.DataTree):
+        summary["groups"] = list(idata.children.keys())
 
         # Prefer posterior; fall back to posterior_predictive (e.g. Monte Carlo)
-        if hasattr(idata, "posterior"):
-            group = idata.posterior
-        elif hasattr(idata, "posterior_predictive"):
-            group = idata.posterior_predictive
-        else:
-            group = None
+        group = None
+        if "posterior" in idata.children:
+            group = idata["posterior"].ds
+        elif "posterior_predictive" in idata.children:
+            group = idata["posterior_predictive"].ds
 
         if group is not None:
             summary["n_chains"] = group.sizes.get("chain", 0)
@@ -1112,7 +1131,7 @@ def summarize_inference_data(idata: Any) -> dict[str, Any]:
             summary["variables"] = list(group.data_vars)
 
             # R-hat convergence diagnostic (only meaningful for posterior)
-            if hasattr(idata, "posterior"):
+            if "posterior" in idata.children:
                 try:
                     rhat = az.rhat(idata)
                     summary["r_hat"] = {
@@ -1142,13 +1161,13 @@ def build_resampled_technical_inference_data(
     prior_return_mean: float = 0.08,
     prior_return_std: float = 0.20,
     n_posterior_samples: int = 4000,
-    n_chains: int = 4,
+    n_chains: int = 8,
     random_seed: int = 42,
 ) -> "az.InferenceData | xr.Dataset | None":
     """
     Build ArviZ InferenceData from resampled technical return posteriors.
 
-    Delegates to ``BayesianTechnicalResampler`` from statistical_analysis.py
+    Delegates to ``BayesianTechnicalResampler`` from statistical_models.py
     and wraps results in the standard InferenceData schema with equity
     coordinates from equities_schema_metadata.
 
@@ -1173,17 +1192,13 @@ def build_resampled_technical_inference_data(
     -------
     arviz.InferenceData, xr.Dataset, or None
     """
-    from probabilistic_ml_model.statistical_functions.statistical_analysis import (
+    from probabilistic_ml_model.statistical_functions.statistical_models import (
         BayesianTechnicalResampler,
     )
 
-    resampler = BayesianTechnicalResampler(
-        prior_return_mean=prior_return_mean,
-        prior_return_std=prior_return_std,
-        n_posterior_samples=n_posterior_samples,
-        n_chains=n_chains,
-        random_seed=random_seed,
-    )
+    resampler = BayesianTechnicalResampler(prior_return_mean=prior_return_mean, prior_return_std=prior_return_std,
+                                           n_posterior_samples=n_posterior_samples, n_chains=n_chains,
+                                           random_seed=random_seed)
     result_df = resampler.resample_returns(equities_df, freq=freq)
     return resampler.build_inference_data(equities_df, freq=freq, result_df=result_df)
 
@@ -1192,26 +1207,8 @@ def build_resampled_technical_inference_data(
 # 9. Extended Schema — Identifier Coordinates, Metadata & Feature Views
 # =============================================================================
 
-# Registry mapping all 17 vw_features_* views to their categories
-FEATURE_VIEW_REGISTRY: dict[str, str] = {
-    "vw_features_analyst_sentiment": "Analyst Sentiment",
-    "vw_features_balance_sheet": "Balance Sheet",
-    "vw_features_cashflow": "Cash Flow",
-    "vw_features_composite_scores": "Composite Scores",
-    "vw_features_cost_structure": "Cost Structure",
-    "vw_features_dividends": "Dividend Features",
-    "vw_features_earnings": "Earnings Quality",
-    "vw_features_employment": "Employment",
-    "vw_features_growth": "Growth Metrics",
-    "vw_features_leverage_liquidity": "Leverage & Liquidity",
-    "vw_features_momentum": "Momentum & Technical",
-    "vw_features_profitability": "Profitability",
-    "vw_features_quality_risk": "Quality & Risk",
-    "vw_features_technical_analysis": "Technical Analysis",
-    "vw_features_temporal": "Inventory Temporal",
-    "vw_features_unusual_items": "Unusual Items",
-    "vw_features_valuation_ratios": "Valuation Ratios",
-}
+# FEATURE_VIEW_REGISTRY is imported from feature_catalog (canonical source)
+# and re-exported at module level for backward compatibility.
 
 
 @dataclass(frozen=True)
@@ -1463,6 +1460,7 @@ def load_identifier_coordinates_from_db(
 ) -> IdentifierCoordinates:
     """Load full IdentifierCoordinates from vw_identifier_columns."""
     import os
+
     from sqlalchemy import create_engine
 
     schema = _validate_schema_name(schema)
@@ -1481,6 +1479,7 @@ def load_equities_schema_metadata_from_db(
 ) -> EquitiesSchemaMetadata:
     """Load EquitiesSchemaMetadata from equities_schema_metadata table."""
     import os
+
     from sqlalchemy import create_engine
 
     schema = _validate_schema_name(schema)
@@ -1499,6 +1498,7 @@ def load_feature_registry_metadata_from_db(
 ) -> FeatureRegistryMetadata:
     """Load FeatureRegistryMetadata from feature_registry_metadata table."""
     import os
+
     from sqlalchemy import create_engine
 
     schema = _validate_schema_name(schema)
@@ -1518,6 +1518,7 @@ def load_feature_view_spec_from_db(
 ) -> FeatureViewSpec:
     """Load a FeatureViewSpec by querying a vw_features_* view for its columns."""
     import os
+
     from sqlalchemy import create_engine, text
 
     schema = _validate_schema_name(schema)
@@ -1562,6 +1563,7 @@ def load_mv_equities_spec_from_db(
 ) -> EquitiesMaterializedViewSpec:
     """Load EquitiesMaterializedViewSpec from mv_equities."""
     import os
+
     from sqlalchemy import create_engine
 
     schema = _validate_schema_name(schema)
@@ -1618,8 +1620,8 @@ def build_feature_view_inference_data(
     posterior_ds = xr.Dataset(posterior_vars, coords=coords)
 
     if ARVIZ_AVAILABLE:
-        return az.InferenceData(
-            posterior=posterior_ds,
-            observed_data=observed_ds,
+        return az.from_dict(
+            {"posterior": {v: posterior_ds[v].values for v in posterior_ds.data_vars}},
+            coords={k: v.values for k, v in posterior_ds.coords.items()},
         )
     return posterior_ds

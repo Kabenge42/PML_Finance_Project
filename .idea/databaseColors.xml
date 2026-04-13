@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DatabaseColorSettings">
+    <colors>
+      <entry key="dividend_quality_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="dividend_safety_analysis/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="earnings_quality_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="equities/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Blue" />
+      <entry key="growth_momentum_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="high_yield_safe_dividend_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="integrity_filtered_growth_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="mv_dcf/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:MATERIALIZED VIEW" value="24414d" />
+      <entry key="prob_analyst_sentiment/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_balance_sheet/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_cash_flow/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_composite_scores/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_cost_structure/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_dividend_features/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_earnings_quality/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_employment/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_growth_metrics/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_inventory_temporal/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_leverage_&amp;amp;_liquidity/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_momentum_&amp;amp;_technical/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_profitability/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_quality_&amp;amp;_risk/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_technical_analysis/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_unusual_items/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="prob_valuation_ratios/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="probability_analytics_summary/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
+      <entry key="screen_fcf_compounders/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="screen_low_vol_quality/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="screen_total_return_leaders/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="sector_relative_ranking/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="strong_consensus_picks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+      <entry key="valuation_reversion_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
+    </colors>
+  </component>
+</project>

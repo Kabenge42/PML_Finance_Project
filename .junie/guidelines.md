@@ -24,32 +24,32 @@ pip install -r requirements.txt
 
 ### Key Configuration Files
 
-| File                      | Purpose                                              |
-|:--------------------------|:-----------------------------------------------------|
-| `pyproject.toml`          | Build system, project metadata, tool configs (v0.9.5)|
-| `requirements.txt`        | Full dependency list (core + optional)               |
-| `Pipfile`                 | Pipenv dependency management                         |
-| `environment_variables.txt`| Reference for all environment variables              |
-| `set_env.ps1`             | PowerShell script to set env vars for a session      |
-| `.gitignore`              | Git ignore rules                                     |
+| File                        | Purpose                                               |
+|:----------------------------|:------------------------------------------------------|
+| `pyproject.toml`            | Build system, project metadata, tool configs (v0.9.5) |
+| `requirements.txt`          | Full dependency list (core + optional)                |
+| `Pipfile`                   | Pipenv dependency management                          |
+| `environment_variables.txt` | Reference for all environment variables               |
+| `set_env.ps1`               | PowerShell script to set env vars for a session       |
+| `.gitignore`                | Git ignore rules                                      |
 
 ### Environment Variables
 
 Set via `set_env.ps1` (dot-source to persist in session: `. .\set_env.ps1`):
 
-| Variable              | Default / Example                                                  | Description                          |
-|:----------------------|:-------------------------------------------------------------------|:-------------------------------------|
-| `LOG_LEVEL`           | `INFO`                                                             | Python logging level                 |
-| `DATA_DIR`            | `data`                                                             | Local data storage                   |
-| `MODEL_DIR`           | `regression`                                                       | Saved model artifacts                |
-| `CACHE_DIR`           | `.cache`                                                           | Cache directory                      |
-| `OUTPUT_DIR`          | `outputs`                                                          | Generated reports / visualizations   |
-| `DB_URL`              | `postgresql+psycopg2://postgres:...@localhost:5432/postgres`       | SQLAlchemy DB connection URL         |
-| `MODEL_VERSION`       | `v9_10`                                                            | Active model version tag             |
-| `RANDOM_SEED`         | `42`                                                               | Reproducibility seed                 |
-| `N_JOBS`              | `4`                                                                | Parallel job count                   |
-| `GEIB_DASHBOARD`      | `true`                                                             | Enable equities dashboard            |
-| `ENABLE_INTERACTIVE_PLOTS` | `true`                                                        | Toggle interactive visualizations    |
+| Variable                   | Default / Example                                            | Description                        |
+|:---------------------------|:-------------------------------------------------------------|:-----------------------------------|
+| `LOG_LEVEL`                | `INFO`                                                       | Python logging level               |
+| `DATA_DIR`                 | `data`                                                       | Local data storage                 |
+| `MODEL_DIR`                | `regression`                                                 | Saved model artifacts              |
+| `CACHE_DIR`                | `.cache`                                                     | Cache directory                    |
+| `OUTPUT_DIR`               | `outputs`                                                    | Generated reports / visualizations |
+| `DB_URL`                   | `postgresql+psycopg2://postgres:...@localhost:5432/postgres` | SQLAlchemy DB connection URL       |
+| `MODEL_VERSION`            | `v9_10`                                                      | Active model version tag           |
+| `RANDOM_SEED`              | `42`                                                         | Reproducibility seed               |
+| `N_JOBS`                   | `4`                                                          | Parallel job count                 |
+| `GEIB_DASHBOARD`           | `true`                                                       | Enable equities dashboard          |
+| `ENABLE_INTERACTIVE_PLOTS` | `true`                                                       | Toggle interactive visualizations  |
 
 ### Python-Version–Gated Dependencies
 
@@ -58,13 +58,13 @@ Some packages are restricted to `python_version < '3.14'`:
 
 ### Optional Dependency Groups (pyproject.toml)
 
-| Group          | Packages                                                 |
-|:---------------|:---------------------------------------------------------|
-| `dev`          | pytest, pytest-cov, black, flake8, mypy, isort, pip-tools|
-| `dashboards`   | streamlit, dash                                          |
-| `database`     | psycopg2-binary, SQLAlchemy                              |
-| `tensorflow`   | tensorflow, scikeras                                     |
-| `performance`  | numba                                                    |
+| Group         | Packages                                                  |
+|:--------------|:----------------------------------------------------------|
+| `dev`         | pytest, pytest-cov, black, flake8, mypy, isort, pip-tools |
+| `dashboards`  | streamlit, dash                                           |
+| `database`    | psycopg2-binary, SQLAlchemy                               |
+| `tensorflow`  | tensorflow, scikeras                                      |
+| `performance` | numba                                                     |
 
 Install an optional group: `pip install -e ".[dev,database]"`
 
@@ -132,15 +132,15 @@ def test_full_workflow():
 
 ### Test Coverage Summary
 
-| Test File                              | Tests     | Coverage                       |
-|:---------------------------------------|:----------|:-------------------------------|
-| `test_screening.py`                    | 42 tests  | Screening functions            |
-| `test_data_utils.py`                   | 38 tests  | Data loading and preprocessing |
-| `test_statistical_analysis.py`         | 39 tests  | Bayesian, MCMC, distributions  |
-| `test_market_analytics_integration.py` | 18 tests  | Cross-module workflows         |
-| `test_visualizations.py`              | 35 tests  | All 12 visualization functions |
-| `test_enhanced_statistics.py`          | 40 tests  | Kalman, Copula, parallel MCMC  |
-| **Total**                              | **212**   | All modules covered            |
+| Test File                              | Tests    | Coverage                       |
+|:---------------------------------------|:---------|:-------------------------------|
+| `test_screening.py`                    | 42 tests | Screening functions            |
+| `test_data_utils.py`                   | 38 tests | Data loading and preprocessing |
+| `test_statistical_analysis.py`         | 39 tests | Bayesian, MCMC, distributions  |
+| `test_market_analytics_integration.py` | 18 tests | Cross-module workflows         |
+| `test_visualizations.py`               | 35 tests | All 12 visualization functions |
+| `test_enhanced_statistics.py`          | 40 tests | Kalman, Copula, parallel MCMC  |
+| **Total**                              | **212**  | All modules covered            |
 
 Run all analytics tests:
 
@@ -160,12 +160,12 @@ pytest tests\test_screening.py tests\test_data_utils.py tests\test_statistical_a
 
 Enforced by the following tools (configured in `pyproject.toml`):
 
-| Tool    | Purpose              | Key Setting                     |
-|:--------|:---------------------|:--------------------------------|
-| Black   | Code formatting      | `line-length = 100`, target py312/py313 |
-| isort   | Import sorting       | `profile = "black"`, `line_length = 100` |
-| Flake8  | Linting              | Standard rules                  |
-| Mypy    | Static type checking | `python_version = "3.12"`       |
+| Tool   | Purpose              | Key Setting                              |
+|:-------|:---------------------|:-----------------------------------------|
+| Black  | Code formatting      | `line-length = 100`, target py312/py313  |
+| isort  | Import sorting       | `profile = "black"`, `line_length = 100` |
+| Flake8 | Linting              | Standard rules                           |
+| Mypy   | Static type checking | `python_version = "3.12"`                |
 
 ---
 
@@ -253,28 +253,20 @@ PML_Finance_Project/
 
 ```python
 # Analytics
-from analytics.data_utils import load_feature_data_from_db, load_all_feature_views, ExportConfig
-from analytics.screening import create_enhanced_screener
-from analytics.statistical_analysis import bayesian_category_analysis, hierarchical_mcmc_multi_level
+from probabilistic_ml_model.data_utils import load_feature_data_from_db, load_all_feature_views, ExportConfig
+from probabilistic_ml_model.statistical_functions.screening import create_enhanced_screener
+from probabilistic_ml_model.statistical_functions.statistical_models import bayesian_category_analysis, hierarchical_mcmc_multi_level
 
-# Schema (finance_ml)
-from core.schema import COLUMN_SCHEMA, normalize_column_name, list_price_cols
-
-# ETL
-from etl import run_etl_pipeline, ETLConfig
-
-# Features
-from ml_workflow.features.api import build_features
 ```
 
 ### Data Sources (v3.4)
 
-| Source                             | Access Function                    |
-|:-----------------------------------|:-----------------------------------|
-| `public.mv_equities`              | `load_equities_data_from_db`       |
-| `public.vw_features_*` (17 views) | `load_all_feature_views`           |
-| `public.mv_all_stock_features`    | `load_feature_data_from_db`        |
-| `public.equities_schema_metadata` | `get_equities_schema`              |
+| Source                                | Access Function                   |
+|:--------------------------------------|:----------------------------------|
+| `public.mv_equities`                  | `load_equities_data_from_db`      |
+| `public.vw_features_*` (17 views)     | `load_all_feature_views`          |
+| `public.mv_all_stock_features`        | `load_feature_data_from_db`       |
+| `public.equities_schema_metadata`     | `get_equities_schema`             |
 | `public.calculated_features_registry` | `load_feature_categories_from_db` |
 
 ### Core Models
@@ -289,9 +281,10 @@ from ml_workflow.features.api import build_features
 
 ### Design Principles
 
-- **Unified Schema**: `core.schema` (`COLUMN_SCHEMA`) is the single source of truth for column definitions.
-- **Optional-dependency stubs**: `analytics/__init__.py` generates stub functions for unavailable optional modules (ArviZ, probability_analytics) so imports never fail at the package level.
-- **Modular ETL**: Configuration and pipeline stages are decoupled in `finance_ml/etl/`.
+- **Unified DB Schema**: `postgres.information_schema` is the single source of truth for column definitions.
+  `SELECT t.* FROM information_schema.columns t WHERE t.table_schema = 'public' or t.table_schema = 'analytics'`
+- **Optional-dependency stubs**: `probabilistic_ml_model/__init__.py` generates stub functions for unavailable optional
+  modules (ArviZ, probability_analytics) so imports never fail at the package level.
 
 ---
 
