@@ -20,11 +20,30 @@ class CategoryAnalyticsCacheKey:
     burn_in: int
     max_features_per_category: int
 
+    subdir: str = "category_analytics"
+
     def to_filename(self) -> str:
         return (
             f"category_analytics_{self.data_checksum}_cats{self.n_categories}_"
             f"mcmc{int(self.use_mcmc)}_n{self.n_mcmc_samples}_b{self.burn_in}_"
             f"max{self.max_features_per_category}.json"
+        )
+
+
+@dataclass(frozen=True)
+class McmcReturnCacheKey:
+    """Stable key for parallel MCMC return analysis results."""
+
+    data_checksum: str
+    n_chains: int
+    n_samples: int
+
+    subdir: str = "mcmc_return"
+
+    def to_filename(self) -> str:
+        return (
+            f"mcmc_return_{self.data_checksum}_"
+            f"chains{self.n_chains}_n{self.n_samples}.json"
         )
 
 
@@ -66,14 +85,59 @@ def dataframe_stable_checksum(
     return _sha1("|".join(parts))
 
 
-def build_cache_path(cache_dir: str | Path, key_filename: str) -> Path:
+def build_cache_path(
+    cache_dir: str | Path, key_filename: str, subdir: str | None = None
+) -> Path:
+    """Build a cache file path, optionally within a *subdir* under *cache_dir*."""
     cache_root = Path(cache_dir)
+    if subdir:
+        cache_root /= subdir
     cache_root.mkdir(parents=True, exist_ok=True)
     return cache_root / key_filename
 
 
+def _json_default(obj: Any) -> Any:
+    """JSON serializer that converts numpy arrays to lists instead of strings."""
+    import numpy as np
+
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return round(float(obj), 8)
+    if isinstance(obj, float):
+        return round(obj, 8)
+    return str(obj)
+
+
+# Keys that contain large raw sample arrays and should be excluded from
+# the on-disk JSON cache.  The in-memory result dict is left untouched
+# so that downstream visualisation functions can still access them.
+_MCMC_LARGE_KEYS: frozenset[str] = frozenset({
+    "chains",
+    "combined_samples",
+    "inference_data",
+})
+
+
+def _strip_large_mcmc_keys(payload: Any) -> Any:
+    """Return a shallow copy of *payload* without bulky sample arrays.
+
+    Only applies when *payload* looks like an MCMC result dict (has the
+    ``posterior_mean`` key).  Category-analytics dicts and other payloads
+    are returned unchanged.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    if "posterior_mean" in payload and any(k in payload for k in _MCMC_LARGE_KEYS):
+        return {k: v for k, v in payload.items() if k not in _MCMC_LARGE_KEYS}
+    return payload
+
+
 def save_json(cache_path: Path, payload: Any) -> None:
-    cache_path.write_text(json.dumps(payload, default=str))
+    cleaned = _strip_large_mcmc_keys(payload)
+    cache_path.write_text(json.dumps(cleaned, default=_json_default))
 
 
 def load_json(cache_path: Path, *, ttl_hours: float | None = None) -> Any | None:

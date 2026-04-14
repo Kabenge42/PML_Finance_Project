@@ -68,7 +68,7 @@ def build_tri_model_alignment(
     kal: pd.DataFrame,
     pt: pd.DataFrame,
     *,
-    bullish_return_threshold: float = 2.0,
+    bullish_return_threshold: float = 10.0,
 ) -> pd.DataFrame:
     """
     Merge Monte Carlo, Kalman, and Price Target Achievement into a
@@ -80,6 +80,10 @@ def build_tri_model_alignment(
         Minimum implied return (%) to classify a model as bullish.
         Default 2.0% prevents near-zero returns from inflating the
         "Strong Bullish" bucket (Issue 8).
+        :param bullish_return_threshold:
+        :param pt:
+        :param kal:
+        :param mc:
     """
     if mc.empty or kal.empty or pt.empty:
         logger.warning("Tri-model alignment skipped — one or more inputs empty")
@@ -134,10 +138,22 @@ def build_tri_model_alignment(
         )
     )
 
-    # Issue 8: materiality threshold for bullish classification
-    tri["mc_bullish"] = tri["implied_return_mc"] > bullish_return_threshold
-    tri["kal_bullish"] = tri["implied_return_kalman"] > bullish_return_threshold
-    tri["pt_bullish"] = tri["implied_return_pt"] > bullish_return_threshold
+    # Issue 8: scale-aware materiality threshold for bullish classification
+    # Use model-specific thresholds based on each model's distribution
+    # to prevent scale mismatch from biasing agreement scores
+    mc_threshold = max(
+        bullish_return_threshold, float(tri["implied_return_mc"].quantile(0.40))
+    )
+    kal_threshold = max(
+        bullish_return_threshold, float(tri["implied_return_kalman"].quantile(0.40))
+    )
+    pt_threshold = max(
+        bullish_return_threshold * 0.3, float(tri["implied_return_pt"].quantile(0.40))
+    )
+
+    tri["mc_bullish"] = tri["implied_return_mc"] > mc_threshold
+    tri["kal_bullish"] = tri["implied_return_kalman"] > kal_threshold
+    tri["pt_bullish"] = tri["implied_return_pt"] > pt_threshold
     tri["agreement_score"] = (
         tri["mc_bullish"].astype(int)
         + tri["kal_bullish"].astype(int)
@@ -161,8 +177,8 @@ def build_quad_model_alignment(
     div_safety: pd.DataFrame | None = None,
     anomaly: pd.DataFrame | None = None,
     *,
-    credit_distress_threshold: float = 0.50,
-    div_cut_threshold: float = 0.40,
+    credit_distress_threshold: float = 0.99,
+    div_cut_threshold: float = 0.67,
     anomaly_severity_threshold: float | None = None,
 ) -> pd.DataFrame:
     """Extend tri-model alignment with up to 4 additional model signals.
@@ -652,6 +668,13 @@ def build_expected_returns_summary(
             summary[col] = summary["isin"].map(price_map)
             logger.debug("Merged market-data column '%s' from mc", col)
 
+    # Robustify heavy-tailed metrics to prevent outlier domination
+    _HEAVY_TAIL_COLS = ["pt_spread", "risk_reward_ratio", "upside_std"]
+    for col in _HEAVY_TAIL_COLS:
+        if col in summary.columns:
+            lo, hi = summary[col].quantile(0.02), summary[col].quantile(0.98)
+            summary[col] = summary[col].clip(lo, hi)
+
     # Enrich from source_df
     if source_df is not None and "isin" in source_df.columns:
         id_cols_ordered = load_identifier_columns()
@@ -769,7 +792,7 @@ def build_expected_returns_summary(
     # Merge parallel MCMC return analysis diagnostics
     if mcmc_result and isinstance(mcmc_result, dict):
         if mcmc_result.get("converged") is not None:
-            summary["mcmc_converged"] = mcmc_result.get("converged", False)
+            summary["mcmc_converged"] = mcmc_result.get("converged", True)
         if mcmc_result.get("r_hat") is not None:
             summary["mcmc_r_hat"] = mcmc_result["r_hat"]
         if mcmc_result.get("posterior_mean") is not None:
@@ -803,7 +826,7 @@ def build_expected_returns_summary(
 
 def extract_strong_consensus(
     tri: pd.DataFrame,
-    min_prob_positive: float = 65.0,
+    min_prob_positive: float = 33.0,
     min_achievement: float = 0.50,
     top_n: int = 2000,
 ) -> pd.DataFrame:

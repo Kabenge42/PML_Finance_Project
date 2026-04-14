@@ -132,7 +132,7 @@ class PipelineConfig:
     mc_max_stocks: int = 10_000
     mcmc_chains: int = 8
     mcmc_samples: int = 50_000
-    beat_threshold: float = 0.6
+    beat_threshold: float = 0.5
     output_dir: str = "outputs"
     log_file: str | None = "logs/expected_returns_pipeline.log"
     log_level: int = logging.INFO
@@ -143,7 +143,7 @@ class PipelineConfig:
         return cls(
             mc_simulations=int(os.environ.get("ER_MC_SIMULATIONS", 50_000)),
             mc_max_stocks=int(os.environ.get("ER_MC_MAX_STOCKS", 10_000)),
-            mcmc_chains=int(os.environ.get("ER_MCMC_CHAINS", 6)),
+            mcmc_chains=int(os.environ.get("ER_MCMC_CHAINS", 8)),
             mcmc_samples=int(os.environ.get("ER_MCMC_SAMPLES", 50_000)),
             output_dir=os.environ.get("ER_OUTPUT_DIR", "outputs"),
             log_file=os.environ.get("ER_LOG_FILE", "logs/expected_returns_pipeline.log"),

@@ -73,6 +73,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\outputs\probability_analytics_summary.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\reference material\machine_learning\datasets\housing\housing.csv">
           <value>
             <Attribute>

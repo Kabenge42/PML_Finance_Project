@@ -39,7 +39,9 @@ See also ``probability_viz`` for MCMC-enhanced Plotly dashboards:
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -106,6 +108,21 @@ def _save_fig(fig, path: Path, dpi: int = 150) -> str:
     fig.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     return str(path)
+
+
+def _parse_chain_string(s: str) -> np.ndarray:
+    """Parse numpy array string representation back to array.
+
+    MCMC cache JSON files may store chain arrays as string representations
+    (e.g. ``"[6.93 6.93 ...]"``).  This helper converts them back.
+    """
+    cleaned = s.strip("[]")
+    # Remove ellipsis (truncated repr)
+    cleaned = re.sub(r"\.{3}", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return np.array([], dtype=float)
+    return np.fromstring(cleaned, sep=" ")
 
 
 # ---------------------------------------------------------------------------
@@ -788,12 +805,11 @@ def create_mcmc_convergence_panel_arviz(
     except Exception as e:
         logger.debug("MCMC autocorr plot failed: %s", e)
 
-    # 4) ESS evolution
+    # 4) ESS evolution (Task 4: use plot_ess_evolution, not plot_ess kind="evolution")
     try:
-        pc = azp.plot_ess(
+        pc = azp.plot_ess_evolution(
             dt,
             var_names=["implied_return_pt"],
-            kind="evolution",
             backend="matplotlib",
         )
         fig = _fig_from_pc(pc)
@@ -842,31 +858,110 @@ def create_mcmc_convergence_panel_arviz(
     except Exception as e:
         logger.debug("MCMC ECDF plot failed: %s", e)
 
-    # 8) PPC Rootogram (NEW — if observed data available)
+    # 8) PPC distribution check (Task 12: use plot_ppc_dist for continuous data,
+    #    not plot_ppc_rootogram which is for count models)
     observed = mcmc_result.get("observed_returns")
     if observed is not None:
         try:
+            obs_arr = np.array(observed)
+            # Build posterior predictive with matching obs dimension
+            # Resample from posterior chains to create predictive samples
+            rng_ppc = np.random.default_rng(42)
+            pp_samples = rng_ppc.choice(
+                chain_array.ravel(), size=(n_chains, len(obs_arr)), replace=True
+            )
+            pp_ds = xr.Dataset(
+                {"implied_return_pt": (["chain", "obs"], pp_samples)},
+                coords={"chain": range(n_chains), "obs": range(len(obs_arr))},
+            )
             obs_ds = xr.Dataset(
-                {"implied_return_pt": (["obs"], np.array(observed))},
-                coords={"obs": range(len(observed))},
+                {"implied_return_pt": (["obs"], obs_arr)},
+                coords={"obs": range(len(obs_arr))},
             )
             dt_ppc = _make_datatree(
-                posterior_predictive=posterior,
+                posterior_predictive=pp_ds,
                 observed_data=obs_ds,
             )
-            pc = azp.plot_ppc_rootogram(
-                dt_ppc,
-                aes={"color": ["__variable__"]},
-                aes_by_visuals={"title": ["color"]},
-                backend="matplotlib",
-            )
-            _pc_add_title(pc, "Posterior Predictive Rootogram: Expected Returns")
-            fig = _fig_from_pc(pc)
-            outputs.append(_save_fig(fig, output_dir / "er_mcmc_ppc_rootogram.png"))
+            # Try plot_ppc_dist first; fall back to manual overlay if upstream
+            # KDE bug triggers on observed_data without chain dim.
+            try:
+                pc = azp.plot_ppc_dist(dt_ppc, backend="matplotlib")
+                _pc_add_title(pc, "Posterior Predictive Check: Expected Returns")
+                fig = _fig_from_pc(pc)
+            except Exception:
+                # Fallback: manual KDE overlay
+                import matplotlib.pyplot as _plt
+                fig, ax = _plt.subplots(figsize=(10, 5))
+                from scipy.stats import gaussian_kde
+                x_grid = np.linspace(
+                    min(obs_arr.min(), chain_array.min()),
+                    max(obs_arr.max(), chain_array.max()),
+                    300,
+                )
+                obs_kde = gaussian_kde(obs_arr)
+                ax.plot(x_grid, obs_kde(x_grid), label="Observed", color="white", lw=2)
+                for ci in range(min(n_chains, 4)):
+                    pp_kde = gaussian_kde(chain_array[ci])
+                    ax.plot(x_grid, pp_kde(x_grid), alpha=0.3, color="cyan")
+                ax.set_title("Posterior Predictive Check: Expected Returns")
+                ax.legend()
+            outputs.append(_save_fig(fig, output_dir / "er_mcmc_ppc_dist.png"))
         except Exception as e:
-            logger.debug("PPC rootogram failed: %s", e)
+            logger.debug("PPC dist plot failed: %s", e)
 
-    # 9) Summary statistics
+    # 9) Trace + density combined (Task 8: plot_trace_dist)
+    try:
+        pc = azp.plot_trace_dist(
+            dt, var_names=["implied_return_pt"], backend="matplotlib"
+        )
+        _pc_add_title(pc, "MCMC Trace + Density: Expected Returns")
+        fig = _fig_from_pc(pc)
+        outputs.append(_save_fig(fig, output_dir / "er_mcmc_trace_dist.png"))
+    except Exception as e:
+        logger.debug("MCMC trace_dist plot failed: %s", e)
+
+    # 10) Rank + density combined (Task 9: plot_rank_dist)
+    try:
+        pc = azp.plot_rank_dist(
+            dt, var_names=["implied_return_pt"], backend="matplotlib"
+        )
+        _pc_add_title(pc, "MCMC Rank + Density: Expected Returns")
+        fig = _fig_from_pc(pc)
+        outputs.append(_save_fig(fig, output_dir / "er_mcmc_rank_dist.png"))
+    except Exception as e:
+        logger.debug("MCMC rank_dist plot failed: %s", e)
+
+    # 11) Convergence distribution (Task 7: plot_convergence_dist)
+    try:
+        pc = azp.plot_convergence_dist(
+            dt, var_names=["implied_return_pt"], backend="matplotlib"
+        )
+        _pc_add_title(pc, "ESS/R-hat Convergence Distribution")
+        fig = _fig_from_pc(pc)
+        outputs.append(_save_fig(fig, output_dir / "er_mcmc_convergence_dist.png"))
+    except Exception as e:
+        logger.debug("MCMC convergence_dist plot failed: %s", e)
+
+    # 12) Combined multi-panel dashboard (Task 11: combine_plots)
+    try:
+        pc = azp.combine_plots(
+            dt,
+            plots=[
+                (azp.plot_trace, {}),
+                (azp.plot_ess, {}),
+                (azp.plot_rank, {}),
+                (azp.plot_mcse, {}),
+            ],
+            var_names=["implied_return_pt"],
+            backend="matplotlib",
+        )
+        _pc_add_title(pc, "MCMC Combined Diagnostics Dashboard")
+        fig = _fig_from_pc(pc)
+        outputs.append(_save_fig(fig, output_dir / "er_mcmc_combined_dashboard.png"))
+    except Exception as e:
+        logger.debug("MCMC combined dashboard failed: %s", e)
+
+    # 13) Summary statistics
     try:
         summary_df = azs.summary(dt, var_names=["implied_return_pt"])
         logger.info("MCMC Summary:\n%s", summary_df.to_string())
@@ -1192,5 +1287,157 @@ def create_cross_model_ecdf_with_references(
         _pc_add_title(pc, "Cross-Model Return ECDF — MC vs Kalman vs Price Target")
         fig = _fig_from_pc(pc)
         return _save_fig(fig, output_dir / "er_cross_model_ecdf.png")
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — MCMC Cache Drift Comparison
+# ---------------------------------------------------------------------------
+
+
+def create_mcmc_drift_comparison(
+    cache_dir: Path,
+    output_dir: Path,
+) -> list[str]:
+    """Compare MCMC posteriors across cached runs to detect model drift.
+
+    Loads all ``mcmc_return_*.json`` files from *cache_dir*, builds a
+    multi-run DataTree, and generates forest/ridge plots comparing
+    posterior distributions across runs.
+    """
+    outputs: list[str] = []
+    if not ARVIZ_AVAILABLE:
+        return outputs
+
+    files = sorted(cache_dir.glob("mcmc_return_*.json"))
+    if len(files) < 2:
+        return outputs
+
+    posterior_dict: dict[str, tuple] = {}
+    n_chains = 4
+    n_draws: int | None = None
+
+    for f in files:
+        try:
+            with open(f) as fh:
+                data = json.load(fh)
+        except Exception:
+            continue
+
+        run_label = f.stem[:20]
+
+        # Parse chains — may be proper arrays or string repr (Task 13)
+        raw_chains = data.get("chains", [])
+        chain_arrays = []
+        for ch in raw_chains:
+            if isinstance(ch, str):
+                arr = _parse_chain_string(ch)
+            elif isinstance(ch, list):
+                arr = np.array(ch, dtype=float)
+            else:
+                continue
+            if len(arr) > 0:
+                chain_arrays.append(arr)
+
+        if len(chain_arrays) >= 2:
+            min_len = min(len(c) for c in chain_arrays)
+            if min_len >= 10:
+                chain_array = np.array([c[:min_len] for c in chain_arrays[:n_chains]])
+                if n_draws is None:
+                    n_draws = min_len
+                else:
+                    n_draws = min(n_draws, min_len)
+                posterior_dict[run_label] = (["chain", "draw"], chain_array)
+
+    if len(posterior_dict) < 2 or n_draws is None:
+        return outputs
+
+    # Align all runs to same draw count and chain count
+    actual_chains = min(v[1].shape[0] for v in posterior_dict.values())
+    aligned = {
+        k: (["chain", "draw"], v[1][:actual_chains, :n_draws])
+        for k, v in posterior_dict.items()
+    }
+    ds = xr.Dataset(
+        aligned,
+        coords={"chain": range(actual_chains), "draw": range(n_draws)},
+    )
+    dt = _make_datatree(posterior=ds)
+
+    # 1) Forest plot — posterior mean ± CI across runs
+    try:
+        pc = azp.plot_forest(dt, combined=True, backend="matplotlib")
+        _pc_add_title(pc, "MCMC Posterior Drift — Forest Plot Across Runs")
+        fig = _fig_from_pc(pc)
+        outputs.append(_save_fig(fig, output_dir / "er_mcmc_drift_forest.png"))
+    except Exception as e:
+        logger.debug("MCMC drift forest plot failed: %s", e)
+
+    # 2) Ridge plot — posterior density comparison
+    try:
+        pc = azp.plot_ridge(dt, combined=True, backend="matplotlib")
+        _pc_add_title(pc, "MCMC Posterior Drift — Ridge Plot Across Runs")
+        fig = _fig_from_pc(pc)
+        outputs.append(_save_fig(fig, output_dir / "er_mcmc_drift_ridge.png"))
+    except Exception as e:
+        logger.debug("MCMC drift ridge plot failed: %s", e)
+
+    return outputs
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — Continuous PPC for Screening (replaces rootogram for continuous data)
+# ---------------------------------------------------------------------------
+
+
+def create_screening_ppc_continuous(
+    screens: dict[str, pd.DataFrame],
+    return_col: str = "implied_return_pt",
+) -> Optional[plt.Figure]:
+    """PPC distribution comparison for continuous return data across screens.
+
+    Uses ``plot_ppc_dist`` instead of ``plot_ppc_rootogram`` because
+    rootograms are designed for count models (Poisson, negative binomial),
+    not continuous return distributions.
+    """
+    if not ARVIZ_AVAILABLE:
+        return None
+
+    dt = build_screening_inference_data(screens, return_col=return_col)
+    if not _has_posterior(dt):
+        return None
+
+    # Build observed from actual screen returns
+    obs_dict = {}
+    max_obs = 0
+    for screen_name, screen_df in screens.items():
+        if screen_df.empty or return_col not in screen_df.columns:
+            continue
+        vals = screen_df[return_col].dropna().values
+        if len(vals) >= 10:
+            obs_dict[screen_name] = vals
+            max_obs = max(max_obs, len(vals))
+
+    if not obs_dict:
+        return None
+
+    padded = {}
+    for name, vals in obs_dict.items():
+        padded[name] = (["obs"], np.pad(vals, (0, max_obs - len(vals)), constant_values=np.nan))
+
+    obs_ds = xr.Dataset(padded, coords={"obs": range(max_obs)})
+    dt_ppc = _make_datatree(
+        posterior_predictive=dt["posterior"].ds,
+        observed_data=obs_ds,
+    )
+
+    try:
+        pc = azp.plot_ppc_dist(
+            dt_ppc,
+            backend="matplotlib",
+        )
+        _pc_add_title(pc, "Screening Strategy — PPC Distribution Check")
+        return _fig_from_pc(pc)
     except Exception:
         return None

@@ -835,6 +835,9 @@ class BeatProbabilityResult:
     prob_beat_given_momentum: Optional[float] = None
     earnings_season_flag: Optional[int] = None
     pre_earnings_window: Optional[int] = None
+    # GAAP-vs-Norm revision spread and continuing EPS streak
+    gaap_vs_norm_revision_spread: Optional[float] = None
+    eps_cont_positive_streak: Optional[int] = None
     ess_bulk: Optional[float] = None
     r_hat: Optional[float] = None
     # EPS streak fields (merged from EPSStreakAnalyzer)
@@ -956,27 +959,30 @@ class PriorParameters:
 class ReportedEPSHistory:
     """Actual reported EPS data for quarterly and annual periods.
 
-    Fields follow the naming convention from the equities schema:
-    - eps_basic_fq: most recent fiscal quarter
-    - eps_basic_1fqfq: one quarter ago, etc.
-    - eps_basic_fy: most recent fiscal year
-    - eps_basic_1fy: one year ago, etc.
+    Fields follow the naming convention from the public database schema:
+    - net_eps_basic_fq: most recent fiscal quarter
+    - net_eps_basic_1fqfq: one quarter ago, etc.
+    - net_eps_basic_fy: most recent fiscal year
+    - net_eps_basic_1fy: one year ago, etc.
     """
 
     # Quarterly Net EPS - Basic (newest first)
-    eps_basic_fq: Optional[float] = None
-    eps_basic_1fqfq: Optional[float] = None
-    eps_basic_2fqfq: Optional[float] = None
-    eps_basic_3fqfq: Optional[float] = None
-    eps_basic_4fqfq: Optional[float] = None
+    net_eps_basic_fq: Optional[float] = None
+    net_eps_basic_1fqfq: Optional[float] = None
+    net_eps_basic_2fqfq: Optional[float] = None
+    net_eps_basic_3fqfq: Optional[float] = None
+    net_eps_basic_4fqfq: Optional[float] = None
 
     # Annual Net EPS - Basic (newest first)
-    eps_basic_fy: Optional[float] = None
-    eps_basic_1fy: Optional[float] = None
-    eps_basic_2fy: Optional[float] = None
-    eps_basic_3fy: Optional[float] = None
-    eps_basic_4fy: Optional[float] = None
-    eps_basic_5fy: Optional[float] = None
+    net_eps_basic_fy: Optional[float] = None
+    net_eps_basic_1fy: Optional[float] = None
+    net_eps_basic_2fy: Optional[float] = None
+    net_eps_basic_3fy: Optional[float] = None
+    net_eps_basic_4fy: Optional[float] = None
+    net_eps_basic_5fy: Optional[float] = None
+
+    # LTM Net EPS - Basic
+    net_eps_basic_ltm: Optional[float] = None
 
     # Adjusted EPS
     eps_adj_fy: Optional[float] = None
@@ -989,28 +995,31 @@ class ReportedEPSHistory:
     eps_adj_4fqfq: Optional[float] = None
 
     # Continuing EPS — quarterly
-    eps_cont_fq: Optional[float] = None
-    eps_cont_1fqfq: Optional[float] = None
-    eps_cont_2fqfq: Optional[float] = None
-    eps_cont_3fqfq: Optional[float] = None
-    eps_cont_4fqfq: Optional[float] = None
+    basic_eps_cont_fq: Optional[float] = None
+    basic_eps_cont_1fqfq: Optional[float] = None
+    basic_eps_cont_2fqfq: Optional[float] = None
+    basic_eps_cont_3fqfq: Optional[float] = None
+    basic_eps_cont_4fqfq: Optional[float] = None
 
     # Continuing EPS — annual
-    eps_cont_fy: Optional[float] = None
-    eps_cont_1fy: Optional[float] = None
-    eps_cont_2fy: Optional[float] = None
-    eps_cont_3fy: Optional[float] = None
-    eps_cont_4fy: Optional[float] = None
+    basic_eps_cont_fy: Optional[float] = None
+    basic_eps_cont_1fy: Optional[float] = None
+    basic_eps_cont_2fy: Optional[float] = None
+    basic_eps_cont_3fy: Optional[float] = None
+    basic_eps_cont_4fy: Optional[float] = None
+
+    # Continuing EPS — LTM
+    basic_eps_cont_ltm: Optional[float] = None
 
     @property
     def quarterly_series(self) -> list[float]:
         """Return non-None quarterly EPS values, newest first."""
         fields = [
-            self.eps_basic_fq,
-            self.eps_basic_1fqfq,
-            self.eps_basic_2fqfq,
-            self.eps_basic_3fqfq,
-            self.eps_basic_4fqfq,
+            self.net_eps_basic_fq,
+            self.net_eps_basic_1fqfq,
+            self.net_eps_basic_2fqfq,
+            self.net_eps_basic_3fqfq,
+            self.net_eps_basic_4fqfq,
         ]
         return [v for v in fields if v is not None]
 
@@ -1018,12 +1027,12 @@ class ReportedEPSHistory:
     def annual_series(self) -> list[float]:
         """Return non-None annual EPS values, newest first."""
         fields = [
-            self.eps_basic_fy,
-            self.eps_basic_1fy,
-            self.eps_basic_2fy,
-            self.eps_basic_3fy,
-            self.eps_basic_4fy,
-            self.eps_basic_5fy,
+            self.net_eps_basic_fy,
+            self.net_eps_basic_1fy,
+            self.net_eps_basic_2fy,
+            self.net_eps_basic_3fy,
+            self.net_eps_basic_4fy,
+            self.net_eps_basic_5fy,
         ]
         return [v for v in fields if v is not None]
 
@@ -1083,18 +1092,18 @@ class ReportedEPSHistory:
         """
         all_fields = [
             # Quarterly basic
-            self.eps_basic_fq,
-            self.eps_basic_1fqfq,
-            self.eps_basic_2fqfq,
-            self.eps_basic_3fqfq,
-            self.eps_basic_4fqfq,
+            self.net_eps_basic_fq,
+            self.net_eps_basic_1fqfq,
+            self.net_eps_basic_2fqfq,
+            self.net_eps_basic_3fqfq,
+            self.net_eps_basic_4fqfq,
             # Annual basic
-            self.eps_basic_fy,
-            self.eps_basic_1fy,
-            self.eps_basic_2fy,
-            self.eps_basic_3fy,
-            self.eps_basic_4fy,
-            self.eps_basic_5fy,
+            self.net_eps_basic_fy,
+            self.net_eps_basic_1fy,
+            self.net_eps_basic_2fy,
+            self.net_eps_basic_3fy,
+            self.net_eps_basic_4fy,
+            self.net_eps_basic_5fy,
             # Adjusted
             self.eps_adj_fy,
             self.eps_adj_1fy,
@@ -1105,11 +1114,11 @@ class ReportedEPSHistory:
             self.eps_adj_3fqfq,
             self.eps_adj_4fqfq,
             # Continuing
-            self.eps_cont_fq,
-            self.eps_cont_1fqfq,
-            self.eps_cont_2fqfq,
-            self.eps_cont_3fqfq,
-            self.eps_cont_4fqfq,
+            self.basic_eps_cont_fq,
+            self.basic_eps_cont_1fqfq,
+            self.basic_eps_cont_2fqfq,
+            self.basic_eps_cont_3fqfq,
+            self.basic_eps_cont_4fqfq,
         ]
         return sum(1 for v in all_fields if v is not None)
 
@@ -1133,10 +1142,10 @@ class ForwardEstimateSignals:
     """
 
     # Consensus estimates
-    eps_norm_ntm: Optional[float] = None
-    eps_norm_fy1e: Optional[float] = None
-    eps_gaap_ntm: Optional[float] = None
-    eps_gaap_fy1e: Optional[float] = None
+    eps_norm_est_ntm: Optional[float] = None
+    eps_norm_est_fy1e: Optional[float] = None
+    eps_gaap_est_ntm: Optional[float] = None
+    eps_gaap_est_fy1e: Optional[float] = None
 
     # Normalized revision percentages
     revision_1w: Optional[float] = None
@@ -1212,11 +1221,11 @@ class ForwardEstimateSignals:
         Returns (GAAP - Norm) / Norm * 100. Negative means GAAP < Norm
         (potential accounting quality concern).
         """
-        if self.eps_gaap_fy1e is not None and self.eps_norm_fy1e is not None:
-            if self.eps_norm_fy1e != 0:
+        if self.eps_gaap_est_fy1e is not None and self.eps_norm_est_fy1e is not None:
+            if self.eps_norm_est_fy1e != 0:
                 return (
-                    (self.eps_gaap_fy1e - self.eps_norm_fy1e)
-                    / self.eps_norm_fy1e
+                    (self.eps_gaap_est_fy1e - self.eps_norm_est_fy1e)
+                    / self.eps_norm_est_fy1e
                     * 100.0
                 )
         return None
@@ -1227,7 +1236,7 @@ class ForwardEstimateSignals:
 
         Requires at least a FY1E estimate and one revision data point.
         """
-        has_estimate = self.eps_norm_fy1e is not None
+        has_estimate = self.eps_norm_est_fy1e is not None
         revision_fields = [
             self.revision_1w,
             self.revision_1m,
@@ -2153,10 +2162,10 @@ class EarningsBeatProbabilityModel:
     # both the normalized revision fields and the GAAP revision fields.
     # eps_revision_momentum serves as the short-term (1w) revision proxy.
     _FORWARD_COL_MAP: dict[str, str] = {
-        "eps_norm_est_avg_ntm": "eps_norm_ntm",
-        "eps_norm_est_avg_fy1e": "eps_norm_fy1e",
-        "eps_gaap_est_avg_ntm": "eps_gaap_ntm",
-        "eps_gaap_est_avg_fy1e": "eps_gaap_fy1e",
+        "eps_norm_est_avg_ntm": "eps_norm_est_ntm",
+        "eps_norm_est_avg_fy1e": "eps_norm_est_fy1e",
+        "eps_gaap_est_avg_ntm": "eps_gaap_est_ntm",
+        "eps_gaap_est_avg_fy1e": "eps_gaap_est_fy1e",
         "eps_revision_momentum": "revision_1w",
         "gaap_revision_1m": "revision_1m",
         "gaap_revision_3m": "revision_3m",
@@ -2173,24 +2182,24 @@ class EarningsBeatProbabilityModel:
         "gaap_revision_1y": "gaap_revision_1y",
     }
 
-    # History column mappings aligned to mv_all_stock_features schema.
-    # net_eps_basic_* columns don't exist in the view; use eps_cont_* as
-    # quarterly proxies and eps_basic_fq/ltm/fy for available basics.
+    # History column mappings: mv_all_stock_features column → dataclass field.
+    # The view exposes eps_basic_fq/fy and eps_cont_* aliases; we map them
+    # to the canonical public-schema names used by ReportedEPSHistory.
     _HISTORY_COL_MAP: dict[str, str] = {
-        # eps_basic — only fq/fy available in mv_all_stock_features
-        "eps_basic_fq": "eps_basic_fq",
-        "eps_basic_fy": "eps_basic_fy",
-        # eps_cont — quarterly lookbacks available in view (proxy for history)
-        "eps_cont_fq": "eps_cont_fq",
-        "eps_cont_1fqfq": "eps_cont_1fqfq",
-        "eps_cont_2fqfq": "eps_cont_2fqfq",
-        "eps_cont_3fqfq": "eps_cont_3fqfq",
-        "eps_cont_4fqfq": "eps_cont_4fqfq",
-        "eps_cont_fy": "eps_cont_fy",
-        "eps_cont_1fy": "eps_cont_1fy",
-        "eps_cont_2fy": "eps_cont_2fy",
-        "eps_cont_3fy": "eps_cont_3fy",
-        "eps_cont_4fy": "eps_cont_4fy",
+        # net_eps_basic — mapped from eps_basic_* in mv_all_stock_features
+        "eps_basic_fq": "net_eps_basic_fq",
+        "eps_basic_fy": "net_eps_basic_fy",
+        # basic_eps_cont — mapped from eps_cont_* in mv_all_stock_features
+        "eps_cont_fq": "basic_eps_cont_fq",
+        "eps_cont_1fqfq": "basic_eps_cont_1fqfq",
+        "eps_cont_2fqfq": "basic_eps_cont_2fqfq",
+        "eps_cont_3fqfq": "basic_eps_cont_3fqfq",
+        "eps_cont_4fqfq": "basic_eps_cont_4fqfq",
+        "eps_cont_fy": "basic_eps_cont_fy",
+        "eps_cont_1fy": "basic_eps_cont_1fy",
+        "eps_cont_2fy": "basic_eps_cont_2fy",
+        "eps_cont_3fy": "basic_eps_cont_3fy",
+        "eps_cont_4fy": "basic_eps_cont_4fy",
         # eps_adj — available in view
         "eps_adj_ltm": "eps_adj_ltm",
         "eps_adj_fy": "eps_adj_fy",
@@ -2355,15 +2364,19 @@ class EarningsBeatProbabilityModel:
                         "gaap_norm_spread": forward_signals.gaap_norm_spread,
                         "revision_trend_short": forward_signals.revision_trend_short,
                         "revision_trend_medium": forward_signals.revision_trend_medium,
-                        "eps_norm_est_fy1e": forward_signals.eps_norm_fy1e,
-                        "eps_norm_est_ntm": forward_signals.eps_norm_ntm,
-                        "eps_gaap_est_ntm": forward_signals.eps_gaap_ntm,
-                        "eps_gaap_est_fy1e": forward_signals.eps_gaap_fy1e,
+                        "eps_norm_est_fy1e": forward_signals.eps_norm_est_fy1e,
+                        "eps_norm_est_ntm": forward_signals.eps_norm_est_ntm,
+                        "eps_gaap_est_ntm": forward_signals.eps_gaap_est_ntm,
+                        "eps_gaap_est_fy1e": forward_signals.eps_gaap_est_fy1e,
                         "analyst_count": forward_signals.analyst_count,
                         "next_earnings_status": row.get("next_earnings_status", None),
                         "quarterly_beat_streak": eps_positive_streak,
                         "data_source": "forward_enhanced",
                         "eps_positive_streak": eps_positive_streak,
+                        "gaap_vs_norm_revision_spread": forward_signals.gaap_norm_spread,
+                        "eps_cont_positive_streak": row.get(
+                            "eps_cont_positive_streak", None
+                        ),
                     }
                 )
 

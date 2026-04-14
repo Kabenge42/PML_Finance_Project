@@ -145,6 +145,8 @@ _IMPORT_REGISTRY: Sequence[tuple[str, Sequence[str]]] = (
             "create_screening_ppc_rootogram",
             "create_hierarchical_dot_comparison",
             "create_cross_model_ecdf_with_references",
+            "create_mcmc_drift_comparison",
+            "create_screening_ppc_continuous",
         ],
     ),
     # Convergence diagnostics module

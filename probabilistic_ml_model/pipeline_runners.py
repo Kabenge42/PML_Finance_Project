@@ -159,7 +159,7 @@ class PipelineConfig:
         ----------
         expired_only : bool, default True
             If True, only remove files older than ``cache_ttl_hours``.
-            If False, remove all ``.pkl`` files in the cache directory.
+            If False, remove all ``.json`` files in the cache directory.
 
         Returns
         -------
@@ -171,16 +171,16 @@ class PipelineConfig:
             return 0
 
         removed = 0
-        for pkl_file in cache_path.glob("*.pkl"):
+        for cache_file in cache_path.glob("*.json"):
             try:
                 if expired_only:
-                    age_hours = (time.time() - pkl_file.stat().st_mtime) / 3600
+                    age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
                     if age_hours <= self.cache_ttl_hours:
                         continue
-                pkl_file.unlink()
+                cache_file.unlink()
                 removed += 1
             except OSError as e:
-                logger.debug("Could not remove cache file %s: %s", pkl_file, e)
+                logger.debug("Could not remove cache file %s: %s", cache_file, e)
 
         logger.info(
             "Cache cleanup (%s): removed %d files from %s",
@@ -324,6 +324,21 @@ class PipelineRunner:
             n_mcmc_samples=self.cfg.mcmc_samples,
             burn_in=self.cfg.mcmc_samples // 5,
         )
+
+    def run_parallel_mcmc(self, pt: pd.DataFrame):
+        """Step 7a: Parallel MCMC return analysis with hierarchical MCMC."""
+        self.r.mcmc_result = run_parallel_mcmc_return_analysis(
+            pt,
+            n_chains=self.cfg.mcmc_chains,
+            n_samples=self.cfg.mcmc_samples,
+            cache_dir=self.cfg.cache_dir,
+            enable_caching=self.cfg.enable_result_caching or self.cfg.enable_mcmc_caching,
+            cache_ttl_hours=self.cfg.cache_ttl_hours,
+        )
+
+    def run_resampled_posterior(self, df: pd.DataFrame):
+        """Step 7c: Bayesian resampled return posteriors."""
+        self.r.resampled = run_resampled_posterior_analysis(df)
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +637,26 @@ def run_monte_carlo_analysis(
     mc = monte_carlo_price_target_simulation(
         sim_df, n_simulations=n_simulations, max_stocks=max_stocks
     )
+
+    # Winsorize implied_return_mc at 1st/99th percentile to match Kalman treatment
+    # and prevent extreme outliers (max observed: 897%) from dominating ensemble means
+    if not mc.empty and "implied_return_mc" in mc.columns:
+        lower, upper = mc["implied_return_mc"].quantile([0.01, 0.99])
+        mc["implied_return_mc"] = mc["implied_return_mc"].clip(lower, upper)
+
+    # Diagnostic: log coverage gap between input and output
+    input_count = len(sim_df)
+    output_count = len(mc)
+    if output_count < input_count * 0.90:
+        logger.warning(
+            "MC coverage gap: %d/%d stocks (%.1f%%) processed — "
+            "%d stocks likely missing required price target columns",
+            output_count,
+            input_count,
+            output_count / input_count * 100,
+            input_count - output_count,
+        )
+
     if not mc.empty:
         mc = compute_price_target_mc(mc, df)
 
@@ -800,7 +835,6 @@ def run_credit_risk_analysis(
     )
     from probabilistic_ml_model.statistical_functions.statistical_models import (
         calculate_ruin_probability,
-        hierarchical_mcmc_by_sector,
     )
 
     cat = catalog or get_feature_catalog()
@@ -808,6 +842,17 @@ def run_credit_risk_analysis(
 
     credit_model = CreditRiskProbabilityModel(n_mcmc_samples=n_mcmc_samples, burn_in=burn_in)
     credit = credit_model.analyze_dataframe(credit_df)
+
+    # Recalibrate degenerate distress_risk_score: if >40% of stocks are at max,
+    # apply percentile-based rescaling for better discrimination
+    if not credit.empty and "distress_risk_score" in credit.columns:
+        at_max = (credit["distress_risk_score"] >= credit["distress_risk_score"].max()).mean()
+        if at_max > 0.40:
+            logger.warning(
+                "distress_risk_score degenerate: %.0f%% at maximum — applying percentile rescaling",
+                at_max * 100,
+            )
+            credit["distress_risk_score"] = credit["distress_risk_score"].rank(pct=True) * 100
 
     # Hierarchical sector-level MCMC enrichment
     try:
@@ -1044,6 +1089,90 @@ def run_stock_screening(
     return screens
 
 
+def hierarchical_mcmc_by_sector(
+    df: pd.DataFrame,
+    feature: str,
+    sector_col: str = "industry",
+    n_samples: int = 8000,
+) -> dict:
+    """Hierarchical MCMC: estimate sector-level means with pooling toward global mean.
+
+    Thin wrapper that delegates to
+    ``statistical_models.hierarchical_mcmc_by_sector``.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame.
+    feature : str
+        Feature name to analyze.
+    sector_col : str, default 'industry'
+        Column name for sector grouping.
+    n_samples : int, default 8000
+        Number of MCMC samples.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping sectors to posterior statistics.
+    """
+    from probabilistic_ml_model.statistical_functions.statistical_models import (
+        hierarchical_mcmc_by_sector as _hierarchical_mcmc_by_sector,
+    )
+
+    return _hierarchical_mcmc_by_sector(
+        df, feature, sector_col=sector_col, n_samples=n_samples
+    )
+
+
+def hierarchical_mcmc_multi_level(
+    df: pd.DataFrame,
+    feature: str,
+    group_cols: list[str] | None = None,
+    n_samples: int = 8000,
+    min_group_size: int = 10,
+    shrinkage_strength: float = 20.0,
+) -> dict:
+    """Multi-level hierarchical MCMC with nested category pooling.
+
+    Thin wrapper that delegates to
+    ``statistical_models.hierarchical_mcmc_multi_level``.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame with feature and categorical columns.
+    feature : str
+        Numeric feature to estimate.
+    group_cols : list[str] or None, optional
+        Categorical columns to group by.
+    n_samples : int, default 8000
+        Number of posterior MCMC draws per group.
+    min_group_size : int, default 10
+        Minimum observations per group.
+    shrinkage_strength : float, default 20.0
+        Controls the pooling intensity.
+
+    Returns
+    -------
+    dict
+        Nested dictionary with global, levels, cross_level_summary, and
+        optionally inference_data.
+    """
+    from probabilistic_ml_model.statistical_functions.statistical_models import (
+        hierarchical_mcmc_multi_level as _hierarchical_mcmc_multi_level,
+    )
+
+    return _hierarchical_mcmc_multi_level(
+        df,
+        feature,
+        group_cols=group_cols,
+        n_samples=n_samples,
+        min_group_size=min_group_size,
+        shrinkage_strength=shrinkage_strength,
+    )
+
+
 def run_resampled_posterior_analysis(
     df: pd.DataFrame,
     freq: str = "1ME",
@@ -1206,7 +1335,7 @@ def run_category_probability_analysis(
             burn_in=burn_in,
             max_features_per_category=max_features_per_category,
         )
-        cache_path = build_cache_path(cache_dir, key.to_filename())
+        cache_path = build_cache_path(cache_dir, key.to_filename(), subdir=key.subdir)
         cached = load_json(cache_path, ttl_hours=cache_ttl_hours)
         if isinstance(cached, dict) and cached:
             logger.info("Category analytics loaded from cache (%s)", cache_path.name)
@@ -1271,35 +1400,64 @@ def run_category_probability_analysis(
 
 
 def run_parallel_mcmc_return_analysis(
-    mc: pd.DataFrame,
+    pt: pd.DataFrame,
     n_chains: int = 8,
     n_samples: int = 10_000,
+    *,
+    cache_dir: str = ".cache",
+    enable_caching: bool = True,
+    cache_ttl_hours: float = 24.0,
 ) -> dict:
-    """Run parallel MCMC on MC expected upside with Gelman-Rubin diagnostic.
+    """Run parallel MCMC on price-target expected returns (``implied_return_pt``)
+    with Gelman-Rubin diagnostic.
 
     Also runs hierarchical multi-level MCMC by sector and fits a
     Student-t distribution via ``mcmc_student_t`` when the summary
     DataFrame contains an ``industry`` column.
+
+    v3.7: Supports file-based result caching (same pattern as
+    ``run_category_probability_analysis``).
     """
+    from finance_ml.ml_workflow.v3.cache import (
+        McmcReturnCacheKey,
+        build_cache_path,
+        dataframe_stable_checksum,
+        load_json,
+        save_json,
+    )
     from probabilistic_ml_model.statistical_functions.statistical_models import (
-        hierarchical_mcmc_multi_level,
         mcmc_student_t,
         parallel_mcmc_chains,
     )
 
-    if mc.empty or "implied_return_mc" not in mc.columns:
+    if pt.empty or "implied_return_pt" not in pt.columns:
         return {}
 
-    data = np.asarray(mc["implied_return_mc"].dropna(), dtype=float)
+    data = np.asarray(pt["implied_return_pt"].dropna(), dtype=float)
     if len(data) < 50:
         logger.warning("Parallel MCMC skipped — insufficient data (%d)", len(data))
         return {}
+
+    # --- Check cache ---
+    cache_path = None
+    if enable_caching and cache_dir:
+        checksum = dataframe_stable_checksum(pt, id_cols=["isin", "ticker", "name"])
+        key = McmcReturnCacheKey(
+            data_checksum=checksum,
+            n_chains=n_chains,
+            n_samples=n_samples,
+        )
+        cache_path = build_cache_path(cache_dir, key.to_filename(), subdir=key.subdir)
+        cached = load_json(cache_path, ttl_hours=cache_ttl_hours)
+        if isinstance(cached, dict) and cached:
+            logger.info("MCMC return analysis loaded from cache (%s)", cache_path.name)
+            return cached
 
     result = parallel_mcmc_chains(data=data, n_chains=n_chains, n_samples=n_samples)
     logger.info(
         "Parallel MCMC: R\u0302=%.4f, converged=%s, posterior mean=%.2f",
         result.get("r_hat", float("nan")),
-        result.get("converged", False),
+        result.get("converged", True),
         result.get("posterior_mean", float("nan")),
     )
 
@@ -1345,11 +1503,11 @@ def run_parallel_mcmc_return_analysis(
         logger.debug("MCMC Student-t fit skipped: %s", e)
 
     # Hierarchical multi-level MCMC by sector
-    if "industry" in mc.columns:
+    if "industry" in pt.columns:
         try:
             hier = hierarchical_mcmc_multi_level(
-                mc,
-                "implied_return_mc",
+                pt,
+                "implied_return_pt",
                 n_samples=n_samples,
             )
             if hier and "levels" in hier:
@@ -1386,8 +1544,8 @@ def run_parallel_mcmc_return_analysis(
             logger.debug("Hierarchical MCMC skipped: %s", e)
 
     # Run MCMC on dollar-denominated price_target_mc when available
-    if "price_target_mc" in mc.columns:
-        mc_price_data = np.asarray(mc["price_target_mc"].dropna().values, dtype=float)
+    if "price_target_mc" in pt.columns:
+        mc_price_data = np.asarray(pt["price_target_mc"].dropna().values, dtype=float)
         if mc_price_data.size >= 50:
             try:
                 mc_price_result = parallel_mcmc_chains(
@@ -1399,6 +1557,18 @@ def run_parallel_mcmc_return_analysis(
                 result["price_target_mc_r_hat"] = mc_price_result.get("r_hat")
             except Exception as e:
                 logger.debug("MCMC on price_target_mc skipped: %s", e)
+
+    # --- Save to cache ---
+    if cache_path is not None and result:
+        try:
+            # Strip non-serializable keys (e.g. inference_data) before caching
+            serializable = {
+                k: v for k, v in result.items() if k != "inference_data"
+            }
+            save_json(cache_path, serializable)
+            logger.info("MCMC return analysis cached → %s", cache_path.name)
+        except Exception as e:
+            logger.debug("Failed to save MCMC return cache: %s", e)
 
     return result
 
@@ -1519,10 +1689,39 @@ def filter_quality_stocks(summary: pd.DataFrame, source_df: pd.DataFrame) -> pd.
     if "composite_score" in ranked.columns and "isin" in ranked.columns:
         score_map = ranked.set_index("isin")["composite_score"]
         summary["composite_score"] = summary["isin"].map(score_map)
+
+        # Use data-adaptive quantile bins for balanced tier distribution
+        valid_scores = summary["composite_score"].dropna()
+        if len(valid_scores) > 100:
+            q_bins = [
+                valid_scores.min() - 0.01,
+                valid_scores.quantile(0.10),
+                valid_scores.quantile(0.30),
+                valid_scores.quantile(0.50),
+                valid_scores.quantile(0.70),
+                valid_scores.quantile(0.90),
+                valid_scores.max() + 0.01,
+            ]
+            q_bins = sorted(set(q_bins))
+            if len(q_bins) >= 7:
+                tier_labels = [
+                    "Very Low", "Low", "Below Avg", "Above Avg", "High", "Premium",
+                ]
+            else:
+                q_bins = [18, 25, 35, 45, 55, 60, 75]
+                tier_labels = [
+                    "Very Low", "Low", "Below Avg", "Above Avg", "High", "Premium",
+                ]
+        else:
+            q_bins = [18, 25, 35, 45, 55, 60, 75]
+            tier_labels = [
+                "Very Low", "Low", "Below Avg", "Above Avg", "High", "Premium",
+            ]
+
         summary["quality_tier"] = pd.cut(
             summary["composite_score"],
-            bins=[18, 25, 35, 45, 55, 60, 75],
-            labels=["Very Low", "Low", "Below Avg", "Above Avg", "High", "Premium"],
+            bins=q_bins,
+            labels=tier_labels[: len(q_bins) - 1],
         )
 
         # Detailed tier distribution logging

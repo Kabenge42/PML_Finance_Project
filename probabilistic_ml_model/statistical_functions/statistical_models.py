@@ -972,7 +972,7 @@ def hierarchical_mcmc_multi_level(
     df : pd.DataFrame
         Input DataFrame with feature and categorical columns.
     feature : str
-        Numeric feature to estimate (e.g. 'implied_return_mc', 'roe').
+        Numeric feature to estimate (e.g. 'implied_return_pt', 'roe').
     group_cols : list[str], optional
         Categorical columns to group by.  Defaults to all available
         columns from ``_HIERARCHICAL_CATEGORY_COLS``.
@@ -993,7 +993,7 @@ def hierarchical_mcmc_multi_level(
             {
                 "global": { "mean": ..., "std": ..., "n_obs": ... },
                 "levels": {
-                    "region":   { "North America": { ... }, ... },
+                    "region":   { "United States and Canada": { ... }, ... },
                     "industry": { "Software": { ... }, ... },
                     ...
                 },
@@ -1003,8 +1003,8 @@ def hierarchical_mcmc_multi_level(
 
     Examples
     --------
-    >>> result = hierarchical_mcmc_multi_level(df,'implied_return_mc')
-    >>> result['levels']['region']['North America']['posterior_mean']
+    >>> result = hierarchical_mcmc_multi_level(df,'implied_return_pt')
+    >>> result['levels']['region']['United States and Canada']['posterior_mean']
     >>> result['levels']['sector']['Technology']['shrinkage']
     """
     if feature not in df.columns:
@@ -2252,7 +2252,7 @@ def parallel_mcmc_chains(
     else:
         result["r_hat"] = _calculate_gelman_rubin(chains)
 
-    result["converged"] = result["r_hat"] < 1.1
+    result["converged"] = result["r_hat"] < 1.001
     return result
 
 

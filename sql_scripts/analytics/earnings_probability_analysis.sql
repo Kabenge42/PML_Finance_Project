@@ -94,7 +94,8 @@ create table analytics.earnings_probability_analysis
     prob_beat_given_momentum          double precision,
     earnings_season_flag              bigint,
     pre_earnings_window               bigint,
-    gaap_vs_norm_revision_spread      double precision
+    gaap_vs_norm_revision_spread double precision,
+    eps_cont_positive_streak     bigint
 );
 
 alter table analytics.earnings_probability_analysis

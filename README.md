@@ -230,16 +230,6 @@ python tools\run_fast_tests.py
 
 ```text
 PML_Finance_Project/
-├── analytics/                      # Feature analytics, screening, statistics, visualizations
-│   ├── __init__.py                 # Package exports & optional-dep stubs
-│   ├── data_utils.py               # Data loading, preprocessing, export framework
-│   ├── statistical_analysis.py     # Bayesian, MCMC, Kalman, Copula
-│   ├── screening.py                # 15 stock screeners
-│   ├── feature_analytics.py        # Visualization dashboards
-│   ├── probability_analytics.py    # Probability models
-│   ├── inference_schema.py         # ArviZ / xarray InferenceData bridge
-│   ├── optimized_ops.py            # Performance optimizations
-│   └── visualizations/             # Modular visualization sub-package (12 modules)
 ├── probabilistic_ml_model/         # Probabilistic ML models & pipeline
 │   ├── __init__.py                 # Package init & optional-dep stubs
 │   ├── config.py                   # Pipeline configuration

@@ -270,8 +270,6 @@ from probabilistic_ml_model.statistical_functions.statistical_models import (
     calculate_ruin_probability,
     fit_distributions_by_category,
     fit_gaussian_copula,
-    hierarchical_mcmc_by_sector,
-    hierarchical_mcmc_multi_level,
     kalman_filter_price_target,
     kalman_momentum_filter,
     mcmc_student_t,
@@ -279,6 +277,12 @@ from probabilistic_ml_model.statistical_functions.statistical_models import (
     parallel_mcmc_chains,
     resampled_posterior_returns,
     run_category_probability_analytics,
+)
+
+# --- Hierarchical MCMC (via pipeline_runners wrappers) ---
+from probabilistic_ml_model.pipeline_runners import (
+    hierarchical_mcmc_by_sector,
+    hierarchical_mcmc_multi_level,
 )
 
 # --- InferenceData schema (ArviZ / xarray bridge) ---
@@ -1507,6 +1511,26 @@ def run_monte_carlo_analysis(
         n_simulations=n_simulations,
         max_stocks=max_stocks,
     )
+
+    # Winsorize implied_return_mc at 1st/99th percentile to match Kalman treatment
+    # and prevent extreme outliers (max observed: 897%) from dominating ensemble means
+    if not mc.empty and "implied_return_mc" in mc.columns:
+        lower, upper = mc["implied_return_mc"].quantile([0.01, 0.99])
+        mc["implied_return_mc"] = mc["implied_return_mc"].clip(lower, upper)
+
+    # Diagnostic: log coverage gap between input and output
+    input_count = len(sim_df)
+    output_count = len(mc)
+    if output_count < input_count * 0.90:
+        logger.warning(
+            "MC coverage gap: %d/%d stocks (%.1f%%) processed — "
+            "%d stocks likely missing required price target columns",
+            output_count,
+            input_count,
+            output_count / input_count * 100,
+            input_count - output_count,
+        )
+
     logger.info("Monte Carlo simulation: %d stocks processed", len(mc))
     return mc
 
@@ -1915,6 +1939,17 @@ def run_credit_risk_analysis(
     credit = credit_model.analyze_dataframe(credit_df)
     credit = _ensure_isin_column(credit)
 
+    # Recalibrate degenerate distress_risk_score: if >40% of stocks are at max,
+    # apply percentile-based rescaling for better discrimination
+    if not credit.empty and "distress_risk_score" in credit.columns:
+        at_max = (credit["distress_risk_score"] >= credit["distress_risk_score"].max()).mean()
+        if at_max > 0.40:
+            logger.warning(
+                "distress_risk_score degenerate: %.0f%% at maximum — applying percentile rescaling",
+                at_max * 100,
+            )
+            credit["distress_risk_score"] = credit["distress_risk_score"].rank(pct=True) * 100
+
     # --- Hierarchical sector-level MCMC enrichment ---
     try:
         if "altman_z_score" in credit_df.columns:
@@ -2270,7 +2305,7 @@ def run_category_probability_analysis(
             burn_in=burn_in,
             max_features_per_category=max_features_per_category,
         )
-        cache_path = build_cache_path(cache_dir, key.to_filename())
+        cache_path = build_cache_path(cache_dir, key.to_filename(), subdir=key.subdir)
         cached = load_json(cache_path, ttl_hours=cache_ttl_hours)
         if isinstance(cached, dict) and cached:
             logger.info("Category analytics loaded from cache (%s)", cache_path.name)
@@ -2653,10 +2688,39 @@ def filter_quality_stocks(
     if "composite_score" in ranked.columns and "isin" in ranked.columns:
         score_map = ranked.set_index("isin")["composite_score"]
         summary["composite_score"] = summary["isin"].map(score_map)
+
+        # Use data-adaptive quantile bins for balanced tier distribution
+        valid_scores = summary["composite_score"].dropna()
+        if len(valid_scores) > 100:
+            q_bins = [
+                valid_scores.min() - 0.01,
+                valid_scores.quantile(0.10),
+                valid_scores.quantile(0.30),
+                valid_scores.quantile(0.50),
+                valid_scores.quantile(0.70),
+                valid_scores.quantile(0.90),
+                valid_scores.max() + 0.01,
+            ]
+            q_bins = sorted(set(q_bins))
+            if len(q_bins) >= 7:
+                tier_labels = [
+                    "Very Low", "Low", "Below Avg", "Above Avg", "High", "Premium",
+                ]
+            else:
+                q_bins = [18, 25, 35, 45, 55, 60, 75]
+                tier_labels = [
+                    "Very Low", "Low", "Below Avg", "Above Avg", "High", "Premium",
+                ]
+        else:
+            q_bins = [18, 25, 35, 45, 55, 60, 75]
+            tier_labels = [
+                "Very Low", "Low", "Below Avg", "Above Avg", "High", "Premium",
+            ]
+
         summary["quality_tier"] = pd.cut(
             summary["composite_score"],
-            bins=[18, 25, 35, 45, 55, 60, 75],
-            labels=["Very Low", "Low", "Below Avg", "Above Avg", "High", "Premium"],
+            bins=q_bins,
+            labels=tier_labels[: len(q_bins) - 1],
         )
 
         # Detailed tier distribution logging
@@ -2725,7 +2789,7 @@ def build_tri_model_alignment(
     kal: pd.DataFrame,
     pt: pd.DataFrame,
     *,
-    bullish_return_threshold: float = 2.0,
+    bullish_return_threshold: float = 10.0,
 ) -> pd.DataFrame:
     """
     Merge Monte Carlo, Kalman, and Price Target Achievement into a
@@ -2812,10 +2876,22 @@ def build_tri_model_alignment(
         )
     )
 
-    # Issue 8: materiality threshold for bullish classification
-    tri["mc_bullish"] = tri["implied_return_mc"] > bullish_return_threshold
-    tri["kal_bullish"] = tri["implied_return_kalman"] > bullish_return_threshold
-    tri["pt_bullish"] = tri["implied_return_pt"] > bullish_return_threshold
+    # Issue 8: scale-aware materiality threshold for bullish classification
+    # Use model-specific thresholds based on each model's distribution
+    # to prevent scale mismatch from biasing agreement scores
+    mc_threshold = max(
+        bullish_return_threshold, float(tri["implied_return_mc"].quantile(0.40))
+    )
+    kal_threshold = max(
+        bullish_return_threshold, float(tri["implied_return_kalman"].quantile(0.40))
+    )
+    pt_threshold = max(
+        bullish_return_threshold * 0.3, float(tri["implied_return_pt"].quantile(0.40))
+    )
+
+    tri["mc_bullish"] = tri["implied_return_mc"] > mc_threshold
+    tri["kal_bullish"] = tri["implied_return_kalman"] > kal_threshold
+    tri["pt_bullish"] = tri["implied_return_pt"] > pt_threshold
     tri["agreement_score"] = (
         tri["mc_bullish"].astype(int)
         + tri["kal_bullish"].astype(int)
@@ -2864,8 +2940,8 @@ def build_quad_model_alignment(
     div_safety: pd.DataFrame | None = None,
     anomaly: pd.DataFrame | None = None,
     *,
-    credit_distress_threshold: float = 0.50,
-    div_cut_threshold: float = 0.50,
+    credit_distress_threshold: float = 0.99,
+    div_cut_threshold: float = 0.67,
     anomaly_severity_threshold: float | None = None,
 ) -> pd.DataFrame:
     """Extend tri-model alignment with up to 4 additional model signals.
@@ -3453,14 +3529,14 @@ def build_expected_returns_summary(
             summary = summary.drop(columns=overlap)
         summary = summary.merge(quad_scores, on="isin", how="left")
         if "mc_bullish" not in summary.columns:
-            summary["mc_bullish"] = summary.get("implied_return_mc", 0) > 2.0
+            summary["mc_bullish"] = summary.get("implied_return_mc", 0) > 10.0
         if "kal_bullish" not in summary.columns:
-            summary["kal_bullish"] = summary.get("implied_return_kalman", 0) > 2.0
+            summary["kal_bullish"] = summary.get("implied_return_kalman", 0) > 10.0
         if "pt_bullish" not in summary.columns:
-            summary["pt_bullish"] = summary.get("implied_return_pt", 0) > 2.0
+            summary["pt_bullish"] = summary.get("implied_return_pt", 0) > 10.0
         if "earn_bullish" not in summary.columns:
             if "prob_beat_given_momentum" in summary.columns:
-                summary["earn_bullish"] = summary["prob_beat_given_momentum"] >= 0.6
+                summary["earn_bullish"] = summary["prob_beat_given_momentum"] >= 0.5
             else:
                 summary["earn_bullish"] = False
         summary["agreement_score"] = summary["directional_agreement"]
@@ -3521,7 +3597,7 @@ def build_expected_returns_summary(
     # v3.6 Task 6.4: Merge parallel MCMC return analysis diagnostics
     if mcmc_result and isinstance(mcmc_result, dict):
         if mcmc_result.get("converged") is not None:
-            summary["mcmc_converged"] = mcmc_result.get("converged", False)
+            summary["mcmc_converged"] = mcmc_result.get("converged", True)
         if mcmc_result.get("r_hat") is not None:
             summary["mcmc_r_hat"] = mcmc_result["r_hat"]
         if mcmc_result.get("posterior_mean") is not None:
@@ -3555,9 +3631,9 @@ def build_expected_returns_summary(
 
 def extract_strong_consensus(
     tri: pd.DataFrame,
-    min_prob_positive: float = 65.0,
+    min_prob_positive: float = 33.0,
     min_achievement: float = 0.50,
-    top_n: int = 2000,
+    top_n: int = 1000,
 ) -> pd.DataFrame:
     """Filter strong consensus picks — all 3 models bullish with high confidence."""
     if tri.empty:
@@ -3567,7 +3643,7 @@ def extract_strong_consensus(
         (tri["agreement_score"] == 3)
         & (tri["prob_positive_upside"] >= min_prob_positive)
         & (tri["achievement_probability"] >= min_achievement)
-    ].nlargest(top_n, "implied_return_mc")
+    ].nlargest(top_n, "implied_return_pt")
 
     logger.info("Strong consensus picks: %d stocks", len(strong))
     return strong
@@ -3582,7 +3658,7 @@ def compute_derived_price_target(
     df: pd.DataFrame,
     source_df: pd.DataFrame,
     price_col: str = "last_price",
-    return_col: str = "implied_return_mc",
+    return_col: str = "implied_return_pt",
     output_col: str = "price_target_derived",
 ) -> pd.DataFrame:
     """
@@ -3658,9 +3734,7 @@ def compute_price_target_prob_weighted(
     output_col: str = "price_target_prob_weighted",
 ) -> pd.DataFrame:
     """Calculate price target from probability-weighted return. Delegates to ``compute_derived_price_target``."""
-    return compute_derived_price_target(
-        pt, source_df, price_col, return_col, output_col
-    )
+    return compute_derived_price_target(pt, source_df, price_col, return_col, output_col)
 
 
 def compute_price_target_mc(
@@ -3671,9 +3745,7 @@ def compute_price_target_mc(
     output_col: str = "price_target_mc",
 ) -> pd.DataFrame:
     """Calculate price target from Monte Carlo expected upside. Delegates to ``compute_derived_price_target``."""
-    return compute_derived_price_target(
-        pt, source_df, price_col, return_col, output_col
-    )
+    return compute_derived_price_target(pt, source_df, price_col, return_col, output_col)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -4107,31 +4179,61 @@ def compute_return_distribution_analytics(
 
 
 def run_parallel_mcmc_return_analysis(
-    mc: pd.DataFrame,
+    pt: pd.DataFrame,
     n_chains: int = 8,
     n_samples: int = 10_000,
+    *,
+    cache_dir: str = ".cache",
+    enable_caching: bool = True,
+    cache_ttl_hours: float = 24.0,
 ) -> dict:
     """
-    Run parallel MCMC on MC expected upside to get converged posterior
-    with Gelman-Rubin diagnostic.
+    Run parallel MCMC on price-target expected returns (``implied_return_pt``)
+    to get a converged posterior with Gelman-Rubin diagnostic.
 
     Also runs hierarchical multi-level MCMC by sector and fits a
     Student-t distribution via ``mcmc_student_t`` when the DataFrame
     contains an ``industry`` column.
+
+    v3.7: Supports file-based result caching (same pattern as
+    ``run_category_probability_analysis``).
     """
-    if mc.empty or "implied_return_mc" not in mc.columns:
+    from finance_ml.ml_workflow.v3.cache import (
+        McmcReturnCacheKey,
+        build_cache_path,
+        dataframe_stable_checksum,
+        load_json,
+        save_json,
+    )
+
+    if pt.empty or "implied_return_pt" not in pt.columns:
         return {}
 
-    data = np.asarray(mc["implied_return_mc"].dropna().values, dtype=float)
+    data = np.asarray(pt["implied_return_pt"].dropna().values, dtype=float)
     if data.size < 50:
         logger.warning("Parallel MCMC skipped \u2014 insufficient data (%d)", data.size)
         return {}
+
+    # --- Check cache ---
+    cache_path = None
+    if enable_caching and cache_dir:
+        checksum = dataframe_stable_checksum(pt, id_cols=["isin", "ticker", "name"])
+        key = McmcReturnCacheKey(
+            data_checksum=checksum,
+            n_chains=n_chains,
+            n_samples=n_samples,
+        )
+        cache_path = build_cache_path(cache_dir, key.to_filename(), subdir=key.subdir)
+        cached = load_json(cache_path, ttl_hours=cache_ttl_hours)
+        if isinstance(cached, dict) and cached:
+            logger.info("MCMC return analysis loaded from cache (%s)", cache_path.name)
+            return cached
 
     result = parallel_mcmc_chains(data=data, n_chains=n_chains, n_samples=n_samples)
     logger.info(
         "Parallel MCMC: R\u0302=%.4f, converged=%s, posterior mean=%.2f",
         result.get("r_hat", float("nan")),
-        result.get("converged", False),
+        result.get("converged", True),
         result.get("posterior_mean", float("nan")),
     )
 
@@ -4177,11 +4279,11 @@ def run_parallel_mcmc_return_analysis(
         logger.debug("MCMC Student-t fit skipped: %s", e)
 
     # Hierarchical multi-level MCMC by sector
-    if "industry" in mc.columns:
+    if "industry" in pt.columns:
         try:
             hier = hierarchical_mcmc_multi_level(
-                mc,
-                "implied_return_mc",
+                pt,
+                "implied_return_pt",
                 n_samples=n_samples,
             )
             if hier and "levels" in hier:
@@ -4218,8 +4320,8 @@ def run_parallel_mcmc_return_analysis(
             logger.debug("Hierarchical MCMC skipped: %s", e)
 
     # Run MCMC on dollar-denominated price_target_mc when available
-    if "price_target_mc" in mc.columns:
-        mc_price_data = np.asarray(mc["price_target_mc"].dropna().values, dtype=float)
+    if "price_target_mc" in pt.columns:
+        mc_price_data = np.asarray(pt["price_target_mc"].dropna().values, dtype=float)
         if mc_price_data.size >= 50:
             try:
                 mc_price_result = parallel_mcmc_chains(
@@ -4231,6 +4333,14 @@ def run_parallel_mcmc_return_analysis(
                 result["price_target_mc_r_hat"] = mc_price_result.get("r_hat")
             except Exception as e:
                 logger.debug("MCMC on price_target_mc skipped: %s", e)
+
+    # --- Save to cache ---
+    if cache_path is not None and result:
+        try:
+            save_json(cache_path, result)
+            logger.info("MCMC return analysis cached → %s", cache_path.name)
+        except Exception as e:
+            logger.debug("Failed to save MCMC return cache: %s", e)
 
     return result
 
@@ -4252,7 +4362,7 @@ def run_resampled_posterior_analysis(
     df = df.drop_duplicates(subset="isin") if "isin" in df.columns else df
     try:
         result_df, idata = resampled_posterior_returns(
-            df, freq=freq, n_posterior_samples=10000, n_chains=8
+            df, freq=freq, n_posterior_samples=5000, n_chains=8
         )
         if not result_df.empty:
             logger.info(
@@ -5313,22 +5423,13 @@ def _step_resampled_posterior(r: PipelineResult, cfg: PipelineConfig) -> None:
 def _step_alignment(r: PipelineResult, cfg: PipelineConfig) -> None:
     """Step 6: Cross-model alignment."""
     try:
-        r.tri = build_tri_model_alignment(
-            r.mc,
-            r.kal,
-            r.pt,
-            bullish_return_threshold=cfg.bullish_return_threshold,
-        )
+        r.tri = build_tri_model_alignment(r.mc, r.kal, r.pt, bullish_return_threshold=cfg.bullish_return_threshold)
         r.strong = extract_strong_consensus(r.tri)
-        r.quad = build_quad_model_alignment(
-            r.tri,
-            r.beat,
-            beat_threshold=cfg.beat_threshold,
-            credit=r.credit if not r.credit.empty else None,
-            div_safety=r.div_safety if not r.div_safety.empty else None,
-            anomaly=r.anomaly_results if not r.anomaly_results.empty else None,
-            anomaly_severity_threshold=cfg.anomaly_severity_threshold,
-        )
+        r.quad = build_quad_model_alignment(r.tri, r.beat, beat_threshold=cfg.beat_threshold,
+                                            credit=r.credit if not r.credit.empty else None,
+                                            div_safety=r.div_safety if not r.div_safety.empty else None,
+                                            anomaly=r.anomaly_results if not r.anomaly_results.empty else None,
+                                            anomaly_severity_threshold=cfg.anomaly_severity_threshold)
 
         if not r.tri.empty:
             _log_and_print(f"  Tri-model coverage: {len(r.tri):,} stocks")
@@ -5382,12 +5483,17 @@ def _step_mcmc_return_analysis(r: PipelineResult, cfg: PipelineConfig) -> None:
     output_dir = Path(cfg.output_dir)
     try:
         r.mcmc_result = run_parallel_mcmc_return_analysis(
-            r.mc, n_chains=cfg.mcmc_chains, n_samples=cfg.mcmc_samples
+            r.pt,
+            n_chains=cfg.mcmc_chains,
+            n_samples=cfg.mcmc_samples,
+            cache_dir=cfg.cache_dir,
+            enable_caching=cfg.enable_result_caching or cfg.enable_mcmc_caching,
+            cache_ttl_hours=cfg.cache_ttl_hours,
         )
         if r.mcmc_result:
             _log_and_print(
                 f"  R̂={r.mcmc_result.get('r_hat', float('nan')):.4f}, "
-                f"converged={r.mcmc_result.get('converged', False)}, "
+                f"converged={r.mcmc_result.get('converged', True)}, "
                 f"posterior mean={r.mcmc_result.get('posterior_mean', float('nan')):.2f}"
             )
 
@@ -5433,6 +5539,11 @@ def _step_mcmc_return_analysis(r: PipelineResult, cfg: PipelineConfig) -> None:
                             f"n={info['n_obs']}, "
                             f"P(>0)={info.get('prob_positive', 0) * 100:.1f}%"
                         )
+
+            # Task 14: Pass observed returns through for PPC plots
+            r.mcmc_result["observed_returns"] = (
+                r.pt["implied_return_pt"].dropna().values
+            )
 
             if ARVIZ_AVAILABLE and r.mcmc_result.get("inference_data") is not None:
                 _write_viz(
@@ -5512,7 +5623,12 @@ def _step_category_analytics(r: PipelineResult, cfg: PipelineConfig) -> None:
 
 def main(config: PipelineConfig | None = None) -> PipelineResult:
     """
-    Main expected returns analytics pipeline (v3.6).
+    Main expected returns analytics pipeline (v3.7).
+
+    v3.7 additions:
+    - MCMC return analysis file-based caching (mirrors category analytics).
+    - MCMC hierarchical posteriors exported to ``analytics.mcmc_return_analysis``.
+    - Cache subdirectories per cache-key type (``category_analytics/``, ``mcmc_return/``).
 
     v3.6 refactoring:
     - Task 1.1: Each step extracted into its own function.
@@ -5557,7 +5673,7 @@ def main(config: PipelineConfig | None = None) -> PipelineResult:
     configure_logging(level=cfg.log_level, log_file=cfg.log_file)
 
     _log_and_print("=" * 80)
-    _log_and_print("Expected Returns Analytics Pipeline v3.6")
+    _log_and_print("Expected Returns Analytics Pipeline v3.7")
     _log_and_print("=" * 80)
 
     output_dir = Path(cfg.output_dir)
@@ -5667,13 +5783,8 @@ def main(config: PipelineConfig | None = None) -> PipelineResult:
     _log_and_print("-" * 80)
     _step_start = time.perf_counter()
     r.tri = build_tri_model_alignment(r.mc, r.kal, r.pt)
-    r.quad = build_quad_model_alignment(
-        r.tri,
-        r.beat,
-        credit=r.credit,
-        div_safety=r.div_safety,
-        anomaly=r.anomaly_results,
-    )
+    r.quad = build_quad_model_alignment(r.tri, r.beat, credit=r.credit, div_safety=r.div_safety,
+                                        anomaly=r.anomaly_results)
     r.strong = extract_strong_consensus(r.tri)
     _log_and_print(f"  ⏱ Step 6 completed in {time.perf_counter() - _step_start:.1f}s")
 
@@ -6669,13 +6780,72 @@ def main(config: PipelineConfig | None = None) -> PipelineResult:
         except Exception as e:
             logger.warning("Aggregated probability export failed: %s", e)
 
+    # Export MCMC hierarchical posteriors
+    if r.mcmc_result:
+        try:
+            mcmc_rows = []
+            # Top-level convergence diagnostics as a single "global" row
+            mcmc_rows.append({
+                "level": "global",
+                "group": "all",
+                "posterior_mean": r.mcmc_result.get("posterior_mean"),
+                "posterior_std": r.mcmc_result.get("posterior_std"),
+                "r_hat": r.mcmc_result.get("r_hat"),
+                "converged": r.mcmc_result.get("converged"),
+                "ess_bulk": r.mcmc_result.get("ess_bulk"),
+                "ess_tail": r.mcmc_result.get("ess_tail"),
+                "ci_95_lower": r.mcmc_result.get("ci_95", [None, None])[0],
+                "ci_95_upper": r.mcmc_result.get("ci_95", [None, None])[1],
+                "student_t_mu": r.mcmc_result.get("student_t_mu"),
+                "student_t_df": r.mcmc_result.get("student_t_df"),
+                "n_obs": None,
+                "raw_mean": None,
+                "shrinkage": None,
+                "prob_positive": None,
+            })
+
+            # Hierarchical level rows
+            hier = r.mcmc_result.get("hierarchical", {})
+            if hier and "levels" in hier:
+                for level_name, groups in hier["levels"].items():
+                    for grp_name, info in groups.items():
+                        mcmc_rows.append({
+                            "level": level_name,
+                            "group": grp_name,
+                            "posterior_mean": info.get("posterior_mean"),
+                            "posterior_std": info.get("posterior_std"),
+                            "r_hat": None,
+                            "converged": None,
+                            "ess_bulk": None,
+                            "ess_tail": None,
+                            "ci_95_lower": None,
+                            "ci_95_upper": None,
+                            "student_t_mu": None,
+                            "student_t_df": None,
+                            "n_obs": info.get("n_obs"),
+                            "raw_mean": info.get("raw_mean"),
+                            "shrinkage": info.get("shrinkage"),
+                            "prob_positive": info.get("prob_positive"),
+                        })
+
+            mcmc_export_df = pd.DataFrame(mcmc_rows)
+            if not mcmc_export_df.empty:
+                export_config = ExportConfig(table_name="mcmc_return_analysis")
+                export_to_db(mcmc_export_df, export_config)
+                _log_and_print(
+                    f"   ✓ mcmc_return_analysis → analytics.mcmc_return_analysis "
+                    f"({len(mcmc_export_df)} rows)"
+                )
+        except Exception as e:
+            logger.warning("MCMC return analysis export failed: %s", e)
+
     _log_and_print(f"  ⏱ Step 10 completed in {time.perf_counter() - _step_start:.1f}s")
 
     # ========================================================================
     # SUMMARY
     # ========================================================================
     _log_and_print("=" * 80)
-    _log_and_print("\u2705 EXPECTED RETURNS ANALYTICS v3.6 COMPLETE")
+    _log_and_print("\u2705 EXPECTED RETURNS ANALYTICS v3.7 COMPLETE")
     _log_and_print("=" * 80)
     _log_and_print("  Data sources:")
     _log_and_print(
