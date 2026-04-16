@@ -68,11 +68,7 @@ def build_tri_model_alignment(
     kal: pd.DataFrame,
     pt: pd.DataFrame,
     *,
-    bullish_return_threshold: float = 0.02,  # v3.9: was 0.0 — heavy tails penalise marginal bulls
-    bma_weights: tuple[float, float, float] = (0.45, 0.25, 0.30),  # (MC, Kalman, PT)
-    use_log_score_reweighting: bool = True,
-    cvar_alpha: float = 0.05,
-    student_t_df: float | None = None,  # v3.9: passed from mcmc_result for tail-aware conviction
+    bullish_return_threshold: float = 0.0,
 ) -> pd.DataFrame:
     """
     Merge Monte Carlo, Kalman, and Price Target Achievement into a
@@ -80,11 +76,6 @@ def build_tri_model_alignment(
 
     Parameters
     ----------
-    use_log_score_reweighting : bool
-    student_t_df : float | None
-        passed from mcmc_result for tail-aware conviction
-    cvar_alpha
-    bma_weights : tuple[float, float, float]
     bullish_return_threshold : float
         Minimum implied return (%) to classify a model as bullish.
         Default 2.0% prevents near-zero returns from inflating the
@@ -157,7 +148,7 @@ def build_tri_model_alignment(
         bullish_return_threshold, float(tri["implied_return_kalman"].quantile(0.40))
     )
     pt_threshold = max(
-        bullish_return_threshold, float(tri["implied_return_pt"].quantile(0.40))
+        bullish_return_threshold * 0.3, float(tri["implied_return_pt"].quantile(0.40))
     )
 
     tri["mc_bullish"] = tri["implied_return_mc"] > mc_threshold
@@ -170,75 +161,10 @@ def build_tri_model_alignment(
     )
     tri["signal"] = tri["agreement_score"].map(_SIGNAL_LABELS)
 
-    # v3.9: Bayesian Model Averaging blended expected return (Finding #3)
-    w_mc, w_kal, w_pt = bma_weights
-    weight_sum = w_mc + w_kal + w_pt
-    if weight_sum > 0:
-        w_mc, w_kal, w_pt = w_mc / weight_sum, w_kal / weight_sum, w_pt / weight_sum
-    tri["blended_return_bma"] = (
-        w_mc * tri["implied_return_mc"]
-        + w_kal * tri["implied_return_kalman"]
-        + w_pt * tri["implied_return_pt"]
-    )
-
-    # v3.9 Cross-cutting T-A: Per-stock tail_df sourced from each model's
-    # *Result dataclass (CreditRiskResult.tail_df, DividendSafetyResult.tail_df,
-    # PriceTargetResult.tail_df). When a per-stock ``tail_df`` column is
-    # present on any of the input frames we use it to compute a **per-stock**
-    # tail penalty rather than broadcasting the global ``student_t_df``.
-    # Falls back to the global scalar when no per-stock column is available
-    # (backwards compatible with prior v3.8 behaviour).
-    per_stock_tail_df: pd.Series | None = None
-    for src in (pt, mc, kal):
-        if "tail_df" in src.columns:
-            cand = (
-                src[["isin", "tail_df"]].dropna(subset=["tail_df"]).drop_duplicates(subset=["isin"])
-            )
-            if not cand.empty:
-                per_stock_tail_df = cand.set_index("isin")["tail_df"]
-                break
-
-    def _df_to_penalty(df_value: float) -> float:
-        if not np.isfinite(df_value):
-            return 1.0
-        if df_value <= 3.0:
-            return 0.5
-        if df_value <= 5.0:
-            return 0.75
-        return 1.0
-
-    if per_stock_tail_df is not None:
-        tri["tail_df"] = tri["isin"].map(per_stock_tail_df).astype(float)
-        # Backfill with the global scalar when individual rows are missing
-        if student_t_df is not None:
-            tri["tail_df"] = tri["tail_df"].fillna(float(student_t_df))
-        tri["tail_penalty"] = tri["tail_df"].map(_df_to_penalty).fillna(1.0)
-        tail_penalty = float(tri["tail_penalty"].mean())
-    else:
-        if student_t_df is not None and student_t_df <= 3.0:
-            tail_penalty = 0.5
-        elif student_t_df is not None and student_t_df <= 5.0:
-            tail_penalty = 0.75
-        else:
-            tail_penalty = 1.0
-        tri["tail_df"] = float(student_t_df) if student_t_df is not None else float("nan")
-        tri["tail_penalty"] = tail_penalty
-    tri["blended_conviction"] = tri["agreement_score"] * tri["tail_penalty"]
-
-    # v3.9: Expose CVaR column when available on MC output (Finding #3 risk management)
-    cvar_col = f"cvar_{int(cvar_alpha * 100)}"
-    if cvar_col in mc.columns:
-        mc_cvar = mc[["isin", cvar_col]].drop_duplicates(subset=["isin"])
-        tri = tri.merge(mc_cvar, on="isin", how="left")
-    elif "var_5_pct" in tri.columns:
-        # Fallback: approximate CVaR from VaR when CVaR isn't emitted yet
-        tri[cvar_col] = tri["var_5_pct"]
-
     logger.info(
-        "Tri-model alignment: %d stocks, %d strong bullish (tail_penalty=%.2f)",
+        "Tri-model alignment: %d stocks, %d strong bullish",
         len(tri),
         (tri["agreement_score"] == 3).sum(),
-        tail_penalty,
     )
     return tri
 
@@ -246,23 +172,15 @@ def build_tri_model_alignment(
 def build_quad_model_alignment(
     tri: pd.DataFrame,
     beat: pd.DataFrame,
-    beat_threshold: float = 0.55,  # v3.9: was 0.50 — higher bar given tail risk
+    beat_threshold: float = 0.50,
     credit: pd.DataFrame | None = None,
     div_safety: pd.DataFrame | None = None,
     anomaly: pd.DataFrame | None = None,
     *,
-    bma_weights: dict[str, float] | None = None,  # v3.9: full six-model BMA weights
-    credit_distress_threshold: float = 0.90,  # v3.9: softened from 0.99
-    div_cut_threshold: float = 0.60,  # v3.9: softened from 0.75
+    credit_distress_threshold: float = 0.99,
+    div_cut_threshold: float = 0.67,
     anomaly_severity_threshold: float | None = None,
     mcmc_result: dict | None = None,
-    use_macro_tilt: bool = True,  # v3.9: regional tilt from macro covariates
-    # v3.10 T-E — optional realised outcomes per model for centralised BMA
-    # weighting via ``ModelConfidenceEstimator.compute_relative_confidence``.
-    # Pass a mapping ``{model_name: (probs, outcomes)}`` and ``bma_weights``
-    # will be overridden with the log-score-derived softmax weights. Falls
-    # back to the static dict when ``None`` (default / backwards compatible).
-    validation_outcomes: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> pd.DataFrame:
     """Extend tri-model alignment with up to 4 additional model signals.
 
@@ -279,7 +197,6 @@ def build_quad_model_alignment(
 
     Parameters
     ----------
-    bma_weights
     tri : pd.DataFrame
         Tri-model alignment output (must contain ``mc_bullish``, ``kal_bullish``,
         ``pt_bullish``).
@@ -301,8 +218,6 @@ def build_quad_model_alignment(
         Maximum anomaly severity score to flag as anomaly-clean.
         When ``None`` the threshold is set to the **median** of the
         available anomaly severity distribution (data-adaptive).
-    mcmc_result : pd.DataFrame or None
-        MCMC results with ``anomaly_severity_score``.
 
     Returns
     -------
@@ -314,44 +229,6 @@ def build_quad_model_alignment(
     if tri.empty or beat.empty:
         logger.warning("Quad-model alignment skipped — insufficient data")
         return pd.DataFrame()
-
-    # v3.9: Full six-model BMA weights (Finding #3) — normalised default
-    if bma_weights is None:
-        bma_weights = {
-            "mc": 0.30,
-            "kalman": 0.20,
-            "pt": 0.20,
-            "beat": 0.15,
-            "credit": 0.10,
-            "div": 0.05,
-        }
-
-    # v3.10 T-E — centralise BMA log-score weighting in
-    # ``ModelConfidenceEstimator.compute_relative_confidence`` when the caller
-    # provides realised outcomes per model. Backwards compatible: unchanged
-    # behaviour when ``validation_outcomes`` is ``None``.
-    if validation_outcomes:
-        try:
-            from probabilistic_ml_model.statistical_functions.probability_models import (
-                ModelConfidenceEstimator,
-            )
-
-            _mce = ModelConfidenceEstimator(n_bins=10, use_quantile_bins=True)
-            _rel = _mce.compute_relative_confidence(validation_outcomes, bootstrap_iters=0)
-            if not _rel.empty and "bma_weight" in _rel.columns:
-                learned = {str(r.model): float(r.bma_weight) for r in _rel.itertuples()}
-                # Merge learned weights into the default dict, keeping entries
-                # for models without validation data.
-                bma_weights = {**bma_weights, **learned}
-                logger.info(
-                    "Quad-model BMA weights overridden via ModelConfidenceEstimator (T-E): %s",
-                    {k: round(v, 4) for k, v in learned.items()},
-                )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("T-E BMA weight override skipped: %s", exc)
-
-    _bma_total = sum(bma_weights.values()) or 1.0
-    bma_weights = {k: v / _bma_total for k, v in bma_weights.items()}
 
     tri = _ensure_isin_column(tri)
     beat = _ensure_isin_column(beat)
@@ -466,9 +343,11 @@ def build_quad_model_alignment(
         + quad["pt_bullish"].astype(int)
         + quad["beat_bullish"]
     )
-    quad["risk_quality_score"] = quad["credit_safe"] + quad["div_safe"] + quad["anomaly_clean"]
-    quad["full_consensus"] = (quad["directional_agreement"] == 4) & (
-        quad["risk_quality_score"] >= 2
+    quad["risk_quality_score"] = (
+        quad["credit_safe"] + quad["div_safe"] + quad["anomaly_clean"]
+    )
+    quad["full_consensus"] = (
+        (quad["directional_agreement"] == 4) & (quad["risk_quality_score"] >= 2)
     )
 
     # Legacy flat agreement kept for backward compatibility
@@ -529,7 +408,7 @@ def build_quad_model_alignment(
     ) / total_w
 
     # --- Task 3: Bayesian shrinkage toward MCMC posterior ---
-    if mcmc_result.get("posterior_mean") is not None:
+    if mcmc_result and mcmc_result.get("posterior_mean") is not None:
         mcmc_mu = mcmc_result["posterior_mean"]
         mcmc_std = mcmc_result.get("posterior_std", 1.0)
 
@@ -677,39 +556,27 @@ def build_expected_returns_summary(
         )
         .merge(
             earn[
-                ["isin"]
-                + [
-                    c
-                    for c in [
-                        "posterior_beat_prob",
-                        "posterior_std",
-                        "confidence_score",
-                        "beat_classification",
-                        "base_posterior_mean",
-                        "resampled_posterior_mean",
-                        "technical_adjustment",
-                        "momentum_signal",
-                        "volatility_regime_score",
-                        "credible_interval_90",
-                        "credible_interval_95",
-                        "prob_beat_given_momentum",
-                        # v3.10 §15.1 ResampledBeat posterior spread & chain diagnostics
-                        "hdi_low",
-                        "hdi_high",
-                        "chain_rhat",
-                        "chain_ess_bulk",
-                        "chain_ess_tail",
-                        "n_effective_samples",
-                        "volatility_regime",
-                        "streak_type",
-                        "continuation_probability",
-                        "mean_reversion_probability",
-                        "expected_next_outcome",
-                        "prediction_confidence",
-                        "model_confidence",
-                        "map_estimate",
-                    ]
-                    if c in earn.columns
+                [
+                    "isin",
+                    "posterior_beat_prob",
+                    "posterior_std",
+                    "confidence_score",
+                    "beat_classification",
+                    "base_posterior_mean",
+                    "resampled_posterior_mean",
+                    "technical_adjustment",
+                    "momentum_signal",
+                    "volatility_regime_score",
+                    "credible_interval_90",
+                    "credible_interval_95",
+                    "prob_beat_given_momentum",
+                    "streak_type",
+                    "continuation_probability",
+                    "mean_reversion_probability",
+                    "expected_next_outcome",
+                    "prediction_confidence",
+                    "model_confidence",
+                    "map_estimate",
                 ]
             ],
             on="isin",
@@ -971,7 +838,9 @@ def build_expected_returns_summary(
     if "kalman_variance" in summary.columns:
         max_var = summary["kalman_variance"].quantile(0.95)
         if max_var > 0:
-            kal_weight = (1 - summary["kalman_variance"].clip(0, max_var) / max_var).clip(0.2, 0.9)
+            kal_weight = (
+                1 - summary["kalman_variance"].clip(0, max_var) / max_var
+            ).clip(0.2, 0.9)
         else:
             kal_weight = 0.5
     else:
@@ -1009,55 +878,6 @@ def build_expected_returns_summary(
             mcmc_result.get("converged", "N/A"),
         )
 
-    # v3.9: Tail-aware risk-adjusted expected return + CVaR + position sizing (Finding #3)
-    df_hat = (
-        float(mcmc_result.get("student_t_df", 10.0))
-        if mcmc_result and isinstance(mcmc_result, dict)
-        else 10.0
-    )
-    if df_hat <= 3.0:
-        haircut = 0.75
-    elif df_hat <= 5.0:
-        haircut = 0.90
-    else:
-        haircut = 1.0
-    summary["tail_df"] = df_hat
-    summary["tail_haircut"] = haircut
-
-    # Pick the best available expected-return column for risk adjustment
-    _ret_src = None
-    for _c in ("blended_return_bma", "ensemble_return", "implied_return_mc"):
-        if _c in summary.columns:
-            _ret_src = _c
-            break
-    if _ret_src is not None:
-        summary["risk_adjusted_expected_return"] = summary[_ret_src] * haircut
-
-    # CVaR column (surfaced from tri/mc); fallback to VaR if absent
-    if "cvar_5" not in summary.columns:
-        if "var_5_pct" in summary.columns:
-            summary["cvar_5"] = summary["var_5_pct"]
-        else:
-            summary["cvar_5"] = np.nan
-
-    # Position size weight: inversely proportional to posterior σ × CI width
-    _post_std = (
-        summary["mcmc_posterior_std"]
-        if "mcmc_posterior_std" in summary.columns
-        else summary.get("posterior_std", pd.Series(1.0, index=summary.index))
-    )
-    _ci_width = (
-        summary.get("ci_width")
-        if "ci_width" in summary.columns
-        else (summary.get("ci_upper_95", 1.0) - summary.get("ci_lower_95", 0.0))
-    )
-    try:
-        _post_std_c = pd.to_numeric(_post_std, errors="coerce").clip(lower=1e-4)
-        _ci_c = pd.to_numeric(_ci_width, errors="coerce").clip(lower=1e-4)
-        summary["position_size_weight"] = 1.0 / (_post_std_c * _ci_c)
-    except Exception:  # pragma: no cover — defensive fallback
-        summary["position_size_weight"] = np.nan
-
     # Remove duplicate columns
     summary = summary.loc[:, ~summary.columns.duplicated()]
 
@@ -1079,9 +899,9 @@ def build_expected_returns_summary(
 
 def extract_strong_consensus(
     tri: pd.DataFrame,
-    min_prob_positive: float = 50.0,  # v3.9: was 33.0 — tighter given df≈2 tail risk
-    min_achievement: float = 0.60,  # v3.9: was 0.50
-    top_n: int = 1500,  # v3.9: was 2000
+    min_prob_positive: float = 33.0,
+    min_achievement: float = 0.50,
+    top_n: int = 2000,
 ) -> pd.DataFrame:
     """Filter strong consensus picks — all 3 models bullish with high confidence."""
     if tri.empty:

@@ -30,7 +30,7 @@ class CategoryAnalyticsCacheKey:
         return (
             f"category_analytics_{self.data_checksum}_cats{self.n_categories}_"
             f"mcmc{int(self.use_mcmc)}_n{self.n_mcmc_samples}_b{self.burn_in}_"
-            f"max{self.max_features_per_category}.json"
+            f"max{self.max_features_per_category}.json.gz"
         )
 
 
@@ -42,94 +42,11 @@ class McmcReturnCacheKey:
     n_chains: int
     n_samples: int
 
-    subdir: str = "mcmc_results"
-    prefix: str = "mcmc_return"
+    subdir: str = "mcmc_return"
 
     def to_filename(self) -> str:
-        """
-
-        :return:
-        """
         return (
-            f"{self.prefix}_{self.data_checksum}_" f"chains{self.n_chains}_n{self.n_samples}.json"
-        )
-
-    # -- convenience constructors for each analysis type ------------------
-
-    @classmethod
-    def for_return(
-        cls, data_checksum: str, n_chains: int, n_samples: int
-    ) -> "McmcReturnCacheKey":
-        """
-
-        :param data_checksum:
-        :param n_chains:
-        :param n_samples:
-        :return:
-        """
-        return cls(
-            data_checksum=data_checksum,
-            n_chains=n_chains,
-            n_samples=n_samples,
-            subdir="mcmc_results/return",
-            prefix="mcmc_return",
-        )
-
-    @classmethod
-    def for_accounting_anomaly(
-        cls, data_checksum: str, n_chains: int, n_samples: int
-    ) -> "McmcReturnCacheKey":
-        """
-
-        :param data_checksum:
-        :param n_chains:
-        :param n_samples:
-        :return:
-        """
-        return cls(
-            data_checksum=data_checksum,
-            n_chains=n_chains,
-            n_samples=n_samples,
-            subdir="mcmc_results/accounting_anomaly",
-            prefix="mcmc_accounting_anomaly",
-        )
-
-    @classmethod
-    def for_credit_risk(
-        cls, data_checksum: str, n_chains: int, n_samples: int
-    ) -> "McmcReturnCacheKey":
-        """
-
-        :param data_checksum:
-        :param n_chains:
-        :param n_samples:
-        :return:
-        """
-        return cls(
-            data_checksum=data_checksum,
-            n_chains=n_chains,
-            n_samples=n_samples,
-            subdir="mcmc_results/credit_risk",
-            prefix="mcmc_credit_risk",
-        )
-
-    @classmethod
-    def for_dividend_safety(
-        cls, data_checksum: str, n_chains: int, n_samples: int
-    ) -> "McmcReturnCacheKey":
-        """
-
-        :param data_checksum:
-        :param n_chains:
-        :param n_samples:
-        :return:
-        """
-        return cls(
-            data_checksum=data_checksum,
-            n_chains=n_chains,
-            n_samples=n_samples,
-            subdir="mcmc_results/dividend_safety",
-            prefix="mcmc_dividend_safety",
+            f"mcmc_return_{self.data_checksum}_" f"chains{self.n_chains}_n{self.n_samples}.json.gz"
         )
 
 
@@ -160,7 +77,7 @@ def dataframe_stable_checksum(
 
     num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     num_cols = sorted(num_cols)
-    if 0 < numeric_sample < len(num_cols):
+    if numeric_sample > 0 and len(num_cols) > numeric_sample:
         num_cols = num_cols[:numeric_sample]
 
     if num_cols:
@@ -203,19 +120,9 @@ class _RoundingEncoder(json.JSONEncoder):
     """
 
     def encode(self, o: Any) -> str:
-        """
-
-        :param o:
-        :return:
-        """
         return super().encode(self._round(o))
 
     def default(self, o: Any) -> Any:
-        """
-
-        :param o:
-        :return:
-        """
         import numpy as np
 
         if isinstance(o, np.ndarray):
@@ -261,13 +168,11 @@ def _json_default(obj: Any) -> Any:
 # Keys that contain large raw sample arrays and should be excluded from
 # the on-disk JSON cache.  The in-memory result dict is left untouched
 # so that downstream visualisation functions can still access them.
-_MCMC_LARGE_KEYS: frozenset[str] = frozenset(
-    {
-        "chains",
-        "combined_samples",
-        "inference_data",
-    }
-)
+_MCMC_LARGE_KEYS: frozenset[str] = frozenset({
+    "chains",
+    "combined_samples",
+    "inference_data",
+})
 
 
 def _strip_large_mcmc_keys(payload: Any) -> Any:
@@ -390,17 +295,20 @@ def _evict_old_caches(
 
 
 # ---------------------------------------------------------------------------
-# Save / Load — plain JSON (with legacy gzip read support)
+# Save / Load with gzip compression
 # ---------------------------------------------------------------------------
 
 
 def save_json(cache_path: Path, payload: Any) -> None:
-    """Serialize *payload* to plain JSON, stripping regenerable arrays.
+    """Serialize *payload* to compressed JSON, stripping regenerable arrays.
 
     Applies three layers of stripping:
     1. Top-level MCMC keys (chains, combined_samples, inference_data).
     2. Category-analytics simulation arrays.
     3. Hierarchical MCMC per-group sample arrays.
+
+    The result is written as gzip-compressed JSON for ~80-90 % further
+    size reduction on float-heavy content.
 
     After writing, old cache files in the same subdirectory are evicted
     to keep at most ``_MAX_CACHE_FILES_PER_SUBDIR`` files.
@@ -409,22 +317,23 @@ def save_json(cache_path: Path, payload: Any) -> None:
     cleaned = _strip_category_simulation_arrays(cleaned)
     cleaned = _strip_hierarchical_samples(cleaned)
 
-    data = json.dumps(cleaned, cls=_RoundingEncoder)
+    data = json.dumps(cleaned, cls=_RoundingEncoder).encode("utf-8")
 
-    # Write plain JSON (strip .gz suffix if present from legacy callers)
-    out_path = cache_path
+    # Ensure the path has .gz extension
+    out_path = cache_path if cache_path.suffix == ".gz" else Path(str(cache_path) + ".gz")
+    with gzip.open(out_path, "wb", compresslevel=6) as f:
+        f.write(data)
+
+    # Remove stale plain-JSON counterpart left by older code (e.g. .json when
+    # we just wrote .json.gz) so it doesn't shadow the new compressed file.
     if out_path.suffix == ".gz":
-        out_path = out_path.with_suffix("")  # .json.gz → .json
-    out_path.write_text(data, encoding="utf-8")
-
-    # Remove stale gzip counterpart left by older code
-    gz_path = Path(str(out_path) + ".gz")
-    if gz_path.exists():
-        try:
-            gz_path.unlink()
-            logger.debug("Removed stale gzip counterpart: %s", gz_path.name)
-        except OSError:
-            pass
+        plain_path = out_path.with_suffix("")  # strip .gz → .json
+        if plain_path.exists() and plain_path != out_path:
+            try:
+                plain_path.unlink()
+                logger.debug("Removed stale plain-JSON counterpart: %s", plain_path.name)
+            except OSError:
+                pass
 
     # Evict old caches in the same subdirectory
     subdir = out_path.parent
@@ -443,11 +352,7 @@ def load_json(cache_path: Path, *, ttl_hours: float | None = None) -> Any | None
     """
     try:
         # Try the .gz path first (new format), then fall back to plain JSON
-        gz_path = (
-            cache_path
-            if cache_path.suffix == ".gz"
-            else cache_path.with_suffix(cache_path.suffix + ".gz")
-        )
+        gz_path = cache_path if cache_path.suffix == ".gz" else Path(str(cache_path) + ".gz")
 
         # Determine which path to read
         if gz_path.exists():
@@ -474,7 +379,7 @@ def load_json(cache_path: Path, *, ttl_hours: float | None = None) -> Any | None
             raw = read_path.read_bytes()
             try:
                 return json.loads(raw.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
+            except json.JSONDecodeError, UnicodeDecodeError:
                 pass
             # Attempt gzip decompression on the .json file
             try:

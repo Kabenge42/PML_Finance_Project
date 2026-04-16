@@ -24,9 +24,16 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from probabilistic_ml_model.visualizations._shared import (
+    PLOTLY_TEMPLATE,
+    COLORS,
+    ENSEMBLE_RETURN_COLS,
+    RISK_DISCOUNT_MAP,
+    RISK_QUALITY_LABELS,
+    create_no_data_figure,
+    resolve_column,
+)
 from probabilistic_ml_model.data_utils.feature_catalog import columns_for_viz
-from probabilistic_ml_model.visualizations._shared import (COLORS, PLOTLY_TEMPLATE, RISK_QUALITY_LABELS,
-                                                           create_no_data_figure, resolve_column)
 
 # Quality & Risk columns derived from catalog (used for availability checks)
 _QUALITY_RISK_COLS = columns_for_viz("quality_risk")
@@ -916,19 +923,10 @@ def create_accounting_anomaly_dashboard(
     go.Figure
         Plotly figure with 4-panel anomaly dashboard
     """
-    # v3.10 §9.1: prefer the new decoupled `combined_anomaly_score` when
-    # present, falling back to the legacy `accounting_anomaly_score` column.
-    score_col = resolve_column(df, "combined_anomaly_score") or (
-        "accounting_anomaly_score" if "accounting_anomaly_score" in df.columns else None
-    )
-    if score_col is None:
+    if "accounting_anomaly_score" not in df.columns:
         return create_no_data_figure(
             "Accounting Anomaly Dashboard — Run detect_accounting_anomalies() first"
         )
-    # Normalise downstream references to a single column name.
-    if score_col != "accounting_anomaly_score":
-        df = df.copy()
-        df["accounting_anomaly_score"] = df[score_col]
 
     fig = make_subplots(
         rows=2,
