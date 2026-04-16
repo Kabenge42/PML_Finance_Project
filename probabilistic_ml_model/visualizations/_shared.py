@@ -155,6 +155,25 @@ for _key, _aliases in _LEGACY_EXTRAS.items():
             if _a not in MV_COLUMN_ALIASES[_key]:
                 MV_COLUMN_ALIASES[_key].append(_a)
 
+# ---------------------------------------------------------------------------
+# Ensemble risk-adjusted return columns (from build_quad_model_alignment)
+# ---------------------------------------------------------------------------
+ENSEMBLE_RETURN_COLS: list[str] = [
+    "ensemble_return",
+    "ensemble_return_shrunk",
+    "risk_adj_return",
+    "mcmc_shrinkage",
+]
+
+RISK_DISCOUNT_MAP: dict[int, float] = {0: 0.70, 1: 0.85, 2: 0.95, 3: 1.00}
+
+RISK_QUALITY_LABELS: dict[int, str] = {
+    0: "High Risk",
+    1: "Elevated Risk",
+    2: "Moderate Risk",
+    3: "Low Risk",
+}
+
 
 def resolve_column(df, logical_name: str) -> str | None:
     """Resolve a logical column name to an actual DataFrame column.

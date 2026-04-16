@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -26,7 +30,7 @@ class CategoryAnalyticsCacheKey:
         return (
             f"category_analytics_{self.data_checksum}_cats{self.n_categories}_"
             f"mcmc{int(self.use_mcmc)}_n{self.n_mcmc_samples}_b{self.burn_in}_"
-            f"max{self.max_features_per_category}.json"
+            f"max{self.max_features_per_category}.json.gz"
         )
 
 
@@ -38,12 +42,59 @@ class McmcReturnCacheKey:
     n_chains: int
     n_samples: int
 
-    subdir: str = "mcmc_return"
+    subdir: str = "mcmc_results"
+    prefix: str = "mcmc_return"
 
     def to_filename(self) -> str:
         return (
-            f"mcmc_return_{self.data_checksum}_"
-            f"chains{self.n_chains}_n{self.n_samples}.json"
+            f"{self.prefix}_{self.data_checksum}_"
+            f"chains{self.n_chains}_n{self.n_samples}.json.gz"
+        )
+
+    # -- convenience constructors for each analysis type ------------------
+
+    @classmethod
+    def for_return(
+        cls, data_checksum: str, n_chains: int, n_samples: int
+    ) -> "McmcReturnCacheKey":
+        return cls(
+            data_checksum=data_checksum,
+            n_chains=n_chains,
+            n_samples=n_samples,
+            prefix="mcmc_return",
+        )
+
+    @classmethod
+    def for_accounting_anomaly(
+        cls, data_checksum: str, n_chains: int, n_samples: int
+    ) -> "McmcReturnCacheKey":
+        return cls(
+            data_checksum=data_checksum,
+            n_chains=n_chains,
+            n_samples=n_samples,
+            prefix="mcmc_accounting_anomaly",
+        )
+
+    @classmethod
+    def for_credit_risk(
+        cls, data_checksum: str, n_chains: int, n_samples: int
+    ) -> "McmcReturnCacheKey":
+        return cls(
+            data_checksum=data_checksum,
+            n_chains=n_chains,
+            n_samples=n_samples,
+            prefix="mcmc_credit_risk",
+        )
+
+    @classmethod
+    def for_dividend_safety(
+        cls, data_checksum: str, n_chains: int, n_samples: int
+    ) -> "McmcReturnCacheKey":
+        return cls(
+            data_checksum=data_checksum,
+            n_chains=n_chains,
+            n_samples=n_samples,
+            prefix="mcmc_dividend_safety",
         )
 
 
@@ -96,20 +147,71 @@ def build_cache_path(
     return cache_root / key_filename
 
 
+# ---------------------------------------------------------------------------
+# Float precision — custom JSON encoder
+# ---------------------------------------------------------------------------
+
+_FLOAT_PRECISION = 6
+
+
+class _RoundingEncoder(json.JSONEncoder):
+    """JSON encoder that rounds all float values to *_FLOAT_PRECISION* digits.
+
+    The standard ``json.dumps(default=...)`` hook is only called for objects
+    the encoder does *not* know how to serialize.  Native Python ``float``
+    values inside lists/dicts therefore bypass ``default`` entirely and are
+    written at full 15-digit precision.
+
+    This encoder overrides ``encode`` to walk the object tree and round
+    every ``float`` **before** the standard encoder serializes it, ensuring
+    consistent precision everywhere.
+    """
+
+    def encode(self, o: Any) -> str:
+        return super().encode(self._round(o))
+
+    def default(self, o: Any) -> Any:
+        import numpy as np
+
+        if isinstance(o, np.ndarray):
+            return [round(float(x), _FLOAT_PRECISION) for x in o.flat]
+        if isinstance(o, (np.integer,)):
+            return int(o)
+        if isinstance(o, (np.floating,)):
+            return round(float(o), _FLOAT_PRECISION)
+        return str(o)
+
+    @classmethod
+    def _round(cls, obj: Any) -> Any:
+        if isinstance(obj, float):
+            return round(obj, _FLOAT_PRECISION)
+        if isinstance(obj, dict):
+            return {k: cls._round(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [cls._round(v) for v in obj]
+        if isinstance(obj, tuple):
+            return tuple(cls._round(v) for v in obj)
+        return obj
+
+
 def _json_default(obj: Any) -> Any:
     """JSON serializer that converts numpy arrays to lists instead of strings."""
     import numpy as np
 
     if isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return [round(float(x), _FLOAT_PRECISION) for x in obj.flat]
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):
-        return round(float(obj), 8)
+        return round(float(obj), _FLOAT_PRECISION)
     if isinstance(obj, float):
-        return round(obj, 8)
+        return round(obj, _FLOAT_PRECISION)
     return str(obj)
 
+
+# ---------------------------------------------------------------------------
+# Stripping large sample arrays before caching
+# ---------------------------------------------------------------------------
 
 # Keys that contain large raw sample arrays and should be excluded from
 # the on-disk JSON cache.  The in-memory result dict is left untouched
@@ -135,21 +237,202 @@ def _strip_large_mcmc_keys(payload: Any) -> Any:
     return payload
 
 
+def _strip_category_simulation_arrays(payload: Any) -> Any:
+    """Remove bulky ``simulations`` arrays from category analytics results.
+
+    Each category's ``distribution_fits`` contains per-feature dicts that
+    include a ``simulations`` key holding 10 000 Monte Carlo draws.  These
+    are regenerable from the distribution parameters already cached, so we
+    strip them to save ~99 % of the file size.
+
+    The original in-memory dict is **not** mutated.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    # Detect category-analytics shape: top-level keys are category names
+    # whose values are dicts containing ``distribution_fits``.
+    first_val = next(iter(payload.values()), None)
+    if not isinstance(first_val, dict) or "distribution_fits" not in first_val:
+        return payload
+
+    result = {}
+    for cat_name, cat_data in payload.items():
+        if not isinstance(cat_data, dict):
+            result[cat_name] = cat_data
+            continue
+        cat_copy = dict(cat_data)
+        if "distribution_fits" in cat_copy and isinstance(cat_copy["distribution_fits"], dict):
+            cat_copy["distribution_fits"] = {
+                feat: {k: v for k, v in fit.items() if k != "simulations"}
+                for feat, fit in cat_copy["distribution_fits"].items()
+                if isinstance(fit, dict)
+            }
+        result[cat_name] = cat_copy
+    return result
+
+
+def _strip_hierarchical_samples(payload: Any) -> Any:
+    """Remove bulky ``samples`` arrays from hierarchical MCMC levels.
+
+    Each group under ``hierarchical.levels.<level>.<group>`` contains a
+    ``samples`` list of 10 000–25 000 MCMC draws that are regenerable.
+    We strip them while preserving all summary statistics.
+
+    The original in-memory dict is **not** mutated.
+    """
+    if not isinstance(payload, dict) or "hierarchical" not in payload:
+        return payload
+
+    hier = payload.get("hierarchical")
+    if not isinstance(hier, dict) or "levels" not in hier:
+        return payload
+
+    result = dict(payload)
+    hier_copy = dict(hier)
+
+    # Strip inference_data from hierarchical if present
+    if "inference_data" in hier_copy:
+        hier_copy = {k: v for k, v in hier_copy.items() if k != "inference_data"}
+
+    hier_copy["levels"] = {
+        level: {
+            group: {k: v for k, v in gdata.items() if k != "samples"}
+            for group, gdata in groups.items()
+            if isinstance(gdata, dict)
+        }
+        for level, groups in hier_copy["levels"].items()
+        if isinstance(groups, dict)
+    }
+    result["hierarchical"] = hier_copy
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Cache eviction — keep only the N most recent files per subdirectory
+# ---------------------------------------------------------------------------
+
+_MAX_CACHE_FILES_PER_SUBDIR = 2
+
+
+def _evict_old_caches(
+    cache_dir: str | Path, subdir: str, max_files: int = _MAX_CACHE_FILES_PER_SUBDIR
+) -> int:
+    """Keep only the *max_files* most recent cache files in *subdir*.
+
+    Returns the number of files removed.
+    """
+    target = Path(cache_dir) / subdir
+    if not target.exists():
+        return 0
+
+    # Match both old .json and new .json.gz files
+    files = sorted(
+        [f for f in target.iterdir() if f.is_file()],
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    removed = 0
+    for old in files[max_files:]:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+# ---------------------------------------------------------------------------
+# Save / Load with gzip compression
+# ---------------------------------------------------------------------------
+
+
 def save_json(cache_path: Path, payload: Any) -> None:
+    """Serialize *payload* to compressed JSON, stripping regenerable arrays.
+
+    Applies three layers of stripping:
+    1. Top-level MCMC keys (chains, combined_samples, inference_data).
+    2. Category-analytics simulation arrays.
+    3. Hierarchical MCMC per-group sample arrays.
+
+    The result is written as gzip-compressed JSON for ~80-90 % further
+    size reduction on float-heavy content.
+
+    After writing, old cache files in the same subdirectory are evicted
+    to keep at most ``_MAX_CACHE_FILES_PER_SUBDIR`` files.
+    """
     cleaned = _strip_large_mcmc_keys(payload)
-    cache_path.write_text(json.dumps(cleaned, default=_json_default))
+    cleaned = _strip_category_simulation_arrays(cleaned)
+    cleaned = _strip_hierarchical_samples(cleaned)
+
+    data = json.dumps(cleaned, cls=_RoundingEncoder).encode("utf-8")
+
+    # Ensure the path has .gz extension
+    out_path = cache_path if cache_path.suffix == ".gz" else Path(str(cache_path) + ".gz")
+    with gzip.open(out_path, "wb", compresslevel=6) as f:
+        f.write(data)
+
+    # Remove stale plain-JSON counterpart left by older code (e.g. .json when
+    # we just wrote .json.gz) so it doesn't shadow the new compressed file.
+    if out_path.suffix == ".gz":
+        plain_path = out_path.with_suffix("")  # strip .gz → .json
+        if plain_path.exists() and plain_path != out_path:
+            try:
+                plain_path.unlink()
+                logger.debug("Removed stale plain-JSON counterpart: %s", plain_path.name)
+            except OSError:
+                pass
+
+    # Evict old caches in the same subdirectory
+    subdir = out_path.parent
+    cache_root = subdir.parent
+    if subdir.name and cache_root.exists():
+        removed = _evict_old_caches(cache_root, subdir.name)
+        if removed > 0:
+            logger.debug("Evicted %d old cache file(s) from %s", removed, subdir.name)
 
 
 def load_json(cache_path: Path, *, ttl_hours: float | None = None) -> Any | None:
+    """Load a cached JSON result, supporting both gzip and plain-text formats.
+
+    Returns ``None`` if the file does not exist, has expired, or cannot be
+    parsed.
+    """
     try:
-        if not cache_path.exists():
+        # Try the .gz path first (new format), then fall back to plain JSON
+        gz_path = cache_path if cache_path.suffix == ".gz" else Path(str(cache_path) + ".gz")
+
+        # Determine which path to read
+        if gz_path.exists():
+            read_path = gz_path
+        elif cache_path.exists() and cache_path.suffix != ".gz":
+            read_path = cache_path
+        else:
             return None
+
         if ttl_hours is not None and ttl_hours > 0:
             import time
 
-            age_h = (time.time() - cache_path.stat().st_mtime) / 3600.0
+            age_h = (time.time() - read_path.stat().st_mtime) / 3600.0
             if age_h > ttl_hours:
                 return None
-        return json.loads(cache_path.read_text())
+
+        if read_path.suffix == ".gz":
+            with gzip.open(read_path, "rb") as f:
+                return json.loads(f.read().decode("utf-8"))
+        else:
+            # Try plain JSON first; fall back to gzip in case the file was
+            # written as compressed data with a .json extension (transitional
+            # files from an earlier code version).
+            raw = read_path.read_bytes()
+            try:
+                return json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+            # Attempt gzip decompression on the .json file
+            try:
+                return json.loads(gzip.decompress(raw).decode("utf-8"))
+            except Exception:
+                return None
     except Exception:
         return None

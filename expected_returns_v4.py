@@ -175,7 +175,7 @@ class PipelineConfig:
     use_historical_targets: bool = True
 
     # Hierarchical MCMC parameters
-    hier_mcmc_min_group_size: int = 20
+    hier_mcmc_min_group_size: int = 50
     hier_mcmc_shrinkage_strength: float = 10.0
     hier_mcmc_group_cols: list[str] | None = None
 
@@ -269,7 +269,7 @@ class PipelineConfig:
                 "ER_USE_HISTORICAL_TARGETS", "true"
             ).lower() == "true",
             hier_mcmc_min_group_size=int(
-                os.environ.get("ER_HIER_MCMC_MIN_GROUP_SIZE", 20)
+                os.environ.get("ER_HIER_MCMC_MIN_GROUP_SIZE", 50)
             ),
             hier_mcmc_shrinkage_strength=float(
                 os.environ.get("ER_HIER_MCMC_SHRINKAGE_STRENGTH", 10.0)
@@ -894,9 +894,8 @@ class BaselinePipeline:
             _log_and_print(f"    ✓ {len(r.category_analytics)} categories analyzed")
 
         def _step_mcmc() -> None:
-            r.mcmc_result = run_parallel_mcmc_return_analysis(
-                r.mc, n_chains=cfg.mcmc_chains, n_samples=cfg.mcmc_samples
-            )
+            r.mcmc_result = run_parallel_mcmc_return_analysis(r.mc, n_chains=cfg.mcmc_chains,
+                                                              n_samples=cfg.mcmc_samples)
             if r.mcmc_result:
                 _log_and_print(
                     f"    ✓ R̂={r.mcmc_result.get('r_hat', float('nan')):.4f}, "
@@ -932,7 +931,15 @@ class BaselinePipeline:
         # Step 20–21: Tri-model & quad-model alignment
         r.tri = build_tri_model_alignment(r.mc, r.kal, r.pt)
         r.strong = extract_strong_consensus(r.tri)
-        r.quad = build_quad_model_alignment(r.tri, r.beat, beat_threshold=cfg.beat_threshold)
+        r.quad = build_quad_model_alignment(
+            r.tri,
+            r.beat,
+            beat_threshold=cfg.beat_threshold,
+            credit=r.credit if not r.credit.empty else None,
+            div_safety=r.div_safety if not r.div_safety.empty else None,
+            anomaly=r.anomaly_results if not r.anomaly_results.empty else None,
+            mcmc_result=r.mcmc_result if r.mcmc_result else None,
+        )
 
         if not r.tri.empty:
             _log_and_print(f"  ✓ Tri-model: {len(r.tri):,} stocks")
@@ -974,13 +981,9 @@ class BaselinePipeline:
                     "style_class",
                     "size_class",
                 ]
-                multi_hier = hierarchical_mcmc_multi_level(
-                    r.summary,
-                    "expected_upside_mc",
-                    group_cols=group_cols,
-                    min_group_size=cfg.hier_mcmc_min_group_size,
-                    shrinkage_strength=cfg.hier_mcmc_shrinkage_strength,
-                )
+                multi_hier = hierarchical_mcmc_multi_level(r.summary, "expected_upside_mc", group_cols=group_cols,
+                                                           min_group_size=cfg.hier_mcmc_min_group_size,
+                                                           shrinkage_strength=cfg.hier_mcmc_shrinkage_strength)
                 if multi_hier and "cross_level_summary" in multi_hier:
                     xls = multi_hier["cross_level_summary"]
                     if isinstance(xls, pd.DataFrame) and not xls.empty:

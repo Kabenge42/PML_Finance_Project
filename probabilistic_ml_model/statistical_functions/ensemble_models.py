@@ -68,7 +68,7 @@ def build_tri_model_alignment(
     kal: pd.DataFrame,
     pt: pd.DataFrame,
     *,
-    bullish_return_threshold: float = 10.0,
+    bullish_return_threshold: float = 0.0,
 ) -> pd.DataFrame:
     """
     Merge Monte Carlo, Kalman, and Price Target Achievement into a
@@ -148,7 +148,7 @@ def build_tri_model_alignment(
         bullish_return_threshold, float(tri["implied_return_kalman"].quantile(0.40))
     )
     pt_threshold = max(
-        bullish_return_threshold * 0.3, float(tri["implied_return_pt"].quantile(0.40))
+        bullish_return_threshold, float(tri["implied_return_pt"].quantile(0.40))
     )
 
     tri["mc_bullish"] = tri["implied_return_mc"] > mc_threshold
@@ -180,6 +180,7 @@ def build_quad_model_alignment(
     credit_distress_threshold: float = 0.99,
     div_cut_threshold: float = 0.67,
     anomaly_severity_threshold: float | None = None,
+    mcmc_result: dict | None = None,
 ) -> pd.DataFrame:
     """Extend tri-model alignment with up to 4 additional model signals.
 
@@ -378,6 +379,74 @@ def build_quad_model_alignment(
         len(quad),
         quad["full_consensus"].sum(),
     )
+
+    # --- Task 2: Confidence-weighted ensemble return ---
+    mc_w = quad["prob_positive_upside"].clip(0, 100) / 100.0
+
+    if "kalman_variance" in quad.columns:
+        max_var = quad["kalman_variance"].quantile(0.95)
+        if max_var > 0:
+            kal_w = (1 - quad["kalman_variance"].clip(0, max_var) / max_var).clip(0.2, 0.9)
+        else:
+            kal_w = 0.5
+    else:
+        kal_w = 0.5
+
+    pt_w = (
+        quad["achievement_probability"].clip(0, 1)
+        if "achievement_probability" in quad.columns
+        else 0.5
+    )
+    beat_w = quad["beat_prob"].clip(0, 1)
+
+    total_w = mc_w + kal_w + pt_w + beat_w
+    quad["ensemble_return"] = (
+        quad["implied_return_mc"] * mc_w
+        + quad["implied_return_kalman"] * kal_w
+        + quad["implied_return_pt"] * pt_w
+        + quad["implied_return_mc"] * beat_w  # beat has no own return; amplify MC
+    ) / total_w
+
+    # --- Task 3: Bayesian shrinkage toward MCMC posterior ---
+    if mcmc_result and mcmc_result.get("posterior_mean") is not None:
+        mcmc_mu = mcmc_result["posterior_mean"]
+        mcmc_std = mcmc_result.get("posterior_std", 1.0)
+
+        # Per-stock shrinkage: higher ensemble variance → more shrinkage toward prior
+        stock_std = quad[["implied_return_mc", "implied_return_kalman", "implied_return_pt"]].std(
+            axis=1
+        )
+        shrinkage = (stock_std**2) / (stock_std**2 + mcmc_std**2)
+        # shrinkage ∈ [0, 1]: 0 = trust prior, 1 = trust stock estimate
+        quad["mcmc_shrinkage"] = shrinkage
+        quad["ensemble_return_shrunk"] = (
+            shrinkage * quad["ensemble_return"] + (1 - shrinkage) * mcmc_mu
+        )
+    else:
+        quad["ensemble_return_shrunk"] = quad["ensemble_return"]
+        quad["mcmc_shrinkage"] = 1.0  # no shrinkage
+
+    # --- Task 4: Risk penalty via risk_quality_score ---
+    risk_discount = (
+        quad["risk_quality_score"].map({0: 0.70, 1: 0.85, 2: 0.95, 3: 1.00}).fillna(0.85)
+    )
+    quad["risk_adj_return"] = quad["ensemble_return_shrunk"] * risk_discount
+
+    # --- Task 5: Optional hierarchical sector adjustment ---
+    if mcmc_result and "hierarchical" in mcmc_result and "industry" in quad.columns:
+        hier = mcmc_result["hierarchical"]
+        industry_posteriors = hier.get("levels", {}).get("industry", {})
+        if industry_posteriors:
+            sector_mu = quad["industry"].map(
+                {k: v["posterior_mean"] for k, v in industry_posteriors.items()}
+            )
+            has_sector = sector_mu.notna()
+            # Blend: where sector prior exists, use it instead of global
+            quad.loc[has_sector, "risk_adj_return"] = (
+                quad.loc[has_sector, "mcmc_shrinkage"] * quad.loc[has_sector, "ensemble_return"]
+                + (1 - quad.loc[has_sector, "mcmc_shrinkage"]) * sector_mu[has_sector]
+            ) * risk_discount[has_sector]
+
     return quad
 
 
@@ -726,6 +795,10 @@ def build_expected_returns_summary(
             "credit_safe",
             "div_safe",
             "anomaly_clean",
+            "ensemble_return",
+            "ensemble_return_shrunk",
+            "mcmc_shrinkage",
+            "risk_adj_return",
         ]
         available_quad_cols = [c for c in _quad_score_cols if c in quad.columns]
         quad_scores = quad[["isin"] + available_quad_cols].drop_duplicates(subset="isin")

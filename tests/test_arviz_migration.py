@@ -229,9 +229,7 @@ class TestHierarchicalMcmcFromDictKwargs:
             return original_from_dict(*args, **kwargs)
 
         with patch.object(sm.az, "from_dict", side_effect=spy_from_dict):
-            result = sm.hierarchical_mcmc_multi_level(
-                df, feature="test_feature", n_samples=200, min_group_size=5
-            )
+            result = sm.hierarchical_mcmc_multi_level(df, feature="test_feature", n_samples=200, min_group_size=5)
 
         if "inference_data" in result:
             assert len(captured["args"]) == 1
@@ -314,8 +312,6 @@ class TestFromDictProducesValidOutput:
             "industry": rng.choice(["X", "Y"], n),
             "val": rng.normal(0, 1, n),
         })
-        result = sm.hierarchical_mcmc_multi_level(
-            df, feature="val", n_samples=200, min_group_size=5
-        )
+        result = sm.hierarchical_mcmc_multi_level(df, feature="val", n_samples=200, min_group_size=5)
         # Should not raise; inference_data may or may not be present
         assert "global" in result

@@ -682,7 +682,7 @@ def bayesian_category_analysis(
 
 def metropolis_hastings_sampler(
     data: np.ndarray,
-    n_samples: int = 10000,
+    n_samples: int = 5000,
     burn_in: int = 2000,
     proposal_std: float = 0.5,
     prior_mean: float = 0,
@@ -699,7 +699,7 @@ def metropolis_hastings_sampler(
     ----------
     data : np.ndarray
         Observed data
-    n_samples : int, default 10000
+    n_samples : int, default 5000
         Number of MCMC samples to generate
     burn_in : int, default 2000
         Number of initial samples to discard
@@ -717,7 +717,7 @@ def metropolis_hastings_sampler(
 
     Examples
     --------
-    >>> samples, acc_rate = metropolis_hastings_sampler(data, n_samples=5000)
+    >>> samples, acc_rate = metropolis_hastings_sampler(data,n_samples=5000)
     >>> print(f"Acceptance rate: {acc_rate:.2%}")
     """
     rng = np.random.default_rng(random_seed)
@@ -780,7 +780,7 @@ def metropolis_hastings_sampler(
 
 
 def mcmc_student_t(
-    data: np.ndarray, n_samples: int = 10000, burn_in: int = 2000
+    data: np.ndarray, n_samples: int = 5000, burn_in: int = 2000
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     MCMC for Student's t location parameter with heavier tails.
@@ -791,7 +791,7 @@ def mcmc_student_t(
     ----------
     data : np.ndarray
         Observed data
-    n_samples : int, default 10000
+    n_samples : int, default 5000
         Number of MCMC samples
     burn_in : int, default 2000
         Burn-in period
@@ -852,7 +852,7 @@ def mcmc_student_t(
 
 
 def hierarchical_mcmc_by_sector(
-    df: pd.DataFrame, feature: str, sector_col: str = "industry", n_samples: int = 8000
+    df: pd.DataFrame, feature: str, sector_col: str = "industry", n_samples: int = 5000
 ) -> dict:
     """
     Hierarchical MCMC: estimate sector-level means with pooling toward global mean.
@@ -875,7 +875,7 @@ def hierarchical_mcmc_by_sector(
 
     Examples
     --------
-    >>> results = hierarchical_mcmc_by_sector(df, 'roe')
+    >>> results = hierarchical_mcmc_by_sector(df,'roe')
     >>> print(results['Technology']['posterior_mean'])
     """
     results = {}
@@ -952,9 +952,9 @@ def hierarchical_mcmc_multi_level(
     df: pd.DataFrame,
     feature: str,
     group_cols: list[str] | None = None,
-    n_samples: int = 8000,
-    min_group_size: int = 10,
-    shrinkage_strength: float = 20.0,
+    n_samples: int = 5000,
+    min_group_size: int = 50,
+    shrinkage_strength: float = 40.0,
 ) -> dict:
     """
     Multi-level hierarchical MCMC with nested category pooling.
@@ -978,7 +978,7 @@ def hierarchical_mcmc_multi_level(
         columns from ``_HIERARCHICAL_CATEGORY_COLS``.
     n_samples : int, default 8000
         Number of posterior MCMC draws per group.
-    min_group_size : int, default 20
+    min_group_size : int, default 50
         Minimum observations per group. Smaller groups get stronger
         shrinkage toward the parent mean.
     shrinkage_strength : float, default 10.0
@@ -2199,12 +2199,7 @@ def parallel_mcmc_chains(
 
     def run_single_chain(seed: int) -> np.ndarray:
         """Run a single MCMC chain with given seed."""
-        samples, _ = metropolis_hastings_sampler(
-            data,
-            n_samples=n_samples,
-            burn_in=n_samples // 5,
-            random_seed=seed,
-        )
+        samples, _ = metropolis_hastings_sampler(data, n_samples=n_samples, burn_in=n_samples // 5, random_seed=seed)
         return samples
 
     # Run chains

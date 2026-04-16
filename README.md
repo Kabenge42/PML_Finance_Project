@@ -3,7 +3,7 @@
 A comprehensive platform for probabilistic equity screening, feature engineering, and machine learning modeling across global financial markets.
 
 [![Python Version](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue)](https://www.python.org/)
-[![Package Version](https://img.shields.io/badge/version-0.9.5-green)](pyproject.toml)
+[![Package Version](https://img.shields.io/badge/version-0.9.6-green)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
@@ -195,30 +195,33 @@ pytest -v
 
 # Specific file
 pytest tests\test_pml_workflow_v4.py
-
-# Fast subset (avoids heavy ML training)
-python tools\run_fast_tests.py
 ```
 
 ### Test Coverage Summary
 
-| Test File                          | Tests   | Coverage                                         |
-|:-----------------------------------|:--------|:-------------------------------------------------|
-| `test_pml_workflow_v4.py`          | 55      | v4 pipeline functions, models, screening         |
-| `test_arviz_refactoring.py`        | 54      | ArviZ 1.0 migration, new viz types, registry     |
-| `test_viz_catalog_integration.py`  | 46      | Visualization–catalog integration                |
-| `test_safe_get_output_values.py`   | 40      | Safe output value extraction                     |
-| `test_data_loading_refactoring.py` | 27      | Data loading & preprocessing refactoring         |
-| `test_catalog_consolidation.py`    | 26      | Catalog consolidation & consistency              |
-| `test_feature_catalog.py`          | 26      | FeatureViewCatalog registry & resolution         |
-| `test_arviz_migration.py`          | 18      | ArviZ 1.0 API migration                          |
-| `test_v35_earnings_beat.py`        | 22      | v3.5 earnings beat model tests                   |
-| `test_new_columns.py`              | 9       | New column definitions & schema                  |
-| `test_idata_shim_smoke.py`         | 9       | InferenceData shim smoke tests                   |
-| `test_v35_anomaly_enhancements.py` | 7       | v3.5 accounting anomaly enhancements             |
-| `test_distribution_fitting.py`     | 6       | Distribution fitting models                      |
-| `test_plr_idata_kwargs.py`         | 3       | ProbabilisticLinearRegression InferenceData args |
-| **Total**                          | **348** | All modules covered                              |
+| Test File                                 | Tests   | Coverage                                     |
+|:------------------------------------------|:--------|:---------------------------------------------|
+| `test_pml_workflow_v4.py`                 | 55      | v4 pipeline functions, models, screening     |
+| `test_arviz_refactoring.py`               | 54      | ArviZ 1.0 migration, new viz types, registry |
+| `test_viz_catalog_integration.py`         | 46      | Visualization–catalog integration            |
+| `test_safe_get_output_values.py`          | 40      | Safe output value extraction                 |
+| `test_cache_optimization.py`              | 39      | Cache optimization & invalidation            |
+| `test_downstream_risk_adj_integration.py` | 30      | Downstream risk-adjusted integration         |
+| `test_data_loading_refactoring.py`        | 27      | Data loading & preprocessing refactoring     |
+| `test_catalog_consolidation.py`           | 26      | Catalog consolidation & consistency          |
+| `test_feature_catalog.py`                 | 26      | FeatureViewCatalog registry & resolution     |
+| `test_v35_earnings_beat.py`               | 22      | v3.5 earnings beat model tests               |
+| `test_ensemble_risk_adj_return.py`        | 21      | Ensemble risk-adjusted return scoring        |
+| `test_arviz_migration.py`                 | 18      | ArviZ 1.0 API migration                      |
+| `test_arviz_improvements.py`              | 17      | ArviZ diagnostic improvements                |
+| `test_pipeline_statistical_fixes.py`      | 17      | Pipeline statistical fix validations         |
+| `test_hierarchical_mcmc_refactor.py`      | 11      | Hierarchical MCMC refactoring                |
+| `test_new_columns.py`                     | 9       | New column definitions & schema              |
+| `test_idata_shim_smoke.py`                | 9       | InferenceData shim smoke tests               |
+| `test_v35_anomaly_enhancements.py`        | 7       | v3.5 accounting anomaly enhancements         |
+| `test_distribution_fitting.py`            | 6       | Distribution fitting models                  |
+| `test_plr_idata_kwargs.py`                | 3       | ProbabilisticLinearRegression idata args     |
+| **Total**                                 | **483** | All modules covered                          |
 
 ### Adding New Tests
 
@@ -269,16 +272,24 @@ PML_Finance_Project/
 │       ├── quality_risk.py
 │       ├── valuation.py
 │       └── _shared.py              # Shared visualization utilities
+├── finance_ml/                     # Core ML package (workflow modules)
+│   └── ml_workflow/                # ML workflow phases
+│       └── v3/                     # v3 workflow utilities (cache, config, enrichment, I/O)
 ├── dashboards/                     # Standalone dashboards
 │   └── geib_dash_app.py            # GEIB equities dashboard
 ├── feature_factory/                # Feature calculation utilities (Beta/CAPM, DCF, Monte Carlo)
 ├── sql_scripts/                    # SQL setup and migration scripts
+│   ├── analytics/                  # Analytics schema SQL
+│   ├── information_schema/         # Information schema queries
+│   └── public/                     # Public schema SQL
 ├── expected_returns_v3.py          # Automated expected-returns pipeline v3.1
 ├── expected_returns_v4.py          # Next-generation expected-returns pipeline
+├── tests/                          # Unit and integration tests (483 tests)
 ├── data/                           # Local data storage
 ├── outputs/                        # Reports and visualizations
 ├── logs/                           # Pipeline execution logs
 ├── archive/                        # Archived files and prior outputs
+├── docs/                           # Documentation
 ├── pyproject.toml
 ├── Pipfile
 ├── requirements.txt

@@ -1441,3 +1441,101 @@ def create_screening_ppc_continuous(
         return _fig_from_pc(pc)
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Risk-Adjusted Return Posterior Panel
+# ---------------------------------------------------------------------------
+
+
+def create_risk_adj_return_posterior_panel(
+    quad: pd.DataFrame,
+    output_dir: Path,
+    mcmc_result: dict | None = None,
+    n_bootstrap: int = 10_000,
+    n_chains: int = 8,
+) -> list[str]:
+    """ArviZ panel for ensemble risk-adjusted return posteriors.
+
+    Generates forest, ridge, and ECDF plots for the four ensemble columns
+    (``ensemble_return``, ``ensemble_return_shrunk``, ``risk_adj_return``,
+    ``mcmc_shrinkage``) produced by ``build_quad_model_alignment``.
+
+    Parameters
+    ----------
+    quad : pd.DataFrame
+        Output of ``build_quad_model_alignment`` with risk-adjusted columns.
+    output_dir : Path
+        Directory for saved PNG figures.
+    mcmc_result : dict | None
+        MCMC result dict (used for annotation only).
+    n_bootstrap : int
+        Bootstrap resamples per chain.
+    n_chains : int
+        Number of synthetic chains.
+
+    Returns
+    -------
+    list[str]
+        Paths to saved figures.
+    """
+    from probabilistic_ml_model.visualizations._shared import ENSEMBLE_RETURN_COLS
+
+    outputs: list[str] = []
+    if not ARVIZ_AVAILABLE:
+        return outputs
+
+    rng = np.random.default_rng(42)
+    posterior_dict: dict[str, tuple] = {}
+
+    for col in ENSEMBLE_RETURN_COLS:
+        if col not in quad.columns:
+            continue
+        vals = quad[col].dropna().values
+        if len(vals) < 10:
+            continue
+        samples = np.array(
+            [
+                [rng.choice(vals, size=len(vals), replace=True).mean() for _ in range(n_bootstrap)]
+                for _ in range(n_chains)
+            ]
+        )
+        posterior_dict[col] = (["chain", "draw"], samples)
+
+    if not posterior_dict:
+        return outputs
+
+    ds = xr.Dataset(
+        posterior_dict,
+        coords={"chain": range(n_chains), "draw": range(n_bootstrap)},
+    )
+    dt = _build_datatree(ds)
+
+    # 1) Forest plot
+    try:
+        pc = azp.plot_forest(dt, combined=True, backend="matplotlib")
+        _pc_add_title(pc, "Risk-Adjusted Return Posteriors (94% HDI)")
+        fig = _fig_from_pc(pc)
+        outputs.append(_save_fig(fig, output_dir / "er_risk_adj_return_forest.png"))
+    except Exception as e:
+        logger.debug("Risk-adj return forest plot failed: %s", e)
+
+    # 2) Ridge overlay
+    try:
+        pc = azp.plot_ridge(dt, combined=True, backend="matplotlib")
+        _pc_add_title(pc, "Risk-Adjusted Return Posterior Density Overlay")
+        fig = _fig_from_pc(pc)
+        outputs.append(_save_fig(fig, output_dir / "er_risk_adj_return_ridge.png"))
+    except Exception as e:
+        logger.debug("Risk-adj return ridge plot failed: %s", e)
+
+    # 3) ECDF with quantile references
+    try:
+        pc = azp.plot_dist(dt, kind="ecdf", backend="matplotlib")
+        _pc_add_title(pc, "Risk-Adjusted Return ECDF")
+        fig = _fig_from_pc(pc)
+        outputs.append(_save_fig(fig, output_dir / "er_risk_adj_return_ecdf.png"))
+    except Exception as e:
+        logger.debug("Risk-adj return ECDF failed: %s", e)
+
+    return outputs

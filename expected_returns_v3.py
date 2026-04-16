@@ -2789,7 +2789,7 @@ def build_tri_model_alignment(
     kal: pd.DataFrame,
     pt: pd.DataFrame,
     *,
-    bullish_return_threshold: float = 10.0,
+    bullish_return_threshold: float = 00.0,
 ) -> pd.DataFrame:
     """
     Merge Monte Carlo, Kalman, and Price Target Achievement into a
@@ -2885,9 +2885,7 @@ def build_tri_model_alignment(
     kal_threshold = max(
         bullish_return_threshold, float(tri["implied_return_kalman"].quantile(0.40))
     )
-    pt_threshold = max(
-        bullish_return_threshold * 0.3, float(tri["implied_return_pt"].quantile(0.40))
-    )
+    pt_threshold = max(bullish_return_threshold, float(tri["implied_return_pt"].quantile(0.40)))
 
     tri["mc_bullish"] = tri["implied_return_mc"] > mc_threshold
     tri["kal_bullish"] = tri["implied_return_kalman"] > kal_threshold
@@ -2943,6 +2941,7 @@ def build_quad_model_alignment(
     credit_distress_threshold: float = 0.99,
     div_cut_threshold: float = 0.67,
     anomaly_severity_threshold: float | None = None,
+    mcmc_result: dict | None = None,
 ) -> pd.DataFrame:
     """Extend tri-model alignment with up to 4 additional model signals.
 
@@ -3141,6 +3140,71 @@ def build_quad_model_alignment(
         len(quad),
         quad["full_consensus"].sum(),
     )
+
+    # --- Task 2: Confidence-weighted ensemble return ---
+    mc_w = quad["prob_positive_upside"].clip(0, 100) / 100.0
+
+    if "kalman_variance" in quad.columns:
+        max_var = quad["kalman_variance"].quantile(0.95)
+        if max_var > 0:
+            kal_w = (1 - quad["kalman_variance"].clip(0, max_var) / max_var).clip(0.2, 0.9)
+        else:
+            kal_w = 0.5
+    else:
+        kal_w = 0.5
+
+    pt_w = (
+        quad["achievement_probability"].clip(0, 1)
+        if "achievement_probability" in quad.columns
+        else 0.5
+    )
+    beat_w = quad["beat_prob"].clip(0, 1)
+
+    total_w = mc_w + kal_w + pt_w + beat_w
+    quad["ensemble_return"] = (
+        quad["implied_return_mc"] * mc_w
+        + quad["implied_return_kalman"] * kal_w
+        + quad["implied_return_pt"] * pt_w
+        + quad["implied_return_mc"] * beat_w  # beat has no own return; amplify MC
+    ) / total_w
+
+    # --- Task 3: Bayesian shrinkage toward MCMC posterior ---
+    if mcmc_result and mcmc_result.get("posterior_mean") is not None:
+        mcmc_mu = mcmc_result["posterior_mean"]
+        mcmc_std = mcmc_result.get("posterior_std", 1.0)
+
+        stock_std = quad[["implied_return_mc", "implied_return_kalman", "implied_return_pt"]].std(
+            axis=1
+        )
+        shrinkage = (stock_std**2) / (stock_std**2 + mcmc_std**2)
+        quad["mcmc_shrinkage"] = shrinkage
+        quad["ensemble_return_shrunk"] = (
+            shrinkage * quad["ensemble_return"] + (1 - shrinkage) * mcmc_mu
+        )
+    else:
+        quad["ensemble_return_shrunk"] = quad["ensemble_return"]
+        quad["mcmc_shrinkage"] = 1.0
+
+    # --- Task 4: Risk penalty via risk_quality_score ---
+    risk_discount = (
+        quad["risk_quality_score"].map({0: 0.70, 1: 0.85, 2: 0.95, 3: 1.00}).fillna(0.85)
+    )
+    quad["risk_adj_return"] = quad["ensemble_return_shrunk"] * risk_discount
+
+    # --- Task 5: Optional hierarchical sector adjustment ---
+    if mcmc_result and "hierarchical" in mcmc_result and "industry" in quad.columns:
+        hier = mcmc_result["hierarchical"]
+        industry_posteriors = hier.get("levels", {}).get("industry", {})
+        if industry_posteriors:
+            sector_mu = quad["industry"].map(
+                {k: v["posterior_mean"] for k, v in industry_posteriors.items()}
+            )
+            has_sector = sector_mu.notna()
+            quad.loc[has_sector, "risk_adj_return"] = (
+                quad.loc[has_sector, "mcmc_shrinkage"] * quad.loc[has_sector, "ensemble_return"]
+                + (1 - quad.loc[has_sector, "mcmc_shrinkage"]) * sector_mu[has_sector]
+            ) * risk_discount[has_sector]
+
     return quad
 
 
@@ -3349,7 +3413,7 @@ def build_expected_returns_summary(
         "sector_posterior_mean",
         "multi_flag_alert",
         "anomaly_conditional_probability",
-        "mh_anomaly_probability",
+        "mahalanobis_distance",
         # v3.5 enhanced anomaly metrics
         "quality_frequency_score",
         "repeat_offender_flag",
@@ -3519,6 +3583,10 @@ def build_expected_returns_summary(
             "credit_safe",
             "div_safe",
             "anomaly_clean",
+            "ensemble_return",
+            "ensemble_return_shrunk",
+            "mcmc_shrinkage",
+            "risk_adj_return",
         ]
         available_quad_cols = [c for c in _quad_score_cols if c in quad.columns]
         quad_scores = quad[["isin"] + available_quad_cols].drop_duplicates(
@@ -4134,7 +4202,7 @@ def compute_return_distribution_analytics(
 
     # --- MCMC Student-t posterior for robust tail estimation ---
     try:
-        mu_samples, df_samples = mcmc_student_t(upside, n_samples=8000)
+        mu_samples, df_samples = mcmc_student_t(upside, n_samples=5000)
         result["mcmc_student_t"] = {
             "posterior_mu_mean": float(np.mean(mu_samples)),
             "posterior_mu_std": float(np.std(mu_samples)),
@@ -4218,7 +4286,7 @@ def run_parallel_mcmc_return_analysis(
     cache_path = None
     if enable_caching and cache_dir:
         checksum = dataframe_stable_checksum(pt, id_cols=["isin", "ticker", "name"])
-        key = McmcReturnCacheKey(
+        key = McmcReturnCacheKey.for_return(
             data_checksum=checksum,
             n_chains=n_chains,
             n_samples=n_samples,
@@ -4282,9 +4350,7 @@ def run_parallel_mcmc_return_analysis(
     if "industry" in pt.columns:
         try:
             hier = hierarchical_mcmc_multi_level(
-                pt,
-                "implied_return_pt",
-                n_samples=n_samples,
+                pt, "implied_return_pt", n_samples=n_samples
             )
             if hier and "levels" in hier:
                 result["hierarchical"] = hier
@@ -5228,6 +5294,14 @@ def _step_earnings_beat(r: PipelineResult, cfg: PipelineConfig) -> None:
 
 def _step_anomaly_detection(r: PipelineResult, cfg: PipelineConfig) -> None:
     """Step 5b: Accounting anomaly detection & analytics."""
+    from finance_ml.ml_workflow.v3.cache import (
+        McmcReturnCacheKey,
+        build_cache_path,
+        dataframe_stable_checksum,
+        load_json,
+        save_json,
+    )
+
     try:
         r.anomaly_results = run_accounting_anomaly_analysis(
             r.df,
@@ -5291,6 +5365,25 @@ def _step_anomaly_detection(r: PipelineResult, cfg: PipelineConfig) -> None:
             _log_and_print(
                 f"✓ Accounting anomaly analysis complete: {len(r.anomaly_results):,} stocks"
             )
+
+            # Cache MCMC anomaly results
+            if cfg.enable_result_caching or cfg.enable_mcmc_caching:
+                try:
+                    checksum = dataframe_stable_checksum(
+                        r.anomaly_results, id_cols=["isin", "ticker", "name"]
+                    )
+                    key = McmcReturnCacheKey.for_accounting_anomaly(
+                        data_checksum=checksum,
+                        n_chains=8,
+                        n_samples=cfg.mcmc_samples,
+                    )
+                    path = build_cache_path(
+                        cfg.cache_dir, key.to_filename(), subdir=key.subdir
+                    )
+                    save_json(path, r.anomaly_results.to_dict(orient="list"))
+                    logger.info("Accounting anomaly results cached → %s", path.name)
+                except Exception as e:
+                    logger.debug("Failed to cache accounting anomaly results: %s", e)
         else:
             _log_and_print("  ⚠️ No accounting anomaly features available")
 
@@ -5301,6 +5394,13 @@ def _step_anomaly_detection(r: PipelineResult, cfg: PipelineConfig) -> None:
 
 def _step_credit_dividend(r: PipelineResult, cfg: PipelineConfig) -> None:
     """Step 5c: Credit risk & dividend safety analysis."""
+    from finance_ml.ml_workflow.v3.cache import (
+        McmcReturnCacheKey,
+        build_cache_path,
+        dataframe_stable_checksum,
+        save_json,
+    )
+
     try:
         r.credit = run_credit_risk_analysis(
             r.df,
@@ -5339,6 +5439,25 @@ def _step_credit_dividend(r: PipelineResult, cfg: PipelineConfig) -> None:
                         f"  Merged {len(anom_cols)} anomaly columns into credit risk DataFrame"
                     )
 
+            # Cache MCMC credit risk results
+            if cfg.enable_result_caching or cfg.enable_mcmc_caching:
+                try:
+                    checksum = dataframe_stable_checksum(
+                        r.credit, id_cols=["isin", "ticker", "name"]
+                    )
+                    key = McmcReturnCacheKey.for_credit_risk(
+                        data_checksum=checksum,
+                        n_chains=8,
+                        n_samples=cfg.mcmc_samples,
+                    )
+                    path = build_cache_path(
+                        cfg.cache_dir, key.to_filename(), subdir=key.subdir
+                    )
+                    save_json(path, r.credit.to_dict(orient="list"))
+                    logger.info("Credit risk results cached → %s", path.name)
+                except Exception as e:
+                    logger.debug("Failed to cache credit risk results: %s", e)
+
         r.div_safety = run_dividend_safety_analysis(
             r.df_features if not r.df_features.empty else r.df_all,
             feature_df=r.df_features,
@@ -5354,6 +5473,25 @@ def _step_credit_dividend(r: PipelineResult, cfg: PipelineConfig) -> None:
             _log_and_print(
                 f"✓ Dividend safety: {len(r.div_safety):,} stocks, {at_risk} at risk"
             )
+
+            # Cache MCMC dividend safety results
+            if cfg.enable_result_caching or cfg.enable_mcmc_caching:
+                try:
+                    checksum = dataframe_stable_checksum(
+                        r.div_safety, id_cols=["isin", "ticker", "name"]
+                    )
+                    key = McmcReturnCacheKey.for_dividend_safety(
+                        data_checksum=checksum,
+                        n_chains=8,
+                        n_samples=cfg.mcmc_samples,
+                    )
+                    path = build_cache_path(
+                        cfg.cache_dir, key.to_filename(), subdir=key.subdir
+                    )
+                    save_json(path, r.div_safety.to_dict(orient="list"))
+                    logger.info("Dividend safety results cached → %s", path.name)
+                except Exception as e:
+                    logger.debug("Failed to cache dividend safety results: %s", e)
 
     except Exception as e:
         logger.error("Step 5c (Credit/Dividend) failed: %s", e, exc_info=True)
@@ -5545,6 +5683,20 @@ def _step_mcmc_return_analysis(r: PipelineResult, cfg: PipelineConfig) -> None:
                 r.pt["implied_return_pt"].dropna().values
             )
 
+            # Task 6: Re-enrich quad with risk-adjusted return after MCMC
+            if r.mcmc_result and not r.quad.empty:
+                r.quad = build_quad_model_alignment(
+                    r.tri,
+                    r.beat,
+                    beat_threshold=cfg.beat_threshold,
+                    credit=r.credit if not r.credit.empty else None,
+                    div_safety=r.div_safety if not r.div_safety.empty else None,
+                    anomaly=r.anomaly_results if not r.anomaly_results.empty else None,
+                    anomaly_severity_threshold=cfg.anomaly_severity_threshold,
+                    mcmc_result=r.mcmc_result,
+                )
+                _log_and_print(f"  ✓ Risk-adjusted returns computed for {len(r.quad):,} stocks")
+
             if ARVIZ_AVAILABLE and r.mcmc_result.get("inference_data") is not None:
                 _write_viz(
                     create_mcse_convergence_panel(
@@ -5693,7 +5845,7 @@ def main(config: PipelineConfig | None = None) -> PipelineResult:
 
     # Cleanup expired cache files on startup
     if cfg.caching_enabled:
-        expired_removed = cfg.clear_cache(expired_only=True)
+        expired_removed = cfg.clear_cache(expired_only=False)
         if expired_removed > 0:
             _log_and_print(f"   🧹 Cleaned {expired_removed} expired cache files")
 

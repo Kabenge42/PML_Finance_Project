@@ -431,11 +431,11 @@ class AccountingAnomalyProbabilityModel:
 
             if "intangibles_growth_flag" in result.columns:
                 intang_growing = result["intangibles_growth_flag"].fillna(0) == 1
-                result.loc[intang_growing, "anomaly_severity_score"] += 4.0
+                result.loc[intang_growing, "anomaly_severity_score"] += 3.0
 
             if "asset_quality_score" in result.columns:
                 low_quality = result["asset_quality_score"].fillna(50) < 25
-                result.loc[low_quality, "anomaly_severity_score"] += 5.0
+                result.loc[low_quality, "anomaly_severity_score"] += 3.0
 
             # NEW: Accumulated deficit — persistent losses create manipulation pressure
             if "accumulated_deficit_flag" in result.columns:
@@ -494,7 +494,7 @@ class AccountingAnomalyProbabilityModel:
 
             if "has_unusual_items_flag" in result.columns:
                 unusual = result["has_unusual_items_flag"].fillna(0) == 1
-                result.loc[unusual, "anomaly_severity_score"] += 4.0
+                result.loc[unusual, "anomaly_severity_score"] += 1.0
 
             if "high_rnd_intensity_flag" in result.columns:
                 rnd = result["high_rnd_intensity_flag"].fillna(0) == 1
@@ -502,7 +502,7 @@ class AccountingAnomalyProbabilityModel:
 
             if "low_tax_flag" in result.columns:
                 low_tax = result["low_tax_flag"].fillna(0) == 1
-                result.loc[low_tax, "anomaly_severity_score"] += 3.0
+                result.loc[low_tax, "anomaly_severity_score"] += 1.0
 
             if "revenue_accelerating_flag" in result.columns:
                 rev_accel = result["revenue_accelerating_flag"].fillna(0) == 1
@@ -511,15 +511,15 @@ class AccountingAnomalyProbabilityModel:
             # NEW: External / operational cross-checks
             if "analyst_bearish_pct" in result.columns:
                 bearish = result["analyst_bearish_pct"].fillna(0) > 50
-                result.loc[bearish, "anomaly_severity_score"] += 3.0
+                result.loc[bearish, "anomaly_severity_score"] += 4.0
 
             if "layoff_risk_flag" in result.columns:
                 layoff = result["layoff_risk_flag"].fillna(0) == 1
-                result.loc[layoff, "anomaly_severity_score"] += 3.0
+                result.loc[layoff, "anomaly_severity_score"] += 2.0
 
             if "debt_maturity_risk" in result.columns:
                 debt_risk = result["debt_maturity_risk"].fillna(0) > 40
-                result.loc[debt_risk, "anomaly_severity_score"] += 4.0
+                result.loc[debt_risk, "anomaly_severity_score"] += 5.0
 
         # Phase 3: Conditional probability of anomaly per row
         # Compute per-feature conditional probabilities
@@ -604,11 +604,7 @@ class AccountingAnomalyProbabilityModel:
 
         # Task 1.1: Student-t posterior for anomaly scores
         try:
-            mu_samples, df_samples = mcmc_student_t(
-                anomaly_scores,
-                n_samples=self.n_mcmc_samples,
-                burn_in=self.burn_in,
-            )
+            mu_samples, df_samples = mcmc_student_t(anomaly_scores, n_samples=self.n_mcmc_samples, burn_in=self.burn_in)
             result["anomaly_posterior_mean"] = mu_samples.mean()
             result["anomaly_posterior_std"] = mu_samples.std()
             result["anomaly_ci_lower"] = np.percentile(mu_samples, 2.5)
@@ -620,12 +616,8 @@ class AccountingAnomalyProbabilityModel:
         sector_col = "industry" if "industry" in result.columns else "sector"
         if sector_col in result.columns:
             try:
-                sector_posteriors = hierarchical_mcmc_by_sector(
-                    result,
-                    feature="accounting_anomaly_score",
-                    sector_col=sector_col,
-                    n_samples=self.n_mcmc_samples,
-                )
+                sector_posteriors = hierarchical_mcmc_by_sector(result, feature="accounting_anomaly_score",
+                                                                sector_col=sector_col, n_samples=self.n_mcmc_samples)
                 # Unwrap ArviZ-wrapped result
                 if "sectors" in sector_posteriors and isinstance(
                     sector_posteriors["sectors"], dict
@@ -1756,7 +1748,7 @@ class EarningsBeatProbabilityModel:
         df: pd.DataFrame,
         beats_col: str = "historical_beat_rate",
         total_col: str = "dynamic_total_reports",
-        sector_col: str = "sector",
+        sector_col: str = "industry",
         ticker_col: str = "isin",
         name_col: str = "name",
         # NEW: feature column mappings (v3.5)
@@ -2242,7 +2234,7 @@ class EarningsBeatProbabilityModel:
     def analyze_dataframe_enhanced(
         self,
         df: pd.DataFrame,
-        sector_col: str = "sector",
+        sector_col: str = "industry",
         ticker_col: str = "isin",
         name_col: str = "name",
     ) -> pd.DataFrame:
@@ -2700,7 +2692,7 @@ class EPSStreakAnalyzer:
         streak_col: str = "eps_positive_streak",
         improvement_col: str = "eps_improvement_count",
         name_col: str = "name",
-        sector_col: str = "sector",
+        sector_col: str = "industry",
         industry_col: str = "industry",
         country_col: str = "country",
         exchange_col: str = "exchange",
@@ -3415,13 +3407,9 @@ class CreditRiskProbabilityModel:
 
         try:
             # Task 2.1: MH sampler on z-scores
-            samples, acc_rate = metropolis_hastings_sampler(
-                z_scores,
-                n_samples=self.n_mcmc_samples,
-                burn_in=self.burn_in,
-                prior_mean=self.distress_threshold,
-                prior_std=1.0,
-            )
+            samples, acc_rate = metropolis_hastings_sampler(z_scores, n_samples=self.n_mcmc_samples,
+                                                            burn_in=self.burn_in, prior_mean=self.distress_threshold,
+                                                            prior_std=1.0)
             # Per-stock: P(distress) = P(posterior_mean < stock_z)
             stock_z = (
                 result_df["altman_z_score"].values
@@ -3436,9 +3424,7 @@ class CreditRiskProbabilityModel:
             )
 
             # Task 2.2: Student-t for robust estimation
-            mu_samples, df_samples = mcmc_student_t(
-                z_scores, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
-            )
+            mu_samples, df_samples = mcmc_student_t(z_scores, n_samples=self.n_mcmc_samples, burn_in=self.burn_in)
             result_df["mcmc_ci_lower"] = np.percentile(mu_samples, 2.5)
             result_df["mcmc_ci_upper"] = np.percentile(mu_samples, 97.5)
         except (ValueError, RuntimeError) as e:
@@ -3454,12 +3440,8 @@ class CreditRiskProbabilityModel:
                 sector_col in source_df.columns
                 and "altman_z_score" in source_df.columns
             ):
-                sector_results = hierarchical_mcmc_by_sector(
-                    source_df,
-                    feature="altman_z_score",
-                    sector_col=sector_col,
-                    n_samples=self.n_mcmc_samples,
-                )
+                sector_results = hierarchical_mcmc_by_sector(source_df, feature="altman_z_score", sector_col=sector_col,
+                                                             n_samples=self.n_mcmc_samples)
                 # Unwrap ArviZ-wrapped result
                 if "sectors" in sector_results and isinstance(
                     sector_results["sectors"], dict
@@ -3495,8 +3477,8 @@ class DividendCutProbabilityModel:
 
     def __init__(
         self,
-        high_payout_threshold: float = 0.6,
-        min_coverage: float = 1.2,
+        high_payout_threshold: float = 0.0,
+        min_coverage: float = 0.0,
         n_mcmc_samples: int = 8000,
         burn_in: int = 2000,
         use_mcmc: bool = True,
@@ -3714,13 +3696,8 @@ class DividendCutProbabilityModel:
                 else np.array([])
             )
             if len(fcf_data) >= 10:
-                samples, _ = metropolis_hastings_sampler(
-                    fcf_data,
-                    n_samples=self.n_mcmc_samples,
-                    burn_in=self.burn_in,
-                    prior_mean=self.min_coverage,
-                    prior_std=1.0,
-                )
+                samples, _ = metropolis_hastings_sampler(fcf_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in,
+                                                         prior_mean=self.min_coverage, prior_std=1.0)
                 fcf_prob = float(np.mean(samples < self.min_coverage))
                 probs.append(fcf_prob)
         except (ValueError, RuntimeError) as e:
@@ -3735,9 +3712,7 @@ class DividendCutProbabilityModel:
                 else np.array([])
             )
             if len(payout_data) >= 10:
-                mu_samples, _ = mcmc_student_t(
-                    payout_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
-                )
+                mu_samples, _ = mcmc_student_t(payout_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in)
                 payout_prob = float(
                     np.mean(mu_samples > self.high_payout_threshold * 100)
                 )
@@ -4010,13 +3985,8 @@ class PriceTargetAchievementModel:
                 vol_scale = source_df["volatility_regime"].median()
                 if pd.notna(vol_scale) and vol_scale > 0:
                     prior_std = prior_std * max(0.5, float(vol_scale))
-            samples, acc_rate = metropolis_hastings_sampler(
-                returns_data,
-                n_samples=self.n_mcmc_samples,
-                burn_in=self.burn_in,
-                prior_mean=0.0,
-                prior_std=prior_std,
-            )
+            samples, acc_rate = metropolis_hastings_sampler(returns_data, n_samples=self.n_mcmc_samples,
+                                                            burn_in=self.burn_in, prior_mean=0.0, prior_std=prior_std)
             # Per-stock: P(achieving target) ≈ P(posterior mean > stock's required upside)
             stock_upside = (
                 result_df["implied_return_pt"].values
@@ -4040,9 +4010,7 @@ class PriceTargetAchievementModel:
 
         try:
             # Task 4.2: Student-t for heavy-tailed returns
-            mu_samples, df_samples = mcmc_student_t(
-                returns_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
-            )
+            mu_samples, df_samples = mcmc_student_t(returns_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in)
             achievement_prob = float(np.mean(mu_samples > 0))
             result_df["mcmc_achievement_probability"] = achievement_prob
             result_df["mcmc_ci_lower"] = np.percentile(mu_samples, 2.5)
@@ -4639,17 +4607,11 @@ class CategoryProbabilityAnalyzer:
 
             try:
                 if self.use_student_t:
-                    mu_samples, _ = mcmc_student_t(
-                        data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
-                    )
+                    mu_samples, _ = mcmc_student_t(data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in)
                 else:
-                    mu_samples, _ = metropolis_hastings_sampler(
-                        data,
-                        n_samples=self.n_mcmc_samples,
-                        burn_in=self.burn_in,
-                        prior_mean=self.prior_alpha,
-                        prior_std=self.prior_beta,
-                    )
+                    mu_samples, _ = metropolis_hastings_sampler(data, n_samples=self.n_mcmc_samples,
+                                                                burn_in=self.burn_in, prior_mean=self.prior_alpha,
+                                                                prior_std=self.prior_beta)
                 stats[feat] = {
                     "posterior_mean": float(mu_samples.mean()),
                     "posterior_std": float(mu_samples.std()),

@@ -1576,6 +1576,100 @@ def load_mv_equities_spec_from_db(
     return EquitiesMaterializedViewSpec.from_dataframe(df)
 
 
+def build_ensemble_risk_adj_inference_data(
+    quad: pd.DataFrame,
+    mcmc_result: dict | None = None,
+    n_posterior_samples: int = 4000,
+    n_chains: int = 8,
+    random_seed: int = 42,
+) -> "az.InferenceData | xr.Dataset":
+    """Build InferenceData for ensemble risk-adjusted returns.
+
+    Creates a posterior group with samples for ``ensemble_return``,
+    ``ensemble_return_shrunk``, ``risk_adj_return``, and ``mcmc_shrinkage``
+    drawn from Normal approximations centred on the per-stock point estimates.
+
+    Groups
+    ------
+    - **posterior**: Normal samples for the four ensemble columns.
+    - **observed_data**: Point-estimate columns from *quad*.
+    - **constant_data**: MCMC global posterior parameters (when available).
+
+    Parameters
+    ----------
+    quad : pd.DataFrame
+        Output of ``build_quad_model_alignment`` containing at least
+        ``ensemble_return``, ``ensemble_return_shrunk``, ``risk_adj_return``,
+        and ``mcmc_shrinkage``.
+    mcmc_result : dict | None
+        Cached MCMC result dict (``posterior_mean``, ``posterior_std``, …).
+    n_posterior_samples : int
+        Draws per chain.
+    n_chains : int
+        Number of MCMC chains.
+    random_seed : int
+        Seed for reproducibility.
+
+    Returns
+    -------
+    arviz.InferenceData or xr.Dataset
+    """
+    if quad.empty or "isin" not in quad.columns or len(quad) == 0:
+        if xr is not None:
+            return xr.Dataset()
+        return None  # type: ignore[return-value]
+
+    rng = np.random.default_rng(random_seed)
+    equity_coords = EquityCoordinates.from_dataframe(quad)
+    n_equities = len(equity_coords.tickers)
+    coords = _build_xarray_coords(equity_coords, n_chains, n_posterior_samples)
+
+    # Posterior variables — sample around point estimates
+    _ENSEMBLE_COLS = [
+        "ensemble_return",
+        "ensemble_return_shrunk",
+        "risk_adj_return",
+        "mcmc_shrinkage",
+    ]
+    posterior_dict: dict[str, np.ndarray] = {}
+    for col in _ENSEMBLE_COLS:
+        if col not in quad.columns:
+            continue
+        vals = quad[col].fillna(0).values.astype(float)
+        sigma = np.abs(vals) * 0.05 + 1e-6
+        posterior_dict[col] = _build_posterior_samples_normal(
+            rng, vals, sigma, n_chains, n_posterior_samples, n_equities
+        )
+
+    if not posterior_dict:
+        if xr is not None:
+            return xr.Dataset()
+        return None  # type: ignore[return-value]
+
+    dims = {col: ["chain", "draw", "equity"] for col in posterior_dict}
+
+    # Constant data — MCMC hyperparameters (1D, no chain/draw dims)
+    constant: dict[str, np.ndarray] = {}
+    if mcmc_result:
+        if mcmc_result.get("posterior_mean") is not None:
+            constant["mcmc_posterior_mean"] = np.array([mcmc_result["posterior_mean"]])
+        if mcmc_result.get("posterior_std") is not None:
+            constant["mcmc_posterior_std"] = np.array([mcmc_result["posterior_std"]])
+        if mcmc_result.get("r_hat") is not None:
+            constant["mcmc_r_hat"] = np.array([mcmc_result["r_hat"]])
+
+    return _build_arviz_or_xarray(
+        posterior=posterior_dict,
+        observed_data=None,
+        constant_data=constant or None,
+        coords=coords,
+        dims=dims,
+        fallback_var_name="risk_adj_return",
+        fallback_data=posterior_dict.get("risk_adj_return"),
+        fallback_dims=["chain", "draw", "equity"],
+    )
+
+
 def build_feature_view_inference_data(
     view_name: str,
     df: pd.DataFrame,

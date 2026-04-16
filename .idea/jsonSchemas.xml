@@ -15,6 +15,9 @@
                   <Item>
                     <option name="path" value=".cache/category_analytics/category_analytics_4eef96d3af759b2d35ce09a2d9b11e8b4184297f_cats17_mcmc1_n25000_b1000_max25.json" />
                   </Item>
+                  <Item>
+                    <option name="path" value=".cache/mcmc_return/mcmc_return_28e12b3148b91578f7e496bca391321351f0673c_chains8_n10000.json/mcmc_return_28e12b3148b91578f7e496bca391321351f0673c_chains8_n10000.json" />
+                  </Item>
                 </list>
               </option>
             </SchemaInfo>

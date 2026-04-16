@@ -26,6 +26,9 @@ from probabilistic_ml_model.visualizations._shared import (  # noqa: E402
     ARVIZ_TEMPLATE,
     COLORS,
     MV_COLUMN_ALIASES,
+    ENSEMBLE_RETURN_COLS,
+    RISK_DISCOUNT_MAP,
+    RISK_QUALITY_LABELS,
     resolve_column,
     create_no_data_figure,
     apply_arviz_theme,
@@ -37,6 +40,9 @@ _shared_exports: list[str] = [
     "ARVIZ_TEMPLATE",
     "COLORS",
     "MV_COLUMN_ALIASES",
+    "ENSEMBLE_RETURN_COLS",
+    "RISK_DISCOUNT_MAP",
+    "RISK_QUALITY_LABELS",
     "resolve_column",
     "create_no_data_figure",
     "apply_arviz_theme",
@@ -59,6 +65,7 @@ _IMPORT_REGISTRY: Sequence[tuple[str, Sequence[str]]] = (
             "create_distress_early_warning_dashboard",
             "create_accounting_anomaly_dashboard",
             "create_anomaly_severity_dashboard",
+            "create_risk_quality_score_dashboard",
         ],
     ),
     # Valuation visualization functions
@@ -102,6 +109,7 @@ _IMPORT_REGISTRY: Sequence[tuple[str, Sequence[str]]] = (
             "create_mcmc_price_target_chart",
             "create_mcmc_category_posterior_chart",
             "create_mcmc_category_posterior_arviz",
+            "create_ensemble_return_comparison",
         ],
     ),
     # Expected returns pipeline visualization functions
@@ -147,6 +155,7 @@ _IMPORT_REGISTRY: Sequence[tuple[str, Sequence[str]]] = (
             "create_cross_model_ecdf_with_references",
             "create_mcmc_drift_comparison",
             "create_screening_ppc_continuous",
+            "create_risk_adj_return_posterior_panel",
         ],
     ),
     # Convergence diagnostics module

@@ -22,6 +22,8 @@ from scipy import stats as sp_stats
 from probabilistic_ml_model.visualizations._shared import (
     PLOTLY_TEMPLATE,
     COLORS,
+    ENSEMBLE_RETURN_COLS,
+    RISK_QUALITY_LABELS,
     create_no_data_figure,
 )
 from probabilistic_ml_model.data_utils.inference_schema import (
@@ -678,6 +680,8 @@ def create_sector_return_analytics_heatmap(sector_analytics: pd.DataFrame) -> go
             "pct_full_consensus",
             "mean_weighted_agreement",
             "risk_adjusted_return",
+            "mean_risk_adj_return",
+            "mean_ensemble_return",
             "mean_beat_prob",
         ]
         if c in sector_analytics.columns
@@ -694,6 +698,8 @@ def create_sector_return_analytics_heatmap(sector_analytics: pd.DataFrame) -> go
         "pct_full_consensus": "Full Consensus %",
         "mean_weighted_agreement": "Wtd Agreement",
         "risk_adjusted_return": "Risk-Adj Return",
+        "mean_risk_adj_return": "Risk-Adj Return (Ens)",
+        "mean_ensemble_return": "Ensemble Return",
         "mean_beat_prob": "Mean P(Beat)",
     }
     heatmap_data = heatmap_data.rename(
