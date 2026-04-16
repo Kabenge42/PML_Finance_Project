@@ -932,7 +932,15 @@ class BaselinePipeline:
         # Step 20–21: Tri-model & quad-model alignment
         r.tri = build_tri_model_alignment(r.mc, r.kal, r.pt)
         r.strong = extract_strong_consensus(r.tri)
-        r.quad = build_quad_model_alignment(r.tri, r.beat, beat_threshold=cfg.beat_threshold)
+        r.quad = build_quad_model_alignment(
+            r.tri,
+            r.beat,
+            beat_threshold=cfg.beat_threshold,
+            credit=r.credit if not r.credit.empty else None,
+            div_safety=r.div_safety if not r.div_safety.empty else None,
+            anomaly=r.anomaly_results if not r.anomaly_results.empty else None,
+            mcmc_result=r.mcmc_result if r.mcmc_result else None,
+        )
 
         if not r.tri.empty:
             _log_and_print(f"  ✓ Tri-model: {len(r.tri):,} stocks")

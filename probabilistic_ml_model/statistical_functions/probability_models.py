@@ -431,11 +431,11 @@ class AccountingAnomalyProbabilityModel:
 
             if "intangibles_growth_flag" in result.columns:
                 intang_growing = result["intangibles_growth_flag"].fillna(0) == 1
-                result.loc[intang_growing, "anomaly_severity_score"] += 4.0
+                result.loc[intang_growing, "anomaly_severity_score"] += 3.0
 
             if "asset_quality_score" in result.columns:
                 low_quality = result["asset_quality_score"].fillna(50) < 25
-                result.loc[low_quality, "anomaly_severity_score"] += 5.0
+                result.loc[low_quality, "anomaly_severity_score"] += 3.0
 
             # NEW: Accumulated deficit — persistent losses create manipulation pressure
             if "accumulated_deficit_flag" in result.columns:
@@ -494,7 +494,7 @@ class AccountingAnomalyProbabilityModel:
 
             if "has_unusual_items_flag" in result.columns:
                 unusual = result["has_unusual_items_flag"].fillna(0) == 1
-                result.loc[unusual, "anomaly_severity_score"] += 4.0
+                result.loc[unusual, "anomaly_severity_score"] += 1.0
 
             if "high_rnd_intensity_flag" in result.columns:
                 rnd = result["high_rnd_intensity_flag"].fillna(0) == 1
@@ -502,7 +502,7 @@ class AccountingAnomalyProbabilityModel:
 
             if "low_tax_flag" in result.columns:
                 low_tax = result["low_tax_flag"].fillna(0) == 1
-                result.loc[low_tax, "anomaly_severity_score"] += 3.0
+                result.loc[low_tax, "anomaly_severity_score"] += 1.0
 
             if "revenue_accelerating_flag" in result.columns:
                 rev_accel = result["revenue_accelerating_flag"].fillna(0) == 1
@@ -511,15 +511,15 @@ class AccountingAnomalyProbabilityModel:
             # NEW: External / operational cross-checks
             if "analyst_bearish_pct" in result.columns:
                 bearish = result["analyst_bearish_pct"].fillna(0) > 50
-                result.loc[bearish, "anomaly_severity_score"] += 3.0
+                result.loc[bearish, "anomaly_severity_score"] += 4.0
 
             if "layoff_risk_flag" in result.columns:
                 layoff = result["layoff_risk_flag"].fillna(0) == 1
-                result.loc[layoff, "anomaly_severity_score"] += 3.0
+                result.loc[layoff, "anomaly_severity_score"] += 2.0
 
             if "debt_maturity_risk" in result.columns:
                 debt_risk = result["debt_maturity_risk"].fillna(0) > 40
-                result.loc[debt_risk, "anomaly_severity_score"] += 4.0
+                result.loc[debt_risk, "anomaly_severity_score"] += 5.0
 
         # Phase 3: Conditional probability of anomaly per row
         # Compute per-feature conditional probabilities
@@ -3495,8 +3495,8 @@ class DividendCutProbabilityModel:
 
     def __init__(
         self,
-        high_payout_threshold: float = 0.6,
-        min_coverage: float = 1.2,
+        high_payout_threshold: float = 0.0,
+        min_coverage: float = 0.0,
         n_mcmc_samples: int = 8000,
         burn_in: int = 2000,
         use_mcmc: bool = True,

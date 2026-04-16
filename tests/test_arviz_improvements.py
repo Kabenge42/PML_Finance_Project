@@ -71,18 +71,21 @@ class TestSaveJsonNumpyArrays:
         from finance_ml.ml_workflow.v3.cache import save_json, load_json
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "test.json"
+            path = Path(tmpdir) / "test.json.gz"
+            # Use a payload without "posterior_mean" so _strip_large_mcmc_keys
+            # does not remove the "data_arrays" key (stripping only applies to
+            # MCMC result dicts that have posterior_mean + chains).
             payload = {
-                "chains": [np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0])],
-                "posterior_mean": 3.5,
+                "data_arrays": [np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0])],
+                "label": "test",
             }
             save_json(path, payload)
             loaded = load_json(path)
-            # chains should be proper JSON arrays, not string repr
-            assert isinstance(loaded["chains"][0], list), (
-                "numpy arrays should be serialized as JSON arrays, not strings"
-            )
-            np.testing.assert_array_almost_equal(loaded["chains"][0], [1.0, 2.0, 3.0])
+            # numpy arrays should be proper JSON arrays, not string repr
+            assert isinstance(
+                loaded["data_arrays"][0], list
+            ), "numpy arrays should be serialized as JSON arrays, not strings"
+            np.testing.assert_array_almost_equal(loaded["data_arrays"][0], [1.0, 2.0, 3.0])
 
 
 # ---------------------------------------------------------------------------

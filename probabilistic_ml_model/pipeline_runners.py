@@ -59,10 +59,10 @@ class PipelineConfig:
         Logging level (e.g. logging.INFO).
     """
 
-    mc_simulations: int = 50_000
+    mc_simulations: int = 10_000
     mc_max_stocks: int = 10_000
     mcmc_chains: int = 8
-    mcmc_samples: int = 50_000
+    mcmc_samples: int = 5_000
     beat_threshold: float = 0.50
     output_dir: str = "outputs"
     log_file: str | None = "logs/expected_returns_pipeline.log"
@@ -90,7 +90,7 @@ class PipelineConfig:
     # v3.7: Data loading strategy (prefer mv_all_stock_features as primary)
     prefer_materialized_view: bool = True
     # v3.8: Ensemble alignment refactoring (Issues 1–8)
-    bullish_return_threshold: float = 2.0  # Minimum % return for bullish classification
+    bullish_return_threshold: float = 0.0  # Minimum % return for bullish classification
     anomaly_severity_threshold: float | None = None  # None = data-adaptive (median)
 
     @classmethod
@@ -100,19 +100,15 @@ class PipelineConfig:
             mc_simulations=int(os.environ.get("ER_MC_SIMULATIONS", 50_000)),
             mc_max_stocks=int(os.environ.get("ER_MC_MAX_STOCKS", 25_000)),
             mcmc_chains=int(os.environ.get("ER_MCMC_CHAINS", 8)),
-            mcmc_samples=int(os.environ.get("ER_MCMC_SAMPLES", 25_000)),
+            mcmc_samples=int(os.environ.get("ER_MCMC_SAMPLES", 10_000)),
             output_dir=os.environ.get("ER_OUTPUT_DIR", "outputs"),
-            log_file=os.environ.get(
-                "ER_LOG_FILE", "logs/expected_returns_pipeline.log"
-            ),
+            log_file=os.environ.get("ER_LOG_FILE", "logs/expected_returns_pipeline.log"),
             mcmc_burn_in=int(os.environ.get("ER_MCMC_BURN_IN", 1000)),
             use_mcmc=os.environ.get("ER_USE_MCMC", "true").lower() == "true",
             use_student_t=os.environ.get("ER_USE_STUDENT_T", "true").lower() == "true",
             # v3.6: Screening thresholds from env
             screening_min_pct=float(os.environ.get("ER_SCREENING_MIN_PCT", 0.5)),
-            screening_quality_roe_min=float(
-                os.environ.get("ER_SCREENING_QUALITY_ROE_MIN", 0.25)
-            ),
+            screening_quality_roe_min=float(os.environ.get("ER_SCREENING_QUALITY_ROE_MIN", 0.25)),
             screening_quality_piotroski_min=float(
                 os.environ.get("ER_SCREENING_QUALITY_PIOTROSKI_MIN", 6.0)
             ),
@@ -124,26 +120,16 @@ class PipelineConfig:
             ),
             # v3.6: Performance tuning from env
             n_jobs=int(os.environ.get("ER_N_JOBS", os.environ.get("N_JOBS", -1))),
-            max_features_per_category=int(
-                os.environ.get("ER_MAX_FEATURES_PER_CATEGORY", 25)
-            ),
+            max_features_per_category=int(os.environ.get("ER_MAX_FEATURES_PER_CATEGORY", 25)),
             # FIX: Compare against "true" (not "false") so the flag is not inverted
-            enable_result_caching=os.environ.get("ER_ENABLE_CACHING", "true").lower()
-            == "true",
-            enable_mcmc_caching=os.environ.get("ER_ENABLE_MCMC_CACHING", "true").lower()
-            == "true",
-            cache_dir=os.environ.get(
-                "ER_CACHE_DIR", os.environ.get("CACHE_DIR", ".cache")
-            ),
+            enable_result_caching=os.environ.get("ER_ENABLE_CACHING", "true").lower() == "true",
+            enable_mcmc_caching=os.environ.get("ER_ENABLE_MCMC_CACHING", "true").lower() == "true",
+            cache_dir=os.environ.get("ER_CACHE_DIR", os.environ.get("CACHE_DIR", ".cache")),
             cache_ttl_hours=float(os.environ.get("ER_CACHE_TTL_HOURS", 24.0)),
             export_max_workers=int(os.environ.get("ER_EXPORT_MAX_WORKERS", 4)),
-            prefer_materialized_view=os.environ.get(
-                "ER_PREFER_MATERIALIZED_VIEW", "true"
-            ).lower()
+            prefer_materialized_view=os.environ.get("ER_PREFER_MATERIALIZED_VIEW", "true").lower()
             == "true",
-            bullish_return_threshold=float(
-                os.environ.get("ER_BULLISH_RETURN_THRESHOLD", 2.0)
-            ),
+            bullish_return_threshold=float(os.environ.get("ER_BULLISH_RETURN_THRESHOLD", 0.0)),
             anomaly_severity_threshold=(
                 float(os.environ["ER_ANOMALY_SEVERITY_THRESHOLD"])
                 if "ER_ANOMALY_SEVERITY_THRESHOLD" in os.environ
@@ -335,6 +321,33 @@ class PipelineRunner:
             enable_caching=self.cfg.enable_result_caching or self.cfg.enable_mcmc_caching,
             cache_ttl_hours=self.cfg.cache_ttl_hours,
         )
+
+    def enrich_quad_with_mcmc(self) -> None:
+        """Re-enrich quad with risk-adjusted returns after MCMC completes.
+
+        Mirrors the post-MCMC enrichment in ``expected_returns_v3._step_mcmc_return_analysis``.
+        When ``mcmc_result`` is populated and ``quad`` is non-empty, re-runs
+        ``build_quad_model_alignment`` with the MCMC result so that
+        ``ensemble_return``, ``ensemble_return_shrunk``, ``mcmc_shrinkage``,
+        and ``risk_adj_return`` columns are computed.
+        """
+        from probabilistic_ml_model.statistical_functions.ensemble_models import (
+            build_quad_model_alignment,
+        )
+
+        r = self.r
+        if r.mcmc_result and not r.quad.empty:
+            r.quad = build_quad_model_alignment(
+                r.tri,
+                r.beat,
+                beat_threshold=getattr(self.cfg, "beat_threshold", 0.50),
+                credit=r.credit if not r.credit.empty else None,
+                div_safety=r.div_safety if not r.div_safety.empty else None,
+                anomaly=r.anomaly_results if not r.anomaly_results.empty else None,
+                anomaly_severity_threshold=getattr(self.cfg, "anomaly_severity_threshold", None),
+                mcmc_result=r.mcmc_result,
+            )
+            logger.info("Risk-adjusted returns computed for %d stocks", len(r.quad))
 
     def run_resampled_posterior(self, df: pd.DataFrame):
         """Step 7c: Bayesian resampled return posteriors."""
@@ -925,8 +938,8 @@ def run_accounting_anomaly_analysis(
     df: pd.DataFrame,
     feature_df: pd.DataFrame | None = None,
     *,
-    severity_anomaly_weight: float = 0.35,
-    severity_feature_weight: float = 0.65,
+    severity_anomaly_weight: float = 0.67,
+    severity_feature_weight: float = 0.33,
     multi_flag_threshold: int = 20,
     anomaly_z_threshold: float | None = None,
     tier_bins: list[float] | None = None,
@@ -965,7 +978,7 @@ def run_accounting_anomaly_analysis(
     try:
         if "accounting_anomaly_score" in result.columns:
             anomaly_series = result["accounting_anomaly_score"].dropna()
-            if len(anomaly_series) > 50:
+            if len(anomaly_series) > 70:
                 anomaly_scores = np.asarray(anomaly_series, dtype=float)
                 mu_samples, df_samples = mcmc_student_t(anomaly_scores)
                 result["anomaly_posterior_location"] = float(np.mean(mu_samples))
@@ -1093,7 +1106,7 @@ def hierarchical_mcmc_by_sector(
     df: pd.DataFrame,
     feature: str,
     sector_col: str = "industry",
-    n_samples: int = 8000,
+    n_samples: int = 5000,
 ) -> dict:
     """Hierarchical MCMC: estimate sector-level means with pooling toward global mean.
 
@@ -1129,7 +1142,7 @@ def hierarchical_mcmc_multi_level(
     df: pd.DataFrame,
     feature: str,
     group_cols: list[str] | None = None,
-    n_samples: int = 8000,
+    n_samples: int = 5000,
     min_group_size: int = 10,
     shrinkage_strength: float = 20.0,
 ) -> dict:

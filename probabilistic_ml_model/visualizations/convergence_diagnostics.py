@@ -113,6 +113,26 @@ def create_unified_convergence_dashboard(
                 chains_arr += rng.normal(0, scale, chains_arr.shape)
                 posterior_dict["anomaly_posterior"] = (["chain", "draw"], chains_arr)
 
+    # 3. Ensemble risk-adjusted return (from quad enrichment)
+    if not summary.empty:
+        rng_ens = np.random.default_rng(43)
+        for col in ("risk_adj_return", "ensemble_return"):
+            if col in summary.columns:
+                vals = summary[col].dropna().values
+                if len(vals) >= 100:
+                    n_draws_ens = len(vals) // n_chains
+                    if n_draws_ens >= 2:
+                        chains_arr = np.array(
+                            [
+                                rng_ens.choice(vals, size=n_draws_ens, replace=True)
+                                for _ in range(n_chains)
+                            ]
+                        )
+                        scale = max(np.std(vals) * 1e-6, 1e-12)
+                        chains_arr += rng_ens.normal(0, scale, chains_arr.shape)
+                        posterior_dict[col] = (["chain", "draw"], chains_arr)
+                break  # only include one ensemble column
+
     if not posterior_dict:
         return outputs
 

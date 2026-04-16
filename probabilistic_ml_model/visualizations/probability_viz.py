@@ -50,6 +50,8 @@ from scipy import stats
 from probabilistic_ml_model.visualizations._shared import (
     PLOTLY_TEMPLATE,
     COLORS,
+    ENSEMBLE_RETURN_COLS,
+    RISK_QUALITY_LABELS,
     create_no_data_figure,
 )
 from probabilistic_ml_model.data_utils.inference_schema import (
@@ -1293,6 +1295,86 @@ def create_tri_model_posterior_price_target_comparison(
         height=280 * rows,
         template=PLOTLY_TEMPLATE,
         legend=dict(orientation="h", yanchor="bottom", y=-0.05, xanchor="center", x=0.5),
+    )
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6b. Ensemble Risk-Adjusted Return Comparison
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def create_ensemble_return_comparison(
+    quad: pd.DataFrame,
+    top_n: int = 30,
+    title: Optional[str] = None,
+) -> go.Figure:
+    """Compare ensemble, shrunk, and risk-adjusted returns per stock.
+
+    Produces a grouped bar chart showing the three ensemble return stages
+    (``ensemble_return``, ``ensemble_return_shrunk``, ``risk_adj_return``)
+    for the top *top_n* stocks sorted by ``risk_adj_return``.
+
+    Parameters
+    ----------
+    quad : pd.DataFrame
+        Output of ``build_quad_model_alignment`` with ensemble columns.
+    top_n : int
+        Number of stocks to display.
+    title : str, optional
+        Custom figure title.
+
+    Returns
+    -------
+    go.Figure
+    """
+    title = title or "Ensemble → Shrunk → Risk-Adjusted Return Comparison"
+
+    required = {"ticker", "ensemble_return", "ensemble_return_shrunk", "risk_adj_return"}
+    if not required.issubset(quad.columns):
+        return create_no_data_figure(f"{title} — missing columns")
+
+    df = quad.dropna(subset=["risk_adj_return"]).nlargest(top_n, "risk_adj_return")
+    if df.empty:
+        return create_no_data_figure(title)
+
+    fig = go.Figure()
+    for col, color, label in [
+        ("ensemble_return", COLORS[0], "Ensemble Return"),
+        ("ensemble_return_shrunk", COLORS[1], "Shrunk (MCMC)"),
+        ("risk_adj_return", COLORS[2], "Risk-Adjusted"),
+    ]:
+        if col in df.columns:
+            fig.add_trace(
+                go.Bar(
+                    x=df["ticker"],
+                    y=df[col],
+                    name=label,
+                    marker_color=color,
+                )
+            )
+
+    # Annotate risk quality tier if available
+    if "risk_quality_score" in df.columns:
+        for i, row in df.iterrows():
+            label = RISK_QUALITY_LABELS.get(int(row["risk_quality_score"]), "")
+            if label:
+                fig.add_annotation(
+                    x=row["ticker"],
+                    y=row["risk_adj_return"],
+                    text=label,
+                    showarrow=False,
+                    yshift=12,
+                    font=dict(size=8),
+                )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Ticker",
+        yaxis_title="Return (%)",
+        barmode="group",
+        template=PLOTLY_TEMPLATE,
+        height=600,
     )
     return fig
 

@@ -27,6 +27,9 @@ from plotly.subplots import make_subplots
 from probabilistic_ml_model.visualizations._shared import (
     PLOTLY_TEMPLATE,
     COLORS,
+    ENSEMBLE_RETURN_COLS,
+    RISK_DISCOUNT_MAP,
+    RISK_QUALITY_LABELS,
     create_no_data_figure,
     resolve_column,
 )
@@ -1329,4 +1332,79 @@ def create_anomaly_severity_dashboard(
         margin=dict(l=120, r=40, t=80, b=60),
     )
 
+    return fig
+
+
+def create_risk_quality_score_dashboard(
+    quad: pd.DataFrame,
+    group_col: str = "industry",
+) -> go.Figure:
+    """Two-panel dashboard for risk-quality score vs risk-adjusted return.
+
+    Panel 1: Distribution of ``risk_quality_score`` (0–3) across the universe.
+    Panel 2: Mean ``risk_adj_return`` by risk-quality tier and sector.
+
+    Parameters
+    ----------
+    quad : pd.DataFrame
+        Output of ``build_quad_model_alignment`` with ``risk_quality_score``
+        and ``risk_adj_return`` columns.
+    group_col : str
+        Column for sector grouping.
+
+    Returns
+    -------
+    go.Figure
+    """
+    if "risk_quality_score" not in quad.columns:
+        return create_no_data_figure("Risk Quality Score Dashboard — No Data")
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=(
+            "Risk Quality Score Distribution",
+            "Mean Risk-Adj Return by Quality Tier",
+        ),
+        horizontal_spacing=0.12,
+    )
+
+    # Panel 1: Score distribution
+    score_counts = quad["risk_quality_score"].value_counts().sort_index()
+    tier_colors = {0: "#E63946", 1: "#f39c12", 2: "#3498db", 3: "#00A878"}
+    fig.add_trace(
+        go.Bar(
+            x=[RISK_QUALITY_LABELS.get(int(s), str(s)) for s in score_counts.index],
+            y=score_counts.values,
+            marker_color=[tier_colors.get(int(s), COLORS[0]) for s in score_counts.index],
+            text=score_counts.values,
+            textposition="auto",
+            name="Count",
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Panel 2: Mean risk-adj return by tier
+    if "risk_adj_return" in quad.columns:
+        tier_returns = quad.groupby("risk_quality_score")["risk_adj_return"].mean().sort_index()
+        fig.add_trace(
+            go.Bar(
+                x=[RISK_QUALITY_LABELS.get(int(s), str(s)) for s in tier_returns.index],
+                y=tier_returns.values,
+                marker_color=[tier_colors.get(int(s), COLORS[1]) for s in tier_returns.index],
+                text=[f"{v:.1f}%" for v in tier_returns.values],
+                textposition="auto",
+                name="Mean Return",
+            ),
+            row=1,
+            col=2,
+        )
+
+    fig.update_layout(
+        title="Risk Quality Score — Ensemble Risk-Adjusted Return Dashboard",
+        template=PLOTLY_TEMPLATE,
+        height=500,
+        showlegend=False,
+    )
     return fig

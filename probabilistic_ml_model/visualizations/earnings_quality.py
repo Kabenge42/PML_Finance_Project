@@ -32,6 +32,7 @@ from plotly.subplots import make_subplots
 from probabilistic_ml_model.visualizations._shared import (
     PLOTLY_TEMPLATE,
     COLORS,
+    ENSEMBLE_RETURN_COLS,
     create_no_data_figure,
     resolve_column,
 )

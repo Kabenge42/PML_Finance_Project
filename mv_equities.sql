@@ -703,8 +703,12 @@ SELECT
     e."Fiscal Month"                                     AS fiscal_month,
     e."Fiscal Quarter"                                   AS fiscal_quarter,
     e."Fiscal Year"                                      AS fiscal_year,
-    e."Reporting Lag"                                    AS reporting_lag
+    e."Reporting Lag" AS reporting_lag,
 
+    -- ═══════════════════════════════════════════════════════════════════════════════
+    -- METADATA
+    -- ═══════════════════════════════════════════════════════════════════════════════
+    CURRENT_TIMESTAMP AS table_calculated_at
 FROM equities e;
 
 -- Unique index on ISIN to support REFRESH MATERIALIZED VIEW CONCURRENTLY
