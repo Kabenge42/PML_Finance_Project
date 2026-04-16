@@ -42,59 +42,11 @@ class McmcReturnCacheKey:
     n_chains: int
     n_samples: int
 
-    subdir: str = "mcmc_results"
-    prefix: str = "mcmc_return"
+    subdir: str = "mcmc_return"
 
     def to_filename(self) -> str:
         return (
-            f"{self.prefix}_{self.data_checksum}_"
-            f"chains{self.n_chains}_n{self.n_samples}.json.gz"
-        )
-
-    # -- convenience constructors for each analysis type ------------------
-
-    @classmethod
-    def for_return(
-        cls, data_checksum: str, n_chains: int, n_samples: int
-    ) -> "McmcReturnCacheKey":
-        return cls(
-            data_checksum=data_checksum,
-            n_chains=n_chains,
-            n_samples=n_samples,
-            prefix="mcmc_return",
-        )
-
-    @classmethod
-    def for_accounting_anomaly(
-        cls, data_checksum: str, n_chains: int, n_samples: int
-    ) -> "McmcReturnCacheKey":
-        return cls(
-            data_checksum=data_checksum,
-            n_chains=n_chains,
-            n_samples=n_samples,
-            prefix="mcmc_accounting_anomaly",
-        )
-
-    @classmethod
-    def for_credit_risk(
-        cls, data_checksum: str, n_chains: int, n_samples: int
-    ) -> "McmcReturnCacheKey":
-        return cls(
-            data_checksum=data_checksum,
-            n_chains=n_chains,
-            n_samples=n_samples,
-            prefix="mcmc_credit_risk",
-        )
-
-    @classmethod
-    def for_dividend_safety(
-        cls, data_checksum: str, n_chains: int, n_samples: int
-    ) -> "McmcReturnCacheKey":
-        return cls(
-            data_checksum=data_checksum,
-            n_chains=n_chains,
-            n_samples=n_samples,
-            prefix="mcmc_dividend_safety",
+            f"mcmc_return_{self.data_checksum}_" f"chains{self.n_chains}_n{self.n_samples}.json.gz"
         )
 
 
@@ -427,7 +379,7 @@ def load_json(cache_path: Path, *, ttl_hours: float | None = None) -> Any | None
             raw = read_path.read_bytes()
             try:
                 return json.loads(raw.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
+            except json.JSONDecodeError, UnicodeDecodeError:
                 pass
             # Attempt gzip decompression on the .json file
             try:

@@ -86,7 +86,7 @@ class PipelineConfig:
     cache_dir: str = ".cache"
     cache_ttl_hours: float = 24.0  # Cache time-to-live in hours
     # v3.6: Export parallelism (Task 7.1)
-    export_max_workers: int = 6
+    export_max_workers: int = 4
     # v3.7: Data loading strategy (prefer mv_all_stock_features as primary)
     prefer_materialized_view: bool = True
     # v3.8: Ensemble alignment refactoring (Issues 1–8)
@@ -102,17 +102,13 @@ class PipelineConfig:
             mcmc_chains=int(os.environ.get("ER_MCMC_CHAINS", 8)),
             mcmc_samples=int(os.environ.get("ER_MCMC_SAMPLES", 10_000)),
             output_dir=os.environ.get("ER_OUTPUT_DIR", "outputs"),
-            log_file=os.environ.get(
-                "ER_LOG_FILE", "logs/expected_returns_pipeline.log"
-            ),
+            log_file=os.environ.get("ER_LOG_FILE", "logs/expected_returns_pipeline.log"),
             mcmc_burn_in=int(os.environ.get("ER_MCMC_BURN_IN", 1000)),
             use_mcmc=os.environ.get("ER_USE_MCMC", "true").lower() == "true",
             use_student_t=os.environ.get("ER_USE_STUDENT_T", "true").lower() == "true",
             # v3.6: Screening thresholds from env
             screening_min_pct=float(os.environ.get("ER_SCREENING_MIN_PCT", 0.5)),
-            screening_quality_roe_min=float(
-                os.environ.get("ER_SCREENING_QUALITY_ROE_MIN", 0.25)
-            ),
+            screening_quality_roe_min=float(os.environ.get("ER_SCREENING_QUALITY_ROE_MIN", 0.25)),
             screening_quality_piotroski_min=float(
                 os.environ.get("ER_SCREENING_QUALITY_PIOTROSKI_MIN", 6.0)
             ),
@@ -124,26 +120,16 @@ class PipelineConfig:
             ),
             # v3.6: Performance tuning from env
             n_jobs=int(os.environ.get("ER_N_JOBS", os.environ.get("N_JOBS", -1))),
-            max_features_per_category=int(
-                os.environ.get("ER_MAX_FEATURES_PER_CATEGORY", 25)
-            ),
+            max_features_per_category=int(os.environ.get("ER_MAX_FEATURES_PER_CATEGORY", 25)),
             # FIX: Compare against "true" (not "false") so the flag is not inverted
-            enable_result_caching=os.environ.get("ER_ENABLE_CACHING", "true").lower()
-            == "true",
-            enable_mcmc_caching=os.environ.get("ER_ENABLE_MCMC_CACHING", "true").lower()
-            == "true",
-            cache_dir=os.environ.get(
-                "ER_CACHE_DIR", os.environ.get("CACHE_DIR", ".cache")
-            ),
+            enable_result_caching=os.environ.get("ER_ENABLE_CACHING", "true").lower() == "true",
+            enable_mcmc_caching=os.environ.get("ER_ENABLE_MCMC_CACHING", "true").lower() == "true",
+            cache_dir=os.environ.get("ER_CACHE_DIR", os.environ.get("CACHE_DIR", ".cache")),
             cache_ttl_hours=float(os.environ.get("ER_CACHE_TTL_HOURS", 24.0)),
-            export_max_workers=int(os.environ.get("ER_EXPORT_MAX_WORKERS", 6)),
-            prefer_materialized_view=os.environ.get(
-                "ER_PREFER_MATERIALIZED_VIEW", "true"
-            ).lower()
+            export_max_workers=int(os.environ.get("ER_EXPORT_MAX_WORKERS", 4)),
+            prefer_materialized_view=os.environ.get("ER_PREFER_MATERIALIZED_VIEW", "true").lower()
             == "true",
-            bullish_return_threshold=float(
-                os.environ.get("ER_BULLISH_RETURN_THRESHOLD", 0.0)
-            ),
+            bullish_return_threshold=float(os.environ.get("ER_BULLISH_RETURN_THRESHOLD", 0.0)),
             anomaly_severity_threshold=(
                 float(os.environ["ER_ANOMALY_SEVERITY_THRESHOLD"])
                 if "ER_ANOMALY_SEVERITY_THRESHOLD" in os.environ
@@ -332,8 +318,7 @@ class PipelineRunner:
             n_chains=self.cfg.mcmc_chains,
             n_samples=self.cfg.mcmc_samples,
             cache_dir=self.cfg.cache_dir,
-            enable_caching=self.cfg.enable_result_caching
-            or self.cfg.enable_mcmc_caching,
+            enable_caching=self.cfg.enable_result_caching or self.cfg.enable_mcmc_caching,
             cache_ttl_hours=self.cfg.cache_ttl_hours,
         )
 
@@ -1136,7 +1121,7 @@ def hierarchical_mcmc_by_sector(
         Feature name to analyze.
     sector_col : str, default 'industry'
         Column name for sector grouping.
-    n_samples : int, default 5000
+    n_samples : int, default 8000
         Number of MCMC samples.
 
     Returns
@@ -1158,7 +1143,7 @@ def hierarchical_mcmc_multi_level(
     feature: str,
     group_cols: list[str] | None = None,
     n_samples: int = 5000,
-    min_group_size: int = 50,
+    min_group_size: int = 10,
     shrinkage_strength: float = 20.0,
 ) -> dict:
     """Multi-level hierarchical MCMC with nested category pooling.
@@ -1176,7 +1161,7 @@ def hierarchical_mcmc_multi_level(
         Categorical columns to group by.
     n_samples : int, default 8000
         Number of posterior MCMC draws per group.
-    min_group_size : int, default 50
+    min_group_size : int, default 10
         Minimum observations per group.
     shrinkage_strength : float, default 20.0
         Controls the pooling intensity.
@@ -1430,7 +1415,7 @@ def run_category_probability_analysis(
 def run_parallel_mcmc_return_analysis(
     pt: pd.DataFrame,
     n_chains: int = 8,
-    n_samples: int = 5_000,
+    n_samples: int = 10_000,
     *,
     cache_dir: str = ".cache",
     enable_caching: bool = True,
@@ -1462,7 +1447,7 @@ def run_parallel_mcmc_return_analysis(
         return {}
 
     data = np.asarray(pt["implied_return_pt"].dropna(), dtype=float)
-    if len(data) < -95:
+    if len(data) < 50:
         logger.warning("Parallel MCMC skipped — insufficient data (%d)", len(data))
         return {}
 
@@ -1470,7 +1455,7 @@ def run_parallel_mcmc_return_analysis(
     cache_path = None
     if enable_caching and cache_dir:
         checksum = dataframe_stable_checksum(pt, id_cols=["isin", "ticker", "name"])
-        key = McmcReturnCacheKey.for_return(
+        key = McmcReturnCacheKey(
             data_checksum=checksum,
             n_chains=n_chains,
             n_samples=n_samples,
@@ -1534,7 +1519,9 @@ def run_parallel_mcmc_return_analysis(
     if "industry" in pt.columns:
         try:
             hier = hierarchical_mcmc_multi_level(
-                pt, "implied_return_pt", n_samples=n_samples
+                pt,
+                "implied_return_pt",
+                n_samples=n_samples,
             )
             if hier and "levels" in hier:
                 result["hierarchical"] = hier
