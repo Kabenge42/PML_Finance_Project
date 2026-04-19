@@ -313,19 +313,19 @@ class AccountingAnomalyProbabilityModel:
     tier_labels : list[str] or None
         Labels for the tier bins. None = ['Clean', 'Watch', 'Flag', 'Alert'].
     severity_anomaly_weight : float
-        Weight for anomaly_score in severity computation (default 0.33).
+        Weight for anomaly_score in severity computation (default 0.75).
     severity_feature_weight : float
-        Weight for feature_count in severity computation (default 0.67).
+        Weight for feature_count in severity computation (default 0.25).
     multi_flag_threshold : int
-        Minimum flagged features to trigger multi_flag_alert (default 20).
+        Minimum flagged features to trigger multi_flag_alert (default 10).
     """
 
     anomaly_z_threshold: float | None = None
     tier_bins: list[float] | None = None
     tier_labels: list[str] | None = None
-    severity_anomaly_weight: float = 0.33
-    severity_feature_weight: float = 0.67
-    multi_flag_threshold: int = 20
+    severity_anomaly_weight: float = 0.45  # v3.9: was 0.75 — avoid double-counting under BMA
+    severity_feature_weight: float = 0.55  # v3.9: was 0.25 — complementary weight
+    multi_flag_threshold: int = 18  # v3.9: was 15 — mid-point given tighter thresholds
     n_mcmc_samples: int = 5000
     burn_in: int = 1000
     use_mcmc: bool = True
@@ -1280,13 +1280,15 @@ class EarningsBeatProbabilityModel:
 
     def __init__(
         self,
-        prior_alpha: float = 1.5,
+        prior_alpha: float = 2.0,  # v3.9: was 1.5 — tighter prior mean ≈ 0.5
         prior_beta: float = 2.0,
         sector_priors: Optional[dict[str, PriorParameters]] = None,
         use_quality_adjustment: bool = True,
         # NEW: Momentum-based prior tilting (v3.5)
         use_momentum_prior: bool = True,
-        momentum_prior_strength: float = 0.3,  # max shift in prior mean
+        momentum_prior_strength: float = 0.5,  # v3.9: was 0.3 — momentum more informative
+        # v3.9: Macro prior tilt (Finding #4)
+        use_macro_prior: bool = True,
     ):
         """
         Initialize the earnings beat probability model.
@@ -1308,6 +1310,7 @@ class EarningsBeatProbabilityModel:
         self.use_quality_adjustment = use_quality_adjustment
         self.use_momentum_prior = use_momentum_prior
         self.momentum_prior_strength = momentum_prior_strength
+        self.use_macro_prior = use_macro_prior
 
     @property
     def prior_alpha(self) -> float:
@@ -3092,19 +3095,24 @@ class CreditRiskProbabilityModel:
 
     def __init__(
         self,
-        distress_threshold: float = 1.81,
+        distress_threshold: float = 70,
         prior_alpha: float = 1.5,
-        prior_beta: float = 2.5,  # Less pessimistic with cash flow quality signals
-        n_mcmc_samples: int = 10000,
-        burn_in: int = 2000,
+        prior_beta: float = 2.0,  # v3.9: was 2.5 — less optimistic given fat-tail risk
+        n_mcmc_samples: int = 15000,  # v3.9: was 5000 — tail ESS target
+        burn_in: int = 3000,  # v3.9: was 1000
         use_mcmc: bool = True,
         # NEW: Leverage & Liquidity enrichment
         use_debt_trajectory: bool = True,
-        use_cash_buffer_signals: bool = True,
+        use_cash_buffer_signals: bool = False,
         use_balance_sheet_quality: bool = True,
         use_wc_deep_signals: bool = True,
         # NEW: Quality & Risk enrichment
         use_quality_risk_flags: bool = True,
+        # v3.9: Heavy-tail / time-varying volatility / macro (Findings #1, #2, #4)
+        use_student_t_likelihood: bool = True,
+        use_garch_volatility: bool = True,
+        use_macro_covariates: bool = True,
+        student_t_df_floor: float = 3.0,
     ):
         self.distress_threshold = distress_threshold
         self.prior_alpha = prior_alpha
@@ -3117,6 +3125,10 @@ class CreditRiskProbabilityModel:
         self.use_balance_sheet_quality = use_balance_sheet_quality
         self.use_wc_deep_signals = use_wc_deep_signals
         self.use_quality_risk_flags = use_quality_risk_flags
+        self.use_student_t_likelihood = use_student_t_likelihood
+        self.use_garch_volatility = use_garch_volatility
+        self.use_macro_covariates = use_macro_covariates
+        self.student_t_df_floor = student_t_df_floor
 
     def analyze_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Analyze dataframe for credit risk with enhanced features."""
@@ -3172,9 +3184,7 @@ class CreditRiskProbabilityModel:
             retained_earnings_vs_5y, _ = _safe_get(row, "retained_earnings_vs_5y", 1.0)
 
             # Quality & Risk flags
-            distress_risk_score, distress_risk_score_raw = _safe_get(
-                row, "distress_risk_score", 50
-            )
+            piotroski_f_score, piotroski_f_score_value = _safe_get(row, "piotroski_f_score", 50)
             retained_earnings_growth, _ = _safe_get(row, "retained_earnings_growth", 0)
             beta_trend, _ = _safe_get(row, "beta_trend", 0)
 
@@ -3274,7 +3284,7 @@ class CreditRiskProbabilityModel:
 
             # NEW: Quality & Risk flags
             if self.use_quality_risk_flags:
-                if distress_risk_score is not None and distress_risk_score > 70:
+                if piotroski_f_score is not None and piotroski_f_score > 70:
                     adjustments += 0.10
                 if (
                     retained_earnings_growth is not None
@@ -3340,7 +3350,7 @@ class CreditRiskProbabilityModel:
                     debt_maturity_risk,
                     wc_efficiency_score,
                     equity_ratio,
-                    distress_risk_score,
+                    piotroski_f_score,
                 ]
                 if v is not None and not pd.isna(v)
             )
@@ -3373,7 +3383,7 @@ class CreditRiskProbabilityModel:
                     "debt_maturity_risk": debt_maturity_risk_raw,
                     "balance_sheet_strength": balance_sheet_strength_raw,
                     "wc_efficiency_score": wc_efficiency_score_raw,
-                    "distress_risk_score": distress_risk_score_raw,
+                    "piotroski_f_score": piotroski_f_score_value,
                     "data_quality_score": data_points / 11.0,
                 }
             )
@@ -3477,14 +3487,16 @@ class DividendCutProbabilityModel:
 
     def __init__(
         self,
-        high_payout_threshold: float = 0.0,
-        min_coverage: float = 0.0,
-        n_mcmc_samples: int = 8000,
-        burn_in: int = 2000,
+        high_payout_threshold: float = 0.55,  # v3.9: was 1.0 — tighter given fat tails
+        min_coverage: float = 1.5,  # v3.9: was 0.0 — require genuine coverage
+        n_mcmc_samples: int = 12000,  # v3.9: was 5000
+        burn_in: int = 3000,  # v3.9: was 1000
         use_mcmc: bool = True,
         # NEW: Leverage & Liquidity signals for dividend sustainability
         use_leverage_signals: bool = True,
         use_balance_sheet: bool = True,
+        # v3.9: Heavy-tail likelihood (Finding #1)
+        use_student_t_likelihood: bool = True,
     ):
         self.high_payout_threshold = high_payout_threshold
         self.min_coverage = min_coverage
@@ -3493,6 +3505,7 @@ class DividendCutProbabilityModel:
         self.use_mcmc = use_mcmc
         self.use_leverage_signals = use_leverage_signals
         self.use_balance_sheet = use_balance_sheet
+        self.use_student_t_likelihood = use_student_t_likelihood
 
     def analyze_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         results = []
@@ -3763,12 +3776,16 @@ class PriceTargetAchievementModel:
     def __init__(
         self,
         time_horizon_months: int = 12,
-        n_mcmc_samples: int = 10000,
-        burn_in: int = 2000,
+        n_mcmc_samples: int = 15000,  # v3.9: was 10000 — tail ESS target
+        burn_in: int = 3000,  # v3.9: was 2000
         use_mcmc: bool = True,
         # NEW: Risk-adjusted achievement
         use_risk_adjustment: bool = True,
         use_financial_health: bool = True,
+        # v3.9: Heavy-tail / GARCH (Findings #1, #2)
+        use_student_t_returns: bool = True,
+        use_garch_volatility: bool = True,
+        df_floor: float = 3.0,
     ):
         self.time_horizon_months = time_horizon_months
         self.n_mcmc_samples = n_mcmc_samples
@@ -3776,6 +3793,9 @@ class PriceTargetAchievementModel:
         self.use_mcmc = use_mcmc
         self.use_risk_adjustment = use_risk_adjustment
         self.use_financial_health = use_financial_health
+        self.use_student_t_returns = use_student_t_returns
+        self.use_garch_volatility = use_garch_volatility
+        self.df_floor = df_floor
 
     def analyze_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         results = []
@@ -4519,10 +4539,15 @@ class CategoryProbabilityAnalyzer:
         category_name: str,
         prior_alpha: float = 1.5,
         prior_beta: float = 2.0,
-        n_mcmc_samples: int = 5000,
-        burn_in: int = 1000,
+        n_mcmc_samples: int = 8000,  # v3.9: was 5000 — tail ESS target
+        burn_in: int = 2000,  # v3.9: was 1000
         use_mcmc: bool = True,
+        # v3.9: Heavy-tail likelihood (Finding #1) — flipped default
         use_student_t: bool = True,
+        student_t_df_floor: float = 3.0,  # clamp df to avoid infinite variance
+        use_mixture: bool = True,  # 2-component normal mixture fallback
+        mixture_components: int = 2,
+        use_garch: bool = True,  # GARCH(1,1) σ per group (Finding #2)
     ):
         self.category_name = category_name
         self.prior_alpha = prior_alpha
@@ -4531,6 +4556,10 @@ class CategoryProbabilityAnalyzer:
         self.burn_in = burn_in
         self.use_mcmc = use_mcmc
         self.use_student_t = use_student_t
+        self.student_t_df_floor = student_t_df_floor
+        self.use_mixture = use_mixture
+        self.mixture_components = mixture_components
+        self.use_garch = use_garch
 
     def analyze_view(
         self,
@@ -4698,9 +4727,9 @@ class ResampledBeatProbabilityModel:
     def __init__(
         self,
         base_model: Optional["EarningsBeatProbabilityModel"] = None,
-        momentum_weight: float = 0.3,
-        volatility_weight: float = 0.2,
-        n_posterior_samples: int = 4000,
+        momentum_weight: float = 0.4,  # v3.9: was 0.3
+        volatility_weight: float = 0.3,  # v3.9: was 0.2 — explicit regime weighting
+        n_posterior_samples: int = 6000,  # v3.9: was 4000 — tail ESS > bulk
         n_chains: int = 8,
         random_seed: int = 42,
     ):

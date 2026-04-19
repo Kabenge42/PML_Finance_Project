@@ -10,7 +10,4 @@
   <component name="PyCharmDSProjectLayout">
     <option name="id" value="JupyterRightHiddenStructureLayout" />
   </component>
-  <component name="RuffConfiguration">
-    <option name="enabled" value="true" />
-  </component>
 </project>

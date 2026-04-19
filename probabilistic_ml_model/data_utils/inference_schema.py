@@ -119,10 +119,27 @@ def _validate_schema_name(schema: str) -> str:
 
 # Column roles from equities_schema_metadata that serve as coordinates
 _ROLE_TO_COORD_DIM = {
-    "id": "equity",  # ticker / isin → primary equity dimension
+    "id": "equity",  # isin/ ticker → primary equity dimension
     "categorical": "equity",  # sector, industry, etc. as coords on equity dim
     "date": "equity",  # reference dates as coords on equity dim
 }
+
+# Project-canonical equity identifier column
+_EQUITY_ID_COLUMN = "isin"
+_EQUITY_ID_FALLBACKS = ["ticker", "symbol"]
+
+
+def _resolve_equity_id_column(df: pd.DataFrame) -> str:
+    """Resolve the equity identifier column, preferring 'isin'."""
+    if _EQUITY_ID_COLUMN in df.columns:
+        return _EQUITY_ID_COLUMN
+    for fallback in _EQUITY_ID_FALLBACKS:
+        if fallback in df.columns:
+            return fallback
+    raise ValueError(
+        f"DataFrame must contain one of {[_EQUITY_ID_COLUMN] + _EQUITY_ID_FALLBACKS} columns"
+    )
+
 
 # Feature category dimension from calculated_features_registry
 _FEATURE_DIM = "feature"
@@ -187,14 +204,21 @@ class EquityCoordinates:
 
         Column names follow the aliases defined in equities_schema_metadata
         (e.g. ``ticker``, ``isin``, ``sector``, ``industry``).
+
+        The equity identifier is resolved dynamically: ``isin`` is preferred,
+        with ``ticker`` and ``symbol`` as fallbacks.
         """
 
         def _col(name: str) -> np.ndarray:
             return _safe_values(df[name]) if name in df.columns else np.array([])
 
-        tickers = _col("ticker")
+        id_col = _resolve_equity_id_column(df)
+        tickers = _col(id_col)
         if len(tickers) == 0:
-            raise ValueError("DataFrame must contain a 'ticker' column")
+            raise ValueError(
+                f"DataFrame must contain one of "
+                f"{[_EQUITY_ID_COLUMN] + _EQUITY_ID_FALLBACKS} columns"
+            )
 
         return cls(
             tickers=tickers,
@@ -1268,14 +1292,22 @@ class IdentifierCoordinates:
 
     @classmethod
     def from_dataframe(cls, df: pd.DataFrame) -> "IdentifierCoordinates":
-        """Construct from a DataFrame containing vw_identifier_columns aliases."""
+        """Construct from a DataFrame containing vw_identifier_columns aliases.
+
+        The equity identifier is resolved dynamically: ``isin`` is preferred,
+        with ``ticker`` and ``symbol`` as fallbacks.
+        """
 
         def _col(name: str) -> np.ndarray:
             return _safe_values(df[name]) if name in df.columns else np.array([])
 
-        tickers = _col("ticker")
+        id_col = _resolve_equity_id_column(df)
+        tickers = _col(id_col)
         if len(tickers) == 0:
-            raise ValueError("DataFrame must contain a 'ticker' column")
+            raise ValueError(
+                f"DataFrame must contain one of "
+                f"{[_EQUITY_ID_COLUMN] + _EQUITY_ID_FALLBACKS} columns"
+            )
         return cls(
             tickers=tickers,
             isins=_col("isin"),
@@ -1558,21 +1590,36 @@ def load_feature_view_spec_from_db(
 
 
 def load_mv_equities_spec_from_db(
+    df: pd.DataFrame | None = None,
     db_url: Optional[str] = None,
     schema: str = "public",
 ) -> EquitiesMaterializedViewSpec:
-    """Load EquitiesMaterializedViewSpec from mv_equities."""
-    import os
+    """Load EquitiesMaterializedViewSpec from mv_equities or a pre-loaded DataFrame.
 
-    from sqlalchemy import create_engine
+    Parameters
+    ----------
+    df : pd.DataFrame or None
+        When provided, the spec is built directly from this DataFrame
+        (skipping the database query).  This allows callers to supply a
+        DataFrame that already has the ``ticker`` column derived from
+        ``isin`` via ``_ensure_ticker_from_isin``.
+    db_url : str or None
+        SQLAlchemy connection URL.  Falls back to ``DB_URL`` env var.
+    schema : str
+        Database schema (default ``"public"``).
+    """
+    if df is None:
+        import os
 
-    schema = _validate_schema_name(schema)
-    url = db_url or os.environ.get("DB_URL")
-    if not url:
-        raise ValueError("DB_URL not available")
+        from sqlalchemy import create_engine
 
-    engine = create_engine(url)
-    df = pd.read_sql(f"SELECT * FROM {schema}.mv_equities LIMIT 0", engine)
+        schema = _validate_schema_name(schema)
+        url = db_url or os.environ.get("DB_URL")
+        if not url:
+            raise ValueError("DB_URL not available")
+
+        engine = create_engine(url)
+        df = pd.read_sql(f"SELECT * FROM {schema}.mv_equities LIMIT 0", engine)
     return EquitiesMaterializedViewSpec.from_dataframe(df)
 
 
