@@ -2,8 +2,6 @@
 
 import gzip
 import json
-import tempfile
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -19,6 +17,7 @@ from finance_ml.ml_workflow.v3.cache import (
     load_json,
     save_json,
 )
+
 
 def _make_mcmc_result(n_chains=4, n_samples=100):
     """Create a realistic MCMC result dict with raw sample arrays."""
@@ -214,20 +213,28 @@ class TestStripHierarchicalSamples:
         assert _strip_hierarchical_samples(d) is d
 
 
-class TestSaveJsonGzip:
-    def test_writes_gzip_file(self, tmp_path):
+class TestSaveJson:
+    def test_writes_json_file(self, tmp_path):
+        mcmc = _make_mcmc_result()
+        p = tmp_path / "mcmc.json"
+        save_json(p, mcmc)
+        assert p.exists()
+        # Verify it's valid plain JSON
+        data = json.loads(p.read_text(encoding="utf-8"))
+        assert "posterior_mean" in data
+
+    def test_strips_gz_suffix_and_writes_json(self, tmp_path):
+        """Legacy .json.gz paths should be written as plain .json."""
         mcmc = _make_mcmc_result()
         p = tmp_path / "mcmc.json.gz"
         save_json(p, mcmc)
-        assert p.exists()
-        # Verify it's valid gzip
-        with gzip.open(p, "rb") as f:
-            data = json.loads(f.read().decode("utf-8"))
-        assert "posterior_mean" in data
+        plain = tmp_path / "mcmc.json"
+        assert plain.exists()
+        assert not p.exists()
 
     def test_roundtrip_strips_large_keys(self, tmp_path):
         mcmc = _make_mcmc_result()
-        p = tmp_path / "mcmc.json.gz"
+        p = tmp_path / "mcmc.json"
         save_json(p, mcmc)
         loaded = load_json(p)
         assert "chains" not in loaded
@@ -236,7 +243,7 @@ class TestSaveJsonGzip:
 
     def test_strips_hierarchical_samples(self, tmp_path):
         mcmc = _make_mcmc_result()
-        p = tmp_path / "mcmc.json.gz"
+        p = tmp_path / "mcmc.json"
         save_json(p, mcmc)
         loaded = load_json(p)
         for level, groups in loaded["hierarchical"]["levels"].items():
@@ -245,7 +252,7 @@ class TestSaveJsonGzip:
 
     def test_strips_category_simulations(self, tmp_path):
         cat = _make_category_analytics()
-        p = tmp_path / "cat.json.gz"
+        p = tmp_path / "cat.json"
         save_json(p, cat)
         loaded = load_json(p)
         for cat_name, cat_data in loaded.items():
@@ -254,23 +261,17 @@ class TestSaveJsonGzip:
 
     def test_file_size_small_mcmc(self, tmp_path):
         mcmc = _make_mcmc_result(n_chains=8, n_samples=25000)
-        p = tmp_path / "mcmc.json.gz"
+        p = tmp_path / "mcmc.json"
         save_json(p, mcmc)
         size_kb = p.stat().st_size / 1024
         assert size_kb < 50, f"Cache file too large: {size_kb:.1f} KB"
 
     def test_file_size_small_category(self, tmp_path):
         cat = _make_category_analytics()
-        p = tmp_path / "cat.json.gz"
+        p = tmp_path / "cat.json"
         save_json(p, cat)
         size_kb = p.stat().st_size / 1024
         assert size_kb < 10, f"Cache file too large: {size_kb:.1f} KB"
-
-    def test_adds_gz_extension_if_missing(self, tmp_path):
-        cat = {"Valuation": {"features_analyzed": 5}}
-        p = tmp_path / "test.json"
-        save_json(p, cat)
-        assert (tmp_path / "test.json.gz").exists()
 
     def test_category_analytics_roundtrip(self, tmp_path):
         cat = {
@@ -279,7 +280,7 @@ class TestSaveJsonGzip:
                 "mcmc_posterior": {"mean": 0.123456789012, "std": 0.05},
             }
         }
-        p = tmp_path / "cat.json.gz"
+        p = tmp_path / "cat.json"
         save_json(p, cat)
         loaded = load_json(p)
         assert loaded["Valuation"]["features_analyzed"] == 5
@@ -345,9 +346,9 @@ class TestCacheEviction:
         import time
 
         for i in range(4):
-            (subdir / f"old_{i}.json.gz").write_bytes(b"x")
+            (subdir / f"old_{i}.json").write_bytes(b"x")
             time.sleep(0.05)
-        p = subdir / "new.json.gz"
+        p = subdir / "new.json"
         save_json(p, {"posterior_mean": 5.0, "chains": [[1, 2]], "combined_samples": [1]})
         remaining = list(subdir.iterdir())
         assert len(remaining) <= 2

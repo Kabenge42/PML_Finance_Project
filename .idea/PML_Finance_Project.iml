@@ -22,6 +22,8 @@
     <orderEntry type="library" exported="" scope="PROVIDED" name="Python 3.14 interpreter library" level="application" />
   </component>
   <component name="PyDocumentationSettings">
+    <option name="format" value="NUMPY" />
+    <option name="myDocStringFormat" value="NumPy" />
     <option name="renderExternalDocumentation" value="true" />
   </component>
   <component name="TestRunnerService">

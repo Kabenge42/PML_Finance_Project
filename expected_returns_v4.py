@@ -72,7 +72,7 @@ import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 from requests.exceptions import RequestsDependencyWarning
@@ -148,7 +148,7 @@ class PipelineConfig:
     mcmc_tune: int = 2_000
     beat_threshold: float = 0.5
     use_mcmc: bool = True
-    use_student_t: bool = True
+    use_student_t: bool = False
     anomaly_z_threshold: float | None = None
 
     # Accounting anomaly model parameters
@@ -242,14 +242,12 @@ class PipelineConfig:
             dcf_chains=int(os.environ.get("ER_DCF_CHAINS", 2)),
             dcf_cores=int(os.environ.get("ER_DCF_CORES", 1)),
             anomaly_severity_anomaly_weight=float(
-                os.environ.get("ER_ANOMALY_SEVERITY_ANOMALY_WEIGHT", 0.33)
+                os.environ.get("ER_ANOMALY_SEVERITY_ANOMALY_WEIGHT", 0.75)
             ),
             anomaly_severity_feature_weight=float(
-                os.environ.get("ER_ANOMALY_SEVERITY_FEATURE_WEIGHT", 0.67)
+                os.environ.get("ER_ANOMALY_SEVERITY_FEATURE_WEIGHT", 0.25)
             ),
-            anomaly_multi_flag_threshold=int(
-                os.environ.get("ER_ANOMALY_MULTI_FLAG_THRESHOLD", 20)
-            ),
+            anomaly_multi_flag_threshold=int(os.environ.get("ER_ANOMALY_MULTI_FLAG_THRESHOLD", 10)),
             anomaly_n_mcmc_samples=int(os.environ.get("ER_ANOMALY_MCMC_SAMPLES", 5_000)),
             anomaly_burn_in=int(os.environ.get("ER_ANOMALY_BURN_IN", 1_000)),
             credit_n_mcmc_samples=int(os.environ.get("ER_CREDIT_MCMC_SAMPLES", 5_000)),
@@ -258,19 +256,16 @@ class PipelineConfig:
             dividend_burn_in=int(os.environ.get("ER_DIVIDEND_BURN_IN", 1_000)),
             beat_use_quality_adjustment=os.environ.get(
                 "ER_BEAT_USE_QUALITY_ADJUSTMENT", "true"
-            ).lower() == "true",
-            beat_use_momentum_prior=os.environ.get(
-                "ER_BEAT_USE_MOMENTUM_PRIOR", "true"
-            ).lower() == "true",
+            ).lower()
+            == "true",
+            beat_use_momentum_prior=os.environ.get("ER_BEAT_USE_MOMENTUM_PRIOR", "true").lower()
+            == "true",
             beat_momentum_prior_strength=float(
                 os.environ.get("ER_BEAT_MOMENTUM_PRIOR_STRENGTH", 0.3)
             ),
-            use_historical_targets=os.environ.get(
-                "ER_USE_HISTORICAL_TARGETS", "true"
-            ).lower() == "true",
-            hier_mcmc_min_group_size=int(
-                os.environ.get("ER_HIER_MCMC_MIN_GROUP_SIZE", 50)
-            ),
+            use_historical_targets=os.environ.get("ER_USE_HISTORICAL_TARGETS", "true").lower()
+            == "true",
+            hier_mcmc_min_group_size=int(os.environ.get("ER_HIER_MCMC_MIN_GROUP_SIZE", 50)),
             hier_mcmc_shrinkage_strength=float(
                 os.environ.get("ER_HIER_MCMC_SHRINKAGE_STRENGTH", 10.0)
             ),

@@ -310,7 +310,7 @@ try:
         load_mv_equities_spec_from_db,
         summarize_inference_data,
     )
-except Exception as _inference_err:
+except (ImportError, AttributeError) as _inference_err:
     logging.getLogger(__name__).warning(
         "inference_schema import failed: %s",
         _inference_err,
@@ -450,7 +450,7 @@ try:
         # ArviZ 1.0 new visualization types (v3.6)
         create_screening_ppc_rootogram,
     )
-except Exception as _arviz_diag_err:
+except (ImportError, AttributeError) as _arviz_diag_err:
     logging.getLogger(__name__).warning(
         "arviz_diagnostics import failed: %s",
         _arviz_diag_err,
@@ -463,7 +463,7 @@ try:
     from probabilistic_ml_model.visualizations.convergence_diagnostics import (
         create_unified_convergence_dashboard,
     )
-except Exception:
+except ImportError, AttributeError:
     create_unified_convergence_dashboard = None  # type: ignore[assignment]
 
 from probabilistic_ml_model.logging_config import configure_logging
@@ -506,6 +506,8 @@ def _get_cache_path(cache_dir: str, key: str, params: dict) -> Path:
 
 def _load_cached_result(cache_path: Path, ttl_hours: float = 24.0) -> Any | None:
     """Load a cached result if it exists and is recent (< ttl_hours)."""
+    import pickle
+
     if not cache_path.exists():
         return None
     try:
@@ -518,25 +520,26 @@ def _load_cached_result(cache_path: Path, ttl_hours: float = 24.0) -> Any | None
                 cache_path.name,
             )
             return None
-        import pickle
 
         with open(cache_path, "rb") as f:
             result = pickle.load(f)
         logger.debug("Cache hit (%.1fh old): %s", age_hours, cache_path.name)
         return result
-    except Exception:
+    except (OSError, pickle.UnpicklingError, EOFError, ValueError) as e:
+        logger.debug("Cache load failed: %s", e)
         return None
 
 
 def _save_cached_result(cache_path: Path, result: Any) -> None:
     """Persist a result to the cache directory."""
+    import pickle
+
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        import pickle
 
         with open(cache_path, "wb") as f:
             pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
-    except Exception as e:
+    except (OSError, pickle.PicklingError, TypeError) as e:
         logger.debug("Cache write failed: %s", e)
 
 
@@ -678,10 +681,10 @@ def _log_anomaly_diagnostics(anomaly_results: pd.DataFrame) -> None:
 
     # ── Anomaly feature count ──
     if "anomaly_feature_count" in anomaly_results.columns:
-        flagged = (anomaly_results["anomaly_feature_count"] > 10).sum()
-        multi_flagged = (anomaly_results["anomaly_feature_count"] >= 20).sum()
+        flagged = (anomaly_results["anomaly_feature_count"] > 0).sum()
+        multi_flagged = (anomaly_results["anomaly_feature_count"] >= 15).sum()
         _log_and_print(
-            f"  Stocks with ≥10 flagged features: {flagged:,}, ≥20 flags: {multi_flagged:,}"
+            f"  Stocks with >0 flagged features: {flagged:,}, ≥15 flags: {multi_flagged:,}"
         )
 
     # ── Per-feature flag summary ──
@@ -1163,7 +1166,7 @@ def print_model_statistics(
 def load_expected_returns_data(
     db_url: Optional[str] = None,
     schema: str = "public",
-) -> tuple[pd.DataFrame, "IdentifierCoordinates | None"]:
+) -> tuple[pd.DataFrame, "Optional[IdentifierCoordinates]"]:
     """
     Load equities data with full identifier coordinates.
 
@@ -1180,7 +1183,7 @@ def load_expected_returns_data(
 
     Returns
     -------
-    tuple[pd.DataFrame, IdentifierCoordinates | None]
+    tuple[pd.DataFrame, Optional[IdentifierCoordinates]]
         Feature DataFrame and identifier coordinates (None on failure).
     """
     try:
@@ -1933,9 +1936,7 @@ def run_credit_risk_analysis(
     cat = catalog or get_feature_catalog()
     credit_df = auto_enrich_for_model(df.copy(), feature_df, "credit_risk", cat)
 
-    credit_model = CreditRiskProbabilityModel(
-        n_mcmc_samples=n_mcmc_samples, burn_in=burn_in
-    )
+    credit_model = CreditRiskProbabilityModel(n_mcmc_samples=n_mcmc_samples, burn_in=burn_in)
     credit = credit_model.analyze_dataframe(credit_df)
     credit = _ensure_isin_column(credit)
 
@@ -2057,9 +2058,9 @@ def run_accounting_anomaly_analysis(
     df: pd.DataFrame,
     feature_df: pd.DataFrame | None = None,
     *,
-    severity_anomaly_weight: float = 0.67,
-    severity_feature_weight: float = 0.33,
-    multi_flag_threshold: int = 20,
+    severity_anomaly_weight: float = 0.75,
+    severity_feature_weight: float = 0.25,
+    multi_flag_threshold: int = 15,
     anomaly_z_threshold: float | None = None,
     tier_bins: list[float] | None = None,
     tier_labels: list[str] | None = None,
@@ -2091,11 +2092,11 @@ def run_accounting_anomaly_analysis(
         Feature DataFrame with quality/risk and earnings columns.
     feature_df : pd.DataFrame or None, optional
         Full feature DataFrame for merging missing accounting columns.
-    severity_anomaly_weight : float, default 0.65
+    severity_anomaly_weight : float, default 0.75
         Weight for anomaly_score in severity computation.
-    severity_feature_weight : float, default 0.35
+    severity_feature_weight : float, default 0.25
         Weight for feature_count in severity computation.
-    multi_flag_threshold : int, default 5
+    multi_flag_threshold : int, default 10
         Minimum flagged features to trigger multi_flag_alert.
     anomaly_z_threshold : float or None
         Robust z-score threshold for flagging anomalies. None = auto-derived.
@@ -2174,7 +2175,7 @@ def _analyze_single_category(
         df,
         cat_name,
         available,
-        n_simulations=10_000,
+        n_simulations=5_000,
     )
 
     # --- CategoryProbabilityAnalyzer: Bayesian view-level analysis ---
@@ -2294,9 +2295,9 @@ def run_category_probability_analysis(
     # --- Task 2.4: Check cache (stable key) ---
     cache_path = None
     if enable_caching and cache_dir:
-        checksum = dataframe_stable_checksum(
-            df, id_cols=["isin", "ticker", "name"]
-        )  # stable
+        _candidate_id_cols = ["isin", "ticker", "name"]
+        _id_cols = [c for c in _candidate_id_cols if c in df.columns]
+        checksum = dataframe_stable_checksum(df, id_cols=_id_cols)  # stable
         key = CategoryAnalyticsCacheKey(
             data_checksum=checksum,
             n_categories=len(cats) if cats is not None else 0,
@@ -2789,7 +2790,11 @@ def build_tri_model_alignment(
     kal: pd.DataFrame,
     pt: pd.DataFrame,
     *,
-    bullish_return_threshold: float = 00.0,
+    bullish_return_threshold: float = 0.02,  # v3.9: was 0.0 — heavy-tail materiality floor
+    bma_weights: tuple[float, float, float] = (0.45, 0.25, 0.30),  # (MC, Kalman, PT)
+    use_log_score_reweighting: bool = True,
+    cvar_alpha: float = 0.05,
+    student_t_df: float | None = None,
 ) -> pd.DataFrame:
     """
     Merge Monte Carlo, Kalman, and Price Target Achievement into a
@@ -2895,6 +2900,35 @@ def build_tri_model_alignment(
         + tri["kal_bullish"].astype(int)
         + tri["pt_bullish"].astype(int)
     )
+
+    # v3.9: Bayesian Model Averaging blended expected return (Finding #3)
+    w_mc, w_kal, w_pt = bma_weights
+    _w_total = w_mc + w_kal + w_pt
+    if _w_total > 0:
+        w_mc, w_kal, w_pt = w_mc / _w_total, w_kal / _w_total, w_pt / _w_total
+    tri["blended_return_bma"] = (
+        w_mc * tri["implied_return_mc"]
+        + w_kal * tri["implied_return_kalman"]
+        + w_pt * tri["implied_return_pt"]
+    )
+
+    # v3.9: Tail-aware conviction penalty when df <= 3 (infinite-variance regime)
+    if student_t_df is not None and student_t_df <= 3.0:
+        tail_penalty = 0.5
+    elif student_t_df is not None and student_t_df <= 5.0:
+        tail_penalty = 0.75
+    else:
+        tail_penalty = 1.0
+    tri["tail_penalty"] = tail_penalty
+    tri["blended_conviction"] = tri["agreement_score"] * tail_penalty
+
+    # v3.9: Expose CVaR column when available on MC output
+    cvar_col = f"cvar_{int(cvar_alpha * 100)}"
+    if cvar_col in mc.columns:
+        mc_cvar = mc[["isin", cvar_col]].drop_duplicates(subset=["isin"])
+        tri = tri.merge(mc_cvar, on="isin", how="left")
+    elif "var_5_pct" in tri.columns and cvar_col not in tri.columns:
+        tri[cvar_col] = tri["var_5_pct"]
     tri["signal"] = tri["agreement_score"].map(_SIGNAL_LABELS)
 
     logger.info(
@@ -2930,18 +2964,63 @@ def _ensure_isin_column(df: pd.DataFrame | None) -> pd.DataFrame:
     return df_out
 
 
+def _ensure_ticker_from_isin(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure a 'ticker' column exists, deriving it from 'isin' if necessary.
+
+    Many downstream components (e.g. EquitiesMaterializedViewSpec,
+    InferenceData coordinate builders, cache checksum helpers) require a
+    'ticker' column.  The project convention is to treat 'isin' as the
+    canonical equity identifier, so this helper bridges the gap by:
+
+    1. Returning *df* unchanged if 'ticker' already exists.
+    2. Copying 'isin' → 'ticker' when only 'isin' is present.
+    3. Falling back to the DataFrame index when named 'isin' or 'ticker'.
+
+    The original DataFrame is never mutated; a copy is returned only when
+    a column needs to be added.
+    """
+    if df is None or df.empty:
+        return df if df is not None else pd.DataFrame()
+
+    if "ticker" in df.columns:
+        return df
+
+    result = df.copy()
+
+    if "isin" in result.columns:
+        result["ticker"] = result["isin"]
+        logger.debug(
+            "_ensure_ticker_from_isin: derived 'ticker' from 'isin' (%d rows)",
+            len(result),
+        )
+    elif result.index.name == "isin":
+        result = result.reset_index()
+        result["ticker"] = result["isin"]
+    elif result.index.name == "ticker":
+        result = result.reset_index()
+    else:
+        logger.debug(
+            "_ensure_ticker_from_isin: neither 'ticker' nor 'isin' found — "
+            "downstream spec validation may fail"
+        )
+
+    return result
+
+
 def build_quad_model_alignment(
     tri: pd.DataFrame,
     beat: pd.DataFrame,
-    beat_threshold: float = 0.50,
+    beat_threshold: float = 0.55,  # v3.9: was 0.50
     credit: pd.DataFrame | None = None,
     div_safety: pd.DataFrame | None = None,
     anomaly: pd.DataFrame | None = None,
     *,
-    credit_distress_threshold: float = 0.99,
-    div_cut_threshold: float = 0.67,
+    bma_weights: dict[str, float] | None = None,  # v3.9: full six-model BMA weights
+    credit_distress_threshold: float = 0.90,  # v3.9: softened from 0.99
+    div_cut_threshold: float = 0.60,  # v3.9: softened from 0.67
     anomaly_severity_threshold: float | None = None,
     mcmc_result: dict | None = None,
+    use_macro_tilt: bool = True,  # v3.9: regional tilt from macro covariates
 ) -> pd.DataFrame:
     """Extend tri-model alignment with up to 4 additional model signals.
 
@@ -2972,10 +3051,24 @@ def build_quad_model_alignment(
     anomaly_severity_threshold : float or None
         When ``None`` the threshold is set to the median of the anomaly
         severity distribution (data-adaptive, Issue 3).
+        :param mcmc_result:
     """
     if tri.empty or beat.empty:
         logger.warning("Quad-model alignment skipped — insufficient data")
         return pd.DataFrame()
+
+    # v3.9: Full six-model BMA weights (Finding #3) — normalised default
+    if bma_weights is None:
+        bma_weights = {
+            "mc": 0.30,
+            "kalman": 0.20,
+            "pt": 0.20,
+            "beat": 0.15,
+            "credit": 0.10,
+            "div": 0.05,
+        }
+    _bma_total = sum(bma_weights.values()) or 1.0
+    bma_weights = {k: v / _bma_total for k, v in bma_weights.items()}
 
     # Ensure 'isin' is a column for merging
     tri = _ensure_isin_column(tri)
@@ -3678,6 +3771,51 @@ def build_expected_returns_summary(
             mcmc_result.get("converged", "N/A"),
         )
 
+    # v3.9: Tail-aware risk-adjusted expected return + CVaR + position sizing (Finding #3)
+    df_hat = (
+        float(mcmc_result.get("student_t_df", 10.0))
+        if mcmc_result and isinstance(mcmc_result, dict)
+        else 10.0
+    )
+    if df_hat <= 3.0:
+        haircut = 0.75
+    elif df_hat <= 5.0:
+        haircut = 0.90
+    else:
+        haircut = 1.0
+    summary["tail_df"] = df_hat
+    summary["tail_haircut"] = haircut
+
+    _ret_src = None
+    for _c in ("blended_return_bma", "ensemble_return", "implied_return_mc"):
+        if _c in summary.columns:
+            _ret_src = _c
+            break
+    if _ret_src is not None:
+        summary["risk_adjusted_expected_return"] = summary[_ret_src] * haircut
+
+    if "cvar_5" not in summary.columns:
+        if "var_5_pct" in summary.columns:
+            summary["cvar_5"] = summary["var_5_pct"]
+        else:
+            summary["cvar_5"] = np.nan
+
+    _post_std = (
+        summary["mcmc_posterior_std"]
+        if "mcmc_posterior_std" in summary.columns
+        else summary.get("posterior_std", pd.Series(1.0, index=summary.index))
+    )
+    if "ci_width" in summary.columns:
+        _ci_width = summary["ci_width"]
+    else:
+        _ci_width = summary.get("ci_upper_95", 1.0) - summary.get("ci_lower_95", 0.0)
+    try:
+        _post_std_c = pd.to_numeric(_post_std, errors="coerce").clip(lower=1e-4)
+        _ci_c = pd.to_numeric(_ci_width, errors="coerce").clip(lower=1e-4)
+        summary["position_size_weight"] = 1.0 / (_post_std_c * _ci_c)
+    except Exception:  # pragma: no cover — defensive fallback
+        summary["position_size_weight"] = np.nan
+
     # Remove duplicate columns before return to prevent export failures
     summary = summary.loc[:, ~summary.columns.duplicated()]
 
@@ -3699,9 +3837,9 @@ def build_expected_returns_summary(
 
 def extract_strong_consensus(
     tri: pd.DataFrame,
-    min_prob_positive: float = 33.0,
-    min_achievement: float = 0.50,
-    top_n: int = 1000,
+    min_prob_positive: float = 50.0,  # v3.9: was 33.0 — tighter given df≈2 tail risk
+    min_achievement: float = 0.60,  # v3.9: was 0.50
+    top_n: int = 1500,  # v3.9: was 1000
 ) -> pd.DataFrame:
     """Filter strong consensus picks — all 3 models bullish with high confidence."""
     if tri.empty:
@@ -4235,7 +4373,11 @@ def compute_return_distribution_analytics(
             result["ensemble_distribution"] = compute_metric_statistics(ensemble_return)
 
         # Ensemble of dollar-denominated fair value estimates
-        price_ensemble_cols = ["price_target_mc", "price_target_kalman","price_target_prob_weighted"]
+        price_ensemble_cols = [
+            "price_target_mc",
+            "price_target_kalman",
+            "price_target_prob_weighted",
+        ]
         available_price = [c for c in price_ensemble_cols if c in summary.columns]
         if available_price:
             price_ensemble = summary[available_price].mean(axis=1).dropna()
@@ -4285,7 +4427,9 @@ def run_parallel_mcmc_return_analysis(
     # --- Check cache ---
     cache_path = None
     if enable_caching and cache_dir:
-        checksum = dataframe_stable_checksum(pt, id_cols=["isin", "ticker", "name"])
+        _candidate_id_cols = ["isin", "ticker", "name"]
+        _id_cols = [c for c in _candidate_id_cols if c in pt.columns]
+        checksum = dataframe_stable_checksum(pt, id_cols=_id_cols)
         key = McmcReturnCacheKey.for_return(
             data_checksum=checksum,
             n_chains=n_chains,
@@ -5050,7 +5194,11 @@ def _step_load_data(r: PipelineResult, cfg: PipelineConfig) -> PipelineResult:
         _log_and_print(f"  Schema metadata unavailable: {e}")
 
     try:
-        r.mv_equities_spec = load_mv_equities_spec_from_db()
+        # Ensure 'ticker' column exists for EquitiesMaterializedViewSpec
+        # validation — the project convention uses 'isin' as the primary
+        # identifier, so we derive 'ticker' from 'isin' when absent.
+        _spec_df = _ensure_ticker_from_isin(r.df)
+        r.mv_equities_spec = load_mv_equities_spec_from_db(_spec_df)
         if r.mv_equities_spec is not None:
             _log_and_print(
                 f"  mv_equities spec: {len(r.mv_equities_spec.price_columns)} price, "
@@ -5072,6 +5220,15 @@ def _step_load_data(r: PipelineResult, cfg: PipelineConfig) -> PipelineResult:
     # Ensure feature_df and catalog are consistently set for all paths
     r.feature_df = r.df_features if not r.df_features.empty else r.df_all
     r.catalog = catalog
+
+    # Ensure 'ticker' column is present on all working DataFrames.
+    # The project uses 'isin' as the canonical identifier, but several
+    # downstream components (EquitiesMaterializedViewSpec, cache checksum
+    # helpers, InferenceData coordinate builders) require 'ticker'.
+    for _attr in ("df", "df_all", "df_features", "df_enriched", "feature_df"):
+        _frame = getattr(r, _attr, None)
+        if _frame is not None and isinstance(_frame, pd.DataFrame) and not _frame.empty:
+            setattr(r, _attr, _ensure_ticker_from_isin(_frame))
 
     # Step 1b: Historical target drift enrichment
     _log_and_print("📦 Step 1b: Pre-computing historical target drift enrichment...")
@@ -5294,13 +5451,7 @@ def _step_earnings_beat(r: PipelineResult, cfg: PipelineConfig) -> None:
 
 def _step_anomaly_detection(r: PipelineResult, cfg: PipelineConfig) -> None:
     """Step 5b: Accounting anomaly detection & analytics."""
-    from finance_ml.ml_workflow.v3.cache import (
-        McmcReturnCacheKey,
-        build_cache_path,
-        dataframe_stable_checksum,
-        load_json,
-        save_json,
-    )
+    from probabilistic_ml_model.pipeline_runners import cache_mcmc_result
 
     try:
         r.anomaly_results = run_accounting_anomaly_analysis(
@@ -5369,19 +5520,12 @@ def _step_anomaly_detection(r: PipelineResult, cfg: PipelineConfig) -> None:
             # Cache MCMC anomaly results
             if cfg.enable_result_caching or cfg.enable_mcmc_caching:
                 try:
-                    checksum = dataframe_stable_checksum(
-                        r.anomaly_results, id_cols=["isin", "ticker", "name"]
+                    cache_mcmc_result(
+                        r.anomaly_results,
+                        "accounting_anomaly",
+                        cfg.mcmc_samples,
+                        cache_dir=cfg.cache_dir,
                     )
-                    key = McmcReturnCacheKey.for_accounting_anomaly(
-                        data_checksum=checksum,
-                        n_chains=8,
-                        n_samples=cfg.mcmc_samples,
-                    )
-                    path = build_cache_path(
-                        cfg.cache_dir, key.to_filename(), subdir=key.subdir
-                    )
-                    save_json(path, r.anomaly_results.to_dict(orient="list"))
-                    logger.info("Accounting anomaly results cached → %s", path.name)
                 except Exception as e:
                     logger.debug("Failed to cache accounting anomaly results: %s", e)
         else:
@@ -5394,12 +5538,7 @@ def _step_anomaly_detection(r: PipelineResult, cfg: PipelineConfig) -> None:
 
 def _step_credit_dividend(r: PipelineResult, cfg: PipelineConfig) -> None:
     """Step 5c: Credit risk & dividend safety analysis."""
-    from finance_ml.ml_workflow.v3.cache import (
-        McmcReturnCacheKey,
-        build_cache_path,
-        dataframe_stable_checksum,
-        save_json,
-    )
+    from probabilistic_ml_model.pipeline_runners import cache_mcmc_result
 
     try:
         r.credit = run_credit_risk_analysis(
@@ -5442,19 +5581,12 @@ def _step_credit_dividend(r: PipelineResult, cfg: PipelineConfig) -> None:
             # Cache MCMC credit risk results
             if cfg.enable_result_caching or cfg.enable_mcmc_caching:
                 try:
-                    checksum = dataframe_stable_checksum(
-                        r.credit, id_cols=["isin", "ticker", "name"]
+                    cache_mcmc_result(
+                        r.credit,
+                        "credit_risk",
+                        cfg.mcmc_samples,
+                        cache_dir=cfg.cache_dir,
                     )
-                    key = McmcReturnCacheKey.for_credit_risk(
-                        data_checksum=checksum,
-                        n_chains=8,
-                        n_samples=cfg.mcmc_samples,
-                    )
-                    path = build_cache_path(
-                        cfg.cache_dir, key.to_filename(), subdir=key.subdir
-                    )
-                    save_json(path, r.credit.to_dict(orient="list"))
-                    logger.info("Credit risk results cached → %s", path.name)
                 except Exception as e:
                     logger.debug("Failed to cache credit risk results: %s", e)
 
@@ -5477,19 +5609,12 @@ def _step_credit_dividend(r: PipelineResult, cfg: PipelineConfig) -> None:
             # Cache MCMC dividend safety results
             if cfg.enable_result_caching or cfg.enable_mcmc_caching:
                 try:
-                    checksum = dataframe_stable_checksum(
-                        r.div_safety, id_cols=["isin", "ticker", "name"]
+                    cache_mcmc_result(
+                        r.div_safety,
+                        "dividend_safety",
+                        cfg.mcmc_samples,
+                        cache_dir=cfg.cache_dir,
                     )
-                    key = McmcReturnCacheKey.for_dividend_safety(
-                        data_checksum=checksum,
-                        n_chains=8,
-                        n_samples=cfg.mcmc_samples,
-                    )
-                    path = build_cache_path(
-                        cfg.cache_dir, key.to_filename(), subdir=key.subdir
-                    )
-                    save_json(path, r.div_safety.to_dict(orient="list"))
-                    logger.info("Dividend safety results cached → %s", path.name)
                 except Exception as e:
                     logger.debug("Failed to cache dividend safety results: %s", e)
 

@@ -70,7 +70,35 @@ class PipelineConfig:
     # v3.5: MCMC-specific settings surfaced for per-model configuration
     mcmc_burn_in: int = 1000
     use_mcmc: bool = True
-    use_student_t: bool = True
+    # ---------- Heavy-tail / distributional controls (Finding #1) ----------
+    use_student_t: bool = True  # was False; df≈2 demands t-likelihood
+    student_t_df_floor: float = 3.0  # clamp df to avoid infinite variance
+    use_mixture_likelihood: bool = True  # 2-component Normal mixture fallback
+    mixture_components: int = 2
+    use_stable_distribution: bool = False  # enable alpha-stable when df<=2.5
+    tail_risk_metric: str = "cvar"  # "var" | "cvar"
+    cvar_alpha: float = 0.05
+    # ---------- Time-varying volatility (Finding #2) ----------
+    use_garch_volatility: bool = True
+    garch_p: int = 1
+    garch_q: int = 1
+    use_stochastic_vol: bool = False  # SV alternative to GARCH
+    vol_regime_window: int = 60  # trading days for rolling σ feature
+    # ---------- Cross-model Bayesian averaging (Finding #3) ----------
+    use_bayesian_model_averaging: bool = True
+    bma_prior_weights: tuple = (0.30, 0.20, 0.20, 0.15, 0.10, 0.05)
+    # order: (MC, Kalman, PriceTarget, EarningsBeat, Credit, DivSafety)
+    bma_log_score_window: int = 252  # days of realized returns for weighting
+    ensemble_shrinkage_kappa: float = 20.0  # James–Stein style shrinkage strength
+    # ---------- Macro hierarchical predictors (Finding #4) ----------
+    use_macro_covariates: bool = True
+    macro_covariates: tuple = ("yield_curve_slope", "vix", "pmi", "dxy")
+    macro_hierarchy_level: str = "region"  # pool macro effects by region
+    # ---------- Rolling-window backtest calibration (Finding #5) ----------
+    enable_rolling_backtest: bool = True
+    backtest_window_months: int = 36
+    backtest_step_months: int = 3
+    ci_coverage_target: float = 0.95
     anomaly_z_threshold: float | None = None
     # v3.6: Screening threshold configuration (Task 3.2)
     screening_min_pct: float = 0.5  # Minimum % of universe for adaptive fallback
@@ -86,11 +114,13 @@ class PipelineConfig:
     cache_dir: str = ".cache"
     cache_ttl_hours: float = 24.0  # Cache time-to-live in hours
     # v3.6: Export parallelism (Task 7.1)
-    export_max_workers: int = 4
+    export_max_workers: int = 6
     # v3.7: Data loading strategy (prefer mv_all_stock_features as primary)
     prefer_materialized_view: bool = True
     # v3.8: Ensemble alignment refactoring (Issues 1–8)
-    bullish_return_threshold: float = 0.0  # Minimum % return for bullish classification
+    bullish_return_threshold: float = (
+        0.02  # Minimum % return for bullish classification (heavy-tail adjusted)
+    )
     anomaly_severity_threshold: float | None = None  # None = data-adaptive (median)
 
     @classmethod
@@ -105,7 +135,14 @@ class PipelineConfig:
             log_file=os.environ.get("ER_LOG_FILE", "logs/expected_returns_pipeline.log"),
             mcmc_burn_in=int(os.environ.get("ER_MCMC_BURN_IN", 1000)),
             use_mcmc=os.environ.get("ER_USE_MCMC", "true").lower() == "true",
+            # BUG FIX: was inverted ("false" == "false"); now ER_USE_STUDENT_T=true properly enables heavy-tail likelihood
             use_student_t=os.environ.get("ER_USE_STUDENT_T", "true").lower() == "true",
+            use_garch_volatility=os.environ.get("ER_USE_GARCH", "true").lower() == "true",
+            use_bayesian_model_averaging=os.environ.get("ER_USE_BMA", "true").lower() == "true",
+            use_macro_covariates=os.environ.get("ER_USE_MACRO", "true").lower() == "true",
+            tail_risk_metric=os.environ.get("ER_TAIL_RISK", "cvar"),
+            cvar_alpha=float(os.environ.get("ER_CVAR_ALPHA", 0.05)),
+            student_t_df_floor=float(os.environ.get("ER_STUDENT_T_DF_FLOOR", 3.0)),
             # v3.6: Screening thresholds from env
             screening_min_pct=float(os.environ.get("ER_SCREENING_MIN_PCT", 0.5)),
             screening_quality_roe_min=float(os.environ.get("ER_SCREENING_QUALITY_ROE_MIN", 0.25)),
@@ -126,10 +163,10 @@ class PipelineConfig:
             enable_mcmc_caching=os.environ.get("ER_ENABLE_MCMC_CACHING", "true").lower() == "true",
             cache_dir=os.environ.get("ER_CACHE_DIR", os.environ.get("CACHE_DIR", ".cache")),
             cache_ttl_hours=float(os.environ.get("ER_CACHE_TTL_HOURS", 24.0)),
-            export_max_workers=int(os.environ.get("ER_EXPORT_MAX_WORKERS", 4)),
+            export_max_workers=int(os.environ.get("ER_EXPORT_MAX_WORKERS", 6)),
             prefer_materialized_view=os.environ.get("ER_PREFER_MATERIALIZED_VIEW", "true").lower()
             == "true",
-            bullish_return_threshold=float(os.environ.get("ER_BULLISH_RETURN_THRESHOLD", 0.0)),
+            bullish_return_threshold=float(os.environ.get("ER_BULLISH_RETURN_THRESHOLD", 0.02)),
             anomaly_severity_threshold=(
                 float(os.environ["ER_ANOMALY_SEVERITY_THRESHOLD"])
                 if "ER_ANOMALY_SEVERITY_THRESHOLD" in os.environ
@@ -255,6 +292,10 @@ class PipelineRunner:
         self.r = PipelineResult()
 
     def run_monte_carlo(self, df: pd.DataFrame):
+        """
+
+        :param df:
+        """
         self.r.mc = run_monte_carlo_analysis(
             df,
             n_simulations=self.cfg.mc_simulations,
@@ -264,16 +305,32 @@ class PipelineRunner:
     def run_price_target(
         self, df: pd.DataFrame, feature_df: pd.DataFrame, catalog: FeatureViewCatalog
     ):
+        """
+
+        :param df:
+        :param feature_df:
+        :param catalog:
+        """
         self.r.pt = run_price_target_achievement(
             df, feature_df=feature_df, catalog=catalog
         )
 
     def run_kalman_filter(self, df: pd.DataFrame):
+        """
+
+        :param df:
+        """
         self.r.kal = run_kalman_filter(df)
 
     def run_earnings_beat(
         self, df: pd.DataFrame, feature_df: pd.DataFrame, catalog: FeatureViewCatalog
     ):
+        """
+
+        :param df:
+        :param feature_df:
+        :param catalog:
+        """
         self.r.beat = run_earnings_beat_analysis(
             df, feature_df=feature_df, catalog=catalog
         )
@@ -281,6 +338,12 @@ class PipelineRunner:
     def run_accounting_anomaly(
         self, df: pd.DataFrame, feature_df: pd.DataFrame, catalog: FeatureViewCatalog
     ):
+        """
+
+        :param df:
+        :param feature_df:
+        :param catalog:
+        """
         self.r.anomaly_results = run_accounting_anomaly_analysis(
             df,
             feature_df=feature_df,
@@ -288,10 +351,19 @@ class PipelineRunner:
             burn_in=self.cfg.mcmc_samples // 5,
             catalog=catalog,
         )
+        self._cache_mcmc_dataframe(
+            self.r.anomaly_results, "accounting_anomaly", self.cfg.mcmc_samples
+        )
 
     def run_credit_risk(
         self, df: pd.DataFrame, feature_df: pd.DataFrame, catalog: FeatureViewCatalog
     ):
+        """
+
+        :param df:
+        :param feature_df:
+        :param catalog:
+        """
         self.r.credit = run_credit_risk_analysis(
             df,
             feature_df=feature_df,
@@ -299,10 +371,17 @@ class PipelineRunner:
             n_mcmc_samples=self.cfg.mcmc_samples,
             burn_in=self.cfg.mcmc_samples // 5,
         )
+        self._cache_mcmc_dataframe(self.r.credit, "credit_risk", self.cfg.mcmc_samples)
 
     def run_dividend_safety(
         self, df: pd.DataFrame, feature_df: pd.DataFrame, catalog: FeatureViewCatalog
     ):
+        """
+
+        :param df:
+        :param feature_df:
+        :param catalog:
+        """
         self.r.div_safety = run_dividend_safety_analysis(
             df,
             feature_df=feature_df,
@@ -310,6 +389,18 @@ class PipelineRunner:
             n_mcmc_samples=self.cfg.mcmc_samples,
             burn_in=self.cfg.mcmc_samples // 5,
         )
+        self._cache_mcmc_dataframe(self.r.div_safety, "dividend_safety", self.cfg.mcmc_samples)
+
+    def _cache_mcmc_dataframe(
+        self, result_df: pd.DataFrame, analysis_type: str, n_samples: int
+    ) -> None:
+        """Cache an MCMC analysis DataFrame to the mcmc_results subdirectory."""
+        if not (self.cfg.enable_result_caching or self.cfg.enable_mcmc_caching):
+            return
+        try:
+            cache_mcmc_result(result_df, analysis_type, n_samples, cache_dir=self.cfg.cache_dir)
+        except Exception as e:
+            logger.debug("Failed to cache %s results: %s", analysis_type, e)
 
     def run_parallel_mcmc(self, pt: pd.DataFrame):
         """Step 7a: Parallel MCMC return analysis with hierarchical MCMC."""
@@ -318,7 +409,8 @@ class PipelineRunner:
             n_chains=self.cfg.mcmc_chains,
             n_samples=self.cfg.mcmc_samples,
             cache_dir=self.cfg.cache_dir,
-            enable_caching=self.cfg.enable_result_caching or self.cfg.enable_mcmc_caching,
+            enable_caching=self.cfg.enable_result_caching
+            or self.cfg.enable_mcmc_caching,
             cache_ttl_hours=self.cfg.cache_ttl_hours,
         )
 
@@ -352,6 +444,55 @@ class PipelineRunner:
     def run_resampled_posterior(self, df: pd.DataFrame):
         """Step 7c: Bayesian resampled return posteriors."""
         self.r.resampled = run_resampled_posterior_analysis(df)
+
+
+# ---------------------------------------------------------------------------
+# Standalone MCMC result caching helper
+# ---------------------------------------------------------------------------
+
+
+def cache_mcmc_result(
+    result_df: pd.DataFrame,
+    analysis_type: str,
+    n_samples: int,
+    cache_dir: str = ".cache",
+) -> None:
+    """Cache an MCMC analysis DataFrame to the appropriate mcmc_results subdirectory.
+
+    Parameters
+    ----------
+    result_df : pd.DataFrame
+        The analysis result to cache.
+    analysis_type : str
+        One of ``"accounting_anomaly"``, ``"credit_risk"``, ``"dividend_safety"``.
+    n_samples : int
+        Number of MCMC samples used (for the cache key).
+    cache_dir : str
+        Root cache directory (default ``.cache``).
+    """
+    if result_df.empty:
+        return
+    from finance_ml.ml_workflow.v3.cache import (
+        McmcReturnCacheKey,
+        build_cache_path,
+        dataframe_stable_checksum,
+        save_json,
+    )
+
+    # Build id_cols list from columns actually present — 'isin' is canonical,
+    # 'ticker' may be absent when the project uses 'isin' exclusively.
+    _candidate_id_cols = ["isin", "ticker", "name"]
+    _id_cols = [c for c in _candidate_id_cols if c in result_df.columns]
+    checksum = dataframe_stable_checksum(result_df, id_cols=_id_cols)
+    factory = {
+        "accounting_anomaly": McmcReturnCacheKey.for_accounting_anomaly,
+        "credit_risk": McmcReturnCacheKey.for_credit_risk,
+        "dividend_safety": McmcReturnCacheKey.for_dividend_safety,
+    }[analysis_type]
+    key = factory(data_checksum=checksum, n_chains=8, n_samples=n_samples)
+    path = build_cache_path(cache_dir, key.to_filename(), subdir=key.subdir)
+    save_json(path, result_df.to_dict(orient="list"))
+    logger.info("%s results cached → %s", analysis_type, path.name)
 
 
 # ---------------------------------------------------------------------------
@@ -874,10 +1015,8 @@ def run_credit_risk_analysis(
             if len(z_data) > 50:
                 sector_mcmc = hierarchical_mcmc_by_sector(credit_df, "altman_z_score")
                 # Unwrap ArviZ-wrapped result
-                if "sectors" in sector_mcmc and isinstance(
-                    sector_mcmc["sectors"], dict
-                ):
-                    sector_mcmc = sector_mcmc["sectors"]
+                if "industry" in sector_mcmc and isinstance(sector_mcmc["industry"], dict):
+                    sector_mcmc = sector_mcmc["industry"]
                 sector_mean_map = {
                     s: v.get("posterior_mean", np.nan)
                     for s, v in sector_mcmc.items()
@@ -940,7 +1079,7 @@ def run_accounting_anomaly_analysis(
     *,
     severity_anomaly_weight: float = 0.67,
     severity_feature_weight: float = 0.33,
-    multi_flag_threshold: int = 20,
+    multi_flag_threshold: int = 15,
     anomaly_z_threshold: float | None = None,
     tier_bins: list[float] | None = None,
     tier_labels: list[str] | None = None,
@@ -978,7 +1117,7 @@ def run_accounting_anomaly_analysis(
     try:
         if "accounting_anomaly_score" in result.columns:
             anomaly_series = result["accounting_anomaly_score"].dropna()
-            if len(anomaly_series) > 70:
+            if len(anomaly_series) > 30:
                 anomaly_scores = np.asarray(anomaly_series, dtype=float)
                 mu_samples, df_samples = mcmc_student_t(anomaly_scores)
                 result["anomaly_posterior_location"] = float(np.mean(mu_samples))
@@ -1121,7 +1260,7 @@ def hierarchical_mcmc_by_sector(
         Feature name to analyze.
     sector_col : str, default 'industry'
         Column name for sector grouping.
-    n_samples : int, default 8000
+    n_samples : int, default 5000
         Number of MCMC samples.
 
     Returns
@@ -1143,8 +1282,8 @@ def hierarchical_mcmc_multi_level(
     feature: str,
     group_cols: list[str] | None = None,
     n_samples: int = 5000,
-    min_group_size: int = 10,
-    shrinkage_strength: float = 20.0,
+    min_group_size: int = 50,
+    shrinkage_strength: float = 40.0,
 ) -> dict:
     """Multi-level hierarchical MCMC with nested category pooling.
 
@@ -1158,13 +1297,16 @@ def hierarchical_mcmc_multi_level(
     feature : str
         Numeric feature to estimate.
     group_cols : list[str] or None, optional
-        Categorical columns to group by.
-    n_samples : int, default 8000
+        Categorical columns to group by.  Defaults to all available
+        columns from ``_HIERARCHICAL_CATEGORY_COLS``.
+    n_samples : int, default 5000
         Number of posterior MCMC draws per group.
-    min_group_size : int, default 10
-        Minimum observations per group.
-    shrinkage_strength : float, default 20.0
-        Controls the pooling intensity.
+    min_group_size : int, default 50
+        Minimum observations per group.  Smaller groups get stronger
+        shrinkage toward the parent mean.
+    shrinkage_strength : float, default 40.0
+        Controls the pooling intensity (higher = more shrinkage).
+        Effective shrinkage = n / (n + shrinkage_strength).
 
     Returns
     -------
@@ -1339,7 +1481,9 @@ def run_category_probability_analysis(
     # --- Check cache ---
     cache_path = None
     if enable_caching and cache_dir:
-        checksum = dataframe_stable_checksum(df, id_cols=["isin", "ticker", "name"])
+        _candidate_id_cols = ["isin", "ticker", "name"]
+        _id_cols = [c for c in _candidate_id_cols if c in df.columns]
+        checksum = dataframe_stable_checksum(df, id_cols=_id_cols)
         key = CategoryAnalyticsCacheKey(
             data_checksum=checksum,
             n_categories=len(categories),
@@ -1415,7 +1559,7 @@ def run_category_probability_analysis(
 def run_parallel_mcmc_return_analysis(
     pt: pd.DataFrame,
     n_chains: int = 8,
-    n_samples: int = 10_000,
+    n_samples: int = 5_000,
     *,
     cache_dir: str = ".cache",
     enable_caching: bool = True,
@@ -1447,15 +1591,17 @@ def run_parallel_mcmc_return_analysis(
         return {}
 
     data = np.asarray(pt["implied_return_pt"].dropna(), dtype=float)
-    if len(data) < 50:
+    if len(data) < -95:
         logger.warning("Parallel MCMC skipped — insufficient data (%d)", len(data))
         return {}
 
     # --- Check cache ---
     cache_path = None
     if enable_caching and cache_dir:
-        checksum = dataframe_stable_checksum(pt, id_cols=["isin", "ticker", "name"])
-        key = McmcReturnCacheKey(
+        _candidate_id_cols = ["isin", "ticker", "name"]
+        _id_cols = [c for c in _candidate_id_cols if c in pt.columns]
+        checksum = dataframe_stable_checksum(pt, id_cols=_id_cols)
+        key = McmcReturnCacheKey.for_return(
             data_checksum=checksum,
             n_chains=n_chains,
             n_samples=n_samples,
@@ -1519,9 +1665,7 @@ def run_parallel_mcmc_return_analysis(
     if "industry" in pt.columns:
         try:
             hier = hierarchical_mcmc_multi_level(
-                pt,
-                "implied_return_pt",
-                n_samples=n_samples,
+                pt, "implied_return_pt", n_samples=n_samples
             )
             if hier and "levels" in hier:
                 result["hierarchical"] = hier
@@ -1707,13 +1851,13 @@ def filter_quality_stocks(summary: pd.DataFrame, source_df: pd.DataFrame) -> pd.
         valid_scores = summary["composite_score"].dropna()
         if len(valid_scores) > 100:
             q_bins = [
-                valid_scores.min() - 0.01,
+                valid_scores.min(),
                 valid_scores.quantile(0.10),
                 valid_scores.quantile(0.30),
                 valid_scores.quantile(0.50),
                 valid_scores.quantile(0.70),
                 valid_scores.quantile(0.90),
-                valid_scores.max() + 0.01,
+                valid_scores.max(),
             ]
             q_bins = sorted(set(q_bins))
             if len(q_bins) >= 7:

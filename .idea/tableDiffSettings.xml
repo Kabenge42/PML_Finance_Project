@@ -2,6 +2,6 @@
 <project version="4">
   <component name="TableDiffSettings">
     <option name="detectColumnInsertion" value="false" />
-    <option name="columnMismatchThreshold" value="1" />
+    <option name="columnMismatchThreshold" value="21" />
   </component>
 </project>

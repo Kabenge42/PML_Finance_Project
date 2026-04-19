@@ -20,7 +20,6 @@ Canonical registries (imported by ``inference_schema`` and ``data_utils``):
 
 from __future__ import annotations
 
-
 import logging
 import os
 import re
@@ -1393,7 +1392,7 @@ _catalog_instance: FeatureViewCatalog | None = None
 def get_feature_catalog(
     db_url: Optional[str] = None,
     schema: str = "public",
-) -> FeatureViewCatalog | None:
+) -> FeatureViewCatalog:
     """Get or create the global FeatureViewCatalog singleton."""
     global _catalog_instance
     if _catalog_instance is None:
