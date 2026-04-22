@@ -288,8 +288,8 @@ class BayesianTechnicalResampler:
             "5D": 5,
             "1W": 7,
             "1M": 30,
-            "3M": 91,
-            "6M": 182,
+            "3M": 90,
+            "6M": 180,
             "1Y": 365,
             "3Y": 1095,
             "5Y": 1825,
@@ -336,8 +336,8 @@ class BayesianTechnicalResampler:
     def resample_returns(
         self,
         df: pd.DataFrame,
-        freq: str = "1ME",
-        group_col: str = "sector",
+        freq: str = "1QE",
+        group_col: str = "industry",
     ) -> pd.DataFrame:
         """
         Compute resampled Bayesian posterior return distributions.
@@ -453,7 +453,7 @@ class BayesianTechnicalResampler:
     def build_inference_data(
         self,
         df: pd.DataFrame,
-        freq: str = "1ME",
+        freq: str = "1QE",
         result_df: pd.DataFrame | None = None,
     ) -> "az.InferenceData | xr.Dataset | None":
         """
@@ -541,7 +541,7 @@ class BayesianTechnicalResampler:
 
 def resampled_posterior_returns(
     df: pd.DataFrame,
-    freq: str = "1ME",
+    freq: str = "1QE",
     prior_return_mean: float = 0.0,
     prior_return_std: float = 0.20,
     n_posterior_samples: int = 4000,
@@ -954,7 +954,7 @@ def hierarchical_mcmc_multi_level(
     group_cols: list[str] | None = None,
     n_samples: int = 5000,
     min_group_size: int = 50,
-    shrinkage_strength: float = 40.0,
+    shrinkage_strength: float = 10.0,
 ) -> dict:
     """
     Multi-level hierarchical MCMC with nested category pooling.
@@ -1033,13 +1033,13 @@ def hierarchical_mcmc_multi_level(
     _PARENT_MAP: dict[str, str | None] = {
         "region": None,
         "country": "region",
-        "trading_country": "region",
-        "exchange": "country",
         "unit": None,
-        "sector": "region",
+        "trading_country": None,
+        "exchange": "country",
+        "sector": "exchange",
         "industry": "sector",
         "style_class": None,
-        "size_class": None,
+        "size_class": "style_class",
     }
 
     levels: dict[str, dict] = {}
@@ -2418,7 +2418,7 @@ def detect_accounting_anomalies(
         # Derive tier bins from data distribution if score column exists
         if "accounting_anomaly_score" in df.columns:
             score_data = df["accounting_anomaly_score"].dropna()
-            if len(score_data) >= 70:
+            if len(score_data) >= 20:
                 q25 = float(score_data.quantile(0.25))
                 q50 = float(score_data.quantile(0.50))
                 q75 = float(score_data.quantile(0.75))

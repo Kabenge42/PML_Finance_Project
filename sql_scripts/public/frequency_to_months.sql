@@ -5,28 +5,20 @@ create function frequency_to_months(earnings_report_frequency text, fy_end_date 
 as
 $$
 DECLARE
-    fy_range_months INTEGER;
+    fy_range_months INT := 12;
 BEGIN
-    -- Calculate the fiscal year range in months (should always be 12)
+    -- Use AGE() for month arithmetic â€” correct across year boundaries
     IF fy_end_date IS NOT NULL AND next_fy_end_date IS NOT NULL THEN
-        fy_range_months := ((EXTRACT(YEAR FROM next_fy_end_date) - EXTRACT(YEAR FROM fy_end_date)) * 12
-            + (EXTRACT(MONTH FROM next_fy_end_date) - EXTRACT(MONTH FROM fy_end_date)))::INTEGER;
-    ELSE
-        -- Default to standard 12-month fiscal year
-        fy_range_months := 12;
+        fy_range_months := (DATE_PART('year', AGE(next_fy_end_date, fy_end_date)) * 12
+            + DATE_PART('month', AGE(next_fy_end_date, fy_end_date)))::INT;
     END IF;
 
-    -- Derive reporting interval as a divisor of the fiscal year range
     RETURN CASE UPPER(TRIM(COALESCE(earnings_report_frequency, 'QUARTERLY')))
-        -- Quarterly: FY range / 4 reporting periods
                WHEN 'QUARTERLY' THEN fy_range_months / 4
-        -- Semi-Annual: FY range / 2 reporting periods
-               WHEN 'SEMI-ANNUALLY' THEN fy_range_months / 2
                WHEN 'SEMI-ANNUAL' THEN fy_range_months / 2
-        -- Annual: Full FY range (1 reporting period)
-               WHEN 'ANNUALLY' THEN fy_range_months
+               WHEN 'SEMI-ANNUALLY' THEN fy_range_months / 2
                WHEN 'ANNUAL' THEN fy_range_months
-        -- Default to quarterly (FY range / 4)
+               WHEN 'ANNUALLY' THEN fy_range_months
                ELSE fy_range_months / 4
         END;
 END;

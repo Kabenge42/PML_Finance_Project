@@ -2912,15 +2912,48 @@ def build_tri_model_alignment(
         + w_pt * tri["implied_return_pt"]
     )
 
-    # v3.9: Tail-aware conviction penalty when df <= 3 (infinite-variance regime)
-    if student_t_df is not None and student_t_df <= 3.0:
-        tail_penalty = 0.5
-    elif student_t_df is not None and student_t_df <= 5.0:
-        tail_penalty = 0.75
+    # v3.9 Cross-cutting T-A: per-stock ``tail_df`` sourced from each
+    # model's *Result dataclass (CreditRiskResult / DividendSafetyResult /
+    # PriceTargetResult). Prefer a per-stock column when present; fall
+    # back to the global ``student_t_df`` scalar for backwards
+    # compatibility with the v3.8 code path.
+    per_stock_tail_df: pd.Series | None = None
+    for _src in (pt, mc, kal):
+        if isinstance(_src, pd.DataFrame) and "tail_df" in _src.columns:
+            _cand = (
+                _src[["isin", "tail_df"]]
+                .dropna(subset=["tail_df"])
+                .drop_duplicates(subset=["isin"])
+            )
+            if not _cand.empty:
+                per_stock_tail_df = _cand.set_index("isin")["tail_df"]
+                break
+
+    def _df_to_penalty(df_value: float) -> float:
+        if not np.isfinite(df_value):
+            return 1.0
+        if df_value <= 3.0:
+            return 0.5
+        if df_value <= 5.0:
+            return 0.75
+        return 1.0
+
+    if per_stock_tail_df is not None:
+        tri["tail_df"] = tri["isin"].map(per_stock_tail_df).astype(float)
+        if student_t_df is not None:
+            tri["tail_df"] = tri["tail_df"].fillna(float(student_t_df))
+        tri["tail_penalty"] = tri["tail_df"].map(_df_to_penalty).fillna(1.0)
+        tail_penalty = float(tri["tail_penalty"].mean())
     else:
-        tail_penalty = 1.0
-    tri["tail_penalty"] = tail_penalty
-    tri["blended_conviction"] = tri["agreement_score"] * tail_penalty
+        if student_t_df is not None and student_t_df <= 3.0:
+            tail_penalty = 0.5
+        elif student_t_df is not None and student_t_df <= 5.0:
+            tail_penalty = 0.75
+        else:
+            tail_penalty = 1.0
+        tri["tail_df"] = float(student_t_df) if student_t_df is not None else float("nan")
+        tri["tail_penalty"] = tail_penalty
+    tri["blended_conviction"] = tri["agreement_score"] * tri["tail_penalty"]
 
     # v3.9: Expose CVaR column when available on MC output
     cvar_col = f"cvar_{int(cvar_alpha * 100)}"
@@ -3439,6 +3472,14 @@ def build_expected_returns_summary(
                 "credible_interval_90",
                 "credible_interval_95",
                 "prob_beat_given_momentum",
+                # v3.10 §15.1 ResampledBeat posterior spread & chain diagnostics
+                "hdi_low",
+                "hdi_high",
+                "chain_rhat",
+                "chain_ess_bulk",
+                "chain_ess_tail",
+                "n_effective_samples",
+                "volatility_regime",
                 "streak_type",
                 "continuation_probability",
                 "mean_reversion_probability",
@@ -4557,7 +4598,7 @@ def run_parallel_mcmc_return_analysis(
 
 def run_resampled_posterior_analysis(
     df: pd.DataFrame,
-    freq: str = "1ME",
+    freq: str = "1QE",
 ) -> pd.DataFrame:
     """
     Compute Bayesian resampled return posteriors from historical price snapshots.
@@ -4731,6 +4772,18 @@ def _trim_credit_for_export(df: pd.DataFrame) -> pd.DataFrame:
         "wealth_buffer",
         "ruin_probability",
         "survival_probability",
+        # v3.9 / v3.10 diagnostic + macro parity (CreditRiskResult §2.1, T-A, T-B)
+        "tail_df",
+        "cond_volatility",
+        "cvar_5",
+        "posterior_ess_bulk",
+        "posterior_ess_tail",
+        "r_hat",
+        "schema_version",
+        "macro_loading_yield_curve_10y2y",
+        "macro_loading_vix",
+        "macro_loading_dxy",
+        "macro_loading_hy_oas",
         # Key market data for context
         "market_cap",
         "enterprise_value",
@@ -4794,6 +4847,19 @@ def _trim_anomaly_for_export(df: pd.DataFrame) -> pd.DataFrame:
                 "benford_chi2_pvalue",
                 "quality_frequency_score",
                 "repeat_offender_flag",
+                # v3.10 anomaly decomposition + diagnostics (§8.1 / §9.1 / §9.2)
+                "flag_count_posterior_mean",
+                "flag_count_ci_low",
+                "flag_count_ci_high",
+                "magnitude_posterior_mean",
+                "combined_anomaly_score",
+                "dominant_flag_category",
+                "tail_df",
+                "cond_volatility",
+                "r_hat",
+                "ess_bulk",
+                "ess_tail",
+                "schema_version",
                 # v3.5 enhanced anomaly metrics
                 "accumulated_deficit_flag",
                 "negative_wc_flag",
@@ -6201,9 +6267,7 @@ def main(config: PipelineConfig | None = None) -> PipelineResult:
             idata_resampled = None
             if not r.df_all.empty:
                 try:
-                    idata_resampled = build_resampled_technical_inference_data(
-                        r.df_all, freq="1ME"
-                    )
+                    idata_resampled = build_resampled_technical_inference_data(r.df_all, freq="1QE")
                     if idata_resampled is not None:
                         resampled_summary = summarize_inference_data(idata_resampled)
                         _log_and_print(

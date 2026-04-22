@@ -3,14 +3,15 @@
 A comprehensive platform for probabilistic equity screening, feature engineering, and machine learning modeling across global financial markets.
 
 [![Python Version](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue)](https://www.python.org/)
-[![Package Version](https://img.shields.io/badge/version-0.9.6-green)](pyproject.toml)
+[![Package Version](https://img.shields.io/badge/version-0.9.5-green)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
 The PML Finance Project is a robust solution for financial data analysis, probabilistic machine learning modeling, and
-portfolio optimization. It implements a structured **8-Phase ML Workflow** (Phases 1-8) for data quality, advanced
-feature engineering, and reliable model evaluation, followed by a **7-Phase Portfolio Optimization** module.
+portfolio optimization. It implements a multi-modal **Probabilistic ML Workflow** (Phases 1-8) for data quality,
+advanced
+feature engineering, and reliable model evaluation, followed by a **Portfolio Optimization** module.
 
 ### Key Features
 
@@ -105,6 +106,7 @@ pip install -e ".[dev,dashboards,database,performance,tensorflow,notebooks,extra
 | File                        | Purpose                                               |
 |:----------------------------|:------------------------------------------------------|
 | `pyproject.toml`            | Build system, project metadata, tool configs (v0.9.5) |
+| `CHANGELOG.md`              | Release notes (Keep a Changelog / SemVer)             |
 | `requirements.txt`          | Full dependency list (core + optional)                |
 | `Pipfile`                   | Pipenv dependency management                          |
 | `environment_variables.txt` | Reference for all environment variables               |
@@ -139,12 +141,11 @@ The package provides command-line entry points (defined in `pyproject.toml`):
 
 ### Interactive Dashboards
 
-| Dashboard              | Run Command                                              | Status  |
-|:-----------------------|:---------------------------------------------------------|:--------|
-| **GEIB Dashboard**     | `python dashboards\geib_dash_app.py`                     | ✅ Live  |
-| **Streamlit App**      | `streamlit run finance_ml\dashboards\streamlit_app.py`   | 🚧 TODO |
-| **Equities Dashboard** | `python finance_ml\dashboards\equities_dashboard_app.py` | 🚧 TODO |
-| **Dash App**           | `python finance_ml\dashboards\dash_app.py`               | 🚧 TODO |
+| Dashboard          | Run Command                          | Status |
+|:-------------------|:-------------------------------------|:-------|
+| **GEIB Dashboard** | `python dashboards\geib_dash_app.py` | ✅ Live |
+
+<!-- TODO: Add Streamlit / Equities / Dash apps under finance_ml/dashboards/ (not yet implemented). -->
 
 ## Scripts & Utilities
 
@@ -195,6 +196,9 @@ pytest -v
 
 # Specific file
 pytest tests\test_pml_workflow_v4.py
+
+# With coverage (requires the [dev] extra)
+pytest --cov=probabilistic_ml_model --cov-report=term-missing
 ```
 
 ### Test Coverage Summary
@@ -276,7 +280,7 @@ PML_Finance_Project/
 │   └── ml_workflow/                # ML workflow phases
 │       └── v3/                     # v3 workflow utilities (cache, config, enrichment, I/O)
 ├── dashboards/                     # Standalone dashboards
-│   └── geib_dash_app.py            # GEIB equities dashboard
+│   └── geib_dash_app.py            # GEIB equities dashboard (live)
 ├── feature_factory/                # Feature calculation utilities (Beta/CAPM, DCF, Monte Carlo)
 ├── sql_scripts/                    # SQL setup and migration scripts
 │   ├── analytics/                  # Analytics schema SQL
@@ -372,9 +376,15 @@ Enforced by the following tools (configured in `pyproject.toml`):
 | Flake8 | Linting              | Standard rules                           |
 | Mypy   | Static type checking | `python_version = "3.14"`                |
 
+## Contributing
+
+- Format with `black .` and `isort .`; lint with `flake8`; type-check with `mypy`.
+- Run the test suite (`pytest`) before submitting changes.
+- See `CHANGELOG.md` for release history (Keep a Changelog / SemVer).
+
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License** (declared in `pyproject.toml`).
 
+<!-- TODO: Add a top-level LICENSE file with the full MIT license text. -->
 <!-- TODO: Implement cli.py module for CLI entry points (finance-ml, finance-ml-analyze, finance-ml-validate). -->
-<!-- TODO: Add a LICENSE file to the project root. -->

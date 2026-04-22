@@ -1181,7 +1181,7 @@ def summarize_inference_data(idata: Any) -> dict[str, Any]:
 
 def build_resampled_technical_inference_data(
     equities_df: pd.DataFrame,
-    freq: str = "1ME",
+    freq: str = "1QE",
     prior_return_mean: float = 0.08,
     prior_return_std: float = 0.20,
     n_posterior_samples: int = 4000,

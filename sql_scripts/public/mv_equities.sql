@@ -674,7 +674,8 @@ SELECT "Ticker"                                           AS ticker,
        "Fiscal Month"                                     AS fiscal_month,
        "Fiscal Quarter"                                   AS fiscal_quarter,
        "Fiscal Year"                                      AS fiscal_year,
-       "Reporting Lag"                                    AS reporting_lag
+       "Reporting Lag"   AS reporting_lag,
+       CURRENT_TIMESTAMP AS table_calculated_at
 FROM equities e;
 
 comment on materialized view mv_equities is 'Aliased snapshot of the equities table. Column names sourced from equities_schema_metadata.column_alias. Refresh with: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_equities;';

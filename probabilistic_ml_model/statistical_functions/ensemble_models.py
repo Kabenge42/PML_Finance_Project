@@ -80,6 +80,11 @@ def build_tri_model_alignment(
 
     Parameters
     ----------
+    use_log_score_reweighting : bool
+    student_t_df : float | None
+        passed from mcmc_result for tail-aware conviction
+    cvar_alpha
+    bma_weights : tuple[float, float, float]
     bullish_return_threshold : float
         Minimum implied return (%) to classify a model as bullish.
         Default 2.0% prevents near-zero returns from inflating the
@@ -176,15 +181,49 @@ def build_tri_model_alignment(
         + w_pt * tri["implied_return_pt"]
     )
 
-    # v3.9: Tail-aware conviction penalty when df <= 3 (infinite-variance regime)
-    if student_t_df is not None and student_t_df <= 3.0:
-        tail_penalty = 0.5
-    elif student_t_df is not None and student_t_df <= 5.0:
-        tail_penalty = 0.75
+    # v3.9 Cross-cutting T-A: Per-stock tail_df sourced from each model's
+    # *Result dataclass (CreditRiskResult.tail_df, DividendSafetyResult.tail_df,
+    # PriceTargetResult.tail_df). When a per-stock ``tail_df`` column is
+    # present on any of the input frames we use it to compute a **per-stock**
+    # tail penalty rather than broadcasting the global ``student_t_df``.
+    # Falls back to the global scalar when no per-stock column is available
+    # (backwards compatible with prior v3.8 behaviour).
+    per_stock_tail_df: pd.Series | None = None
+    for src in (pt, mc, kal):
+        if "tail_df" in src.columns:
+            cand = (
+                src[["isin", "tail_df"]].dropna(subset=["tail_df"]).drop_duplicates(subset=["isin"])
+            )
+            if not cand.empty:
+                per_stock_tail_df = cand.set_index("isin")["tail_df"]
+                break
+
+    def _df_to_penalty(df_value: float) -> float:
+        if not np.isfinite(df_value):
+            return 1.0
+        if df_value <= 3.0:
+            return 0.5
+        if df_value <= 5.0:
+            return 0.75
+        return 1.0
+
+    if per_stock_tail_df is not None:
+        tri["tail_df"] = tri["isin"].map(per_stock_tail_df).astype(float)
+        # Backfill with the global scalar when individual rows are missing
+        if student_t_df is not None:
+            tri["tail_df"] = tri["tail_df"].fillna(float(student_t_df))
+        tri["tail_penalty"] = tri["tail_df"].map(_df_to_penalty).fillna(1.0)
+        tail_penalty = float(tri["tail_penalty"].mean())
     else:
-        tail_penalty = 1.0
-    tri["tail_penalty"] = tail_penalty
-    tri["blended_conviction"] = tri["agreement_score"] * tail_penalty
+        if student_t_df is not None and student_t_df <= 3.0:
+            tail_penalty = 0.5
+        elif student_t_df is not None and student_t_df <= 5.0:
+            tail_penalty = 0.75
+        else:
+            tail_penalty = 1.0
+        tri["tail_df"] = float(student_t_df) if student_t_df is not None else float("nan")
+        tri["tail_penalty"] = tail_penalty
+    tri["blended_conviction"] = tri["agreement_score"] * tri["tail_penalty"]
 
     # v3.9: Expose CVaR column when available on MC output (Finding #3 risk management)
     cvar_col = f"cvar_{int(cvar_alpha * 100)}"
@@ -218,6 +257,12 @@ def build_quad_model_alignment(
     anomaly_severity_threshold: float | None = None,
     mcmc_result: dict | None = None,
     use_macro_tilt: bool = True,  # v3.9: regional tilt from macro covariates
+    # v3.10 T-E — optional realised outcomes per model for centralised BMA
+    # weighting via ``ModelConfidenceEstimator.compute_relative_confidence``.
+    # Pass a mapping ``{model_name: (probs, outcomes)}`` and ``bma_weights``
+    # will be overridden with the log-score-derived softmax weights. Falls
+    # back to the static dict when ``None`` (default / backwards compatible).
+    validation_outcomes: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> pd.DataFrame:
     """Extend tri-model alignment with up to 4 additional model signals.
 
@@ -234,6 +279,7 @@ def build_quad_model_alignment(
 
     Parameters
     ----------
+    bma_weights
     tri : pd.DataFrame
         Tri-model alignment output (must contain ``mc_bullish``, ``kal_bullish``,
         ``pt_bullish``).
@@ -279,6 +325,31 @@ def build_quad_model_alignment(
             "credit": 0.10,
             "div": 0.05,
         }
+
+    # v3.10 T-E — centralise BMA log-score weighting in
+    # ``ModelConfidenceEstimator.compute_relative_confidence`` when the caller
+    # provides realised outcomes per model. Backwards compatible: unchanged
+    # behaviour when ``validation_outcomes`` is ``None``.
+    if validation_outcomes:
+        try:
+            from probabilistic_ml_model.statistical_functions.probability_models import (
+                ModelConfidenceEstimator,
+            )
+
+            _mce = ModelConfidenceEstimator(n_bins=10, use_quantile_bins=True)
+            _rel = _mce.compute_relative_confidence(validation_outcomes, bootstrap_iters=0)
+            if not _rel.empty and "bma_weight" in _rel.columns:
+                learned = {str(r.model): float(r.bma_weight) for r in _rel.itertuples()}
+                # Merge learned weights into the default dict, keeping entries
+                # for models without validation data.
+                bma_weights = {**bma_weights, **learned}
+                logger.info(
+                    "Quad-model BMA weights overridden via ModelConfidenceEstimator (T-E): %s",
+                    {k: round(v, 4) for k, v in learned.items()},
+                )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("T-E BMA weight override skipped: %s", exc)
+
     _bma_total = sum(bma_weights.values()) or 1.0
     bma_weights = {k: v / _bma_total for k, v in bma_weights.items()}
 
@@ -395,11 +466,9 @@ def build_quad_model_alignment(
         + quad["pt_bullish"].astype(int)
         + quad["beat_bullish"]
     )
-    quad["risk_quality_score"] = (
-        quad["credit_safe"] + quad["div_safe"] + quad["anomaly_clean"]
-    )
-    quad["full_consensus"] = (
-        (quad["directional_agreement"] == 4) & (quad["risk_quality_score"] >= 2)
+    quad["risk_quality_score"] = quad["credit_safe"] + quad["div_safe"] + quad["anomaly_clean"]
+    quad["full_consensus"] = (quad["directional_agreement"] == 4) & (
+        quad["risk_quality_score"] >= 2
     )
 
     # Legacy flat agreement kept for backward compatibility
@@ -460,7 +529,7 @@ def build_quad_model_alignment(
     ) / total_w
 
     # --- Task 3: Bayesian shrinkage toward MCMC posterior ---
-    if mcmc_result and mcmc_result.get("posterior_mean") is not None:
+    if mcmc_result.get("posterior_mean") is not None:
         mcmc_mu = mcmc_result["posterior_mean"]
         mcmc_std = mcmc_result.get("posterior_std", 1.0)
 
@@ -608,27 +677,39 @@ def build_expected_returns_summary(
         )
         .merge(
             earn[
-                [
-                    "isin",
-                    "posterior_beat_prob",
-                    "posterior_std",
-                    "confidence_score",
-                    "beat_classification",
-                    "base_posterior_mean",
-                    "resampled_posterior_mean",
-                    "technical_adjustment",
-                    "momentum_signal",
-                    "volatility_regime_score",
-                    "credible_interval_90",
-                    "credible_interval_95",
-                    "prob_beat_given_momentum",
-                    "streak_type",
-                    "continuation_probability",
-                    "mean_reversion_probability",
-                    "expected_next_outcome",
-                    "prediction_confidence",
-                    "model_confidence",
-                    "map_estimate",
+                ["isin"]
+                + [
+                    c
+                    for c in [
+                        "posterior_beat_prob",
+                        "posterior_std",
+                        "confidence_score",
+                        "beat_classification",
+                        "base_posterior_mean",
+                        "resampled_posterior_mean",
+                        "technical_adjustment",
+                        "momentum_signal",
+                        "volatility_regime_score",
+                        "credible_interval_90",
+                        "credible_interval_95",
+                        "prob_beat_given_momentum",
+                        # v3.10 §15.1 ResampledBeat posterior spread & chain diagnostics
+                        "hdi_low",
+                        "hdi_high",
+                        "chain_rhat",
+                        "chain_ess_bulk",
+                        "chain_ess_tail",
+                        "n_effective_samples",
+                        "volatility_regime",
+                        "streak_type",
+                        "continuation_probability",
+                        "mean_reversion_probability",
+                        "expected_next_outcome",
+                        "prediction_confidence",
+                        "model_confidence",
+                        "map_estimate",
+                    ]
+                    if c in earn.columns
                 ]
             ],
             on="isin",
@@ -890,9 +971,7 @@ def build_expected_returns_summary(
     if "kalman_variance" in summary.columns:
         max_var = summary["kalman_variance"].quantile(0.95)
         if max_var > 0:
-            kal_weight = (
-                1 - summary["kalman_variance"].clip(0, max_var) / max_var
-            ).clip(0.2, 0.9)
+            kal_weight = (1 - summary["kalman_variance"].clip(0, max_var) / max_var).clip(0.2, 0.9)
         else:
             kal_weight = 0.5
     else:

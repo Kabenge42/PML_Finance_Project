@@ -1,34 +1,34 @@
 [
   {
     "metric": "Total Stocks Analyzed",
-    "value": 6685.0
+    "value": 6677.0
   },
   {
     "metric": "Mean Posterior Beat Probability",
-    "value": 0.6010439291
+    "value": 0.5951962039
   },
   {
     "metric": "Median Posterior Beat Probability",
-    "value": 0.6
+    "value": 0.5882352941
   },
   {
     "metric": "Stocks Classified as Likely Beat",
-    "value": 4935.0
+    "value": 4860.0
   },
   {
     "metric": "Mean Confidence Score",
-    "value": 0.3814011365
+    "value": 0.3789228825
   },
   {
     "metric": "Mean Streak Length",
-    "value": 3.6406881077
+    "value": 3.6414557436
   },
   {
     "metric": "Stocks with Beat Streak",
-    "value": 5915.0
+    "value": 5908.0
   },
   {
     "metric": "Stocks with Miss Streak",
-    "value": 770.0
+    "value": 769.0
   }
 ]
