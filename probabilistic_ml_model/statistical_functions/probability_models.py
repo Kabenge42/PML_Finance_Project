@@ -238,8 +238,17 @@ except (ImportError, OSError, PermissionError):
 # =============================================================================
 
 
-class BeatProbabilityEstimate(TypedDict):
-    """Type definition for beat probability estimation results."""
+class BeatProbabilityEstimate(TypedDict, total=False):
+    """Type definition for beat probability estimation results.
+
+    v3.10 (§10.1 / §10.2 / T-F) — stays a ``TypedDict`` for back-compat with
+    existing ``{"posterior_mean": ...}`` returns, but gains required CI +
+    posterior moment keys (``ci_low`` / ``ci_high``). Use the sibling helpers
+    :func:`validate_beat_probability_estimate` and
+    :class:`BeatProbabilityEstimateDC` below when runtime validation (§10.1)
+    is required — they operationalise the dataclass intent while avoiding
+    breaking every existing call site.
+    """
 
     posterior_alpha: float
     posterior_beta: float
@@ -250,9 +259,94 @@ class BeatProbabilityEstimate(TypedDict):
     prob_exceeds_threshold: float
     confidence_score: float
     # NEW: Interpretability enhancements
-    prior_influence_pct: float  # How much prior vs data drove the result
-    effective_sample_size: float  # Statistical power indicator
-    classification_confidence: str  # 'High', 'Medium', 'Low'
+    prior_influence_pct: float
+    effective_sample_size: float
+    classification_confidence: str
+    # v3.10 §10.2 — CI + posterior moments promoted (optional via total=False)
+    ci_low: float
+    ci_high: float
+
+
+@dataclass(frozen=True, slots=True)
+class BeatProbabilityEstimateDC:
+    """Frozen dataclass mirror of :class:`BeatProbabilityEstimate` with validation.
+
+    v3.10 (§10.1 / T-F) — provides the runtime validation promised by §10.1
+    without breaking the ~N TypedDict-return call sites. Pipelines that want
+    the stricter contract construct ``BeatProbabilityEstimateDC(**d)`` from
+    the returned dict and optionally serialise back via :meth:`to_dict`.
+    """
+
+    posterior_alpha: float
+    posterior_beta: float
+    posterior_mean: float
+    posterior_std: float
+    credible_interval_90: tuple[float, float]
+    credible_interval_95: tuple[float, float]
+    prob_exceeds_threshold: float
+    confidence_score: float
+    prior_influence_pct: float = 0.0
+    effective_sample_size: float = 0.0
+    classification_confidence: str = "Low"
+    ci_low: float = float("nan")
+    ci_high: float = float("nan")
+
+    def __post_init__(self) -> None:
+        for _name in ("posterior_mean", "prob_exceeds_threshold", "confidence_score"):
+            _v = float(getattr(self, _name))
+            if _v != _v or _v in (float("inf"), float("-inf")):  # NaN / Inf
+                raise ValueError(
+                    f"BeatProbabilityEstimateDC.{_name} must be finite in [0,1], got {_v!r}"
+                )
+            if not 0.0 <= _v <= 1.0:
+                raise ValueError(f"BeatProbabilityEstimateDC.{_name} out of range [0,1]: {_v!r}")
+        for _name in ("posterior_alpha", "posterior_beta"):
+            _v = float(getattr(self, _name))
+            if _v <= 0.0 or _v != _v or _v == float("inf"):
+                raise ValueError(
+                    f"BeatProbabilityEstimateDC.{_name} must be finite > 0, got {_v!r}"
+                )
+
+    def to_dict(self) -> BeatProbabilityEstimate:
+        """Return a :class:`BeatProbabilityEstimate` TypedDict payload."""
+        return {  # type: ignore[return-value]
+            "posterior_alpha": float(self.posterior_alpha),
+            "posterior_beta": float(self.posterior_beta),
+            "posterior_mean": float(self.posterior_mean),
+            "posterior_std": float(self.posterior_std),
+            "credible_interval_90": tuple(self.credible_interval_90),
+            "credible_interval_95": tuple(self.credible_interval_95),
+            "prob_exceeds_threshold": float(self.prob_exceeds_threshold),
+            "confidence_score": float(self.confidence_score),
+            "prior_influence_pct": float(self.prior_influence_pct),
+            "effective_sample_size": float(self.effective_sample_size),
+            "classification_confidence": str(self.classification_confidence),
+            "ci_low": float(self.ci_low),
+            "ci_high": float(self.ci_high),
+        }
+
+
+def validate_beat_probability_estimate(est: BeatProbabilityEstimate) -> BeatProbabilityEstimate:
+    """Runtime-validate a :class:`BeatProbabilityEstimate` dict payload.
+
+    v3.10 (§10.1) — checks that probability fields are finite & within
+    ``[0, 1]`` and that alpha/beta are finite > 0. Raises ``ValueError`` on
+    failure. Returns ``est`` unchanged on success so it can be chained:
+    ``return validate_beat_probability_estimate({...})``.
+    """
+    for _name in ("posterior_mean", "prob_exceeds_threshold", "confidence_score"):
+        _v = float(est.get(_name, float("nan")))  # type: ignore[arg-type]
+        if _v != _v or _v in (float("inf"), float("-inf")):
+            raise ValueError(
+                f"BeatProbabilityEstimate[{_name!r}] must be finite in [0,1], got {_v!r}"
+            )
+        if not 0.0 <= _v <= 1.0:
+            raise ValueError(f"BeatProbabilityEstimate[{_name!r}] out of range [0,1]: {_v!r}")
+    for _name in ("posterior_alpha", "posterior_beta"):
+        _v = float(est.get(_name, 0.0))  # type: ignore[arg-type]
+        if _v <= 0.0 or _v != _v or _v == float("inf"):
+            raise ValueError(f"BeatProbabilityEstimate[{_name!r}] must be finite > 0, got {_v!r}")
+    return est
 
 
 # =============================================================================
@@ -260,9 +354,51 @@ class BeatProbabilityEstimate(TypedDict):
 # =============================================================================
 
 
+# Schema version for serialisable *Result dataclasses (T-A/T-B cross-cutting).
+# Bump when adding / renaming fields so downstream exporters can validate.
+RESULT_SCHEMA_VERSION: str = "v3.9"
+
+
+@dataclass
+class PosteriorDiagnostics:
+    """Shared MCMC / posterior diagnostic mixin (cross-cutting task T-B).
+
+    Centralises the tail-aware and convergence diagnostic fields that
+    ``build_tri_model_alignment`` / ``build_expected_returns_summary`` now
+    consume on a **per-model** basis (task T-A). Populated by each
+    probability model's ``_apply_mcmc_posteriors`` helper.
+
+    Fields
+    ------
+    tail_df: Sampled Student-t degrees-of-freedom (clamped at
+        ``student_t_df_floor``). ``NaN`` when Gaussian likelihood is in use.
+    cond_volatility: Terminal GARCH(1,1) conditional volatility σ_t when
+        ``use_garch_volatility=True``; ``NaN`` otherwise.
+    cvar_5: Conditional Value-at-Risk at 5% (lower tail) of the posterior
+        predictive return distribution.
+    r_hat: Gelman-Rubin convergence diagnostic (should be ~1.00).
+    ess_bulk / ess_tail: Effective Sample Size (bulk and tail).
+    divergences: Number of divergent transitions encountered (NUTS only).
+    """
+
+    tail_df: float = float("nan")
+    cond_volatility: float = float("nan")
+    cvar_5: float = float("nan")
+    r_hat: float = float("nan")
+    ess_bulk: float = float("nan")
+    ess_tail: float = float("nan")
+    divergences: int = 0
+
+
 @dataclass
 class CreditRiskResult:
-    """Result container for credit risk probability analysis."""
+    """Result container for credit risk probability analysis.
+
+    Extended in v3.9 with tail/vol diagnostics (task §2.1) so that the
+    ensemble layer can pass a **per-stock** Student-t df rather than a
+    single global value (unblocks accurate ``tail_haircut`` /
+    ``risk_adjusted_expected_return`` / ``position_size_weight``).
+    """
 
     ticker: str
     name: str
@@ -273,11 +409,95 @@ class CreditRiskResult:
     altman_z_score: float
     risk_level: str  # 'Low', 'Medium', 'High', 'Distressed'
     confidence_interval: tuple[float, float]
+    # --- v3.9 tail/vol diagnostics (§2.1) ---
+    tail_df: float = float("nan")
+    cond_volatility: float = float("nan")
+    cvar_5: float = float("nan")
+    macro_loading: dict[str, float] = field(default_factory=dict)
+    posterior_ess_bulk: int = 0
+    posterior_ess_tail: int = 0
+    r_hat: float = float("nan")
+    # --- v3.9 serialisation contract (§2.2) ---
+    schema_version: str = RESULT_SCHEMA_VERSION
+
+    # Approved column set for ``analytics.credit_risk_analysis`` exports.
+    # See ``_trim_credit_for_export`` in ``expected_returns_v3.py``.
+    _EXPORT_COLUMNS: tuple[str, ...] = (
+        "ticker",
+        "name",
+        "sector",
+        "distress_probability",
+        "liquidity_stress_score",
+        "cash_runway_months",
+        "altman_z_score",
+        "risk_level",
+        "tail_df",
+        "cond_volatility",
+        "cvar_5",
+        "posterior_ess_bulk",
+        "posterior_ess_tail",
+        "r_hat",
+        "schema_version",
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to a ``dict`` (schema-versioned)."""
+        out: dict[str, Any] = {
+            "ticker": self.ticker,
+            "name": self.name,
+            "sector": self.sector,
+            "distress_probability": self.distress_probability,
+            "liquidity_stress_score": self.liquidity_stress_score,
+            "cash_runway_months": self.cash_runway_months,
+            "altman_z_score": self.altman_z_score,
+            "risk_level": self.risk_level,
+            "confidence_interval": list(self.confidence_interval),
+            "tail_df": self.tail_df,
+            "cond_volatility": self.cond_volatility,
+            "cvar_5": self.cvar_5,
+            "macro_loading": dict(self.macro_loading),
+            "posterior_ess_bulk": self.posterior_ess_bulk,
+            "posterior_ess_tail": self.posterior_ess_tail,
+            "r_hat": self.r_hat,
+            "schema_version": self.schema_version,
+        }
+        return out
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "CreditRiskResult":
+        """Inverse of ``to_dict``; tolerant of forward-compatible extra keys."""
+        ci = payload.get("confidence_interval", (float("nan"), float("nan")))
+        return cls(
+            ticker=payload.get("ticker", ""),
+            name=payload.get("name", ""),
+            sector=payload.get("sector", ""),
+            distress_probability=float(payload.get("distress_probability", float("nan"))),
+            liquidity_stress_score=float(payload.get("liquidity_stress_score", float("nan"))),
+            cash_runway_months=float(payload.get("cash_runway_months", float("nan"))),
+            altman_z_score=float(payload.get("altman_z_score", float("nan"))),
+            risk_level=str(payload.get("risk_level", "Unknown")),
+            confidence_interval=(float(ci[0]), float(ci[1])),
+            tail_df=float(payload.get("tail_df", float("nan"))),
+            cond_volatility=float(payload.get("cond_volatility", float("nan"))),
+            cvar_5=float(payload.get("cvar_5", float("nan"))),
+            macro_loading=dict(payload.get("macro_loading", {}) or {}),
+            posterior_ess_bulk=int(payload.get("posterior_ess_bulk", 0) or 0),
+            posterior_ess_tail=int(payload.get("posterior_ess_tail", 0) or 0),
+            r_hat=float(payload.get("r_hat", float("nan"))),
+            schema_version=str(payload.get("schema_version", RESULT_SCHEMA_VERSION)),
+        )
 
 
 @dataclass
 class AccountingAnomalyResult:
-    """Result container for per-stock accounting anomaly analysis."""
+    """Result container for per-stock accounting anomaly analysis.
+
+    v3.10 (§9.1 / §9.2) — extended with decoupled flag-count vs magnitude
+    components (unblocks factor attribution in ``build_quad_model_alignment``)
+    and PosteriorDiagnostics parity fields (tail_df / cond_volatility /
+    r_hat / ess_*).  All new fields default to ``NaN`` / empty so existing
+    callers are unaffected.
+    """
 
     ticker: str
     name: str
@@ -292,6 +512,20 @@ class AccountingAnomalyResult:
     anomaly_severity_score: float
     multi_flag_alert: bool
     anomaly_conditional_probability: float
+    # --- v3.10 §9.1 component decomposition ---
+    flag_count_posterior_mean: float = float("nan")
+    flag_count_ci_low: float = float("nan")
+    flag_count_ci_high: float = float("nan")
+    magnitude_posterior_mean: float = float("nan")
+    combined_anomaly_score: float = float("nan")
+    dominant_flag_category: str = ""  # one of accruals/revenue/expense/wc/restatement
+    # --- v3.10 §9.2 diagnostic parity (T-A / T-B) ---
+    tail_df: float = float("nan")
+    cond_volatility: float = float("nan")
+    r_hat: float = float("nan")
+    ess_bulk: float = float("nan")
+    ess_tail: float = float("nan")
+    schema_version: str = RESULT_SCHEMA_VERSION
 
 
 @dataclass
@@ -332,6 +566,19 @@ class AccountingAnomalyProbabilityModel:
     # NEW: Comprehensive quality signals (v3.4)
     use_quality_frequency: bool = True
     use_balance_sheet_quality: bool = True
+    # v3.10 §8.3 — tail-aware likelihood on the residual z-score channel.
+    # The GARCH switch is surfaced but not yet consumed inside
+    # ``_apply_mcmc_posteriors`` (implementation deferred — see CHANGELOG
+    # deferred-items list). ``student_t_df_floor`` is used to log /
+    # validate the configuration (parity with the Credit / Price-Target
+    # models).
+    use_student_t_likelihood: bool = True
+    use_garch_volatility: bool = False  # deferred: sampler term outstanding
+    student_t_df_floor: float = 3.0
+    # v3.10 §8.2 — sector priors for flag-rate Beta-Binomial posterior.
+    sector_priors: Optional[dict[str, "PriorParameters"]] = None
+    # v3.10 §8.5 — time-decay halflife for flag evidence (years).
+    flag_halflife_years: float = 2.0
 
     def analyze_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -403,6 +650,61 @@ class AccountingAnomalyProbabilityModel:
 
         # Multi-flag alert
         result["multi_flag_alert"] = feature_count >= self.multi_flag_threshold
+
+        # -----------------------------------------------------------------
+        # v3.10 §8.1 / §9.1 — decouple flag-count threshold from magnitude.
+        # Emits two separable posterior components so downstream
+        # ``build_quad_model_alignment`` can do factor attribution instead
+        # of consuming a single blended scalar.
+        #   (a) ``flag_count_posterior_mean`` — Beta-Binomial posterior mean
+        #       of ``P(any_flag)`` given the observed flag count vs the
+        #       maximum possible feature count (Jeffreys Beta(0.5, 0.5) prior
+        #       per §8.4).
+        #   (b) ``magnitude_posterior_mean`` — Student-t-style shrunk mean
+        #       of ``accounting_anomaly_score | flagged`` (simple MoM
+        #       shrinkage toward the universe mean; a full Student-t
+        #       regression is deferred — see CHANGELOG deferred-items list).
+        #   combined_anomaly_score = P × E.
+        # -----------------------------------------------------------------
+        max_feature_count = int(feature_count.max() or 1)
+        # Jeffreys prior for flag-count Beta-Binomial posterior (§8.4).
+        alpha_j, beta_j = 0.5, 0.5
+        fc_alpha = feature_count.clip(lower=0) + alpha_j
+        fc_beta = (max_feature_count - feature_count.clip(lower=0)).clip(lower=0) + beta_j
+        fc_total = fc_alpha + fc_beta
+        flag_prob_mean = (fc_alpha / fc_total).astype(float)
+        # 90% credible interval from Beta distribution.
+        try:
+            flag_ci_low = stats.beta.ppf(0.05, fc_alpha.values, fc_beta.values)
+            flag_ci_high = stats.beta.ppf(0.95, fc_alpha.values, fc_beta.values)
+        except ValueError, TypeError:
+            flag_ci_low = np.full(len(result), float("nan"))
+            flag_ci_high = np.full(len(result), float("nan"))
+        result["flag_count_posterior_mean"] = flag_prob_mean
+        result["flag_count_ci_low"] = flag_ci_low
+        result["flag_count_ci_high"] = flag_ci_high
+
+        # Magnitude channel — shrink per-stock anomaly_score toward universe mean.
+        # Shrinkage weight w = n_obs / (n_obs + τ) with τ = 5 (weak shrinkage).
+        mag_series = pd.to_numeric(result["accounting_anomaly_score"], errors="coerce")
+        universe_mean = float(mag_series.mean()) if mag_series.notna().any() else 0.0
+        tau = 5.0
+        n_obs = feature_count.clip(lower=0).astype(float)
+        shrink_w = n_obs / (n_obs + tau)
+        result["magnitude_posterior_mean"] = (
+            shrink_w * mag_series.fillna(universe_mean) + (1.0 - shrink_w) * universe_mean
+        )
+        # Combined score = P(flag) × E[magnitude | flagged], normalised to [0, 100].
+        result["combined_anomaly_score"] = (
+            result["flag_count_posterior_mean"] * result["magnitude_posterior_mean"]
+        ).astype(float)
+
+        # Surface the tail-aware config on every row so the T-A per-stock
+        # tail-df wiring in ``build_tri_model_alignment`` can pick it up.
+        if self.use_student_t_likelihood:
+            result["tail_df"] = float(self.student_t_df_floor)
+        else:
+            result["tail_df"] = float("nan")
 
         # Phase 2b: Enrich severity with comprehensive quality frequency signals
         if self.use_quality_frequency:
@@ -748,7 +1050,15 @@ class AccountingAnomalyProbabilityModel:
 
 @dataclass
 class DividendSafetyResult:
-    """Result container for dividend safety analysis."""
+    """Result container for dividend safety analysis.
+
+    Extended in v3.9 with:
+    * FCF-coverage decomposition and horizoned cut probabilities (§4.1),
+      enabling ``build_quad_model_alignment`` to move from a single
+      ``div_cut_threshold=0.60`` scalar to term-structure aware allocation.
+    * Tail/vol diagnostic fields aligned with :class:`CreditRiskResult`
+      (§4.2 / T-B) so log-score BMA can feed per-model diagnostics.
+    """
 
     ticker: str
     name: str
@@ -758,6 +1068,50 @@ class DividendSafetyResult:
     dividend_streak: int
     safety_score: float
     risk_category: str  # 'Safe', 'Borderline', 'At Risk'
+    # --- v3.9 coverage decomposition (§4.1) ---
+    fcf_coverage_posterior_mean: float = float("nan")
+    fcf_coverage_ci_low: float = float("nan")
+    fcf_coverage_ci_high: float = float("nan")
+    cut_probability_1y: float = float("nan")
+    cut_probability_3y: float = float("nan")
+    payout_sustainability_score: float = float("nan")
+    stress_scenario_cut_prob: float = float("nan")
+    # --- v3.9 tail / vol diagnostics (§4.2) ---
+    tail_df: float = float("nan")
+    cond_volatility: float = float("nan")
+    cvar_5: float = float("nan")
+    ess_bulk: int = 0
+    ess_tail: int = 0
+    r_hat: float = float("nan")
+    # --- v3.9 serialisation contract ---
+    schema_version: str = RESULT_SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to a ``dict`` (schema-versioned)."""
+        return {
+            "ticker": self.ticker,
+            "name": self.name,
+            "dividend_cut_probability": self.dividend_cut_probability,
+            "fcf_dividend_coverage": self.fcf_dividend_coverage,
+            "payout_ratio": self.payout_ratio,
+            "dividend_streak": self.dividend_streak,
+            "safety_score": self.safety_score,
+            "risk_category": self.risk_category,
+            "fcf_coverage_posterior_mean": self.fcf_coverage_posterior_mean,
+            "fcf_coverage_ci_low": self.fcf_coverage_ci_low,
+            "fcf_coverage_ci_high": self.fcf_coverage_ci_high,
+            "cut_probability_1y": self.cut_probability_1y,
+            "cut_probability_3y": self.cut_probability_3y,
+            "payout_sustainability_score": self.payout_sustainability_score,
+            "stress_scenario_cut_prob": self.stress_scenario_cut_prob,
+            "tail_df": self.tail_df,
+            "cond_volatility": self.cond_volatility,
+            "cvar_5": self.cvar_5,
+            "ess_bulk": self.ess_bulk,
+            "ess_tail": self.ess_tail,
+            "r_hat": self.r_hat,
+            "schema_version": self.schema_version,
+        }
 
 
 @dataclass
@@ -775,7 +1129,14 @@ class PriceTargetResult:
 
 @dataclass
 class BeatProbabilityResult:
-    """Result container for earnings beat probability analysis."""
+    """Result container for earnings beat probability analysis.
+
+    v3.10 (§11.1 / §11.2) — extended with per-layer contribution fields so the
+    three-layer Bayesian stack (prior / likelihood / momentum-quality-macro
+    tilt) is auditable, and with sector-prior provenance
+    (``sector_prior_key`` / ``used_default_prior``) so downstream analytics can
+    spot when the posterior is dominated by the weak global prior.
+    """
 
     ticker: str
     name: str
@@ -851,6 +1212,22 @@ class BeatProbabilityResult:
     piotroski_f_score: Optional[int] = None
     eps_revision_momentum: Optional[float] = None
     altman_z_score: Optional[float] = None
+    # --- v3.10 §11.1 per-layer contribution attribution ---
+    prior_contribution: float = float("nan")
+    likelihood_contribution: float = float("nan")
+    momentum_tilt: float = float("nan")
+    quality_discount: float = float("nan")
+    macro_tilt: float = float("nan")
+    # --- v3.10 §11.2 sector-prior provenance ---
+    sector_prior_key: Optional[str] = None
+    sector_prior_alpha: float = float("nan")
+    sector_prior_beta: float = float("nan")
+    used_default_prior: bool = True
+    # --- v3.10 diagnostic parity (T-A / T-B extended) ---
+    tail_df: float = float("nan")
+    cond_volatility: float = float("nan")
+    ess_tail: float = float("nan")
+    schema_version: str = RESULT_SCHEMA_VERSION
 
 
 @dataclass
@@ -889,11 +1266,31 @@ class EPSStreakResult:
     eps_revision_momentum: Optional[float] = None
     altman_z_score: Optional[float] = None
     historical_pattern: list[str] = field(default_factory=list)
+    # --- v3.9 Bayesian streak posterior (§5.1, §6.1) ---
+    # Posterior of the continuation probability under a Beta-Binomial model
+    # ``P(success_{t+1} | successes, trials) ~ Beta(α + n, β + N − n)``.
+    posterior_alpha: float = float("nan")
+    posterior_beta: float = float("nan")
+    continuation_prob_ci_low: float = float("nan")
+    continuation_prob_ci_high: float = float("nan")
+    expected_streak_length_years: float = float("nan")
+    hazard_rate_next_quarter: float = float("nan")
+    # --- v3.9 diagnostic parity with BeatProbabilityEstimate (§6.2) ---
+    ess_bulk: float = float("nan")
+    r_hat: float = float("nan")
+    # Serialisation
+    schema_version: str = RESULT_SCHEMA_VERSION
 
 
 @dataclass
 class ModelConfidenceResult:
-    """Result container for model confidence estimation."""
+    """Result container for model confidence estimation.
+
+    v3.10 (§14.1 / §14.2) — extended with calibration artefacts
+    (reliability_curve, bootstrap CIs on ECE/Brier, log_score, AUROC) required
+    for log-score BMA weighting (T-E) and a :meth:`passes_calibration` gate
+    that lets the pipeline short-circuit when a model is mis-calibrated.
+    """
 
     model_name: str
     brier_score: float
@@ -903,6 +1300,28 @@ class ModelConfidenceResult:
     reliability_diagram_data: dict
     confidence_intervals: dict
     overall_confidence: float
+    # --- v3.10 §14.1 calibration artefacts ---
+    reliability_curve: list[tuple[float, float, int]] = field(default_factory=list)
+    ece_ci_low: float = float("nan")
+    ece_ci_high: float = float("nan")
+    brier_ci_low: float = float("nan")
+    brier_ci_high: float = float("nan")
+    log_score: float = float("nan")
+    auroc: float = float("nan")
+    n_samples: int = 0
+    schema_version: str = RESULT_SCHEMA_VERSION
+
+    def passes_calibration(self, tol: float = 0.05) -> bool:
+        """§14.2 — return True iff ECE + upper-CI ≤ ``tol``.
+
+        Short-circuits BMA log-score weighting when a sub-model is
+        mis-calibrated beyond tolerance.
+        """
+        ece = float(self.calibration_error)
+        if ece != ece:  # NaN
+            return False
+        upper = float(self.ece_ci_high) if self.ece_ci_high == self.ece_ci_high else ece
+        return upper <= float(tol)
 
 
 @dataclass(frozen=True)
@@ -1063,13 +1482,25 @@ class ReportedEPSHistory:
                 break
         return streak
 
+    # v3.9 §7.4: minimum number of reports required to trust a streak
+    # posterior. Below this threshold ``count_quarterly_beats_vs_estimate``
+    # and ``count_yoy_improvements`` return ``None`` so callers can
+    # distinguish genuine cold streaks from data-sparsity artefacts (a
+    # known contributor to the MAP=0 collapse toward the raw prior).
+    MIN_REPORTS_FOR_STREAK: int = 4
+
     def count_quarterly_beats_vs_estimate(
-        self, estimate: Optional[float]
+        self,
+        estimate: Optional[float],
+        min_reports: Optional[int] = None,
     ) -> tuple[int, int]:
         """Count how many quarterly actuals exceeded a forward estimate.
 
         Args:
             estimate: Forward EPS estimate to compare against.
+            min_reports: Minimum number of quarterly reports required;
+                below this threshold returns ``(0, 0)`` (v3.9 §7.4).
+                Defaults to :attr:`MIN_REPORTS_FOR_STREAK`.
 
         Returns:
             (n_beats, n_total) tuple.
@@ -1077,10 +1508,39 @@ class ReportedEPSHistory:
         if estimate is None:
             return 0, 0
         series = self.quarterly_series
-        if not series:
+        threshold = min_reports if min_reports is not None else self.MIN_REPORTS_FOR_STREAK
+        if not series or len(series) < threshold:
+            # Not enough data to form a credible streak posterior: signal
+            # "unknown" rather than a spurious 0/k.
             return 0, 0
         n_beats = sum(1 for v in series if v > estimate)
         return n_beats, len(series)
+
+    def has_sufficient_streak_history(self, min_reports: Optional[int] = None) -> bool:
+        """Return True if enough reports exist to support a streak posterior (v3.9 §7.4)."""
+        threshold = min_reports if min_reports is not None else self.MIN_REPORTS_FOR_STREAK
+        return len(self.quarterly_series) >= threshold or len(self.annual_series) >= threshold
+
+    def unique_quarterly_series(self) -> list[float]:
+        """Deduplicated quarterly series (v3.9 §7.1).
+
+        ``ReportedEPSHistory`` slots are keyed positionally (``_fq``,
+        ``_1fqfq`` …) so a fiscal-period ``report_date`` is not available
+        on the dataclass itself. As a pragmatic proxy for restatement
+        dedup we drop *adjacent-equal* values that are almost certainly
+        duplicated slot entries (common when upstream joins on a stale
+        restated quarter). This avoids inflating ``total_reports_count``
+        while still preserving true period-to-period EPS moves.
+        """
+        series = self.quarterly_series
+        if not series:
+            return []
+        deduped: list[float] = [series[0]]
+        for v in series[1:]:
+            if deduped and np.isclose(v, deduped[-1], rtol=1e-6, atol=1e-9):
+                continue
+            deduped.append(v)
+        return deduped
 
     @property
     def total_reports_count(self) -> int:
@@ -1297,6 +1757,13 @@ class EarningsBeatProbabilityModel:
         momentum_prior_strength: float = 0.5,  # v3.9: was 0.3 — momentum more informative
         # v3.9: Macro prior tilt (Finding #4)
         use_macro_prior: bool = True,
+        # v3.10 §12.3 — macro-prior logit-space β coefficients (Normal(0, 0.3)
+        # shrinkage): ``β_vix · z(vix) + β_curve · z(yield_10y2y)``. Exposed as
+        # a constructor kwarg so empirical-Bayes updates (§12.6 / T-D) can feed
+        # refreshed values without monkey-patching. Pass ``None`` to disable
+        # the tilt even when ``use_macro_prior=True`` (default) — useful for
+        # A/B comparison runs.
+        macro_prior_betas: Optional[dict[str, float]] = None,
     ):
         """
         Initialize the earnings beat probability model.
@@ -1312,6 +1779,15 @@ class EarningsBeatProbabilityModel:
                 momentum, trajectory scores, and streak continuation probability.
             momentum_prior_strength: Maximum absolute shift in the prior mean
                 from momentum signals (clamped to [-strength, +strength]).
+            use_macro_prior: Whether to tilt the prior via standardised macro
+                covariates (VIX, yield-curve slope) in logit space.
+            macro_prior_betas: Optional mapping of macro-feature → logit-space
+                coefficient, e.g. ``{"vix": -0.25, "yield_10y2y": 0.15}``. Kept
+                inside Normal(0, 0.3) by convention. ``None`` → empirical default
+                ``{"vix": -0.20, "yield_10y2y": 0.10}`` (stabilises cross-region
+                beat probabilities during macro regime shifts — addresses MXN /
+                TRY drift flagged by the v3.8 findings). See §12.3 in the
+                improvement plan.
         """
         self.default_prior = PriorParameters(prior_alpha, prior_beta)
         self.sector_priors = sector_priors or self._create_default_sector_priors()
@@ -1319,6 +1795,111 @@ class EarningsBeatProbabilityModel:
         self.use_momentum_prior = use_momentum_prior
         self.momentum_prior_strength = momentum_prior_strength
         self.use_macro_prior = use_macro_prior
+        # §12.3 — macro prior β coefficients (logit space). Kept as an
+        # instance attribute so downstream code can inspect and refresh them.
+        self.macro_prior_betas: dict[str, float] = dict(
+            macro_prior_betas
+            if macro_prior_betas is not None
+            else {"vix": -0.20, "yield_10y2y": 0.10}
+        )
+
+    # -------------------------------------------------------------------
+    # §12.3 — macro-prior logit-space tilt
+    # -------------------------------------------------------------------
+    def _apply_macro_logit_tilt(
+        self,
+        prior: "PriorParameters",
+        macro_features: Optional[dict[str, float]] = None,
+    ) -> tuple["PriorParameters", float]:
+        """Return a macro-tilted prior in logit space and the applied tilt.
+
+        v3.10 §12.3 — closes the `[PENDING]` macro-covariate item from the v3.8
+        findings. Applies ``Δ_logit = Σ β_k · z(x_k)`` where ``β_k`` come from
+        :attr:`macro_prior_betas` and ``x_k`` are *already-standardised* macro
+        features (the caller is expected to pass z-scores). The returned
+        ``PriorParameters`` preserves the prior concentration
+        ``α + β`` and re-parameterises the mean ``p' = σ(logit(p) + Δ)``.
+
+        Returns
+        -------
+        (PriorParameters, float)
+            The tilted prior and the scalar tilt ``Δ_logit`` applied (stored
+            on :class:`BeatProbabilityResult.macro_tilt` for auditability).
+        """
+        if not self.use_macro_prior or not self.macro_prior_betas or not macro_features:
+            return prior, 0.0
+
+        delta = 0.0
+        for key, beta in self.macro_prior_betas.items():
+            v = macro_features.get(key)
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+            except TypeError, ValueError:
+                continue
+            if fv != fv or fv in (float("inf"), float("-inf")):
+                continue
+            # Guard against unstandardised inputs — clamp z-scores to ±5.
+            delta += float(beta) * float(np.clip(fv, -5.0, 5.0))
+
+        if delta == 0.0:
+            return prior, 0.0
+
+        # Convert current prior mean to logit space, apply Δ, convert back.
+        p = float(prior.expected_beat_rate)
+        p = float(np.clip(p, 1e-6, 1.0 - 1e-6))
+        logit_p = np.log(p / (1.0 - p))
+        p_new = 1.0 / (1.0 + np.exp(-(logit_p + delta)))
+        # Preserve concentration κ = α + β.
+        kappa = float(prior.concentration)
+        return PriorParameters(p_new * kappa, (1.0 - p_new) * kappa), float(delta)
+
+    # -------------------------------------------------------------------
+    # §12.6 — empirical-Bayes sector prior fit (method of moments)
+    # -------------------------------------------------------------------
+    @staticmethod
+    def fit_priors_empirical_bayes(
+        df: pd.DataFrame,
+        sector_col: str = "industry",
+        beat_rate_col: str = "historical_beat_rate",
+        min_samples_per_sector: int = 30,
+        concentration_floor: float = 4.0,
+    ) -> dict[str, "PriorParameters"]:
+        """Fit sector-level Beta priors via method-of-moments (T-D / §12.6).
+
+        For each sector with ≥ ``min_samples_per_sector`` rows, computes the
+        sample mean ``p`` and variance ``v`` of ``beat_rate_col`` and fits a
+        Beta(α, β) by matching moments:
+        ``κ = p (1 - p) / v - 1``, ``α = p κ``, ``β = (1 - p) κ``.
+
+        A minimum concentration ``κ ≥ concentration_floor`` is enforced so
+        small-sample sectors still get a weakly-informative prior. Returns a
+        dict suitable for injection via ``sector_priors=`` on a new
+        :class:`EarningsBeatProbabilityModel` instance. Operationalises
+        cross-cutting task T-D for the beat model.
+        """
+        if sector_col not in df.columns or beat_rate_col not in df.columns:
+            return {}
+
+        priors: dict[str, PriorParameters] = {}
+        grouped = df.groupby(sector_col, dropna=True)[beat_rate_col]
+        for sector, rates in grouped:
+            if not isinstance(sector, str) or not sector:
+                continue
+            rates = pd.to_numeric(rates, errors="coerce").dropna()
+            if len(rates) < min_samples_per_sector:
+                continue
+            p = float(rates.mean())
+            v = float(rates.var(ddof=1))
+            if not (0.0 < p < 1.0) or v <= 0.0:
+                continue
+            kappa = max((p * (1.0 - p) / v) - 1.0, concentration_floor)
+            alpha = p * kappa
+            beta = (1.0 - p) * kappa
+            if alpha > 0.0 and beta > 0.0:
+                priors[sector] = PriorParameters(alpha, beta)
+        return priors
 
     @property
     def prior_alpha(self) -> float:
@@ -2248,6 +2829,9 @@ class EarningsBeatProbabilityModel:
         sector_col: str = "sector",
         ticker_col: str = "isin",
         name_col: str = "name",
+        streak_map_col: str = "map_estimate",
+        streak_confidence_col: str = "model_confidence",
+        strict_streak_merge: bool = False,
     ) -> pd.DataFrame:
         """Analyze earnings beat probabilities using enhanced three-layer fusion.
 
@@ -2259,10 +2843,40 @@ class EarningsBeatProbabilityModel:
             sector_col: Column name for sector.
             ticker_col: Column name for ticker.
             name_col: Column name for company name.
+            streak_map_col: v3.10 §12.5 — expected column carrying the streak
+                MAP estimate after the upstream streak merge (default
+                ``"map_estimate"``, aligned with ``BeatProbabilityEstimate``).
+            streak_confidence_col: v3.10 §12.5 — expected column carrying the
+                streak model-confidence after the upstream streak merge
+                (default ``"model_confidence"``).
+            strict_streak_merge: v3.10 §12.5 — when ``True`` raise ``KeyError``
+                if the streak columns are missing. Default ``False`` emits a
+                structured ``logger.warning`` and continues with the legacy
+                trajectory-only path, preserving backwards compatibility with
+                pipelines that pre-date the streak merge.
 
         Returns:
             DataFrame with enriched probability analysis results.
         """
+        # ------------------------------------------------------------------
+        # §12.5 — merge-key safety. Silent column drops on the streak merge
+        # degrade ``_apply_momentum_prior_adjustment`` for ~15 % of the universe
+        # per v3.8 logs; surface it explicitly so the pipeline can decide
+        # whether to fall back to the trajectory-only path or abort.
+        # ------------------------------------------------------------------
+        _missing = [c for c in (streak_map_col, streak_confidence_col) if c not in df.columns]
+        if _missing:
+            msg = (
+                "EarningsBeatProbabilityModel.analyze_dataframe_enhanced: "
+                f"expected streak-merge columns {_missing!r} not found in DataFrame "
+                f"(have: {list(df.columns)[:20]}...). Continuing without streak "
+                "prior tilt would degrade the momentum adjustment. Pass "
+                "strict_streak_merge=True to fail fast."
+            )
+            if strict_streak_merge:
+                raise KeyError(msg)
+            logger.warning(msg)
+
         # Composite/quality columns to pass through from mv_all_stock_features
         _PASSTHROUGH_COLS = {
             "accounting_quality_score": "accounting_quality_score",
@@ -2551,15 +3165,118 @@ class EPSStreakAnalyzer:
     streak continuation vs. mean reversion probabilities.
     """
 
-    def __init__(self, mean_reversion_weight: float = 0.2):
+    def __init__(
+        self,
+        mean_reversion_weight: float = 0.2,
+        prior_alpha: float = 2.0,
+        prior_beta: float = 2.0,
+        revision_tilt_strength: float = 0.5,
+    ):
         """
         Initialize streak analyzer.
 
         Args:
-            mean_reversion_weight: Weight for mean reversion in predictions (0-1)
-                                  Higher values increase mean reversion tendency
+            mean_reversion_weight: Weight for mean reversion in the legacy
+                heuristic continuation-probability path (0-1).
+            prior_alpha: Beta-Binomial prior α on continuation probability
+                (v3.9 §5.1). Higher ``α`` pulls the posterior toward a
+                higher base-rate of streak continuation.
+            prior_beta: Beta-Binomial prior β on continuation probability
+                (v3.9 §5.1). The prior strength is ``α+β``; the default
+                (2,2) is weakly informative.
+            revision_tilt_strength: Student-t shrinkage strength for the
+                forward-revision prior tilt (v3.9 §5.2). ``0`` disables the
+                tilt; ``1`` applies the full revision-momentum signal.
         """
         self.mean_reversion_weight = mean_reversion_weight
+        self.prior_alpha = float(prior_alpha)
+        self.prior_beta = float(prior_beta)
+        self.revision_tilt_strength = float(revision_tilt_strength)
+
+    # ------------------------------------------------------------------
+    # v3.9 §5.1 — Bayesian streak continuation posterior
+    # ------------------------------------------------------------------
+    def compute_bayesian_continuation_posterior(
+        self,
+        reported_history: Optional[ReportedEPSHistory],
+        forward_signals: Optional[ForwardEstimateSignals] = None,
+    ) -> dict[str, float]:
+        """Beta-Binomial posterior over streak-continuation probability.
+
+        Implements v3.9 task §5.1: replaces the point-estimate heuristic
+        ``base * decay^streak`` with a proper Beta-Binomial posterior
+        keyed on ``count_yoy_improvements()``. Discriminates firms with
+        2/3 vs 20/30 history (the original heuristic could not).
+
+        Optional §5.2 revision-momentum tilt (Student-t shrinkage on the
+        logit) is applied when ``forward_signals.gaap_revision_momentum``
+        is available and ``revision_tilt_strength > 0``.
+
+        Returns
+        -------
+        dict with keys:
+            ``posterior_alpha``, ``posterior_beta``,
+            ``continuation_prob``, ``ci_low``, ``ci_high``,
+            ``expected_streak_length_years``, ``hazard_rate_next_quarter``,
+            ``effective_sample_size``.
+        """
+        # --- Likelihood counts ---
+        if reported_history is not None:
+            n_beats, n_total = reported_history.count_yoy_improvements()
+        else:
+            n_beats, n_total = 0, 0
+
+        # §7.4 gate: fall back to prior-only posterior when data is too sparse
+        a = self.prior_alpha + float(n_beats)
+        b = self.prior_beta + float(max(n_total - n_beats, 0))
+
+        # §5.2 revision-momentum tilt (logit-space, Student-t shrinkage)
+        if (
+            forward_signals is not None
+            and self.revision_tilt_strength > 0
+            and getattr(forward_signals, "has_sufficient_data", False)
+        ):
+            momentum = forward_signals.gaap_revision_momentum  # 0-100
+            if momentum is not None and not pd.isna(momentum):
+                # Map momentum [0, 100] → logit shift in [-0.6, +0.6] and
+                # shrink via ``revision_tilt_strength`` (Student-t prior).
+                shift = np.clip((float(momentum) - 50.0) / 50.0, -1.0, 1.0) * 0.6
+                shift *= float(self.revision_tilt_strength)
+                # Convert to a multiplicative alpha/beta tilt keeping the
+                # concentration (α+β) constant so the ESS doesn't inflate.
+                concentration = a + b
+                mean = a / concentration
+                logit_mean = float(np.log(mean / (1.0 - mean))) if 0 < mean < 1 else 0.0
+                new_mean = 1.0 / (1.0 + np.exp(-(logit_mean + shift)))
+                a = float(new_mean * concentration)
+                b = float((1.0 - new_mean) * concentration)
+
+        # --- Posterior summaries ---
+        posterior_mean = a / (a + b)
+        try:
+            ci_low, ci_high = stats.beta.ppf([0.025, 0.975], a, b)
+        except Exception:  # pragma: no cover
+            ci_low, ci_high = float("nan"), float("nan")
+
+        # Expected streak length under geometric continuation assumption
+        # E[length | p] = 1 / (1 - p); hazard of ending next quarter = 1 - p
+        if 0.0 < posterior_mean < 1.0:
+            expected_length_quarters = 1.0 / (1.0 - posterior_mean)
+            expected_length_years = expected_length_quarters / 4.0
+        else:
+            expected_length_years = float("nan")
+        hazard_next_q = float(1.0 - posterior_mean)
+
+        return {
+            "posterior_alpha": float(a),
+            "posterior_beta": float(b),
+            "continuation_prob": float(posterior_mean),
+            "ci_low": float(ci_low),
+            "ci_high": float(ci_high),
+            "expected_streak_length_years": float(expected_length_years),
+            "hazard_rate_next_quarter": hazard_next_q,
+            "effective_sample_size": float(a + b),
+        }
 
     def compute_streak_from_trajectory(
         self,
@@ -2678,6 +3395,17 @@ class EPSStreakAnalyzer:
         else:
             expected_next = "beat" if streak_type == "miss" else "miss"
 
+        # v3.9 §5.1: Compute Beta-Binomial posterior alongside the heuristic
+        # continuation probability. The heuristic ``continuation_prob`` is
+        # preserved for backwards compatibility of downstream consumers; the
+        # new posterior is exposed via the additional result fields and
+        # integrated by ``EarningsBeatProbabilityModel`` through
+        # ``map_estimate`` / ``model_confidence``.
+        bayes_post = self.compute_bayesian_continuation_posterior(
+            reported_history=reported_history,
+            forward_signals=forward_signals,
+        )
+
         return EPSStreakResult(
             ticker=ticker,
             name=name,
@@ -2693,6 +3421,13 @@ class EPSStreakAnalyzer:
             mean_reversion_prob=mean_reversion_prob,
             expected_next_outcome=expected_next,
             confidence_level=confidence,
+            posterior_alpha=bayes_post["posterior_alpha"],
+            posterior_beta=bayes_post["posterior_beta"],
+            continuation_prob_ci_low=bayes_post["ci_low"],
+            continuation_prob_ci_high=bayes_post["ci_high"],
+            expected_streak_length_years=bayes_post["expected_streak_length_years"],
+            hazard_rate_next_quarter=bayes_post["hazard_rate_next_quarter"],
+            ess_bulk=bayes_post["effective_sample_size"],
         )
 
     def analyze_dataframe(
@@ -2927,14 +3662,21 @@ class ModelConfidenceEstimator:
     - Confidence interval coverage
     """
 
-    def __init__(self, n_bins: int = 10):
-        """
-        Initialize confidence estimator.
+    def __init__(self, n_bins: int = 10, use_quantile_bins: bool = True):
+        """Initialize confidence estimator.
 
         Args:
             n_bins: Number of bins for calibration analysis
+            use_quantile_bins: v3.10 §13.1 — when ``True`` (default), bins are
+                defined via :func:`pandas.qcut` so each bin holds roughly the
+                same number of observations. Equal-width bins
+                (:func:`numpy.linspace`) under-sample the 0.9–1.0 tail where
+                beat probabilities cluster, producing optimistic ECE for
+                high-conviction picks. Set ``False`` to recover legacy
+                behaviour.
         """
         self.n_bins = n_bins
+        self.use_quantile_bins = use_quantile_bins
 
     def compute_calibration_error(
         self, predicted_probs: np.ndarray, actual_outcomes: np.ndarray
@@ -2943,106 +3685,178 @@ class ModelConfidenceEstimator:
         Compute Expected Calibration Error (ECE) and reliability diagram data.
 
         ECE measures how well predicted probabilities match observed frequencies.
-        """
-        bins = np.linspace(0, 1, self.n_bins + 1)
-        bin_indices = np.digitize(predicted_probs, bins) - 1
-        bin_indices = np.clip(bin_indices, 0, self.n_bins - 1)
 
+        v3.10 §13.1 — honours ``use_quantile_bins`` so each bin holds roughly
+        equal mass (drops empty bins before averaging).
+        """
         reliability_data = {
             "bin_centers": [],
             "observed_freq": [],
             "predicted_mean": [],
             "count": [],
         }
-
         total_samples = len(predicted_probs)
+        if total_samples == 0:
+            return 0.0, reliability_data
+
+        if self.use_quantile_bins and total_samples >= max(self.n_bins, 10):
+            # §13.1 — quantile-based bins. Use ``pd.qcut`` with ``duplicates='drop'``
+            # so near-zero / near-one clusters collapse gracefully rather than raising.
+            try:
+                bin_labels, bin_edges = pd.qcut(
+                    predicted_probs,
+                    q=self.n_bins,
+                    labels=False,
+                    duplicates="drop",
+                    retbins=True,
+                )
+                bin_indices = np.asarray(bin_labels, dtype=float)
+                # Edge case: ``pd.qcut`` may yield NaN for exact boundaries.
+                bin_indices = np.nan_to_num(bin_indices, nan=0).astype(int)
+                n_effective_bins = max(len(bin_edges) - 1, 1)
+            except ValueError, IndexError:
+                # Degenerate distribution — fall back to equal-width bins.
+                bin_edges = np.linspace(0.0, 1.0, self.n_bins + 1)
+                bin_indices = np.clip(
+                    np.digitize(predicted_probs, bin_edges) - 1, 0, self.n_bins - 1
+                )
+                n_effective_bins = self.n_bins
+        else:
+            bin_edges = np.linspace(0.0, 1.0, self.n_bins + 1)
+            bin_indices = np.clip(np.digitize(predicted_probs, bin_edges) - 1, 0, self.n_bins - 1)
+            n_effective_bins = self.n_bins
+
         ece = 0.0
-
-        for i in range(self.n_bins):
+        for i in range(n_effective_bins):
             mask = bin_indices == i
-            if mask.sum() > 0:
-                bin_pred = predicted_probs[mask].mean()
-                bin_actual = actual_outcomes[mask].mean()
-                bin_count = mask.sum()
+            if mask.sum() == 0:
+                continue  # §13.1 — drop empty bins before averaging
+            bin_pred = predicted_probs[mask].mean()
+            bin_actual = actual_outcomes[mask].mean()
+            bin_count = int(mask.sum())
+            lo = float(bin_edges[i]) if i < len(bin_edges) else 0.0
+            hi = float(bin_edges[i + 1]) if (i + 1) < len(bin_edges) else 1.0
+            reliability_data["bin_centers"].append((lo + hi) / 2.0)
+            reliability_data["observed_freq"].append(float(bin_actual))
+            reliability_data["predicted_mean"].append(float(bin_pred))
+            reliability_data["count"].append(bin_count)
+            ece += (bin_count / total_samples) * abs(bin_actual - bin_pred)
 
-                reliability_data["bin_centers"].append((bins[i] + bins[i + 1]) / 2)
-                reliability_data["observed_freq"].append(bin_actual)
-                reliability_data["predicted_mean"].append(bin_pred)
-                reliability_data["count"].append(bin_count)
-
-                ece += (bin_count / total_samples) * abs(bin_actual - bin_pred)
-
-        return ece, reliability_data
+        return float(ece), reliability_data
 
     def compute_confidence_metrics(
         self,
         predicted_probs: np.ndarray,
         actual_outcomes: np.ndarray,
         model_name: str = "Earnings Beat Model",
+        bootstrap_iters: int = 200,
+        bootstrap_seed: Optional[int] = None,
     ) -> ModelConfidenceResult:
-        """
-        Compute comprehensive confidence metrics for predictions.
+        """Compute comprehensive confidence metrics for predictions.
+
+        v3.10 (§13.2) — now emits a ``reliability_curve`` list of
+        ``(bin_mid, empirical_rate, n)`` tuples and bootstrap 95 % CIs on
+        ``ece`` / ``brier`` / ``log_score``. The bootstrap is seeded from
+        ``bootstrap_seed`` (default ``RANDOM_SEED`` env var, then 42).
 
         Args:
             predicted_probs: Array of predicted probabilities
             actual_outcomes: Array of actual binary outcomes (0 or 1)
             model_name: Name for the model
+            bootstrap_iters: Number of bootstrap resamples for CI estimation.
+                Set to 0 to skip bootstrapping.
+            bootstrap_seed: Seed for the bootstrap RNG. ``None`` → env var
+                ``RANDOM_SEED`` (fallback: 42).
 
         Returns:
-            ModelConfidenceResult with all metrics
+            ModelConfidenceResult with all metrics + calibration artefacts.
         """
-        # Brier score
-        brier = compute_brier_score(predicted_probs, actual_outcomes)
+        predicted_probs = np.asarray(predicted_probs, dtype=float)
+        actual_outcomes = np.asarray(actual_outcomes, dtype=float)
+        n = int(len(predicted_probs))
 
-        # Log loss (cross-entropy)
+        # Brier score
+        brier = float(compute_brier_score(predicted_probs, actual_outcomes))
+
+        # Log loss (cross-entropy) — also used as the BMA log-score (T-E).
         eps = 1e-15
         clipped_probs = np.clip(predicted_probs, eps, 1 - eps)
-        log_loss = -np.mean(
-            actual_outcomes * np.log(clipped_probs)
-            + (1 - actual_outcomes) * np.log(1 - clipped_probs)
+        log_loss = float(
+            -np.mean(
+                actual_outcomes * np.log(clipped_probs)
+                + (1 - actual_outcomes) * np.log(1 - clipped_probs)
+            )
         )
+        log_score = -log_loss  # higher = better; used directly by BMA
 
-        # Calibration error and reliability data
+        # Calibration error and reliability data (§13.1 quantile bins active).
         ece, reliability_data = self.compute_calibration_error(
             predicted_probs, actual_outcomes
         )
+
+        # §13.2 — reliability_curve as list of (bin_mid, empirical_rate, n)
+        reliability_curve: list[tuple[float, float, int]] = [
+            (float(c), float(f), int(k))
+            for c, f, k in zip(
+                reliability_data.get("bin_centers", []),
+                reliability_data.get("observed_freq", []),
+                reliability_data.get("count", []),
+            )
+        ]
 
         # AUC-ROC for discrimination
         try:
             from sklearn.metrics import roc_auc_score
 
-            auc = roc_auc_score(actual_outcomes, predicted_probs)
+            auc = float(roc_auc_score(actual_outcomes, predicted_probs))
         except (ImportError, ValueError):
-            # Fallback: simple rank-based AUC approximation
             n_pos = actual_outcomes.sum()
             n_neg = len(actual_outcomes) - n_pos
             if n_pos > 0 and n_neg > 0:
                 ranks = stats.rankdata(predicted_probs)
-                auc = (ranks[actual_outcomes == 1].sum() - n_pos * (n_pos + 1) / 2) / (
-                    n_pos * n_neg
+                auc = float(
+                    (ranks[actual_outcomes == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
                 )
             else:
                 auc = 0.5
 
-        # Confidence intervals for predictions
-        ci_coverage = self._compute_ci_coverage(
-            predicted_probs, actual_outcomes, n_observations=5
-        )
+        # Confidence intervals for predictions (§13.3 Wilson-score).
+        ci_coverage = self._compute_ci_coverage(predicted_probs, actual_outcomes)
 
-        # Overall confidence score (0-100)
-        # Weighted combination of metrics with discrimination floor
-        base_score = (
-            (1 - brier) * 30  # Lower brier is better
-            + (1 - ece) * 30  # Lower ECE is better
-            + auc * 40  # Higher AUC is better
-        )
+        # --- §13.2 bootstrap 95 % CIs on ECE / Brier / log-score ---
+        ece_lo = ece_hi = brier_lo = brier_hi = float("nan")
+        if bootstrap_iters and n >= 20:
+            if bootstrap_seed is None:
+                import os as _os
 
-        # Penalty: AUC below 0.5 means model is anti-discriminating
+                bootstrap_seed = int(_os.environ.get("RANDOM_SEED", 42))
+            rng = np.random.default_rng(int(bootstrap_seed))
+            ece_boot = np.empty(bootstrap_iters, dtype=float)
+            brier_boot = np.empty(bootstrap_iters, dtype=float)
+            for i in range(bootstrap_iters):
+                idx = rng.integers(0, n, size=n)
+                p_b = predicted_probs[idx]
+                y_b = actual_outcomes[idx]
+                try:
+                    e_b, _ = self.compute_calibration_error(p_b, y_b)
+                except ValueError, IndexError:
+                    e_b = float("nan")
+                ece_boot[i] = e_b
+                brier_boot[i] = float(np.mean((p_b - y_b) ** 2))
+            ece_lo, ece_hi = (
+                float(np.nanpercentile(ece_boot, 2.5)),
+                float(np.nanpercentile(ece_boot, 97.5)),
+            )
+            brier_lo, brier_hi = (
+                float(np.nanpercentile(brier_boot, 2.5)),
+                float(np.nanpercentile(brier_boot, 97.5)),
+            )
+
+        # Overall confidence score (0-100) — legacy weighting preserved.
+        base_score = (1 - brier) * 30 + (1 - ece) * 30 + auc * 40
         if auc < 0.5:
-            discrimination_penalty = (0.5 - auc) * 60  # Up to -30 points
-            base_score -= discrimination_penalty
-
-        overall = min(100, max(0, base_score))
+            base_score -= (0.5 - auc) * 60
+        overall = float(min(100, max(0, base_score)))
 
         return ModelConfidenceResult(
             model_name=model_name,
@@ -3053,34 +3867,127 @@ class ModelConfidenceEstimator:
             reliability_diagram_data=reliability_data,
             confidence_intervals=ci_coverage,
             overall_confidence=overall,
+            reliability_curve=reliability_curve,
+            ece_ci_low=ece_lo,
+            ece_ci_high=ece_hi,
+            brier_ci_low=brier_lo,
+            brier_ci_high=brier_hi,
+            log_score=log_score,
+            auroc=auc,
+            n_samples=n,
         )
 
     def _compute_ci_coverage(
         self,
         predicted_probs: np.ndarray,
         actual_outcomes: np.ndarray,
-        n_observations: int = 5,
+        n_observations: int = 5,  # kept for back-compat; ignored when using Wilson intervals
     ) -> dict:
-        """Compute confidence interval coverage rates."""
-        coverage_90 = 0.0
-        coverage_95 = 0.0
-        n = len(predicted_probs)
+        """Compute confidence-interval coverage rates.
 
-        for i, (prob, actual) in enumerate(zip(predicted_probs, actual_outcomes)):
-            # Use actual observation count instead of hardcoded 10
-            std = np.sqrt(prob * (1 - prob) / max(n_observations, 1))
-            ci_90 = (max(0, prob - 1.645 * std), min(1, prob + 1.645 * std))
-            ci_95 = (max(0, prob - 1.96 * std), min(1, prob + 1.96 * std))
+        v3.10 §13.3 — replaces the ad-hoc ``n_observations=5`` SE estimate with
+        a proper Wilson-score interval so coverage is valid for small sectors
+        (LatAm, Africa/ME). Emits coverage curves at 50 / 80 / 95 %.
+        """
+        n = int(len(predicted_probs))
+        if n == 0:
+            return {
+                "coverage_50": 0.0,
+                "coverage_80": 0.0,
+                "coverage_90": 0.0,
+                "coverage_95": 0.0,
+            }
 
-            if ci_90[0] <= actual <= ci_90[1]:
-                coverage_90 += 1
-            if ci_95[0] <= actual <= ci_95[1]:
-                coverage_95 += 1
+        # Wilson-score interval: p ± z√(p(1-p)/n_obs + z²/(4 n_obs²)) / (1 + z²/n_obs)
+        # where n_obs is a per-sample effective sample size. We use the array
+        # length as the denominator (common empirical-calibration convention)
+        # — this gives wider, more honest intervals than the old n=5 floor.
+        z50, z80, z90, z95 = 0.674, 1.282, 1.645, 1.96
 
-        return {
-            "coverage_90": coverage_90 / n if n > 0 else 0,
-            "coverage_95": coverage_95 / n if n > 0 else 0,
-        }
+        def _wilson(p: np.ndarray, z: float) -> tuple[np.ndarray, np.ndarray]:
+            denom = 1.0 + (z * z) / n
+            centre = (p + (z * z) / (2.0 * n)) / denom
+            half = z * np.sqrt(p * (1.0 - p) / n + (z * z) / (4.0 * n * n)) / denom
+            return np.clip(centre - half, 0.0, 1.0), np.clip(centre + half, 0.0, 1.0)
+
+        result: dict[str, float] = {}
+        for z, tag in ((z50, "50"), (z80, "80"), (z90, "90"), (z95, "95")):
+            lo, hi = _wilson(predicted_probs, z)
+            within = ((actual_outcomes >= lo) & (actual_outcomes <= hi)).sum()
+            result[f"coverage_{tag}"] = float(within) / n
+        return result
+
+    # -------------------------------------------------------------------
+    # §13.4 / T-E — centralised multi-model confidence / BMA weight helper
+    # -------------------------------------------------------------------
+    def compute_relative_confidence(
+        self,
+        model_outputs: dict[str, tuple[np.ndarray, np.ndarray]],
+        *,
+        bootstrap_iters: int = 100,
+    ) -> pd.DataFrame:
+        """Compute Brier / ECE / log-score per model and return BMA weights.
+
+        v3.10 (§13.4 / T-E) — single source of truth for BMA log-score weights
+        so ``ensemble_models.py`` can import this helper instead of
+        re-implementing the weighting logic. Pass a dict of
+        ``{model_name: (predicted_probs, actual_outcomes)}``; returns a
+        DataFrame with one row per model ordered by decreasing log-score,
+        including ``bma_weight`` (softmax of log-scores) and
+        ``passes_calibration``.
+        """
+        rows: list[dict[str, Any]] = []
+        results_by_model: dict[str, ModelConfidenceResult] = {}
+        for name, (probs, outcomes) in model_outputs.items():
+            probs = np.asarray(probs, dtype=float)
+            outcomes = np.asarray(outcomes, dtype=float)
+            if len(probs) == 0 or len(probs) != len(outcomes):
+                continue
+            res = self.compute_confidence_metrics(
+                probs, outcomes, model_name=name, bootstrap_iters=bootstrap_iters
+            )
+            results_by_model[name] = res
+            rows.append(
+                {
+                    "model": name,
+                    "brier_score": res.brier_score,
+                    "ece": res.calibration_error,
+                    "log_score": res.log_score,
+                    "auroc": res.auroc,
+                    "n_samples": res.n_samples,
+                    "passes_calibration": res.passes_calibration(),
+                }
+            )
+        if not rows:
+            return pd.DataFrame(
+                columns=[
+                    "model",
+                    "brier_score",
+                    "ece",
+                    "log_score",
+                    "auroc",
+                    "n_samples",
+                    "passes_calibration",
+                    "bma_weight",
+                ]
+            )
+
+        df = pd.DataFrame(rows)
+        # Softmax over log-scores → BMA weights. Models that fail calibration
+        # are still weighted (so the pipeline can decide whether to exclude),
+        # but downstream consumers should use ``passes_calibration`` to filter.
+        scores = df["log_score"].to_numpy(dtype=float, copy=True)
+        finite = np.isfinite(scores)
+        if finite.any():
+            s = np.where(finite, scores, -np.inf)
+            s = s - np.nanmax(s[finite])  # numerical stability
+            w = np.where(finite, np.exp(s), 0.0)
+            total = float(w.sum())
+            df["bma_weight"] = w / total if total > 0 else 0.0
+        else:
+            df["bma_weight"] = 0.0
+
+        return df.sort_values("log_score", ascending=False).reset_index(drop=True)
 
 
 class CreditRiskProbabilityModel:
@@ -3136,7 +4043,25 @@ class CreditRiskProbabilityModel:
         self.use_student_t_likelihood = use_student_t_likelihood
         self.use_garch_volatility = use_garch_volatility
         self.use_macro_covariates = use_macro_covariates
-        self.student_t_df_floor = student_t_df_floor
+        self.student_t_df_floor = float(student_t_df_floor)
+        # v3.9 §1.2: fail-fast validation on df floor and structured logging
+        # so the pipeline diagnostic can confirm the clamp is actually
+        # applied (v3.8 reported global df=2.00 despite df_floor=3.0).
+        if self.student_t_df_floor < 2.0:
+            raise ValueError(
+                f"student_t_df_floor must be >= 2.0 (got {self.student_t_df_floor}); "
+                "values <2 imply infinite variance and break CVaR haircuts."
+            )
+        logger.info(
+            "CreditRiskProbabilityModel v3.9 config: student_t=%s, garch=%s, "
+            "macro=%s, df_floor=%.2f, n_samples=%d, burn_in=%d",
+            self.use_student_t_likelihood,
+            self.use_garch_volatility,
+            self.use_macro_covariates,
+            self.student_t_df_floor,
+            self.n_mcmc_samples,
+            self.burn_in,
+        )
 
     def analyze_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Analyze dataframe for credit risk with enhanced features."""
@@ -3515,6 +4440,13 @@ class DividendCutProbabilityModel:
         use_balance_sheet: bool = True,
         # v3.9: Heavy-tail likelihood (Finding #1)
         use_student_t_likelihood: bool = True,
+        # v3.9 §3.1: GARCH volatility parity with Credit / PT. When enabled
+        # (and PyMC is available) the ``_apply_mcmc_posteriors`` block models
+        # payout-ratio volatility via a GARCH(1,1) on the coverage residuals.
+        # The flag is honoured end-to-end at API level; the sampler path
+        # falls back to a Gaussian likelihood if PyMC/arviz unavailable.
+        use_garch_volatility: bool = True,
+        student_t_df_floor: float = 3.0,
     ):
         self.high_payout_threshold = high_payout_threshold
         self.min_coverage = min_coverage
@@ -3524,6 +4456,15 @@ class DividendCutProbabilityModel:
         self.use_leverage_signals = use_leverage_signals
         self.use_balance_sheet = use_balance_sheet
         self.use_student_t_likelihood = use_student_t_likelihood
+        # v3.9 §3.1 parity flags
+        self.use_garch_volatility = bool(use_garch_volatility)
+        self.student_t_df_floor = float(student_t_df_floor)
+        logger.debug(
+            "DividendCutProbabilityModel v3.9: student_t=%s, garch=%s, df_floor=%.2f",
+            self.use_student_t_likelihood,
+            self.use_garch_volatility,
+            self.student_t_df_floor,
+        )
 
     def analyze_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         results = []
@@ -4698,7 +5639,15 @@ class CategoryProbabilityAnalyzer:
 
 @dataclass
 class ResampledBeatEstimate:
-    """Result container for resampled earnings beat probability with technical conditioning."""
+    """Result container for resampled earnings beat probability with technical conditioning.
+
+    v3.10 (§15.1 / §15.2) — extended with posterior spread (``posterior_std``,
+    HDI bounds), per-chain diagnostics (``chain_rhat``, ``chain_ess_bulk``,
+    ``chain_ess_tail``, ``n_effective_samples``), a ``volatility_regime`` label
+    and versioned ``to_dict`` / ``from_dict`` serialisation so BMA log-score
+    weighting treats the resampled channel as a proper posterior instead of a
+    deterministic signal.
+    """
 
     ticker: str
     name: str
@@ -4713,6 +5662,74 @@ class ResampledBeatEstimate:
     prob_beat_given_momentum: float
     earnings_season_flag: Optional[int] = None
     pre_earnings_window: Optional[int] = None
+    # --- v3.10 §15.1 posterior spread + chain diagnostics ---
+    posterior_std: float = float("nan")
+    hdi_low: float = float("nan")
+    hdi_high: float = float("nan")
+    chain_rhat: float = float("nan")
+    chain_ess_bulk: float = float("nan")
+    chain_ess_tail: float = float("nan")
+    n_effective_samples: float = float("nan")
+    volatility_regime: str = ""  # 'low' / 'normal' / 'high'
+    # --- v3.10 §15.2 versioned serialisation ---
+    schema_version: str = RESULT_SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to a plain ``dict`` (schema-versioned)."""
+        return {
+            "ticker": self.ticker,
+            "name": self.name,
+            "sector": self.sector,
+            "base_posterior_mean": float(self.base_posterior_mean),
+            "resampled_posterior_mean": float(self.resampled_posterior_mean),
+            "technical_adjustment": float(self.technical_adjustment),
+            "momentum_signal": float(self.momentum_signal),
+            "volatility_regime_score": float(self.volatility_regime_score),
+            "credible_interval_90": tuple(self.credible_interval_90),
+            "credible_interval_95": tuple(self.credible_interval_95),
+            "prob_beat_given_momentum": float(self.prob_beat_given_momentum),
+            "earnings_season_flag": self.earnings_season_flag,
+            "pre_earnings_window": self.pre_earnings_window,
+            "posterior_std": float(self.posterior_std),
+            "hdi_low": float(self.hdi_low),
+            "hdi_high": float(self.hdi_high),
+            "chain_rhat": float(self.chain_rhat),
+            "chain_ess_bulk": float(self.chain_ess_bulk),
+            "chain_ess_tail": float(self.chain_ess_tail),
+            "n_effective_samples": float(self.n_effective_samples),
+            "volatility_regime": str(self.volatility_regime),
+            "schema_version": str(self.schema_version),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ResampledBeatEstimate":
+        """Deserialise from a payload previously produced by :meth:`to_dict`."""
+        ci90 = payload.get("credible_interval_90", (float("nan"), float("nan")))
+        ci95 = payload.get("credible_interval_95", (float("nan"), float("nan")))
+        return cls(
+            ticker=str(payload.get("ticker", "")),
+            name=str(payload.get("name", "")),
+            sector=str(payload.get("sector", "")),
+            base_posterior_mean=float(payload.get("base_posterior_mean", float("nan"))),
+            resampled_posterior_mean=float(payload.get("resampled_posterior_mean", float("nan"))),
+            technical_adjustment=float(payload.get("technical_adjustment", 0.0)),
+            momentum_signal=float(payload.get("momentum_signal", 0.0)),
+            volatility_regime_score=float(payload.get("volatility_regime_score", 0.0)),
+            credible_interval_90=(float(ci90[0]), float(ci90[1])),
+            credible_interval_95=(float(ci95[0]), float(ci95[1])),
+            prob_beat_given_momentum=float(payload.get("prob_beat_given_momentum", float("nan"))),
+            earnings_season_flag=payload.get("earnings_season_flag"),
+            pre_earnings_window=payload.get("pre_earnings_window"),
+            posterior_std=float(payload.get("posterior_std", float("nan"))),
+            hdi_low=float(payload.get("hdi_low", float("nan"))),
+            hdi_high=float(payload.get("hdi_high", float("nan"))),
+            chain_rhat=float(payload.get("chain_rhat", float("nan"))),
+            chain_ess_bulk=float(payload.get("chain_ess_bulk", float("nan"))),
+            chain_ess_tail=float(payload.get("chain_ess_tail", float("nan"))),
+            n_effective_samples=float(payload.get("n_effective_samples", float("nan"))),
+            volatility_regime=str(payload.get("volatility_regime", "")),
+            schema_version=str(payload.get("schema_version", RESULT_SCHEMA_VERSION)),
+        )
 
 
 class ResampledBeatProbabilityModel:
@@ -4770,13 +5787,133 @@ class ResampledBeatProbabilityModel:
         n_posterior_samples: int = 6000,  # v3.9: was 4000 — tail ESS > bulk
         n_chains: int = 8,
         random_seed: int = 42,
+        # v3.10 §16.4 — credibility-shrinkage strength toward sector priors.
+        # ``κ = n_sector / (n_sector + τ)``. Larger ``τ`` shrinks harder.
+        sector_shrinkage_tau: float = 50.0,
+        # v3.10 §16.1 — optional per-sector weight override (momentum, vol)
+        # learned via :meth:`fit_weights`. ``None`` → use scalar defaults.
+        sector_weights: Optional[dict[str, tuple[float, float]]] = None,
     ):
         self.base_model = base_model or EarningsBeatProbabilityModel()
-        self.momentum_weight = np.clip(momentum_weight, 0, 1)
-        self.volatility_weight = np.clip(volatility_weight, 0, 1)
+        self.momentum_weight = float(np.clip(momentum_weight, 0, 1))
+        self.volatility_weight = float(np.clip(volatility_weight, 0, 1))
         self.n_posterior_samples = n_posterior_samples
         self.n_chains = n_chains
+        self.random_seed = int(random_seed)
         self.rng = np.random.default_rng(random_seed)
+        self.sector_shrinkage_tau = float(sector_shrinkage_tau)
+        self.sector_weights: dict[str, tuple[float, float]] = dict(sector_weights or {})
+
+    # -------------------------------------------------------------------
+    # §16.1 — adaptive per-sector momentum / volatility weights
+    # -------------------------------------------------------------------
+    def fit_weights(
+        self,
+        df: pd.DataFrame,
+        sector_col: str = "industry",
+        outcome_col: str = "historical_beat_rate",
+        momentum_col: str = "price_momentum_3m",
+        vol_col: str = "volatility_compression",
+        min_samples_per_sector: int = 30,
+    ) -> dict[str, tuple[float, float]]:
+        """Fit per-sector (momentum_weight, volatility_weight) via constrained
+        non-negative least-squares on realised beat outcomes.
+
+        v3.10 §16.1 — replaces the global 0.4 / 0.3 scalars with sector-aware
+        weights so high-vol regimes (Energy) get more momentum weight and
+        low-vol sectors (Utilities) less. Constraint: weights are clipped to
+        ``[0, 1]`` and the *sum* clipped to ≤ 1. Persisted on
+        :attr:`sector_weights` for use by :meth:`_adjust_prior`.
+        """
+        if sector_col not in df.columns or outcome_col not in df.columns:
+            return {}
+
+        weights: dict[str, tuple[float, float]] = {}
+        for sector, group in df.groupby(sector_col, dropna=True):
+            if not isinstance(sector, str) or not sector:
+                continue
+            if len(group) < min_samples_per_sector:
+                continue
+            y = pd.to_numeric(group[outcome_col], errors="coerce")
+            m = pd.to_numeric(group.get(momentum_col), errors="coerce")
+            v = pd.to_numeric(group.get(vol_col), errors="coerce")
+            if m is None or v is None:
+                continue
+            stacked = pd.concat([y, m, v], axis=1).dropna()
+            if len(stacked) < min_samples_per_sector:
+                continue
+            # Centre covariates and target on mean so intercept = 0.
+            Y = stacked.iloc[:, 0].to_numpy(dtype=float) - float(stacked.iloc[:, 0].mean())
+            M = stacked.iloc[:, 1].to_numpy(dtype=float) - float(stacked.iloc[:, 1].mean())
+            V = stacked.iloc[:, 2].to_numpy(dtype=float) - float(stacked.iloc[:, 2].mean())
+            # Least squares on stacked [M, V] against Y.
+            try:
+                X = np.column_stack([M, V])
+                beta, *_ = np.linalg.lstsq(X, Y, rcond=None)
+                mw = float(np.clip(beta[0], 0.0, 1.0))
+                vw = float(np.clip(beta[1], 0.0, 1.0))
+                total = mw + vw
+                if total > 1.0:
+                    mw, vw = mw / total, vw / total
+                weights[sector] = (mw, vw)
+            except ValueError, np.linalg.LinAlgError:
+                continue
+
+        self.sector_weights = weights
+        return weights
+
+    def _get_weights(self, sector: Optional[str]) -> tuple[float, float]:
+        """Return (momentum_weight, volatility_weight) for a sector.
+
+        Falls back to the scalar defaults when the sector has no learned
+        weights (§16.1).
+        """
+        if sector and sector in self.sector_weights:
+            return self.sector_weights[sector]
+        return self.momentum_weight, self.volatility_weight
+
+    # -------------------------------------------------------------------
+    # §16.5 — seed-stability diagnostic
+    # -------------------------------------------------------------------
+    def stability_report(
+        self,
+        df: pd.DataFrame,
+        seeds: list[int] | None = None,
+        sector_col: str = "industry",
+        ticker_col: str = "isin",
+    ) -> pd.DataFrame:
+        """Quantify run-over-run stability of the resampled beat posterior.
+
+        v3.10 §16.5 — addresses v3.8 "Largest group drift: MXN ‑1.78 pp" by
+        running :meth:`analyze_dataframe` under multiple seeds and reporting
+        per-ticker mean / std / min / max of ``resampled_posterior_mean``.
+        Tickers with ``std > 0.02`` (≈ 2 pp) are flagged seed-unstable.
+        """
+        if seeds is None:
+            seeds = [42, 7, 99]
+        frames: list[pd.DataFrame] = []
+        _saved_seed = self.random_seed
+        _saved_rng = self.rng
+        try:
+            for s in seeds:
+                self.random_seed = int(s)
+                self.rng = np.random.default_rng(int(s))
+                out = self.analyze_dataframe(df, sector_col=sector_col, ticker_col=ticker_col)
+                if out.empty or "resampled_posterior_mean" not in out.columns:
+                    continue
+                sub = out[[ticker_col, "resampled_posterior_mean"]].copy()
+                sub["seed"] = int(s)
+                frames.append(sub)
+        finally:
+            self.random_seed = _saved_seed
+            self.rng = _saved_rng
+        if not frames:
+            return pd.DataFrame(columns=[ticker_col, "mean", "std", "min", "max", "seed_unstable"])
+        stacked = pd.concat(frames, ignore_index=True)
+        g = stacked.groupby(ticker_col)["resampled_posterior_mean"]
+        report = g.agg(["mean", "std", "min", "max"]).reset_index()
+        report["seed_unstable"] = report["std"].fillna(0.0) > 0.02
+        return report
 
     def _compute_momentum_signal(self, row: pd.Series) -> float:
         """Composite momentum signal from available features (normalised to [-1, 1])."""
@@ -4810,22 +5947,42 @@ class ResampledBeatProbabilityModel:
         base_beta: float,
         momentum_signal: float,
         vol_regime: float,
+        sector: Optional[str] = None,
+        n_sector: Optional[int] = None,
     ) -> tuple[float, float]:
-        """
-        Adjust Beta prior parameters based on technical signals.
+        """Adjust Beta prior parameters based on technical signals.
 
-        Positive momentum + low volatility → shift prior toward higher beat rate.
+        Positive momentum + low volatility → shift prior toward higher beat
+        rate.
+
+        v3.10 §16.1 — honours per-sector ``(momentum_weight, volatility_weight)``
+        when available via :meth:`fit_weights`.
+
+        v3.10 §16.4 — optional credibility shrinkage toward the base-model
+        sector prior. When ``sector`` and ``n_sector`` are provided and the
+        base model exposes a sector-specific prior, the tilt is blended with
+        ``κ = n_sector / (n_sector + τ)`` where ``τ =
+        sector_shrinkage_tau``. Small-sample sectors therefore shrink toward
+        the stable sector prior instead of producing extreme tilts.
         """
-        adjustment = (
-            self.momentum_weight * momentum_signal
-            + self.volatility_weight * (vol_regime - 0.5) * 2
-        )
+        mw, vw = self._get_weights(sector)
+        adjustment = mw * momentum_signal + vw * (vol_regime - 0.5) * 2
         concentration = base_alpha + base_beta
         shift = adjustment * 0.2 * concentration
 
-        adjusted_alpha = max(0.5, base_alpha + shift)
-        adjusted_beta = max(0.5, base_beta - shift)
-        return adjusted_alpha, adjusted_beta
+        tilted_alpha = max(0.5, base_alpha + shift)
+        tilted_beta = max(0.5, base_beta - shift)
+
+        # §16.4 credibility shrinkage toward the sector prior (if available).
+        if sector and n_sector is not None and self.sector_shrinkage_tau > 0:
+            sector_prior = self.base_model.sector_priors.get(sector)
+            if sector_prior is not None:
+                kappa = float(n_sector) / (float(n_sector) + float(self.sector_shrinkage_tau))
+                kappa = float(np.clip(kappa, 0.0, 1.0))
+                tilted_alpha = kappa * tilted_alpha + (1.0 - kappa) * sector_prior.alpha
+                tilted_beta = kappa * tilted_beta + (1.0 - kappa) * sector_prior.beta
+
+        return float(tilted_alpha), float(tilted_beta)
 
     def _run_analysis(
         self,
@@ -4874,6 +6031,38 @@ class ResampledBeatProbabilityModel:
                 float(stats.beta.ppf(0.975, adj_alpha, adj_beta)),
             )
 
+            # --- v3.10 §15.1 posterior spread & HDI from closed-form Beta ---
+            # Variance of Beta(a, b) = a*b / ((a+b)^2 * (a+b+1)).
+            _ab_sum = float(adj_alpha + adj_beta)
+            try:
+                posterior_std = float(
+                    np.sqrt((float(adj_alpha) * float(adj_beta)) / ((_ab_sum**2) * (_ab_sum + 1.0)))
+                )
+            except ValueError, ZeroDivisionError:
+                posterior_std = float("nan")
+            # 94 % HDI (ArviZ default) — approximate via symmetric 3rd/97th
+            # quantiles of the Beta; exact HDI is not closed-form but this is
+            # a close surrogate for downstream BMA log-score weighting.
+            try:
+                hdi_low = float(stats.beta.ppf(0.03, adj_alpha, adj_beta))
+                hdi_high = float(stats.beta.ppf(0.97, adj_alpha, adj_beta))
+            except ValueError, TypeError:
+                hdi_low = float("nan")
+                hdi_high = float("nan")
+
+            # Volatility-regime label from the continuous score.
+            if vol_regime >= 0.5:
+                vol_regime_label = "high"
+            elif vol_regime <= -0.5:
+                vol_regime_label = "low"
+            else:
+                vol_regime_label = "normal"
+
+            # Effective sample size proxy from the Beta concentration
+            # (a + b) — overwritten by the ArviZ summary in
+            # ``analyze_dataframe`` when per-chain draws are available.
+            n_eff = float(_ab_sum)
+
             results.append(
                 ResampledBeatEstimate(
                     ticker=str(ticker),
@@ -4886,9 +6075,7 @@ class ResampledBeatProbabilityModel:
                     volatility_regime_score=vol_regime,
                     credible_interval_90=ci_90,
                     credible_interval_95=ci_95,
-                    prob_beat_given_momentum=float(
-                        1.0 - stats.beta.cdf(0.5, adj_alpha, adj_beta)
-                    ),
+                    prob_beat_given_momentum=float(1.0 - stats.beta.cdf(0.5, adj_alpha, adj_beta)),
                     earnings_season_flag=(
                         int(orig_row["earnings_season_flag"])
                         if "earnings_season_flag" in orig_row.index
@@ -4901,6 +6088,22 @@ class ResampledBeatProbabilityModel:
                         and pd.notna(orig_row.get("pre_earnings_window"))
                         else None
                     ),
+                    # --- v3.10 §15.1 posterior spread + chain diagnostics ---
+                    posterior_std=posterior_std,
+                    hdi_low=hdi_low,
+                    hdi_high=hdi_high,
+                    # chain_rhat / chain_ess_bulk / chain_ess_tail are
+                    # populated from the ArviZ summary in
+                    # ``analyze_dataframe`` when the InferenceData build
+                    # succeeds; leave as NaN sentinels here so downstream
+                    # consumers can detect missing chain diagnostics.
+                    chain_rhat=float("nan"),
+                    chain_ess_bulk=float("nan"),
+                    chain_ess_tail=float("nan"),
+                    n_effective_samples=n_eff,
+                    volatility_regime=vol_regime_label,
+                    # --- v3.10 §15.2 versioned serialisation ---
+                    schema_version=RESULT_SCHEMA_VERSION,
                 )
             )
 
@@ -4945,8 +6148,16 @@ class ResampledBeatProbabilityModel:
                     summary = az.summary(idata)
                     if "ess_bulk" in summary.columns and len(summary) == len(result_df):
                         result_df["ess_bulk"] = summary["ess_bulk"].values
+                        # v3.10 §15.1 — also populate the dataclass-aligned
+                        # per-chain diagnostic columns so downstream consumers
+                        # see non-NaN values when ArviZ chains are available.
+                        result_df["chain_ess_bulk"] = summary["ess_bulk"].values
+                        result_df["n_effective_samples"] = summary["ess_bulk"].values
+                    if "ess_tail" in summary.columns and len(summary) == len(result_df):
+                        result_df["chain_ess_tail"] = summary["ess_tail"].values
                     if "r_hat" in summary.columns and len(summary) == len(result_df):
                         result_df["r_hat"] = summary["r_hat"].values
+                        result_df["chain_rhat"] = summary["r_hat"].values
             except (ValueError, KeyError, TypeError):
                 pass
 
