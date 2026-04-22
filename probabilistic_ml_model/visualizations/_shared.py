@@ -19,8 +19,6 @@ import plotly.graph_objects as go
 from probabilistic_ml_model.data_utils.feature_catalog import (
     get_column_aliases,
     resolve_column_from_catalog,
-    columns_for_viz,
-    VIZ_REQUIREMENTS,
 )
 
 # Dark theme for Plotly (single source of truth)
@@ -146,6 +144,31 @@ _LEGACY_EXTRAS: dict[str, list[str]] = {
     "quality_composite_score": ["quality_momentum_score", "quality_composite_score"],
     "rnd_intensity": ["rnd_intensity", "rnd_intensity_ltm"],
     "asset_turnover": ["asset_turnover", "total_asset_turnover"],
+    # v3.9 / v3.10 probability-model diagnostic columns (T-A / T-B / §9.1)
+    "tail_df": ["tail_df", "credit_tail_df", "student_t_df"],
+    "cond_volatility": ["cond_volatility", "credit_cond_vol", "conditional_volatility"],
+    "combined_anomaly_score": [
+        "combined_anomaly_score",
+        "accounting_anomaly_score",
+        "anomaly_score",
+    ],
+    "flag_count_posterior_mean": [
+        "flag_count_posterior_mean",
+        "anomaly_flag_count",
+        "multi_flag_count",
+    ],
+    "magnitude_posterior_mean": [
+        "magnitude_posterior_mean",
+        "anomaly_magnitude",
+    ],
+    # §4.1 dividend safety decomposition
+    "cut_probability_1y": ["cut_probability_1y", "dividend_cut_probability"],
+    "cut_probability_3y": ["cut_probability_3y"],
+    "payout_sustainability_score": ["payout_sustainability_score"],
+    "fcf_coverage_posterior_mean": ["fcf_coverage_posterior_mean", "fcf_coverage"],
+    # §6.1 streak posterior
+    "continuation_probability": ["continuation_probability", "streak_continuation_prob"],
+    "hazard_rate_next_quarter": ["hazard_rate_next_quarter"],
 }
 for _key, _aliases in _LEGACY_EXTRAS.items():
     if _key not in MV_COLUMN_ALIASES:

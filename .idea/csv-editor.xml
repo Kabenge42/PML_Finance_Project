@@ -73,6 +73,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\outputs\eps_streak_analysis.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\outputs\probability_analytics_summary.csv">
           <value>
             <Attribute>
@@ -81,13 +88,6 @@
           </value>
         </entry>
         <entry key="\reference material\machine_learning\datasets\housing\housing.csv">
-          <value>
-            <Attribute>
-              <option name="separator" value="," />
-            </Attribute>
-          </value>
-        </entry>
-        <entry key="\sdk_ouputs\production\PML_Finance_Project\data\playground\screening_etf.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

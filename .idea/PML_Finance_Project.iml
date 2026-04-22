@@ -6,7 +6,6 @@
       <sourceFolder url="file://$MODULE_DIR$/data" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/sql_scripts" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/.idea" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/archive" />
       <excludeFolder url="file://$MODULE_DIR$/.jbeval" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
@@ -17,7 +16,7 @@
       <excludeFolder url="file://$MODULE_DIR$/analytics/.venv/Scripts" />
       <excludeFolder url="file://$MODULE_DIR$/analytics" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.14 (PML_Finance_Project)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.14 (PML_Finance_Project) (2)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="library" exported="" scope="PROVIDED" name="Python 3.14 interpreter library" level="application" />
   </component>
@@ -25,6 +24,14 @@
     <option name="format" value="NUMPY" />
     <option name="myDocStringFormat" value="NumPy" />
     <option name="renderExternalDocumentation" value="true" />
+  </component>
+  <component name="TemplatesService">
+    <option name="TEMPLATE_FOLDERS">
+      <list>
+        <option value="$MODULE_DIR$/.idea" />
+        <option value="$MODULE_DIR$/.run" />
+      </list>
+    </option>
   </component>
   <component name="TestRunnerService">
     <option name="PROJECT_TEST_RUNNER" value="py.test" />

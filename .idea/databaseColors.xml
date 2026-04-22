@@ -2,14 +2,21 @@
 <project version="4">
   <component name="DatabaseColorSettings">
     <colors>
+      <entry key="calculated_features_registry/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Green" />
       <entry key="dividend_quality_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="dividend_safety_analysis/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="earnings_quality_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="equities/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Blue" />
+      <entry key="equities_schema_metadata/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Blue" />
+      <entry key="feature_registry_metadata/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Green" />
       <entry key="growth_momentum_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="high_yield_safe_dividend_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="integrity_filtered_growth_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
-      <entry key="mv_dcf/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:MATERIALIZED VIEW" value="24414d" />
+      <entry key="mv_all_stock_features/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:MATERIALIZED VIEW" value="Green" />
+      <entry key="mv_dcf/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:MATERIALIZED VIEW" value="ca904a" />
+      <entry key="mv_equities/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:MATERIALIZED VIEW" value="Blue" />
+      <entry key="mv_exp_returns_df/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:MATERIALIZED VIEW" value="ca904a" />
+      <entry key="mv_expected_returns/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:MATERIALIZED VIEW" value="ca904a" />
       <entry key="prob_analyst_sentiment/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
       <entry key="prob_balance_sheet/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />
       <entry key="prob_cash_flow/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Yellow" />

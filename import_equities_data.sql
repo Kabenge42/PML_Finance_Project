@@ -41,23 +41,22 @@ FROM equities;
 CREATE OR REPLACE FUNCTION month_abbrev_to_number(month_abbrev TEXT)
     RETURNS INTEGER AS
 $$
-BEGIN
-    RETURN CASE UPPER(LEFT(TRIM(COALESCE(month_abbrev, '')), 3))
-               WHEN 'JAN' THEN 1
-               WHEN 'FEB' THEN 2
-               WHEN 'MAR' THEN 3
-               WHEN 'APR' THEN 4
-               WHEN 'MAY' THEN 5
-               WHEN 'JUN' THEN 6
-               WHEN 'JUL' THEN 7
-               WHEN 'AUG' THEN 8
-               WHEN 'SEP' THEN 9
-               WHEN 'OCT' THEN 10
-               WHEN 'NOV' THEN 11
-               WHEN 'DEC' THEN 12
-        END;
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+SELECT CASE UPPER(LEFT(TRIM(COALESCE(month_abbrev, '')), 3))
+           WHEN 'JAN' THEN 1
+           WHEN 'FEB' THEN 2
+           WHEN 'MAR' THEN 3
+           WHEN 'APR' THEN 4
+           WHEN 'MAY' THEN 5
+           WHEN 'JUN' THEN 6
+           WHEN 'JUL' THEN 7
+           WHEN 'AUG' THEN 8
+           WHEN 'SEP' THEN 9
+           WHEN 'OCT' THEN 10
+           WHEN 'NOV' THEN 11
+           WHEN 'DEC' THEN 12
+           END
+$$ LANGUAGE SQL IMMUTABLE
+                PARALLEL SAFE;
 
 -- ===================================================================
 -- HELPER FUNCTION: Get Expected Reporting Lag Days
@@ -66,17 +65,16 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 CREATE OR REPLACE FUNCTION get_expected_reporting_lag_days(earnings_report_frequency TEXT)
     RETURNS INTEGER AS
 $$
-BEGIN
-    RETURN CASE UPPER(TRIM(COALESCE(earnings_report_frequency, 'QUARTERLY')))
-               WHEN 'QUARTERLY' THEN 45
-               WHEN 'SEMI-ANNUALLY' THEN 60
-               WHEN 'SEMI-ANNUAL' THEN 60
-               WHEN 'ANNUALLY' THEN 90
-               WHEN 'ANNUAL' THEN 90
-               ELSE 45
-        END;
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+SELECT CASE UPPER(TRIM(COALESCE(earnings_report_frequency, 'QUARTERLY')))
+           WHEN 'QUARTERLY' THEN 45
+           WHEN 'SEMI-ANNUAL' THEN 60
+           WHEN 'SEMI-ANNUALLY' THEN 60
+           WHEN 'ANNUAL' THEN 90
+           WHEN 'ANNUALLY' THEN 90
+           ELSE 45
+           END
+$$ LANGUAGE SQL IMMUTABLE
+                PARALLEL SAFE;
 
 -- Converts TEXT to NUMERIC, treating common non-numeric patterns as NULL
 CREATE OR REPLACE FUNCTION text_to_numeric_safe(input_text TEXT)
@@ -115,35 +113,29 @@ CREATE OR REPLACE FUNCTION parse_fiscal_year_end_date(fy_end_text TEXT)
     RETURNS DATE AS
 $$
 DECLARE
-    month_name TEXT;
-    year_text  TEXT;
-    month_num  INTEGER;
-    year_value INTEGER;
+    parts      TEXT[];
+    month_num  INT;
+    year_value INT;
 BEGIN
     IF fy_end_text IS NULL OR TRIM(fy_end_text) = '' THEN
         RETURN NULL;
     END IF;
 
-    fy_end_text := TRIM(fy_end_text);
-    month_name := SPLIT_PART(fy_end_text, ' ', 1);
-    year_text := SPLIT_PART(fy_end_text, ' ', 2);
-
-    -- Validate year format and range
-    IF year_text !~ '^\d{4}$' THEN
+    parts := regexp_split_to_array(TRIM(fy_end_text), '\s+');
+    IF array_length(parts, 1) < 2 OR parts[2] !~ '^\d{4}$' THEN
         RETURN NULL;
     END IF;
 
-    year_value := year_text::INTEGER;
-    IF year_value < 1900 OR year_value > 2100 THEN
+    year_value := parts[2]::INT;
+    month_num := month_abbrev_to_number(parts[1]);
+
+    IF month_num IS NULL OR year_value NOT BETWEEN 1900 AND 2100 THEN
         RETURN NULL;
     END IF;
 
-    month_num := month_abbrev_to_number(month_name);
-    IF month_num IS NULL THEN
-        RETURN NULL;
-    END IF;
-
-    RETURN (MAKE_DATE(year_value, month_num, 1) + INTERVAL '1 month - 1 day')::DATE;
+    -- Last day of month via single interval literal date-math idiom
+    RETURN (MAKE_DATE(year_value, month_num, 1)
+        + INTERVAL '1 month - 1 day')::DATE;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE
                     STRICT;
@@ -159,28 +151,20 @@ CREATE OR REPLACE FUNCTION frequency_to_months(
     RETURNS INTEGER AS
 $$
 DECLARE
-    fy_range_months INTEGER;
+    fy_range_months INT := 12;
 BEGIN
-    -- Calculate the fiscal year range in months (should always be 12)
+    -- Use AGE() for month arithmetic — correct across year boundaries
     IF fy_end_date IS NOT NULL AND next_fy_end_date IS NOT NULL THEN
-        fy_range_months := ((EXTRACT(YEAR FROM next_fy_end_date) - EXTRACT(YEAR FROM fy_end_date)) * 12
-            + (EXTRACT(MONTH FROM next_fy_end_date) - EXTRACT(MONTH FROM fy_end_date)))::INTEGER;
-    ELSE
-        -- Default to standard 12-month fiscal year
-        fy_range_months := 12;
+        fy_range_months := (DATE_PART('year', AGE(next_fy_end_date, fy_end_date)) * 12
+            + DATE_PART('month', AGE(next_fy_end_date, fy_end_date)))::INT;
     END IF;
 
-    -- Derive reporting interval as a divisor of the fiscal year range
     RETURN CASE UPPER(TRIM(COALESCE(earnings_report_frequency, 'QUARTERLY')))
-        -- Quarterly: FY range / 4 reporting periods
                WHEN 'QUARTERLY' THEN fy_range_months / 4
-        -- Semi-Annual: FY range / 2 reporting periods
-               WHEN 'SEMI-ANNUALLY' THEN fy_range_months / 2
                WHEN 'SEMI-ANNUAL' THEN fy_range_months / 2
-        -- Annual: Full FY range (1 reporting period)
-               WHEN 'ANNUALLY' THEN fy_range_months
+               WHEN 'SEMI-ANNUALLY' THEN fy_range_months / 2
                WHEN 'ANNUAL' THEN fy_range_months
-        -- Default to quarterly (FY range / 4)
+               WHEN 'ANNUALLY' THEN fy_range_months
                ELSE fy_range_months / 4
         END;
 END;
@@ -192,14 +176,14 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 CREATE OR REPLACE FUNCTION months_to_frequency(interval_months INTEGER)
     RETURNS TEXT AS
 $$
-BEGIN
-    RETURN CASE
-               WHEN interval_months <= 3 THEN 'Quarterly'
-               WHEN interval_months <= 6 THEN 'Semi-Annually'
-               ELSE 'Annually'
-        END;
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+SELECT CASE
+           WHEN interval_months IS NULL THEN 'Quarterly'
+           WHEN interval_months <= 3 THEN 'Quarterly'
+           WHEN interval_months <= 6 THEN 'Semi-Annually'
+           ELSE 'Annually'
+           END
+$$ LANGUAGE SQL IMMUTABLE
+                PARALLEL SAFE;
 
 -- ===================================================================
 -- HELPER FUNCTION: Derive Earnings Report Frequency
@@ -211,23 +195,33 @@ CREATE OR REPLACE FUNCTION derive_earnings_report_frequency(
     RETURNS TEXT AS
 $$
 DECLARE
-    months_diff INTEGER;
+    months_diff INT;
 BEGIN
     IF income_statement_report_date IS NULL OR fy_end_date IS NULL THEN
         RETURN 'Quarterly';
     END IF;
 
+    -- AGE() handles direction & year wrap automatically; it also
+    -- respects the DAY component, unlike raw EXTRACT() subtraction.
     months_diff := ABS(
-            (EXTRACT(YEAR FROM income_statement_report_date) - EXTRACT(YEAR FROM fy_end_date)) * 12
-                + (EXTRACT(MONTH FROM income_statement_report_date) - EXTRACT(MONTH FROM fy_end_date))
-                   )::INTEGER;
+            (DATE_PART('year', AGE(income_statement_report_date, fy_end_date)) * 12
+                + DATE_PART('month', AGE(income_statement_report_date, fy_end_date)))::INT
+                   );
 
-    -- Normalize to 1-12 range
-    months_diff := COALESCE(NULLIF(months_diff % 12, 0), 12);
+    -- Normalize within a 12-month window, but treat exact FY-end (0) as Annually
+    -- rather than conflating it with Semi-Annually.
+    IF months_diff = 0 THEN
+        RETURN 'Annually';
+    END IF;
 
-    -- Determine frequency: check if months align with semi-annual or quarterly
+    months_diff := months_diff % 12;
+    IF months_diff = 0 THEN
+        months_diff := 12;
+    END IF;
+
     RETURN CASE
-               WHEN months_diff IN (6, 12) THEN 'Semi-Annually'
+               WHEN months_diff = 12 THEN 'Annually'
+               WHEN months_diff = 6 THEN 'Semi-Annually'
                ELSE 'Quarterly'
         END;
 END;
@@ -264,12 +258,12 @@ BEGIN
         RETURN;
     END IF;
 
-    -- Calculate Next FY End Date (defines the reporting range)
-    next_fy_end_date := (fy_end_date + INTERVAL '1 year')::DATE;
+    -- Use make_interval + AGE() for date-math-correct boundaries
+    next_fy_end_date := (fy_end_date + make_interval(years => 1))::DATE;
 
-    -- Calculate fiscal year range in months (the base for all interval calculations)
-    fy_range_months := ((EXTRACT(YEAR FROM next_fy_end_date) - EXTRACT(YEAR FROM fy_end_date)) * 12
-        + (EXTRACT(MONTH FROM next_fy_end_date) - EXTRACT(MONTH FROM fy_end_date)))::INTEGER;
+    -- Fiscal year range in months via AGE() (respects day component)
+    fy_range_months := (DATE_PART('year', AGE(next_fy_end_date, fy_end_date)) * 12
+        + DATE_PART('month', AGE(next_fy_end_date, fy_end_date)))::INTEGER;
 
     -- Determine earnings frequency
     earnings_report_frequency := COALESCE(NULLIF(TRIM(input_earnings_frequency), ''),
@@ -290,15 +284,13 @@ BEGIN
     -- Calculate periods per fiscal year based on the FY range
     periods_per_year := fy_range_months / interval_months;
 
-    -- Calculate months since fiscal year end
-    months_since_fy_end := ((EXTRACT(YEAR FROM reference_date) - EXTRACT(YEAR FROM fy_end_date)) * 12
-        + (EXTRACT(MONTH FROM reference_date) - EXTRACT(MONTH FROM fy_end_date)))::INTEGER;
+    -- Months since fiscal year end via AGE() (correct across year boundaries
+    -- AND accounts for the day of month, unlike raw EXTRACT subtraction).
+    months_since_fy_end := (DATE_PART('year', AGE(reference_date, fy_end_date)) * 12
+        + DATE_PART('month', AGE(reference_date, fy_end_date)))::INTEGER;
 
-    -- Fiscal month (1-12) derived from position within FY range
-    fiscal_month := ((months_since_fy_end - 1) % fy_range_months) + 1;
-    IF fiscal_month <= 0 THEN
-        fiscal_month := fiscal_month + fy_range_months;
-    END IF;
+    -- Fiscal month (1..fy_range_months); safe for negative months_since_fy_end too
+    fiscal_month := ((months_since_fy_end - 1) % fy_range_months + fy_range_months) % fy_range_months + 1;
 
     -- Fiscal quarter derived from fiscal month relative to FY range
     -- Each quarter represents (fy_range_months / 4) months
@@ -360,14 +352,13 @@ CREATE OR REPLACE FUNCTION calculate_next_income_statement_report_date(
 )
     RETURNS DATE AS
 $$
-BEGIN
-    IF income_statement_report_date IS NULL THEN
-        RETURN NULL;
-    END IF;
-    RETURN (income_statement_report_date +
-            (frequency_to_months(earnings_report_frequency) || ' months')::INTERVAL)::DATE;
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+SELECT CASE
+           WHEN income_statement_report_date IS NULL THEN NULL
+           ELSE (income_statement_report_date
+               + make_interval(months => frequency_to_months(earnings_report_frequency)))::DATE
+           END
+$$ LANGUAGE SQL IMMUTABLE
+                PARALLEL SAFE;
 
 -- ===================================================================
 -- HELPER FUNCTION: Calculate Next Fiscal Year End Date
@@ -375,14 +366,10 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 CREATE OR REPLACE FUNCTION calculate_next_fy_end_date(fy_end_date DATE)
     RETURNS DATE AS
 $$
-BEGIN
-    IF fy_end_date IS NULL THEN
-        RETURN NULL;
-    END IF;
-    RETURN (fy_end_date + INTERVAL '1 year')::DATE;
-END;
-$$ LANGUAGE plpgsql IMMUTABLE
-                    STRICT;
+SELECT (fy_end_date + make_interval(years => 1))::DATE
+$$ LANGUAGE SQL IMMUTABLE
+                STRICT
+                PARALLEL SAFE;
 
 -- ===================================================================
 -- HELPER FUNCTION: Calculate Next Fiscal Quarter
@@ -396,86 +383,61 @@ CREATE OR REPLACE FUNCTION calculate_next_fiscal_quarter(
     RETURNS INTEGER AS
 $$
 DECLARE
-    next_fy_end_date      DATE;
-    reference_date        DATE;
-    fy_range_months       INTEGER;
-    interval_months       INTEGER;
-    months_into_fy        INTEGER;
-    next_period_end_month INTEGER;
-    fiscal_quarter        INTEGER;
+    reference_date   DATE;
+    interval_months  INT;
+    years_ahead      INT;
+    current_fy_start DATE;
+    months_into_fy   INT;
 BEGIN
-    -- Return NULL if essential dates are missing
     IF fy_end_date IS NULL THEN
         RETURN NULL;
     END IF;
 
-    -- Determine the reference date: prefer Next Earnings, fallback to Income Statement + interval
-    IF next_earnings_date IS NOT NULL THEN
+    interval_months := frequency_to_months(earnings_report_frequency);
+
+    -- Choose reference date
+    IF income_statement_report_date IS NOT NULL THEN
+        reference_date := income_statement_report_date;
+    ELSIF next_earnings_date IS NOT NULL THEN
         reference_date := next_earnings_date;
-    ELSIF income_statement_report_date IS NOT NULL THEN
-        -- Estimate next report date by adding the reporting interval
-        interval_months := CASE UPPER(TRIM(COALESCE(earnings_report_frequency, 'QUARTERLY')))
-                               WHEN 'QUARTERLY' THEN 3
-                               WHEN 'SEMI-ANNUALLY' THEN 6
-                               WHEN 'SEMI-ANNUAL' THEN 6
-                               WHEN 'ANNUALLY' THEN 12
-                               WHEN 'ANNUAL' THEN 12
-                               ELSE 3
-            END;
-        reference_date := (income_statement_report_date + (interval_months || ' months')::INTERVAL)::DATE;
     ELSE
         RETURN NULL;
     END IF;
 
-    -- Calculate fiscal year boundaries
-    -- Determine which fiscal year the reference_date falls into
-    next_fy_end_date := fy_end_date;
-    WHILE next_fy_end_date < reference_date
-        LOOP
-            next_fy_end_date := (next_fy_end_date + INTERVAL '1 year')::DATE;
-        END LOOP;
-
-    -- The current FY end for this period is one year before next_fy_end_date
-    -- unless reference_date is exactly on or before the original fy_end_date
-    IF next_fy_end_date = fy_end_date THEN
-        -- Reference date is before/on the first FY end, use it directly
-        NULL; -- next_fy_end_date is already correct
+    -- How many whole fiscal years between fy_end and reference, using AGE()
+    -- so that day-of-month is respected. FLOOR + 1 keeps us inside the CURRENT
+    -- fiscal year even when reference_date falls exactly on an FY boundary.
+    IF reference_date <= fy_end_date THEN
+        years_ahead := 0;
+    ELSE
+        years_ahead := FLOOR(
+                               (DATE_PART('year', AGE(reference_date, fy_end_date)) * 12
+                                   + DATE_PART('month', AGE(reference_date, fy_end_date)))::NUMERIC / 12
+                       )::INT + 1;
     END IF;
 
-    -- Fiscal year range is always 12 months
-    fy_range_months := 12;
+    -- Start of the current fiscal year = (fy_end + (years_ahead - 1) years) + 1 day
+    current_fy_start := (fy_end_date + make_interval(years => years_ahead - 1)
+        + INTERVAL '1 day')::DATE;
 
-    -- Calculate months from the START of the fiscal year to the reference date
-    -- FY starts the day after the previous FY end
-    months_into_fy := (
-        (EXTRACT(YEAR FROM reference_date) - EXTRACT(YEAR FROM (next_fy_end_date - INTERVAL '1 year'))) * 12
-            + (EXTRACT(MONTH FROM reference_date) - EXTRACT(MONTH FROM (next_fy_end_date - INTERVAL '1 year')))
-        )::INTEGER;
+    -- Months into FY using AGE (handles month-length variations correctly)
+    months_into_fy := (DATE_PART('year', AGE(reference_date, current_fy_start)) * 12
+        + DATE_PART('month', AGE(reference_date, current_fy_start)))::INT + 1;
 
-    -- Normalize to 1-12 range (months within the fiscal year)
-    months_into_fy := ((months_into_fy - 1) % 12) + 1;
-    IF months_into_fy <= 0 THEN
-        months_into_fy := months_into_fy + 12;
-    END IF;
+    -- Safe 1–12 normalization even for negative values
+    months_into_fy := ((months_into_fy - 1) % 12 + 12) % 12 + 1;
 
-    -- Derive fiscal quarter from the fiscal month
-    -- Q1: months 1-3, Q2: months 4-6, Q3: months 7-9, Q4: months 10-12
-    fiscal_quarter := CEIL(months_into_fy / 3.0)::INTEGER;
-
-    -- Ensure quarter is within valid range
-    IF fiscal_quarter < 1 THEN
-        fiscal_quarter := 1;
-    ELSIF fiscal_quarter > 4 THEN
-        fiscal_quarter := 4;
-    END IF;
-
-    RETURN fiscal_quarter;
+    RETURN LEAST(4, GREATEST(1, CEIL(months_into_fy / 3.0)::INT));
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
 -- ===================================================================
 -- HELPER FUNCTION: Calculate Reporting Lag
 -- ===================================================================
+-- Returns the ACTUAL lag in days between the next earnings date and the
+-- most recent income-statement report date, along with the deviation from
+-- the EXPECTED lag for the given frequency. Using date subtraction (Date Math)
+-- returns an integer number of days directly.
 CREATE OR REPLACE FUNCTION calculate_reporting_lag(
     next_earnings DATE,
     income_statement_report_date DATE,
@@ -483,13 +445,16 @@ CREATE OR REPLACE FUNCTION calculate_reporting_lag(
 )
     RETURNS INTEGER AS
 $$
-BEGIN
-    IF next_earnings IS NULL OR income_statement_report_date IS NULL THEN
-        RETURN NULL;
-    END IF;
-    RETURN next_earnings - income_statement_report_date;
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+SELECT CASE
+           WHEN next_earnings IS NULL OR income_statement_report_date IS NULL THEN NULL
+           -- Date - Date returns an INTEGER number of days in PostgreSQL.
+           -- We compare against the expected reporting lag for the given frequency
+           -- to produce the deviation (positive = late, negative = early).
+           ELSE (next_earnings - income_statement_report_date)
+               - get_expected_reporting_lag_days(earnings_report_frequency)
+           END
+$$ LANGUAGE SQL IMMUTABLE
+                PARALLEL SAFE;
 
 -- ===================================================================
 -- HELPER FUNCTION: Calculate Expected Report Date
@@ -500,13 +465,13 @@ CREATE OR REPLACE FUNCTION calculate_expected_report_date(
 )
     RETURNS DATE AS
 $$
-BEGIN
-    IF period_end_date IS NULL THEN
-        RETURN NULL;
-    END IF;
-    RETURN period_end_date + (get_expected_reporting_lag_days(earnings_report_frequency) || ' days')::INTERVAL;
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+SELECT CASE
+           WHEN period_end_date IS NULL THEN NULL
+           ELSE (period_end_date
+               + make_interval(days => get_expected_reporting_lag_days(earnings_report_frequency)))::DATE
+           END
+$$ LANGUAGE SQL IMMUTABLE
+                PARALLEL SAFE;
 
 -- ===================================================================
 -- HELPER FUNCTION: Validate Fiscal Dates
@@ -525,21 +490,26 @@ AS
 $$
 BEGIN
     IF fy_end_date > reference_date THEN
-        RETURN QUERY SELECT 'FY End Date is in the future'::TEXT as fy_end_future, 'WARNING'::TEXT as fy_end_warning;
+        RETURN QUERY SELECT 'FY End Date is in the future'::TEXT, 'WARNING'::TEXT;
     END IF;
 
-    IF report_date IS NOT NULL AND report_date < fy_end_date - INTERVAL '1 year' THEN
-        RETURN QUERY SELECT 'Report date predates fiscal year'::TEXT as report_date_predates,
-                            'ERROR'::TEXT                            as report_date_error;
+    -- A report that is MORE THAN a full fiscal year before the FY end
+    -- cannot belong to the current fiscal period. Use strict inequality
+    -- with make_interval for clarity.
+    IF report_date IS NOT NULL AND report_date < (fy_end_date - make_interval(years => 1))::DATE THEN
+        RETURN QUERY SELECT 'Report date predates fiscal year'::TEXT, 'ERROR'::TEXT;
     END IF;
 
-    IF report_date > reference_date + INTERVAL '1 day' THEN
-        RETURN QUERY SELECT 'Report date is in the future'::TEXT as report_date_future,
-                            'WARNING'::TEXT                      as report_date_warning;
+    -- Allow at most 1 day of clock skew; anything beyond is a future-date error
+    IF report_date IS NOT NULL AND report_date > reference_date + INTERVAL '1 day' THEN
+        RETURN QUERY SELECT 'Report date is in the future'::TEXT, 'WARNING'::TEXT;
     END IF;
 
-    IF fy_end_date != (DATE_TRUNC('month', fy_end_date) + INTERVAL '1 month - 1 day')::DATE THEN
-        RETURN QUERY SELECT 'FY End is not last day of month'::TEXT as fy_end_ldm, 'INFO'::TEXT as fy_end_info;
+    -- Idiomatic end-of-month test via DATE_TRUNC
+    IF fy_end_date IS NOT NULL
+        AND fy_end_date <> (DATE_TRUNC('month', fy_end_date)
+            + INTERVAL '1 month - 1 day')::DATE THEN
+        RETURN QUERY SELECT 'FY End is not last day of month'::TEXT, 'INFO'::TEXT;
     END IF;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
@@ -1191,17 +1161,17 @@ CREATE TEMP TABLE screening_staging
     "Interest And Investment Income (-2FY)"            TEXT, -- alias: interest_and_investment_income_2fy
     "Interest And Investment Income (-3FY)"            TEXT, -- alias: interest_and_investment_income_3fy
     "Interest And Investment Income (-4FY)"            TEXT, -- alias: interest_and_investment_income_4fy
-    "Effective Tax Rate - (Ratio) (LTM)"               TEXT,
-    "Effective Tax Rate - (Ratio) (FQ)"                TEXT,
-    "Effective Tax Rate - (Ratio) (-1FQFQ)"            TEXT,
-    "Effective Tax Rate - (Ratio) (-2FQFQ)"            TEXT,
-    "Effective Tax Rate - (Ratio) (-4FQFQ)"            TEXT,
-    "Effective Tax Rate - (Ratio) (-3FQFQ)"            TEXT,
-    "Effective Tax Rate - (Ratio) (FY)"                TEXT,
-    "Effective Tax Rate - (Ratio) (-1FY)"              TEXT,
-    "Effective Tax Rate - (Ratio) (-2FY)"              TEXT,
-    "Effective Tax Rate - (Ratio) (-3FY)"              TEXT,
-    "Effective Tax Rate - (Ratio) (-4FY)"              TEXT,
+    "Effective Tax Rate - (Ratio) (LTM)"    TEXT,            -- alias: effective_tax_rate_ltm
+    "Effective Tax Rate - (Ratio) (FQ)"     TEXT,            -- alias: effective_tax_rate_fq
+    "Effective Tax Rate - (Ratio) (-1FQFQ)" TEXT,            -- alias: effective_tax_rate_1fqfq
+    "Effective Tax Rate - (Ratio) (-2FQFQ)" TEXT,            -- alias: effective_tax_rate_2fqfq
+    "Effective Tax Rate - (Ratio) (-4FQFQ)" TEXT,            -- alias: effective_tax_rate_4fqfq
+    "Effective Tax Rate - (Ratio) (-3FQFQ)" TEXT,            -- alias: effective_tax_rate_3fqfq
+    "Effective Tax Rate - (Ratio) (FY)"     TEXT,            -- alias: effective_tax_rate_fy
+    "Effective Tax Rate - (Ratio) (-1FY)"   TEXT,            -- alias: effective_tax_rate_1fy
+    "Effective Tax Rate - (Ratio) (-2FY)"   TEXT,            -- alias: effective_tax_rate_2fy
+    "Effective Tax Rate - (Ratio) (-3FY)"   TEXT,            -- alias: effective_tax_rate_3fy
+    "Effective Tax Rate - (Ratio) (-4FY)"   TEXT,            -- alias: effective_tax_rate_4fy
     "FCF - Est Avg (FY1E)"                             TEXT, -- alias: fcf_est_avg_fy1e
     "FCF - Est Avg (FY2E)"                             TEXT, -- alias: fcf_est_avg_fy2e
     "FCF - Est Avg (FY3E)"                             TEXT, -- alias: fcf_est_avg_fy3e

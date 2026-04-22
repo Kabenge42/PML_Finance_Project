@@ -135,7 +135,6 @@ class PipelineConfig:
             log_file=os.environ.get("ER_LOG_FILE", "logs/expected_returns_pipeline.log"),
             mcmc_burn_in=int(os.environ.get("ER_MCMC_BURN_IN", 1000)),
             use_mcmc=os.environ.get("ER_USE_MCMC", "true").lower() == "true",
-            # BUG FIX: was inverted ("false" == "false"); now ER_USE_STUDENT_T=true properly enables heavy-tail likelihood
             use_student_t=os.environ.get("ER_USE_STUDENT_T", "true").lower() == "true",
             use_garch_volatility=os.environ.get("ER_USE_GARCH", "true").lower() == "true",
             use_bayesian_model_averaging=os.environ.get("ER_USE_BMA", "true").lower() == "true",
@@ -1330,7 +1329,7 @@ def hierarchical_mcmc_multi_level(
 
 def run_resampled_posterior_analysis(
     df: pd.DataFrame,
-    freq: str = "1ME",
+    freq: str = "1QE",
 ) -> pd.DataFrame:
     """Compute Bayesian resampled return posteriors from historical price snapshots."""
     from probabilistic_ml_model.statistical_functions.statistical_models import (

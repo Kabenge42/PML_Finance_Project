@@ -1,15 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="SqlDialectMappings">
-    <file url="file://$PROJECT_DIR$/create_equities_schema.sql" dialect="PostgreSQL" />
-    <file url="file://$PROJECT_DIR$/create_helper_functions.sql" dialect="PostgreSQL" />
-    <file url="file://$PROJECT_DIR$/currency_import.sql" dialect="PostgreSQL" />
+    <file url="file://$PROJECT_DIR$/equities_schema_metadata_setup.sql" dialect="PostgreSQL" />
     <file url="file://$PROJECT_DIR$/feature_registry.sql" dialect="PostgreSQL" />
-    <file url="file://$PROJECT_DIR$/mv_all_stock_features.sql" dialect="PostgreSQL" />
+    <file url="file://$PROJECT_DIR$/import_equities_data.sql" dialect="PostgreSQL" />
     <file url="file://$PROJECT_DIR$/mv_dcf.sql" dialect="PostgreSQL" />
-    <file url="file://$PROJECT_DIR$/mv_equities.sql" dialect="PostgreSQL" />
+    <file url="file://$PROJECT_DIR$/mv_exp_returns.sql" dialect="PostgreSQL" />
     <file url="file://$PROJECT_DIR$/mv_expected_returns.sql" dialect="PostgreSQL" />
-    <file url="file://$PROJECT_DIR$/sql_scripts" dialect="PostgreSQL" />
-    <file url="PROJECT" dialect="PostgreSQL" />
+    <file url="file://$PROJECT_DIR$/sql_scripts/public/equities_schema_metadata.sql" dialect="PostgreSQL" />
   </component>
 </project>
