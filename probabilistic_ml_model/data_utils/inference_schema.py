@@ -686,6 +686,101 @@ def build_credit_risk_inference_data(
 
 
 # =============================================================================
+# 3a2. InferenceData Factory — Dividend Safety (v3.10 per-isin)
+# =============================================================================
+
+
+def _build_dividend_observed_data(
+    div_df: pd.DataFrame,
+) -> dict[str, np.ndarray]:
+    """Extract observed dividend-safety inputs (per-isin rows)."""
+    observed: dict[str, np.ndarray] = {}
+    for col in (
+        "fcf_dividend_coverage",
+        "payout_ratio",
+        "dividend_streak",
+        "dividend_consistency",
+    ):
+        if col in div_df.columns:
+            observed[col] = _safe_values(div_df[col])
+    return observed
+
+
+def _build_dividend_constant_data(
+    div_df: pd.DataFrame,
+) -> dict[str, np.ndarray]:
+    """Extract per-isin diagnostic fields (safety_score, CI bounds)."""
+    constant_data: dict[str, np.ndarray] = {}
+    for col in ("safety_score", "mcmc_ci_lower", "mcmc_ci_upper"):
+        if col in div_df.columns:
+            constant_data[col] = _safe_values(div_df[col])
+    if "risk_category" in div_df.columns:
+        constant_data["risk_category"] = _safe_values(div_df["risk_category"].astype(str))
+    return constant_data
+
+
+def build_dividend_safety_inference_data(
+    div_results_df: pd.DataFrame,
+    n_posterior_samples: int = 4000,
+    n_chains: int = 4,
+    random_seed: int = 42,
+) -> "az.InferenceData | xr.Dataset":
+    """Build per-isin InferenceData for the dividend cut probability model.
+
+    v3.10: Rows are unique per ``isin`` (enforced upstream in
+    ``DividendCutProbabilityModel.analyze_dataframe``). The posterior is
+    a moment-matched Beta on ``mcmc_cut_probability``; non-payer rows
+    (NaN probability) are filtered out so the InferenceData dimension
+    matches only dividend payers.
+    """
+    rng = np.random.default_rng(random_seed)
+
+    # Filter to payer rows with a valid MCMC posterior
+    prob_col = (
+        "mcmc_cut_probability"
+        if "mcmc_cut_probability" in div_results_df.columns
+        else "dividend_cut_probability"
+    )
+    payer_df = div_results_df.copy()
+    if "is_dividend_payer" in payer_df.columns:
+        payer_df = payer_df[payer_df["is_dividend_payer"].fillna(True).astype(bool)]
+    payer_df = payer_df[payer_df[prob_col].notna()]
+    if "isin" in payer_df.columns:
+        payer_df = payer_df.drop_duplicates(subset="isin").reset_index(drop=True)
+
+    equity_coords = EquityCoordinates.from_dataframe(payer_df)
+    n_equities = len(equity_coords.tickers)
+    if n_equities == 0:
+        # Return an empty InferenceData (fallback dataset) rather than raising
+        return _build_arviz_or_xarray(
+            posterior={"cut_probability": np.zeros((1, 1, 0))},
+            coords=_build_xarray_coords(equity_coords, 1, 1),
+            dims={"cut_probability": ["chain", "draw", "equity"]},
+        )
+
+    cut_p = np.clip(_safe_values(payer_df[prob_col]), 0.001, 0.999)
+    alpha_cut, beta_cut = _moment_matched_beta_params(cut_p, concentration=40.0)
+
+    posterior_samples = _build_posterior_samples_beta(
+        rng, alpha_cut, beta_cut, n_chains, n_posterior_samples, n_equities
+    )
+
+    coords = _build_xarray_coords(equity_coords, n_chains, n_posterior_samples)
+    dims = {"cut_probability": ["chain", "draw", "equity"]}
+
+    observed = _build_dividend_observed_data(payer_df)
+    constant_data = _build_dividend_constant_data(payer_df)
+
+    return _build_arviz_or_xarray(
+        posterior={"cut_probability": posterior_samples},
+        observed_data=observed if observed else None,
+        constant_data=constant_data if constant_data else None,
+        coords=coords,
+        dims=dims,
+    )
+
+
+# =============================================================================
 # 3b. InferenceData Factory — Accounting Anomaly Detection
 # =============================================================================
 

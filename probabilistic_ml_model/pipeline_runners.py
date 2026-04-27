@@ -886,10 +886,18 @@ def run_earnings_beat_analysis(
     df: pd.DataFrame,
     feature_df: pd.DataFrame | None = None,
     catalog: FeatureViewCatalog | None = None,
+    *,
+    strict_streak_merge: bool = False,
 ) -> pd.DataFrame:
     """Run enhanced three-layer Bayesian earnings beat probability model.
 
     Column requirements resolved from ``FeatureViewCatalog``.
+
+    v0.9.8.2 — The EPS streak analysis (which produces ``map_estimate`` and
+    ``model_confidence``) now runs *before* ``analyze_dataframe_enhanced`` and
+    ``ResampledBeatProbabilityModel.analyze_dataframe`` so the streak-merge
+    columns are present on both the enriched beat frame and the source
+    ``df`` consumed by the resampled wrapper (see CHANGELOG §12.5).
     """
     from probabilistic_ml_model.statistical_functions.probability_models import (
         EarningsBeatProbabilityModel,
@@ -903,28 +911,41 @@ def run_earnings_beat_analysis(
     cat = catalog or get_feature_catalog()
     beat_df = auto_enrich_for_model(df.copy(), feature_df, "earnings_beat", cat)
 
-    model = EarningsBeatProbabilityModel()
-    sector_col = "sector" if "sector" in beat_df.columns else "industry"
-    beat = model.analyze_dataframe_enhanced(beat_df, sector_col=sector_col)
-    logger.info("Earnings beat analysis: %d stocks processed", len(beat))
-
-    # EPS streak analysis
+    # --- §12.5: run streak analyzer FIRST so map_estimate / model_confidence
+    # are present on the DFs consumed by analyze_dataframe_enhanced and the
+    # downstream ResampledBeatProbabilityModel (which re-invokes the base
+    # enhanced analyzer internally). Previously the streak merge happened
+    # after these calls, leading to silent column drops and degraded
+    # momentum prior tilt for ~15 % of the universe.
+    streak_df = pd.DataFrame()
     try:
         streak_analyzer = EPSStreakAnalyzer()
         streak_df = streak_analyzer.analyze_dataframe(df)
         if not streak_df.empty and "isin" in streak_df.columns:
-            streak_cols = [
-                c for c in streak_df.columns if c != "isin" and c not in beat.columns
-            ]
-            if streak_cols:
-                beat = beat.merge(
-                    streak_df[["isin"] + streak_cols], on="isin", how="left"
-                )
-                logger.info("EPS streak enrichment: %d columns added", len(streak_cols))
+            prior_cols = ["map_estimate", "model_confidence"]
+            merge_cols = [c for c in prior_cols if c in streak_df.columns]
+            if merge_cols:
+                beat_df = beat_df.merge(streak_df[["isin"] + merge_cols], on="isin", how="left")
+                # Also stamp onto the original `df` passed to the resampled model
+                df = df.merge(streak_df[["isin"] + merge_cols], on="isin", how="left")
     except Exception as e:
-        logger.warning("EPS streak analysis failed: %s", e)
+        logger.warning("EPS streak pre-merge failed: %s", e)
 
-    # Resampled technical priors
+    model = EarningsBeatProbabilityModel()
+    sector_col = "sector" if "sector" in beat_df.columns else "industry"
+    beat = model.analyze_dataframe_enhanced(
+        beat_df, sector_col=sector_col, strict_streak_merge=strict_streak_merge
+    )
+    logger.info("Earnings beat analysis: %d stocks processed", len(beat))
+
+    # Merge remaining streak diagnostic columns (those not already on beat)
+    if not streak_df.empty and "isin" in streak_df.columns:
+        streak_cols = [c for c in streak_df.columns if c != "isin" and c not in beat.columns]
+        if streak_cols:
+            beat = beat.merge(streak_df[["isin"] + streak_cols], on="isin", how="left")
+            logger.info("EPS streak enrichment: %d columns added", len(streak_cols))
+
+    # Resampled technical priors — now sees the streak columns on `df`
     try:
         resampled_model = ResampledBeatProbabilityModel(base_model=model)
         # Resampled model uses ticker_col="isin" to match the main beat DataFrame
@@ -1051,24 +1072,43 @@ def run_dividend_safety_analysis(
     df: pd.DataFrame,
     feature_df: pd.DataFrame | None = None,
     *,
-    n_mcmc_samples: int = 5000,
-    burn_in: int = 1000,
+    n_mcmc_samples: int = 8000,
+    burn_in: int = 2000,
+    high_payout_threshold: float = 0.80,
+    min_coverage: float = 1.2,
+    risk_category_thresholds: tuple[float, float, float] = (0.20, 0.40, 0.65),
+    posterior_pseudo_count: float = 40.0,
+    exclude_non_payers: bool = True,
     catalog: FeatureViewCatalog | None = None,
 ) -> pd.DataFrame:
-    """Run dividend cut probability analysis.
+    """Run dividend cut probability analysis (v3.10 per-isin MCMC).
 
-    Column requirements resolved from ``FeatureViewCatalog``.
+    Column requirements resolved from ``FeatureViewCatalog``. Input is
+    de-duplicated on ``isin`` so that posterior rows are unique per
+    instrument.
     """
     from probabilistic_ml_model.statistical_functions.probability_models import (
         DividendCutProbabilityModel,
     )
 
+    # v3.10: guarantee per-isin inference rows
+    if "isin" in df.columns:
+        df = df.drop_duplicates(subset="isin").reset_index(drop=True)
+
     cat = catalog or get_feature_catalog()
     div_df = auto_enrich_for_model(df.copy(), feature_df, "dividend_safety", cat)
 
-    model = DividendCutProbabilityModel(n_mcmc_samples=n_mcmc_samples, burn_in=burn_in)
+    model = DividendCutProbabilityModel(
+        high_payout_threshold=high_payout_threshold,
+        min_coverage=min_coverage,
+        n_mcmc_samples=n_mcmc_samples,
+        burn_in=burn_in,
+        risk_category_thresholds=risk_category_thresholds,
+        posterior_pseudo_count=posterior_pseudo_count,
+        exclude_non_payers=exclude_non_payers,
+    )
     div_safety = model.analyze_dataframe(div_df)
-    logger.info("Dividend safety analysis: %d stocks processed", len(div_safety))
+    logger.info("Dividend safety analysis (v3.10 per-isin): %d stocks processed", len(div_safety))
     return div_safety
 
 

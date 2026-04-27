@@ -14,7 +14,6 @@ pandas>= 2.2.0, <4.0.0
 scipy>= 1.14.0, <4.0.0
 statsmodels>= 0.14.0, <3.0.0
 cython>=3.2.0
-numpyro>=0.14.0
 # --- Machine Learning: Core Frameworks ---
 scikit-learn>= 1.6.0, <4.0.0
 imbalanced-learn>= 0.12.0, <1.0.0
@@ -39,10 +38,10 @@ xlsxwriter>= 3.2.0, <4.0.0
 psutil>= 6.0.0, <8.0.0
 
 # --- Bayesian / Probabilistic ---
-arviz>=1.0.0,<2.0.0
-arviz-base>=1.0.0,<2.0.0
-arviz-stats>=1.0.0,<2.0.0
-arviz-plots>=1.0.0,<2.0.0
+arviz>=0.18,<1.0
+#arviz-base>=0.18,<1.0
+#arviz-stats>=0.18,<1.0
+#arviz-plots>=0.18,<1.0
 xarray>=2025.0.0,<2027.0.0
 pymc>=5.0.0
 pytensor>=2.38.0
@@ -110,3 +109,5 @@ flask>= 3.0.0, <4.0.0
 ipython>= 8.28.0, <11.0.0
 python-dotenv
 numba<0.70.0
+
+arviz-base

@@ -42,17 +42,17 @@ def apply_arviz_theme() -> None:
         import arviz_plots as azp
 
         azp.style.use(ARVIZ_TEMPLATE)
-    except (ImportError, ValueError, TypeError):
+    except ImportError, ValueError, TypeError, OSError:
         try:
             import arviz as az
 
             az.style.use(ARVIZ_TEMPLATE)
-        except (ImportError, ValueError, TypeError):
+        except ImportError, ValueError, TypeError, OSError:
             try:
                 import matplotlib.pyplot as plt
 
                 plt.style.use("dark_background")
-            except ImportError:
+            except ImportError, OSError:
                 pass
 
 

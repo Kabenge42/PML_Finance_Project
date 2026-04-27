@@ -5,7 +5,6 @@
     <file url="file://$PROJECT_DIR$/feature_registry.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/import_equities_data.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/mv_dcf.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
-    <file url="file://$PROJECT_DIR$/mv_exp_returns.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/mv_expected_returns.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/sql_scripts/public/equities_schema_metadata.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
   </component>

@@ -38,7 +38,7 @@ ArviZ / arviz-plots integration:
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -47,10 +47,12 @@ import xarray as xr
 from plotly.subplots import make_subplots
 from scipy import stats
 
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure as MplFigure
+
 from probabilistic_ml_model.visualizations._shared import (
     PLOTLY_TEMPLATE,
     COLORS,
-    ENSEMBLE_RETURN_COLS,
     RISK_QUALITY_LABELS,
     create_no_data_figure,
 )
@@ -174,12 +176,31 @@ def _detect_and_fix_constant_column(
 # Lazy ArviZ import (matches project-wide pattern)
 # ---------------------------------------------------------------------------
 try:
-    import arviz as az
+    import warnings as _warnings
 
-    ARVIZ_AVAILABLE = hasattr(az, "InferenceData")
+    with _warnings.catch_warnings():
+        # ArviZ 1.0 emits a ``MigrationWarning`` on ``arviz.InferenceData``
+        # attribute access; suppress it during availability probing.
+        _warnings.filterwarnings("ignore", category=Warning, module=r"arviz.*")
+        import arviz as az  # noqa: E402
+    # ArviZ 1.0 replaced ``InferenceData`` with ``xarray.DataTree``.
+    ARVIZ_AVAILABLE = hasattr(xr, "DataTree") or hasattr(az, "from_dict")
 except ImportError:  # pragma: no cover
     az = None  # type: ignore[assignment]
     ARVIZ_AVAILABLE = False
+
+
+def _is_inference_data(obj) -> bool:
+    """Return True if *obj* is an ArviZ ``InferenceData`` or ``xr.DataTree``.
+
+    ArviZ 1.0 migrated to ``xarray.DataTree``; older code may still pass
+    ``arviz.InferenceData``.  This helper accepts both without triggering
+    the deprecation warning emitted by ``arviz.__getattr__``.
+    """
+    if isinstance(obj, xr.DataTree):
+        return True
+    cls_name = type(obj).__name__
+    return cls_name == "InferenceData"
 
 
 def float_array(x) -> np.ndarray:
@@ -250,7 +271,7 @@ def create_posterior_return_forest(
     title = title or f"Posterior Expected Returns — Top {top_n} Equities"
 
     # ── ArviZ path ────────────────────────────────────────────────────────
-    if ARVIZ_AVAILABLE and isinstance(idata_or_df, az.InferenceData):
+    if ARVIZ_AVAILABLE and _is_inference_data(idata_or_df):
         return _forest_from_idata(idata_or_df, var_name, top_n, credible_interval, sort_by, title)
 
     # ── DataFrame fallback ────────────────────────────────────────────────
@@ -503,7 +524,7 @@ def create_beat_probability_posterior(
     title = title or "Posterior Earnings Beat Probability"
 
     # ── ArviZ path ────────────────────────────────────────────────────────
-    if ARVIZ_AVAILABLE and isinstance(idata_or_df, az.InferenceData):
+    if ARVIZ_AVAILABLE and _is_inference_data(idata_or_df):
         return _beat_density_from_idata(idata_or_df, tickers, top_n, title)
 
     # ── DataFrame fallback ────────────────────────────────────────────────
@@ -679,7 +700,7 @@ def create_ruin_probability_diagnostic(
     if isinstance(idata_or_df, pd.DataFrame):
         return _ruin_diagnostic_from_df(idata_or_df, top_n, title)
 
-    if ARVIZ_AVAILABLE and isinstance(idata_or_df, az.InferenceData):
+    if ARVIZ_AVAILABLE and _is_inference_data(idata_or_df):
         return _ruin_diagnostic_from_idata(idata_or_df, top_n, title)
 
     return create_no_data_figure(title)
@@ -873,7 +894,7 @@ def create_mcse_convergence_panel(
 
     if not ARVIZ_AVAILABLE:
         return create_no_data_figure(f"{title} — ArviZ required")
-    if not isinstance(idata, az.InferenceData) or not hasattr(idata, "posterior"):
+    if not _is_inference_data(idata) or not hasattr(idata, "posterior"):
         return create_no_data_figure(f"{title} — no posterior group")
     if var_name not in idata.posterior.data_vars:
         return create_no_data_figure(f"{title} — variable not found")
@@ -1444,7 +1465,7 @@ def create_feature_view_posterior_panel(
     title = title or f"{view_spec.category} — Feature Posterior Panel"
 
     # Extract the posterior dataset
-    if ARVIZ_AVAILABLE and isinstance(idata, az.InferenceData):
+    if ARVIZ_AVAILABLE and _is_inference_data(idata):
         if hasattr(idata, "posterior"):
             ds = idata.posterior
         else:
@@ -2531,10 +2552,66 @@ def create_mcmc_category_posterior_chart(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+_MCMC_N_CHAINS = 8
+_MCMC_N_DRAWS = 10_000
+_MCMC_RNG_SEED = 42
+_FEATURE_NAME_MAX_LEN = 50
+_MIN_POSTERIOR_STD = 1e-6
+_DEFAULT_POSTERIOR_STD = 1e-3
+
+
+def _import_arviz_backend():
+    """Import the preferred ArviZ plotting backend.
+
+    Returns ``arviz_plots`` when available, falling back to ``arviz``.
+    Returns ``None`` if neither is installed.
+    """
+    try:
+        import arviz_plots as azp
+
+        return azp
+    except ImportError:
+        try:
+            import arviz as azp  # type: ignore[no-redef]
+
+            return azp
+        except ImportError:
+            return None
+
+
+def _build_posterior_dataset(
+    bayesian: dict,
+    rng: np.random.Generator,
+) -> "xr.Dataset | None":
+    """Simulate per-feature MCMC draws and wrap them in an ``xr.Dataset``.
+
+    Returns ``None`` when no feature has a usable ``posterior_mean``.
+    """
+    posterior_dict = {}
+    for feat, info in bayesian.items():
+        if not isinstance(info, dict) or "posterior_mean" not in info:
+            continue
+        posterior_std = max(info.get("posterior_std", _DEFAULT_POSTERIOR_STD), _MIN_POSTERIOR_STD)
+        samples = rng.normal(
+            info["posterior_mean"],
+            posterior_std,
+            size=(_MCMC_N_CHAINS, _MCMC_N_DRAWS),
+        )
+        posterior_dict[feat[:_FEATURE_NAME_MAX_LEN]] = (["chain", "draw"], samples)
+
+    if not posterior_dict:
+        return None
+
+    return xr.Dataset(
+        posterior_dict,
+        coords={"chain": range(_MCMC_N_CHAINS), "draw": range(_MCMC_N_DRAWS)},
+    )
+
+
 def create_mcmc_category_posterior_arviz(
     analytics: dict,
     category_name: str = "Category",
-) -> Optional["plt.Figure"]:  # noqa: F821
+) -> Optional["MplFigure"]:
     """ArviZ 1.0 forest plot for per-category Bayesian posteriors.
 
     Uses ``azp.plot_forest`` with ``shade_label`` for visual grouping,
@@ -2551,13 +2628,9 @@ def create_mcmc_category_posterior_arviz(
     -------
     matplotlib.figure.Figure | None
     """
-    try:
-        import arviz_plots as azp
-    except ImportError:
-        try:
-            import arviz as azp  # type: ignore[no-redef]
-        except ImportError:
-            return None
+    azp = _import_arviz_backend()
+    if azp is None:
+        return None
 
     from probabilistic_ml_model.visualizations._shared import (
         _make_datatree,
@@ -2569,25 +2642,13 @@ def create_mcmc_category_posterior_arviz(
     if not bayesian:
         return None
 
-    n_chains, n_draws = 8, 10_000
-    rng = np.random.default_rng(42)
-    posterior_dict = {}
-
-    for feat, info in bayesian.items():
-        if not isinstance(info, dict) or "posterior_mean" not in info:
-            continue
-        samples = rng.normal(
-            info["posterior_mean"],
-            max(info.get("posterior_std", 1e-3), 1e-6),
-            size=(n_chains, n_draws),
-        )
-        posterior_dict[feat[:50]] = (["chain", "draw"], samples)
-
-    if not posterior_dict:
+    rng = np.random.default_rng(_MCMC_RNG_SEED)
+    ds = _build_posterior_dataset(bayesian, rng)
+    if ds is None:
         return None
 
-    ds = xr.Dataset(posterior_dict, coords={"chain": range(n_chains), "draw": range(n_draws)})
     dt = _make_datatree(posterior=ds)
+    plot_title = f"{category_name} — Feature Posterior Forest (ArviZ)"
 
     try:
         pc = azp.plot_forest(
@@ -2596,7 +2657,7 @@ def create_mcmc_category_posterior_arviz(
             combined=False,
             backend="matplotlib",
         )
-        _pc_add_title(pc, f"{category_name} — Feature Posterior Forest (ArviZ)")
+        _pc_add_title(pc, plot_title)
         return _fig_from_pc(pc)
-    except Exception:
+    except ImportError:
         return None

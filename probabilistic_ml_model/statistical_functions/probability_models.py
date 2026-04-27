@@ -906,11 +906,7 @@ class AccountingAnomalyProbabilityModel:
 
         # Task 1.1: Student-t posterior for anomaly scores
         try:
-            mu_samples, df_samples = mcmc_student_t(
-                anomaly_scores,
-                n_samples=self.n_mcmc_samples,
-                burn_in=self.burn_in,
-            )
+            mu_samples, df_samples = mcmc_student_t(anomaly_scores, n_samples=self.n_mcmc_samples, burn_in=self.burn_in)
             result["anomaly_posterior_mean"] = mu_samples.mean()
             result["anomaly_posterior_std"] = mu_samples.std()
             result["anomaly_ci_lower"] = np.percentile(mu_samples, 2.5)
@@ -922,12 +918,8 @@ class AccountingAnomalyProbabilityModel:
         sector_col = "industry" if "industry" in result.columns else "sector"
         if sector_col in result.columns:
             try:
-                sector_posteriors = hierarchical_mcmc_by_sector(
-                    result,
-                    feature="accounting_anomaly_score",
-                    sector_col=sector_col,
-                    n_samples=self.n_mcmc_samples,
-                )
+                sector_posteriors = hierarchical_mcmc_by_sector(result, feature="accounting_anomaly_score",
+                                                                sector_col=sector_col, n_samples=self.n_mcmc_samples)
                 # Unwrap ArviZ-wrapped result
                 if "sectors" in sector_posteriors and isinstance(
                     sector_posteriors["sectors"], dict
@@ -2340,7 +2332,7 @@ class EarningsBeatProbabilityModel:
         df: pd.DataFrame,
         beats_col: str = "historical_beat_rate",
         total_col: str = "dynamic_total_reports",
-        sector_col: str = "sector",
+        sector_col: str = "industry",
         ticker_col: str = "isin",
         name_col: str = "name",
         # NEW: feature column mappings (v3.5)
@@ -2826,7 +2818,7 @@ class EarningsBeatProbabilityModel:
     def analyze_dataframe_enhanced(
         self,
         df: pd.DataFrame,
-        sector_col: str = "sector",
+        sector_col: str = "industry",
         ticker_col: str = "isin",
         name_col: str = "name",
         streak_map_col: str = "map_estimate",
@@ -3438,7 +3430,7 @@ class EPSStreakAnalyzer:
         streak_col: str = "eps_positive_streak",
         improvement_col: str = "eps_improvement_count",
         name_col: str = "name",
-        sector_col: str = "sector",
+        sector_col: str = "industry",
         industry_col: str = "industry",
         country_col: str = "country",
         exchange_col: str = "exchange",
@@ -4350,13 +4342,9 @@ class CreditRiskProbabilityModel:
 
         try:
             # Task 2.1: MH sampler on z-scores
-            samples, acc_rate = metropolis_hastings_sampler(
-                z_scores,
-                n_samples=self.n_mcmc_samples,
-                burn_in=self.burn_in,
-                prior_mean=self.distress_threshold,
-                prior_std=1.0,
-            )
+            samples, acc_rate = metropolis_hastings_sampler(z_scores, n_samples=self.n_mcmc_samples,
+                                                            burn_in=self.burn_in, prior_mean=self.distress_threshold,
+                                                            prior_std=1.0)
             # Per-stock: P(distress) = P(posterior_mean < stock_z)
             stock_z = (
                 result_df["altman_z_score"].values
@@ -4371,9 +4359,7 @@ class CreditRiskProbabilityModel:
             )
 
             # Task 2.2: Student-t for robust estimation
-            mu_samples, df_samples = mcmc_student_t(
-                z_scores, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
-            )
+            mu_samples, df_samples = mcmc_student_t(z_scores, n_samples=self.n_mcmc_samples, burn_in=self.burn_in)
             result_df["mcmc_ci_lower"] = np.percentile(mu_samples, 2.5)
             result_df["mcmc_ci_upper"] = np.percentile(mu_samples, 97.5)
         except (ValueError, RuntimeError) as e:
@@ -4389,12 +4375,8 @@ class CreditRiskProbabilityModel:
                 sector_col in source_df.columns
                 and "altman_z_score" in source_df.columns
             ):
-                sector_results = hierarchical_mcmc_by_sector(
-                    source_df,
-                    feature="altman_z_score",
-                    sector_col=sector_col,
-                    n_samples=self.n_mcmc_samples,
-                )
+                sector_results = hierarchical_mcmc_by_sector(source_df, feature="altman_z_score", sector_col=sector_col,
+                                                             n_samples=self.n_mcmc_samples)
                 # Unwrap ArviZ-wrapped result
                 if "sectors" in sector_results and isinstance(
                     sector_results["sectors"], dict
@@ -4430,23 +4412,25 @@ class DividendCutProbabilityModel:
 
     def __init__(
         self,
-        high_payout_threshold: float = 0.55,  # v3.9: was 1.0 — tighter given fat tails
-        min_coverage: float = 1.5,  # v3.9: was 0.0 — require genuine coverage
-        n_mcmc_samples: int = 12000,  # v3.9: was 5000
-        burn_in: int = 3000,  # v3.9: was 1000
+        # v3.10: recalibrated — dividend cuts empirically spike above 80% payout
+        high_payout_threshold: float = 0.80,  # was 0.55
+        min_coverage: float = 1.2,  # was 1.5 — industry standard FCF/div ratio
+        n_mcmc_samples: int = 8000,  # was 12000 — per-isin inference
+        burn_in: int = 2000,  # was 3000 — matches reduced sample count
         use_mcmc: bool = True,
         # NEW: Leverage & Liquidity signals for dividend sustainability
         use_leverage_signals: bool = True,
         use_balance_sheet: bool = True,
         # v3.9: Heavy-tail likelihood (Finding #1)
         use_student_t_likelihood: bool = True,
-        # v3.9 §3.1: GARCH volatility parity with Credit / PT. When enabled
-        # (and PyMC is available) the ``_apply_mcmc_posteriors`` block models
-        # payout-ratio volatility via a GARCH(1,1) on the coverage residuals.
-        # The flag is honoured end-to-end at API level; the sampler path
-        # falls back to a Gaussian likelihood if PyMC/arviz unavailable.
+        # v3.9 §3.1: GARCH volatility parity with Credit / PT.
         use_garch_volatility: bool = True,
-        student_t_df_floor: float = 3.0,
+        student_t_df_floor: float = 4.0,  # v3.10: was 3.0 — finite kurtosis
+        # v3.10: NEW calibration knobs
+        risk_category_thresholds: tuple[float, float, float] = (0.20, 0.40, 0.65),
+        posterior_pseudo_count: float = 40.0,
+        sector_adjusted_min_coverage: bool = True,
+        exclude_non_payers: bool = True,
     ):
         self.high_payout_threshold = high_payout_threshold
         self.min_coverage = min_coverage
@@ -4456,14 +4440,22 @@ class DividendCutProbabilityModel:
         self.use_leverage_signals = use_leverage_signals
         self.use_balance_sheet = use_balance_sheet
         self.use_student_t_likelihood = use_student_t_likelihood
-        # v3.9 §3.1 parity flags
         self.use_garch_volatility = bool(use_garch_volatility)
         self.student_t_df_floor = float(student_t_df_floor)
+        # v3.10 new calibration
+        self.risk_category_thresholds = tuple(risk_category_thresholds)
+        self.posterior_pseudo_count = float(posterior_pseudo_count)
+        self.sector_adjusted_min_coverage = bool(sector_adjusted_min_coverage)
+        self.exclude_non_payers = bool(exclude_non_payers)
         logger.debug(
-            "DividendCutProbabilityModel v3.9: student_t=%s, garch=%s, df_floor=%.2f",
+            "DividendCutProbabilityModel v3.10: student_t=%s, garch=%s, df_floor=%.2f, "
+            "high_payout=%.2f, min_cov=%.2f, thresholds=%s",
             self.use_student_t_likelihood,
             self.use_garch_volatility,
             self.student_t_df_floor,
+            self.high_payout_threshold,
+            self.min_coverage,
+            self.risk_category_thresholds,
         )
 
     def analyze_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -4613,116 +4605,204 @@ class DividendCutProbabilityModel:
 
             prob = min(0.95, max(0.03, prob))
 
-            risk_cat = "Safe"
-            if prob > 0.6:
-                risk_cat = "At Risk"
-            elif prob > 0.35:
-                risk_cat = "Borderline"
-            elif prob > 0.15:
-                risk_cat = "Monitor"
+            # v3.10 §D: Non-payer guardrail — exclude/label zero-dividend tickers
+            streak_eff = streak_raw if streak_raw is not None and not pd.isna(streak_raw) else 0
+            payout_eff = (
+                payout_ratio_raw
+                if payout_ratio_raw is not None and not pd.isna(payout_ratio_raw)
+                else 0
+            )
+            is_payer = (streak_eff >= 2) and (payout_eff > 0)
 
             record = _extract_identifiers(row)
-            record.update(
-                {
-                    "high_yield_flag": high_yield_flag_raw,
-                    "dividend_cut_probability": prob,
-                    "fcf_dividend_coverage": fcf_coverage_raw,
-                    "payout_ratio": payout_ratio_raw,
-                    "dividend_streak": streak_raw,
-                    "dividend_consistency": consistency_raw,
-                    "yield_vs_5y_avg": yield_vs_5y_raw,
-                    "sustainable_flag": sustainable_flag_raw,
-                    "safety_score": 100 * (1 - prob),
-                    "risk_category": risk_cat,
-                }
-            )
+            if self.exclude_non_payers and not is_payer:
+                record.update(
+                    {
+                        "high_yield_flag": high_yield_flag_raw,
+                        "dividend_cut_probability": np.nan,
+                        "fcf_dividend_coverage": fcf_coverage_raw,
+                        "payout_ratio": payout_ratio_raw,
+                        "dividend_streak": streak_raw,
+                        "dividend_consistency": consistency_raw,
+                        "yield_vs_5y_avg": yield_vs_5y_raw,
+                        "sustainable_flag": sustainable_flag_raw,
+                        "safety_score": np.nan,
+                        "risk_category": "Not a Payer",
+                        "is_dividend_payer": False,
+                    }
+                )
+            else:
+                # Heuristic risk category (will be overwritten post-MCMC)
+                record.update(
+                    {
+                        "high_yield_flag": high_yield_flag_raw,
+                        "dividend_cut_probability": prob,
+                        "fcf_dividend_coverage": fcf_coverage_raw,
+                        "payout_ratio": payout_ratio_raw,
+                        "dividend_streak": streak_raw,
+                        "dividend_consistency": consistency_raw,
+                        "yield_vs_5y_avg": yield_vs_5y_raw,
+                        "sustainable_flag": sustainable_flag_raw,
+                        "safety_score": 100 * (1 - prob),
+                        "risk_category": "Safe",  # placeholder — reassigned below
+                        "is_dividend_payer": True,
+                    }
+                )
             results.append(record)
 
         result_df = pd.DataFrame(results)
 
-        # MCMC enrichment path
+        # v3.10: de-duplicate on isin to guarantee per-isin inference
+        if not result_df.empty and "isin" in result_df.columns:
+            result_df = result_df.drop_duplicates(subset="isin").reset_index(drop=True)
+
+        # MCMC enrichment path (per-isin)
         if self.use_mcmc and not result_df.empty:
             result_df = self._apply_mcmc_posteriors(result_df, df)
+        else:
+            result_df["mcmc_cut_probability"] = np.nan
+            result_df["mcmc_ci_lower"] = np.nan
+            result_df["mcmc_ci_upper"] = np.nan
+
+        # v3.10 §B: Synchronise risk_category with the FINAL probability
+        final_p = result_df["mcmc_cut_probability"].fillna(result_df["dividend_cut_probability"])
+        t1, t2, t3 = self.risk_category_thresholds
+        cat = pd.cut(
+            final_p,
+            bins=[-np.inf, t1, t2, t3, np.inf],
+            labels=["Safe", "Monitor", "Borderline", "At Risk"],
+        ).astype(object)
+        # Preserve 'Not a Payer' labels (their final_p is NaN)
+        if "risk_category" in result_df.columns:
+            is_non_payer = result_df["risk_category"] == "Not a Payer"
+            cat = cat.where(~is_non_payer, other="Not a Payer")
+        result_df["risk_category"] = cat.fillna("Not a Payer")
+        # Recompute safety_score from the final probability
+        result_df["safety_score"] = np.where(
+            final_p.isna(), np.nan, 100.0 * (1.0 - final_p.fillna(0.0))
+        )
 
         return result_df
 
     def _apply_mcmc_posteriors(
         self, result_df: pd.DataFrame, source_df: pd.DataFrame
     ) -> pd.DataFrame:
-        """Apply MCMC posterior estimation for dividend cut probability."""
+        """Per-isin MCMC posterior enrichment for dividend cut probability.
+
+        v3.10: Replaces the prior cross-sectional single-scalar composite
+        with a per-row logit-pooled Beta posterior. The population MCMC
+        (FCF coverage + payout ratio) runs once to form hyper-priors;
+        each isin is then scored against those posteriors and combined
+        with the heuristic probability via logit pooling. Per-row Beta
+        credible intervals lie in [0, 1].
+        """
         from probabilistic_ml_model.statistical_functions.statistical_models import (
             mcmc_student_t,
             metropolis_hastings_sampler,
         )
 
-        probs = []
+        # ---- Population reference distributions (computed ONCE) --------
+        fcf_pop = (
+            source_df["fcf_dividend_coverage"].dropna().values
+            if "fcf_dividend_coverage" in source_df.columns
+            else np.array([])
+        )
+        payout_pop = (
+            source_df["dividend_payout_ratio"].dropna().values
+            if "dividend_payout_ratio" in source_df.columns
+            else np.array([])
+        )
+        payout_mu = float(np.nanmedian(payout_pop)) if len(payout_pop) else 50.0
 
-        # Task 3.1: FCF coverage posterior
-        fcf_prob = 0.5
-        samples = np.array([])
-        fcf_data = np.array([])
+        # Population MCMC runs only to form the hyper-prior
         try:
-            fcf_data = (
-                source_df["fcf_dividend_coverage"].dropna().values
-                if "fcf_dividend_coverage" in source_df.columns
-                else np.array([])
-            )
-            if len(fcf_data) >= 10:
-                samples, _ = metropolis_hastings_sampler(
-                    fcf_data,
+            if len(fcf_pop) >= 10:
+                fcf_post, _ = metropolis_hastings_sampler(
+                    fcf_pop,
                     n_samples=self.n_mcmc_samples,
                     burn_in=self.burn_in,
                     prior_mean=self.min_coverage,
                     prior_std=1.0,
                 )
-                fcf_prob = float(np.mean(samples < self.min_coverage))
-                probs.append(fcf_prob)
+            else:
+                fcf_post = np.array([self.min_coverage])
         except (ValueError, RuntimeError) as e:
-            logger.warning("MCMC FCF coverage posterior failed: %s", e)
+            logger.warning("MCMC FCF coverage hyper-prior failed: %s", e)
+            fcf_post = np.array([self.min_coverage])
 
-        # Task 3.2: Payout ratio posterior (Student-t)
-        payout_prob = 0.5
         try:
-            payout_data = (
-                source_df["dividend_payout_ratio"].dropna().values
-                if "dividend_payout_ratio" in source_df.columns
-                else np.array([])
-            )
-            if len(payout_data) >= 10:
-                mu_samples, _ = mcmc_student_t(
-                    payout_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
+            if len(payout_pop) >= 10:
+                payout_post, _ = mcmc_student_t(
+                    payout_pop,
+                    n_samples=self.n_mcmc_samples,
+                    burn_in=self.burn_in,
                 )
-                payout_prob = float(
-                    np.mean(mu_samples > self.high_payout_threshold * 100)
-                )
-                probs.append(payout_prob)
+            else:
+                payout_post = np.array([payout_mu])
         except (ValueError, RuntimeError) as e:
-            logger.warning("MCMC payout ratio posterior failed: %s", e)
+            logger.warning("MCMC payout ratio hyper-prior failed: %s", e)
+            payout_post = np.array([payout_mu])
 
-        # Task 3.4: Composite posterior (multiply individual posteriors)
-        if probs:
-            composite = 1.0
-            for p in probs:
-                composite *= max(p, 0.01)
-            # Normalize to reasonable range
-            composite = min(0.95, max(0.03, composite))
-            result_df["mcmc_cut_probability"] = composite
-            # CI from FCF samples if available
+        def _logit(p: float) -> float:
+            p = min(max(p, 1e-4), 1 - 1e-4)
+            return float(np.log(p / (1.0 - p)))
+
+        def _sigmoid(x: float) -> float:
+            return float(1.0 / (1.0 + np.exp(-x)))
+
+        mcmc_probs: list[float] = []
+        lo: list[float] = []
+        hi: list[float] = []
+        kappa = self.posterior_pseudo_count
+
+        for _, r in result_df.iterrows():
+            # Skip non-payers (explicitly tagged earlier)
+            if str(r.get("risk_category", "")) == "Not a Payer" or not bool(
+                r.get("is_dividend_payer", True)
+            ):
+                mcmc_probs.append(np.nan)
+                lo.append(np.nan)
+                hi.append(np.nan)
+                continue
+
+            fcf_r = r.get("fcf_dividend_coverage", np.nan)
+            pay_r = r.get("payout_ratio", np.nan)
+            base = r.get("dividend_cut_probability", 0.10)
+            if pd.isna(base):
+                base = 0.10
+
+            # Per-row likelihood vs population posterior
+            if not pd.isna(fcf_r):
+                # Firms whose coverage is below posterior draws => cut risk
+                p_fcf = float(np.mean(fcf_post > max(float(fcf_r), 1e-6)))
+            else:
+                p_fcf = 0.5
+            if not pd.isna(pay_r):
+                # Firms whose payout exceeds posterior draws => cut risk
+                p_pay = float(np.mean(payout_post < float(pay_r)))
+            else:
+                p_pay = 0.5
+
+            # Logit pooling (replaces multiplicative collapse to 0.03 floor)
+            logit_post = (_logit(float(base)) + 0.6 * _logit(p_fcf) + 0.4 * _logit(p_pay)) / 2.0
+            p = float(np.clip(_sigmoid(logit_post), 0.02, 0.97))
+
+            # Beta credible interval around p
+            a = p * kappa + 1.0
+            b = (1.0 - p) * kappa + 1.0
             try:
-                if len(fcf_data) >= 10:
-                    result_df["mcmc_ci_lower"] = np.percentile(samples, 2.5)
-                    result_df["mcmc_ci_upper"] = np.percentile(samples, 97.5)
-                else:
-                    result_df["mcmc_ci_lower"] = np.nan
-                    result_df["mcmc_ci_upper"] = np.nan
-            except (ValueError, KeyError, IndexError):
-                result_df["mcmc_ci_lower"] = np.nan
-                result_df["mcmc_ci_upper"] = np.nan
-        else:
-            result_df["mcmc_cut_probability"] = np.nan
-            result_df["mcmc_ci_lower"] = np.nan
-            result_df["mcmc_ci_upper"] = np.nan
+                ci_l = float(stats.beta.ppf(0.025, a, b))
+                ci_u = float(stats.beta.ppf(0.975, a, b))
+            except ValueError, RuntimeError:
+                ci_l, ci_u = np.nan, np.nan
 
+            mcmc_probs.append(p)
+            lo.append(ci_l)
+            hi.append(ci_u)
+
+        result_df["mcmc_cut_probability"] = mcmc_probs
+        result_df["mcmc_ci_lower"] = lo
+        result_df["mcmc_ci_upper"] = hi
         return result_df
 
 
@@ -4971,13 +5051,8 @@ class PriceTargetAchievementModel:
                 vol_scale = source_df["volatility_regime"].median()
                 if pd.notna(vol_scale) and vol_scale > 0:
                     prior_std = prior_std * max(0.5, float(vol_scale))
-            samples, acc_rate = metropolis_hastings_sampler(
-                returns_data,
-                n_samples=self.n_mcmc_samples,
-                burn_in=self.burn_in,
-                prior_mean=0.0,
-                prior_std=prior_std,
-            )
+            samples, acc_rate = metropolis_hastings_sampler(returns_data, n_samples=self.n_mcmc_samples,
+                                                            burn_in=self.burn_in, prior_mean=0.0, prior_std=prior_std)
             # Per-stock: P(achieving target) ≈ P(posterior mean > stock's required upside)
             stock_upside = (
                 result_df["implied_return_pt"].values
@@ -5001,9 +5076,7 @@ class PriceTargetAchievementModel:
 
         try:
             # Task 4.2: Student-t for heavy-tailed returns
-            mu_samples, df_samples = mcmc_student_t(
-                returns_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
-            )
+            mu_samples, df_samples = mcmc_student_t(returns_data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in)
             achievement_prob = float(np.mean(mu_samples > 0))
             result_df["mcmc_achievement_probability"] = achievement_prob
             result_df["mcmc_ci_lower"] = np.percentile(mu_samples, 2.5)
@@ -5609,17 +5682,11 @@ class CategoryProbabilityAnalyzer:
 
             try:
                 if self.use_student_t:
-                    mu_samples, _ = mcmc_student_t(
-                        data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in
-                    )
+                    mu_samples, _ = mcmc_student_t(data, n_samples=self.n_mcmc_samples, burn_in=self.burn_in)
                 else:
-                    mu_samples, _ = metropolis_hastings_sampler(
-                        data,
-                        n_samples=self.n_mcmc_samples,
-                        burn_in=self.burn_in,
-                        prior_mean=self.prior_alpha,
-                        prior_std=self.prior_beta,
-                    )
+                    mu_samples, _ = metropolis_hastings_sampler(data, n_samples=self.n_mcmc_samples,
+                                                                burn_in=self.burn_in, prior_mean=self.prior_alpha,
+                                                                prior_std=self.prior_beta)
                 stats[feat] = {
                     "posterior_mean": float(mu_samples.mean()),
                     "posterior_std": float(mu_samples.std()),

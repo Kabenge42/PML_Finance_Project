@@ -1,4 +1,18 @@
 import importlib as _importlib
+import warnings as _warnings
+
+# ── Suppress ArviZ 1.0 MigrationWarning for ``arviz.InferenceData`` ─────────
+# ArviZ 1.0 migrated ``InferenceData`` to ``xarray.DataTree``.  PyMC 5.x and
+# legacy downstream code may still reference ``arviz.InferenceData`` (e.g.
+# via ``hasattr``/type-hint resolution), which triggers a noisy
+# ``MigrationWarning`` emitted from ``arviz/__init__.py`` on every attribute
+# access.  Filter it package-wide; the project's compat shim
+# (``_pymc_arviz_compat``) injects a functional ``InferenceData`` replacement
+# so behaviour is preserved.
+_warnings.filterwarnings(
+    "ignore",
+    message=r".*arviz\.InferenceData is no longer available.*",
+)
 
 # ── Patch arviz for PyMC 5.x compatibility with arviz >= 1.0 ─────────────────
 try:
@@ -13,21 +27,21 @@ except Exception:
 # Each entry is resolved on first access via __getattr__.
 _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
     "ProbabilisticLinearRegression": (
-        ".pml_models.ProbabilisticLinearRegressionModel",
+        ".pymc_models.ProbabilisticLinearRegressionModel",
         "ProbabilisticLinearRegression",
     ),
-    "KalmanFilterPriceTarget": (".pml_models.KalmanFilterModel", "KalmanFilterPriceTarget"),
-    "DCFPriceTarget": (".pml_models.DCF_PriceTargetModel", "DCFPriceTarget"),
-    "EarningsBeatBayesian": (".pml_models.EarningsBeatModel", "EarningsBeatBayesian"),
-    "DividendSafetyBayesian": (".pml_models.DividendSafetyModel", "DividendSafetyBayesian"),
-    "PriceTargetAchievement": (".pml_models.PriceTargetModel", "PriceTargetAchievement"),
+    "KalmanFilterPriceTarget": (".pymc_models.KalmanFilterModel", "KalmanFilterPriceTarget"),
+    "DCFPriceTarget": (".pymc_models.DCF_PriceTargetModel", "DCFPriceTarget"),
+    "EarningsBeatBayesian": (".pymc_models.EarningsBeatModel", "EarningsBeatBayesian"),
+    "DividendSafetyBayesian": (".pymc_models.DividendSafetyModel", "DividendSafetyBayesian"),
+    "PriceTargetAchievement": (".pymc_models.PriceTargetModel", "PriceTargetAchievement"),
     "AccountingAnomalyBayesian": (
-        ".pml_models.AccountingAnomalyModel",
+        ".pymc_models.AccountingAnomalyModel",
         "AccountingAnomalyBayesian",
     ),
-    "CreditRiskBayesian": (".pml_models.CreditRiskModel", "CreditRiskBayesian"),
+    "CreditRiskBayesian": (".pymc_models.CreditRiskModel", "CreditRiskBayesian"),
     "MonteCarloReturnSimulation": (
-        ".pml_models.MonteCarloSimulation",
+        ".pymc_models.MonteCarloSimulation",
         "MonteCarloReturnSimulation",
     ),
 }
@@ -47,7 +61,7 @@ _SUBPACKAGES: set[str] = {
     "optimized_ops",
     "statistical_functions",
     "visualizations",
-    "pml_models",
+    "pymc_models",
     "pipeline_runners",
 }
 
