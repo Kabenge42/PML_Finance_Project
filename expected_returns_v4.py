@@ -663,7 +663,8 @@ class BaselinePipeline:
     # ── Phase 2: Core PML Model Execution ─────────────────────────────────────
 
     def phase_2_core_models(self) -> None:
-        """Execute all core PML models from probabilistic_ml_model.pml_models."""
+        """Execute all core PML models from probabilistic_ml_model.pymc_models."""
+
         from probabilistic_ml_model.pipeline_runners import (
             compute_price_target_mc,
             compute_price_target_prob_weighted,
@@ -779,7 +780,7 @@ class BaselinePipeline:
             _run_model_step(15, "DCF Price Target Model", self._run_dcf)
 
     def _run_plr(self) -> None:
-        from probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel import (
+        from probabilistic_ml_model.pymc_models.ProbabilisticLinearRegressionModel import (
             ProbabilisticLinearRegression,
         )
 
@@ -825,7 +826,7 @@ class BaselinePipeline:
         )
 
     def _run_dcf(self) -> None:
-        from probabilistic_ml_model.pml_models.DCF_PriceTargetModel import (
+        from probabilistic_ml_model.pymc_models.DCF_PriceTargetModel import (
             DCFPriceTarget,
         )
 

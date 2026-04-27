@@ -1794,6 +1794,8 @@ def run_earnings_beat_analysis(
     df: pd.DataFrame,
     feature_df: pd.DataFrame | None = None,
     catalog: FeatureViewCatalog | None = None,
+    *,
+    strict_streak_merge: bool = False,
 ) -> pd.DataFrame:
     """
     Run enhanced three-layer Bayesian earnings beat probability model.
@@ -1806,6 +1808,14 @@ def run_earnings_beat_analysis(
 
     Column requirements resolved from ``FeatureViewCatalog``.
 
+    v0.9.8.2 — EPS streak analysis runs *first* so the
+    ``map_estimate`` / ``model_confidence`` columns are present on both
+    ``beat_df`` (consumed by ``analyze_dataframe_enhanced``) and ``df``
+    (consumed by ``ResampledBeatProbabilityModel.analyze_dataframe``,
+    which re-invokes the base enhanced analyzer internally). Without
+    this pre-merge the momentum prior tilt silently degraded for
+    ~15 % of the universe (CHANGELOG §12.5).
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -1814,12 +1824,38 @@ def run_earnings_beat_analysis(
         Full feature DataFrame for merging missing quality columns.
     catalog : FeatureViewCatalog or None, optional
         Pre-loaded feature catalog. If None, uses the global singleton.
+    strict_streak_merge : bool, optional
+        When True, ``EarningsBeatProbabilityModel.analyze_dataframe_enhanced``
+        raises ``KeyError`` if the streak-merge columns are missing on
+        ``beat_df``. Intended for CI/regression runs so a future
+        regression that re-introduces the silent drop fails fast.
     """
     # v3.9: Ensure input uniqueness to prevent Cartesian explosion
     df = _ensure_isin_column(df)
     df = df.drop_duplicates(subset="isin") if "isin" in df.columns else df
     cat = catalog or get_feature_catalog()
     beat_df = auto_enrich_for_model(df.copy(), feature_df, "earnings_beat", cat)
+
+    # --- v0.9.8.2 §12.5: run the streak analyzer FIRST so the
+    # streak-merge columns (map_estimate / model_confidence) are present
+    # on both `beat_df` and the source `df` passed to the resampled
+    # wrapper. Must run before analyze_dataframe_enhanced.
+    streak_df = pd.DataFrame()
+    try:
+        streak_analyzer = EPSStreakAnalyzer()
+        streak_df = streak_analyzer.analyze_dataframe(df)
+        streak_df = _ensure_isin_column(streak_df)
+        if not streak_df.empty and "isin" in streak_df.columns:
+            # v3.9: Deduplicate side-car before merge
+            streak_df = streak_df.drop_duplicates(subset="isin")
+            prior_cols = ["map_estimate", "model_confidence"]
+            merge_cols = [c for c in prior_cols if c in streak_df.columns]
+            if merge_cols:
+                beat_df = beat_df.merge(streak_df[["isin"] + merge_cols], on="isin", how="left")
+                df = df.merge(streak_df[["isin"] + merge_cols], on="isin", how="left")
+    except Exception as e:
+        logger.warning("EPS streak pre-merge failed: %s", e)
+        streak_df = pd.DataFrame()
 
     # v3.5: momentum-adjusted priors and quality discounting
     model = EarningsBeatProbabilityModel(
@@ -1828,32 +1864,24 @@ def run_earnings_beat_analysis(
         momentum_prior_strength=0.1,
     )
     sector_col = "sector" if "sector" in beat_df.columns else "industry"
-    beat = model.analyze_dataframe_enhanced(beat_df, sector_col=sector_col)
+    beat = model.analyze_dataframe_enhanced(
+        beat_df, sector_col=sector_col, strict_streak_merge=strict_streak_merge
+    )
     beat = _ensure_isin_column(beat)
     logger.info("Earnings beat analysis: %d stocks processed", len(beat))
 
-    # --- EPS streak analysis (Markov-chain continuation probabilities) ---
-    try:
-        streak_analyzer = EPSStreakAnalyzer()
-        streak_df = streak_analyzer.analyze_dataframe(df)
-        streak_df = _ensure_isin_column(streak_df)
-        if not streak_df.empty and "isin" in streak_df.columns:
-            # v3.9: Deduplicate side-car before merge
-            streak_side = streak_df.drop_duplicates(subset="isin")
-            streak_cols = [
-                c for c in streak_side.columns if c != "isin" and c not in beat.columns
-            ]
-            if streak_cols:
-                beat = beat.merge(
-                    streak_side[["isin"] + streak_cols],
-                    on="isin",
-                    how="left",
-                )
-                logger.info("EPS streak enrichment: %d columns added", len(streak_cols))
-    except Exception as e:
-        logger.warning("EPS streak analysis failed: %s", e)
+    # --- Merge remaining streak diagnostic columns (those not already on beat) ---
+    if not streak_df.empty and "isin" in streak_df.columns:
+        streak_cols = [c for c in streak_df.columns if c != "isin" and c not in beat.columns]
+        if streak_cols:
+            beat = beat.merge(
+                streak_df[["isin"] + streak_cols],
+                on="isin",
+                how="left",
+            )
+            logger.info("EPS streak enrichment: %d columns added", len(streak_cols))
 
-    # --- Resampled technical priors ---
+    # --- Resampled technical priors (now sees streak columns on `df`) ---
     try:
         resampled_model = ResampledBeatProbabilityModel(base_model=model)
         resampled_df = resampled_model.analyze_dataframe(df)
@@ -2009,8 +2037,13 @@ def run_dividend_safety_analysis(
     df: pd.DataFrame,
     feature_df: pd.DataFrame | None = None,
     *,
-    n_mcmc_samples: int = 5000,
-    burn_in: int = 1000,
+    n_mcmc_samples: int = 8000,
+    burn_in: int = 2000,
+    high_payout_threshold: float = 0.80,
+    min_coverage: float = 1.2,
+    risk_category_thresholds: tuple[float, float, float] = (0.20, 0.40, 0.65),
+    posterior_pseudo_count: float = 40.0,
+    exclude_non_payers: bool = True,
     catalog: FeatureViewCatalog | None = None,
 ) -> pd.DataFrame:
     """
@@ -2041,16 +2074,27 @@ def run_dividend_safety_analysis(
         Dividend safety results with ``dividend_cut_probability``,
         ``safety_score``, ``risk_category``.
     """
-    # v3.9: Strict input deduplication
+    # v3.10: Strict per-isin deduplication so inference rows are unique
     df = _ensure_isin_column(df)
     df = df.drop_duplicates(subset="isin") if "isin" in df.columns else df
     cat = catalog or get_feature_catalog()
     div_df = auto_enrich_for_model(df.copy(), feature_df, "dividend_safety", cat)
 
-    model = DividendCutProbabilityModel(n_mcmc_samples=n_mcmc_samples, burn_in=burn_in)
+    model = DividendCutProbabilityModel(
+        high_payout_threshold=high_payout_threshold,
+        min_coverage=min_coverage,
+        n_mcmc_samples=n_mcmc_samples,
+        burn_in=burn_in,
+        risk_category_thresholds=risk_category_thresholds,
+        posterior_pseudo_count=posterior_pseudo_count,
+        exclude_non_payers=exclude_non_payers,
+    )
     div_safety = model.analyze_dataframe(div_df)
     div_safety = _ensure_isin_column(div_safety)
-    logger.info("Dividend safety analysis: %d stocks processed", len(div_safety))
+    logger.info(
+        "Dividend safety analysis (v3.10 per-isin): %d stocks processed",
+        len(div_safety),
+    )
     return div_safety
 
 
@@ -5479,10 +5523,23 @@ def _step_kalman(r: PipelineResult, cfg: PipelineConfig) -> None:
 
 
 def _step_earnings_beat(r: PipelineResult, cfg: PipelineConfig) -> None:
-    """Step 5: Bayesian earnings beat analysis."""
+    """Step 5: Bayesian earnings beat analysis.
+
+    v0.9.8.2 — opts into ``strict_streak_merge`` when the
+    ``PML_STRICT_STREAK_MERGE`` env var is truthy (CI/regression guard).
+    """
+    import os
+
+    strict_streak_merge = os.environ.get("PML_STRICT_STREAK_MERGE", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     try:
         r.beat = run_earnings_beat_analysis(
-            r.df_features if not r.df_features.empty else r.df, feature_df=r.df_features
+            r.df_features if not r.df_features.empty else r.df,
+            feature_df=r.df_features,
+            strict_streak_merge=strict_streak_merge,
         )
         if not r.beat.empty and _has_required_columns(
             r.beat, ["posterior_beat_prob"], "Earnings Beat"

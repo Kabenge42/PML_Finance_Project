@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8.2] - 2026-04-23
+
+### Fixed — EPS streak pre-merge ordering (v3.10 §12.5 orchestration fix)
+
+- **`probabilistic_ml_model/pipeline_runners.py::run_earnings_beat_analysis`**
+  and **`expected_returns_v3.py::run_earnings_beat_analysis`** reordered so
+  that `EPSStreakAnalyzer.analyze_dataframe` runs *before*
+  `EarningsBeatProbabilityModel.analyze_dataframe_enhanced` and
+  `ResampledBeatProbabilityModel.analyze_dataframe`. The streak posterior
+  columns (`map_estimate`, `model_confidence`) are now merged onto both
+  `beat_df` (primary enhanced-analyzer input) and the source `df`
+  subsequently consumed by the resampled wrapper (which re-invokes the
+  base enhanced analyzer internally per chain/seed). This eliminates
+  the four `logger.warning` lines previously emitted on every pipeline
+  run ("expected streak-merge columns ['map_estimate',
+  'model_confidence'] not found in DataFrame ...") and restores the
+  Bayesian momentum-prior tilt that was silently skipped for ~15 % of
+  the universe per v3.8 logs.
+- **New `strict_streak_merge` keyword argument** added to both
+  `run_earnings_beat_analysis` implementations. When `True` the
+  underlying `analyze_dataframe_enhanced` raises `KeyError` if the
+  streak-merge columns are missing, so regressions that re-introduce
+  the silent drop fail fast instead of degrading silently.
+- **`expected_returns_v3._step_earnings_beat`** opts into
+  `strict_streak_merge=True` when the `PML_STRICT_STREAK_MERGE` env
+  var is truthy (`1` / `true` / `yes`), intended for CI/regression
+  runs. Default behaviour unchanged for interactive pipeline runs.
+
+### Notes
+
+- No schema or downstream-merge changes required — the existing
+  `[c for c in resampled_df.columns if c != "isin" and c not in beat.columns]`
+  merge shape introduced in 0.9.8.1 already propagates the resampled
+  diagnostic columns correctly once the streak pre-merge is in place.
+- `EarningsBeatProbabilityModel.analyze_dataframe_enhanced` and
+  `EPSStreakAnalyzer.analyze_dataframe` are unchanged; the fix is
+  purely an orchestration-ordering refactor.
+
+[0.9.8.2]: https://github.com/Kabenge42/PML_Finance_Project/compare/v0.9.8.1...v0.9.8.2
+
 ## [0.9.8.1] - 2026-04-22
 
 ### Fixed — ResampledBeat null-column population (v3.10 patch)

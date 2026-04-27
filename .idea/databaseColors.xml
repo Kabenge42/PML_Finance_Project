@@ -2,13 +2,14 @@
 <project version="4">
   <component name="DatabaseColorSettings">
     <colors>
-      <entry key="calculated_features_registry/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Green" />
+      <entry key="calculated_features_registry/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Orange" />
       <entry key="dividend_quality_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="dividend_safety_analysis/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="earnings_quality_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="equities/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Blue" />
       <entry key="equities_schema_metadata/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Blue" />
-      <entry key="feature_registry_metadata/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Green" />
+      <entry key="feature_catalogue/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Green" />
+      <entry key="feature_registry_metadata/public/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Orange" />
       <entry key="growth_momentum_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="high_yield_safe_dividend_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />
       <entry key="integrity_filtered_growth_stocks/analytics/postgres/4a5713c4-e52c-4ad4-8e82-d218d447191c:TABLE" value="Violet" />

@@ -11,7 +11,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 import pandas as pd
 
@@ -1338,7 +1338,7 @@ def _load_view_category_mapping_from_db(
     url = _resolve_db_url(db_url)
     if url is None:
         raise ValueError("DB URL not available")
-    
+
     if create_engine is None:
         raise ImportError("SQLAlchemy not available")
     engine = create_engine(url)
@@ -1348,9 +1348,10 @@ def _load_view_category_mapping_from_db(
     category_label_sql = text(f"""
         SELECT DISTINCT
             source_function,
-            category
+            category,
+            calculation_type
         FROM {schema}.calculated_features_registry
-        WHERE source_function IS NOT NULL
+        WHERE source_function IS NOT NULL and calculation_type <> 'direct'
     """)
 
     # ── View column metadata ──
@@ -1405,7 +1406,7 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
     Hardcoded fallback mapping aligned with the current database views.
 
     This must be periodically synced with the actual view definitions.
-    Last synced: 2026-02-19.
+    Last synced: 2026-04-23.
     """
     return {
         "vw_features_analyst_sentiment": {
@@ -1416,7 +1417,7 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "analyst_bearish_pct",
                 "analyst_neutral_pct",
                 "analyst_conviction",
-                "expected_upside_pt",
+                "upside_potential",
                 "price_target_spread_pct",
                 "price_target_revision_1m",
                 "price_target_revision_3m",
@@ -1601,12 +1602,11 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
         "vw_features_composite_scores": {
             "category": "Composite Scores",
             "feature_cols": [
-                # calc_composite_scores
+                # calc_composite_scores / calc_eps_trajectory_features (view order)
                 "piotroski_f_score",
+                "eps_trajectory_score",
                 "dilution_score",
                 "quality_momentum_score",
-                # calc_eps_trajectory_features
-                "eps_trajectory_score",
                 # calc_net_income_comprehensive
                 "net_income_is_fq",
                 "net_income_is_ltm",
@@ -2106,10 +2106,11 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "low_beta_flag",
                 "beta_stability_score",
                 # calc_financial_distress_features
-                "combined_distress_score",
+                "distress_risk_score",
                 "liquidity_stress_score",
                 "working_capital_trend",
                 "cash_runway_months",
+                "combined_distress_score",
                 "wc_deteriorating_flag",
                 "retained_earnings_growth",
                 "accumulated_deficit_flag",
@@ -2119,6 +2120,7 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "restructuring_intensity",
                 "exceptional_items_frequency",
                 "merger_impact_ratio",
+                "non_operating_income_share",
                 "asset_sale_boost",
                 "accounting_quality_score",
                 # calc_quality_features_comprehensive
@@ -2402,8 +2404,9 @@ def load_feature_categories_from_db(
         return _get_fallback_feature_categories()
 
     query = text("""
-                 SELECT category, feature_alias
+                 SELECT category, feature_alias,calculation_type
                  FROM public.calculated_features_registry
+                 WHERE calculation_type <> 'direct'
                  ORDER BY category, feature_alias
                  """)
 
