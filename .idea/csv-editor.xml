@@ -94,6 +94,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\sdk_ouputs\production\PML_Finance_Project\data\playground\screening_etf.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\sdk_ouputs\production\PML_Finance_Project\playground\screening_etf.csv">
           <value>
             <Attribute>
