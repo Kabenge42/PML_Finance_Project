@@ -1,10 +1,5 @@
 create function calc_all_enhanced_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin           text,
-                feature_count  integer,
-                reference_date timestamp without time zone
-            )
+    returns TABLE(isin text, feature_count integer, reference_date timestamp without time zone)
     stable
     parallel safe
     language sql

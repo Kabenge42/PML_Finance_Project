@@ -1,6 +1,4 @@
-create function calculate_next_fiscal_quarter(next_earnings_date date, income_statement_report_date date,
-                                              fy_end_date date,
-                                              earnings_report_frequency text DEFAULT 'Quarterly'::text) returns integer
+create function calculate_next_fiscal_quarter(next_earnings_date date, income_statement_report_date date, fy_end_date date, earnings_report_frequency text DEFAULT 'Quarterly'::text) returns integer
     immutable
     language plpgsql
 as
@@ -27,14 +25,17 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    -- Closed-form: how many whole fiscal years between fy_end and reference?
-    -- GREATEST(0, ceil(months_diff / 12)) â€” avoids the WHILE loop entirely
-    years_ahead := GREATEST(0,
-                            CEIL(
-                                    (DATE_PART('year', AGE(reference_date, fy_end_date)) * 12
-                                        + DATE_PART('month', AGE(reference_date, fy_end_date)))::NUMERIC / 12
-                            )::INT
-                   );
+    -- How many whole fiscal years between fy_end and reference, using AGE()
+    -- so that day-of-month is respected. FLOOR + 1 keeps us inside the CURRENT
+    -- fiscal year even when reference_date falls exactly on an FY boundary.
+    IF reference_date <= fy_end_date THEN
+        years_ahead := 0;
+    ELSE
+        years_ahead := FLOOR(
+                               (DATE_PART('year', AGE(reference_date, fy_end_date)) * 12
+                                   + DATE_PART('month', AGE(reference_date, fy_end_date)))::NUMERIC / 12
+                       )::INT + 1;
+    END IF;
 
     -- Start of the current fiscal year = (fy_end + (years_ahead - 1) years) + 1 day
     current_fy_start := (fy_end_date + make_interval(years => years_ahead - 1)

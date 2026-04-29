@@ -1,15 +1,5 @@
 create function calc_employment_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                 text,
-                revenue_per_employee numeric,
-                profit_per_employee  numeric,
-                ebitda_per_employee  numeric,
-                assets_per_employee  numeric,
-                fte_growth_1y_pct    numeric,
-                fte_growth_3y_pct    numeric,
-                workforce_stability  numeric
-            )
+    returns TABLE(isin text, revenue_per_employee numeric, profit_per_employee numeric, ebitda_per_employee numeric, assets_per_employee numeric, fte_growth_1y_pct numeric, fte_growth_3y_pct numeric, workforce_stability numeric)
     stable
     parallel safe
     language sql

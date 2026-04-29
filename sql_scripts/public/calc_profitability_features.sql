@@ -1,17 +1,5 @@
 create function calc_profitability_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                 text,
-                roe                  numeric,
-                roa                  numeric,
-                gross_margin_pct     numeric,
-                operating_margin_pct numeric,
-                net_margin_pct       numeric,
-                ebitda_margin_pct    numeric,
-                roic                 numeric,
-                rnd_intensity        numeric,
-                equity_multiplier    numeric
-            )
+    returns TABLE(isin text, roe numeric, roa numeric, gross_margin_pct numeric, operating_margin_pct numeric, net_margin_pct numeric, ebitda_margin_pct numeric, roic numeric, rnd_intensity numeric, equity_multiplier numeric)
     stable
     parallel safe
     language sql

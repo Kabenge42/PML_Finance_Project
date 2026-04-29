@@ -1,0 +1,28 @@
+create table bonds
+(
+    name               text,
+    currency           text,
+    issuer             text,
+    isin               text,
+    sector             text,
+    maturity           double precision,
+    "S&P Rating"       text,
+    coupon             double precision,
+    "Coupon frequency" text,
+    "YTM (Ask)"        double precision,
+    bid                text,
+    ask                double precision,
+    "Minimum size"     double precision,
+    "Country of issue" text,
+    "Amount issued"    double precision,
+    "Increment size"   double precision,
+    subordinated       text,
+    "EU Tax"           text,
+    "W/Tax"            text,
+    "Accrued days"     double precision,
+    "Accrued interest" double precision
+);
+
+alter table bonds
+    owner to postgres;
+

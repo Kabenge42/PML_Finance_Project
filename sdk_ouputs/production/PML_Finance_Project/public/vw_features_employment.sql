@@ -1,0 +1,76 @@
+create view vw_features_employment
+            (isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
+             dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
+             next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
+             dividend_record_announce_date, dividend_record_ex_date, dividend_record_payable_date,
+             dividend_record_record_date, fy_end_date, income_statement_report_date, last_updated, next_earnings,
+             next_fy_end_date, next_income_statement_report_date, reference_date, revenue_per_employee,
+             profit_per_employee, ebitda_per_employee, assets_per_employee, fte_growth_1y_pct, fte_growth_3y_pct,
+             workforce_stability, fte_growth_2y_pct, fte_acceleration, workforce_volatility, hiring_intensity,
+             productivity_trend, headcount_vs_revenue, workforce_efficiency_gain, layoff_risk_flag, rapid_hiring_flag,
+             sustainable_growth_flag)
+as
+SELECT id.isin,
+       id.ticker,
+       id.name,
+       id.description,
+       id.region,
+       id.country,
+       id.trading_country,
+       id.exchange,
+       id.sector,
+       id.industry,
+       id.dividend_record_frequency,
+       id.earnings_report_frequency,
+       id.fy_end,
+       id.next_earnings_report,
+       id.next_earnings_status,
+       id.next_earnings_when,
+       id.next_fiscal_quarter,
+       id.reporting_interval,
+       id.size_class,
+       id.style_class,
+       id.unit,
+       id.dividend_record_announce_date,
+       id.dividend_record_ex_date,
+       id.dividend_record_payable_date,
+       id.dividend_record_record_date,
+       id.fy_end_date,
+       id.income_statement_report_date,
+       id.last_updated,
+       id.next_earnings,
+       id.next_fy_end_date,
+       id.next_income_statement_report_date,
+       id.reference_date,
+       ef.revenue_per_employee,
+       ef.profit_per_employee,
+       ef.ebitda_per_employee,
+       ef.assets_per_employee,
+       ef.fte_growth_1y_pct,
+       ef.fte_growth_3y_pct,
+       ef.workforce_stability,
+       ed.fte_growth_2y_pct,
+       ed.fte_acceleration,
+       ed.workforce_volatility,
+       ed.hiring_intensity,
+       ed.productivity_trend,
+       ed.headcount_vs_revenue,
+       ed.workforce_efficiency_gain,
+       ed.layoff_risk_flag,
+       ed.rapid_hiring_flag,
+       ed.sustainable_growth_flag
+FROM vw_identifier_columns id
+         LEFT JOIN calc_employment_features() ef(isin, revenue_per_employee, profit_per_employee, ebitda_per_employee,
+                                                 assets_per_employee, fte_growth_1y_pct, fte_growth_3y_pct,
+                                                 workforce_stability) USING (isin)
+         LEFT JOIN calc_employment_dynamics() ed(isin, fte_growth_2y_pct, fte_acceleration, workforce_volatility,
+                                                 hiring_intensity, productivity_trend, headcount_vs_revenue,
+                                                 workforce_efficiency_gain, layoff_risk_flag, rapid_hiring_flag,
+                                                 sustainable_growth_flag) USING (isin);
+
+comment on view vw_features_employment is 'Employment metrics including productivity, workforce trends, and efficiency.
+    Source functions: calc_employment_features, calc_employment_dynamics';
+
+alter table vw_features_employment
+    owner to postgres;
+

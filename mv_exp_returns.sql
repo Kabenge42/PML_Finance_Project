@@ -974,13 +974,13 @@ SELECT_LEGACY_FEATURE_COLUMNS_START
        fge.fcf_est_growth_fy4_vs_fy3,
        fge.fcf_est_growth_fy5_vs_fy4,
        fge.fcf_est_cagr_3y,
-       fge.fcf_est_cagr_5y                 AS fcf_est_cagr_5y_fwd,
+       fge.fcf_est_cagr_5y
        fge.fcf_est_margin_fy1,
        fge.fcf_est_yield_fy1,
        fge.fcf_est_growth_acceleration,
        fge.fcf_est_growth_deceleration,
-       fge.fcf_est_trajectory_score        AS fcf_est_trajectory_score_fwd,
-       fge.fcf_est_always_positive         AS fcf_est_always_positive_fwd,
+       fge.fcf_est_trajectory_score
+       fge.fcf_est_always_positive
        fge.fcf_est_vs_historical,
        fge.fcf_est_capex_implied_ratio,
        CURRENT_TIMESTAMP                   AS feature_calculated_at

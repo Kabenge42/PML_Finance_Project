@@ -1,15 +1,5 @@
 create function calc_growth_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                    text,
-                revenue_growth_yoy      numeric,
-                ebitda_growth_yoy       numeric,
-                operating_income_growth numeric,
-                fcf_growth              numeric,
-                revenue_cagr_5y         numeric,
-                forward_revenue_growth  numeric,
-                revenue_vs_5y_avg       numeric
-            )
+    returns TABLE(isin text, revenue_growth_yoy numeric, ebitda_growth_yoy numeric, operating_income_growth numeric, fcf_growth numeric, revenue_cagr_5y numeric, forward_revenue_growth numeric, revenue_vs_5y_avg numeric)
     stable
     parallel safe
     language sql

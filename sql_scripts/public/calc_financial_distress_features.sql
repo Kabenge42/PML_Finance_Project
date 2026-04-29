@@ -1,17 +1,5 @@
 create function calc_financial_distress_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                     text,
-                distress_risk_score      numeric,
-                liquidity_stress_score   numeric,
-                working_capital_trend    numeric,
-                cash_runway_months       numeric,
-                combined_distress_score  numeric,
-                wc_deteriorating_flag    integer,
-                retained_earnings_growth numeric,
-                accumulated_deficit_flag integer,
-                adequate_cash_buffer     integer
-            )
+    returns TABLE(isin text, distress_risk_score numeric, liquidity_stress_score numeric, working_capital_trend numeric, cash_runway_months numeric, combined_distress_score numeric, wc_deteriorating_flag integer, retained_earnings_growth numeric, accumulated_deficit_flag integer, adequate_cash_buffer integer)
     stable
     parallel safe
     language sql

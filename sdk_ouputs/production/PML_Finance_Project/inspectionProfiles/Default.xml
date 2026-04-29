@@ -1,0 +1,108 @@
+<component name="InspectionProjectProfileManager">
+    <profile version="1.0">
+        <option name="myName" value="Default"/>
+        <option name="scopesOrder">
+            <list>
+                <option value="Project Files"/>
+                <option value="All Changed Files"/>
+                <option value="Changes"/>
+                <option value="Open Files"/>
+                <option value="Scratches and Consoles"/>
+            </list>
+        </option>
+        <inspection_tool class="AiaStyle" enabled="false" level="TYPO" enabled_by_default="false"/>
+        <inspection_tool class="DartOutdatedDependencies" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="DartPathPackageReference" enabled="false" level="ERROR" enabled_by_default="false"/>
+        <inspection_tool class="DbtConfigurationInspection" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="DockerJsonFormStringLiterals" enabled="false" level="WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="FlowJSFlagCommentPlacement" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="GrazieStyle" enabled="false" level="STYLE_SUGGESTION" enabled_by_default="false"/>
+        <inspection_tool class="HttpUrlsUsage" enabled="false" level="WEAK WARNING" enabled_by_default="false"/>
+        <inspection_tool class="Json5StandardCompliance" enabled="false" level="ERROR" enabled_by_default="false"/>
+        <inspection_tool class="JsonDuplicatePropertyKeys" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="JsonPathEvaluateUnknownKey" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="JsonPathUnknownFunction" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="JsonPathUnknownOperator" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="JsonSchemaCompliance" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="JsonSchemaDeprecation" enabled="false" level="WEAK WARNING" enabled_by_default="false"/>
+        <inspection_tool class="JsonSchemaRefReference" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="JsonStandardCompliance" enabled="false" level="ERROR" enabled_by_default="false"/>
+        <inspection_tool class="JvmLinesOfCodeInspection" enabled="true" level="WARNING" enabled_by_default="true"/>
+        <inspection_tool class="LanguageDetectionInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="NpmUsedModulesInstalled" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PackageJsonMismatchedDependency" enabled="false" level="WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyAbstractClassInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyAssignmentToLoopOrWithParameterInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyAttributeOutsideInitInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyComparisonWithNoneInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyCompatibilityInspection" enabled="true" level="WARNING" enabled_by_default="true">
+            <scope name="Project Files" level="WARNING" enabled="true" editorAttributes="WARNING_ATTRIBUTES">
+                <option name="ourVersions">
+                    <value>
+                        <list size="5">
+                            <item index="0" class="java.lang.String" itemvalue="3.14"/>
+                            <item index="1" class="java.lang.String" itemvalue="3.15"/>
+                            <item index="2" class="java.lang.String" itemvalue="3.13"/>
+                            <item index="3" class="java.lang.String" itemvalue="3.12"/>
+                            <item index="4" class="java.lang.String" itemvalue="3.11"/>
+                        </list>
+                    </value>
+                </option>
+            </scope>
+            <option name="ourVersions">
+                <value>
+                    <list size="3">
+                        <item index="0" class="java.lang.String" itemvalue="2.7"/>
+                        <item index="1" class="java.lang.String" itemvalue="3.14"/>
+                        <item index="2" class="java.lang.String" itemvalue="3.7"/>
+                    </list>
+                </value>
+            </option>
+        </inspection_tool>
+        <inspection_tool class="PyGlobalUndefinedInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyInterpreterInspection" enabled="false" level="WARNING" enabled_by_default="false">
+            <scope name="Project Files" level="WARNING" enabled="false" editorAttributes="WARNING_ATTRIBUTES"/>
+        </inspection_tool>
+        <inspection_tool class="PyListCreationInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyMethodMayBeStaticInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyMethodParametersInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyNonAsciiCharInspection" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="PyProtectedMemberInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyShadowingBuiltinsInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="PyShadowingNamesInspection" enabled="false" level="WEAK WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="SpellCheckingInspection" enabled="false" level="TYPO" enabled_by_default="false">
+            <option name="processCode" value="true"/>
+            <option name="processLiterals" value="true"/>
+            <option name="processComments" value="true"/>
+        </inspection_tool>
+        <inspection_tool class="StudyItemNotFound" enabled="false" level="ERROR" enabled_by_default="false"/>
+        <inspection_tool class="TaskFileNotFound" enabled="false" level="ERROR" enabled_by_default="false"/>
+        <inspection_tool class="TypeScriptConfig" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="TypeScriptLibrary" enabled="false" level="ERROR" enabled_by_default="false"/>
+        <inspection_tool class="TypeScriptMissingConfigOption" enabled="false" level="WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="UnsupportedLanguageVersion" enabled="false" level="ERROR" enabled_by_default="false"/>
+        <inspection_tool class="UpdateDependencyToLatestVersion" enabled="false" level="INFORMATION"
+                         enabled_by_default="false"/>
+        <inspection_tool class="UvPackageVersionsInspection" enabled="false" level="WARNING"
+                         enabled_by_default="false"/>
+        <inspection_tool class="WebpackConfigHighlighting" enabled="false" level="WARNING" enabled_by_default="false"/>
+        <inspection_tool class="YAMLSchemaDeprecation" enabled="false" level="WEAK WARNING" enabled_by_default="false"/>
+        <inspection_tool class="YAMLSchemaValidation" enabled="false" level="WARNING" enabled_by_default="false"/>
+    </profile>
+</component>

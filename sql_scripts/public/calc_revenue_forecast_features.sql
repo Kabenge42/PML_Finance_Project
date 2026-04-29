@@ -1,20 +1,5 @@
 create function calc_revenue_forecast_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                       text,
-                revenue_est_spread         numeric,
-                revenue_beat_potential     numeric,
-                revenue_est_revision_trend numeric,
-                ebitda_est_vs_actual       numeric,
-                forward_revenue_multiple   numeric,
-                revenue_estimate_count     numeric,
-                revenue_guidance_gap       numeric,
-                consensus_revenue_growth   numeric,
-                ebit_estimate_spread       numeric,
-                forward_ebitda_margin      numeric,
-                revenue_acceleration       numeric,
-                estimate_confidence_score  numeric
-            )
+    returns TABLE(isin text, revenue_est_spread numeric, revenue_beat_potential numeric, revenue_est_revision_trend numeric, ebitda_est_vs_actual numeric, forward_revenue_multiple numeric, revenue_estimate_count numeric, revenue_guidance_gap numeric, consensus_revenue_growth numeric, ebit_estimate_spread numeric, forward_ebitda_margin numeric, revenue_acceleration numeric, estimate_confidence_score numeric)
     stable
     parallel safe
     language sql

@@ -1,11 +1,5 @@
 create function calc_share_dilution_tracking(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                  text,
-                shrs_out_1fy          numeric,
-                shares_yoy_change_pct numeric,
-                net_buyback_flag      integer
-            )
+    returns TABLE(isin text, shrs_out_1fy numeric, shares_yoy_change_pct numeric, net_buyback_flag integer)
     stable
     parallel safe
     language sql

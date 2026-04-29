@@ -11,6 +11,7 @@ Reference: CreditRiskProbabilityModel in probability_models.py (line 2456);
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from typing import Any, Literal, Optional, TYPE_CHECKING
 
 try:
@@ -22,6 +23,7 @@ except ImportError:
         az = None  # type: ignore[assignment]
 
 import numpy as np
+import pandas as pd
 
 try:
     import pymc as pm
@@ -35,8 +37,18 @@ if TYPE_CHECKING:
     import pymc as pm_typing  # noqa: F401
 
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
 
 logger = logging.getLogger(__name__)
+
+# Canonical category names in public.calculated_features_registry whose
+# feature_aliases drive the auxiliary "credit_feature" dim. Aligned with
+# the credit-risk / quality / leverage features feeding the distress model.
+_CREDIT_CATEGORY_KEYS: tuple[str, ...] = (
+    "Credit Risk",
+    "Quality & Risk",
+    "Leverage & Liquidity",
+)
 
 Parameterization = Literal["centered", "non_centered"]
 
@@ -61,6 +73,54 @@ class CreditRiskBayesian:
         self.prior_beta = prior_beta
         self.model_: Optional[pm_typing.Model] = None
         self.idata_: Optional[az_typing.InferenceData] = None
+
+    @staticmethod
+    @lru_cache(maxsize=4)
+    def _resolve_credit_feature_aliases(
+        connection_string: Optional[str] = None,
+    ) -> tuple[str, ...]:
+        """Resolve the credit-risk feature aliases from calculated_features_registry.
+
+        These serve as labelled coordinates along the ``credit_feature`` dim
+        for the auxiliary ``pm.Data`` container of observed credit-feature
+        values (credit-risk + quality + leverage signals).
+        """
+        try:
+            categories = load_feature_categories_from_db(connection_string)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Could not load feature categories: %s", exc)
+            return tuple()
+        aliases: list[str] = []
+        seen: set[str] = set()
+        for key in _CREDIT_CATEGORY_KEYS:
+            for alias in categories.get(key, []):
+                if alias not in seen:
+                    seen.add(alias)
+                    aliases.append(alias)
+        return tuple(aliases)
+
+    @staticmethod
+    def _align_credit_features(
+        credit_features_df: Optional[pd.DataFrame],
+        isin: np.ndarray,
+        feature_aliases: list[str],
+    ) -> np.ndarray:
+        """Align an (isin × credit_feature) matrix to the model dims.
+
+        Missing columns/rows are filled with ``0.0`` so the container always
+        has shape ``(n_isin, n_credit_feature)``.
+        """
+        n_isin = len(isin)
+        n_feat = len(feature_aliases)
+        if credit_features_df is None or n_feat == 0 or n_isin == 0:
+            return np.zeros((n_isin, max(n_feat, 0)), dtype="float64")
+
+        df = credit_features_df.copy()
+        if "isin" in df.columns:
+            df = df.drop_duplicates(subset="isin").set_index("isin")
+
+        aligned = df.reindex(index=isin, columns=feature_aliases)
+        return aligned.astype("float64").fillna(0.0).to_numpy()
 
     def fit(
         self,

@@ -13,7 +13,6 @@ import inspect
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 
 class TestPLRIdataKwargs:
@@ -21,14 +20,14 @@ class TestPLRIdataKwargs:
 
     def test_fit_passes_idata_kwargs_to_pm_sample(self):
         """pm.sample must receive idata_kwargs with posterior_predictive={}."""
-        from probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel import (
+        from probabilistic_ml_model.pymc_models.ProbabilisticLinearRegressionModel import (
             ProbabilisticLinearRegression,
         )
 
         fake_idata = MagicMock(name="idata")
 
         with patch(
-            "probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel.pm"
+            "probabilistic_ml_model.pymc_models.ProbabilisticLinearRegressionModel.pm"
         ) as mock_pm:
             mock_pm.sample.return_value = fake_idata
             mock_pm.Model.return_value.__enter__ = MagicMock(return_value=None)
@@ -38,7 +37,7 @@ class TestPLRIdataKwargs:
             mock_pm.Data = MagicMock()
 
             with patch(
-                "probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel.pt"
+                "probabilistic_ml_model.pymc_models.ProbabilisticLinearRegressionModel.pt"
             ) as mock_pt:
                 mock_pt.add.return_value = MagicMock()
                 mock_pt.dot.return_value = MagicMock()
@@ -64,7 +63,7 @@ class TestPLRIdataKwargs:
 
     def test_fit_source_contains_idata_kwargs(self):
         """Quick source-level check that idata_kwargs is present in fit()."""
-        from probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel import (
+        from probabilistic_ml_model.pymc_models.ProbabilisticLinearRegressionModel import (
             ProbabilisticLinearRegression,
         )
 
@@ -74,14 +73,14 @@ class TestPLRIdataKwargs:
 
     def test_fit_does_not_pass_posterior_predictive_none(self):
         """Ensure we never pass posterior_predictive=None to pm.sample."""
-        from probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel import (
+        from probabilistic_ml_model.pymc_models.ProbabilisticLinearRegressionModel import (
             ProbabilisticLinearRegression,
         )
 
         fake_idata = MagicMock(name="idata")
 
         with patch(
-            "probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel.pm"
+            "probabilistic_ml_model.pymc_models.ProbabilisticLinearRegressionModel.pm"
         ) as mock_pm:
             mock_pm.sample.return_value = fake_idata
             mock_pm.Model.return_value.__enter__ = MagicMock(return_value=None)
@@ -91,7 +90,7 @@ class TestPLRIdataKwargs:
             mock_pm.Data = MagicMock()
 
             with patch(
-                "probabilistic_ml_model.pml_models.ProbabilisticLinearRegressionModel.pt"
+                "probabilistic_ml_model.pymc_models.ProbabilisticLinearRegressionModel.pt"
             ) as mock_pt:
                 mock_pt.add.return_value = MagicMock()
                 mock_pt.dot.return_value = MagicMock()

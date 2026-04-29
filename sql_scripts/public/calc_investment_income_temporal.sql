@@ -1,17 +1,5 @@
 create function calc_investment_income_temporal(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                         text,
-                inv_income_ltm               numeric,
-                inv_income_fq                numeric,
-                inv_income_fy                numeric,
-                inv_income_qoq_growth        numeric,
-                inv_income_yoy_growth        numeric,
-                inv_income_to_revenue        numeric,
-                inv_income_trend_3y          numeric,
-                inv_income_positive_quarters integer,
-                financial_company_proxy      integer
-            )
+    returns TABLE(isin text, inv_income_ltm numeric, inv_income_fq numeric, inv_income_fy numeric, inv_income_qoq_growth numeric, inv_income_yoy_growth numeric, inv_income_to_revenue numeric, inv_income_trend_3y numeric, inv_income_positive_quarters integer, financial_company_proxy integer)
     stable
     parallel safe
     language sql

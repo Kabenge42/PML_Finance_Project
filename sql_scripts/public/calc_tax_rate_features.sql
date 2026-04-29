@@ -1,15 +1,5 @@
 create function calc_tax_rate_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                   text,
-                effective_tax_rate_ltm numeric,
-                effective_tax_rate_fy  numeric,
-                tax_rate_yoy_change    numeric,
-                tax_rate_qoq_change    numeric,
-                tax_rate_stability     numeric,
-                low_tax_flag           integer,
-                tax_rate_trend_4q      numeric
-            )
+    returns TABLE(isin text, effective_tax_rate_ltm numeric, effective_tax_rate_fy numeric, tax_rate_yoy_change numeric, tax_rate_qoq_change numeric, tax_rate_stability numeric, low_tax_flag integer, tax_rate_trend_4q numeric)
     stable
     parallel safe
     language sql

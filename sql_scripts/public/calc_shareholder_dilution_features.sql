@@ -1,9 +1,5 @@
 create function calc_shareholder_dilution_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin           text,
-                dilution_score numeric
-            )
+    returns TABLE(isin text, dilution_score numeric)
     stable
     parallel safe
     language sql

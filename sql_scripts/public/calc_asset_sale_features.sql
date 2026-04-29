@@ -1,11 +1,5 @@
 create function calc_asset_sale_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                            text,
-                gain_loss_on_sale_of_assets_ltm numeric,
-                asset_sale_frequency            integer,
-                asset_sale_trend                numeric
-            )
+    returns TABLE(isin text, gain_loss_on_sale_of_assets_ltm numeric, asset_sale_frequency integer, asset_sale_trend numeric)
     stable
     parallel safe
     language sql

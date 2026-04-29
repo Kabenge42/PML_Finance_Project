@@ -1,12 +1,5 @@
 create function calc_efficiency_ratios(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                  text,
-                asset_turnover        numeric,
-                inventory_turnover    numeric,
-                receivables_days      numeric,
-                working_capital_turns numeric
-            )
+    returns TABLE(isin text, asset_turnover numeric, inventory_turnover numeric, receivables_days numeric, working_capital_turns numeric)
     stable
     parallel safe
     language sql

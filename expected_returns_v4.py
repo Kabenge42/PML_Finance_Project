@@ -843,7 +843,7 @@ class BaselinePipeline:
             return
         r.dcf_result = dcf.fit(
             historical_fcf=dcf_data[fcf_col].values,
-            market_prices=dcf_data[price_col].values,
+            price_target=dcf_data[price_col].values,
             samples=cfg.dcf_samples,
             tune=cfg.dcf_tune,
             chains=cfg.dcf_chains,

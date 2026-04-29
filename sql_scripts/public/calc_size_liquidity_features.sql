@@ -1,18 +1,5 @@
 create function calc_size_liquidity_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                 text,
-                market_cap           numeric,
-                market_cap_country_r numeric,
-                log_market_cap       numeric,
-                volume_shrs          numeric,
-                relative_volume      numeric,
-                shares_outstanding   numeric,
-                daily_turnover_ratio numeric,
-                size_class           text,
-                style_class          text,
-                liquidity_score      numeric
-            )
+    returns TABLE(isin text, market_cap numeric, market_cap_country_r numeric, log_market_cap numeric, volume_shrs numeric, relative_volume numeric, shares_outstanding numeric, daily_turnover_ratio numeric, size_class text, style_class text, liquidity_score numeric)
     stable
     parallel safe
     language sql
