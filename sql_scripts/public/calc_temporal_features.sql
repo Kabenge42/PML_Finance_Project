@@ -1,15 +1,5 @@
 create function calc_temporal_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                    text,
-                fiscal_quarter          integer,
-                fiscal_month            integer,
-                fiscal_year             integer,
-                days_to_earnings        integer,
-                earnings_report_recency integer,
-                reporting_lag           numeric,
-                fiscal_year_progress    numeric
-            )
+    returns TABLE(isin text, fiscal_quarter integer, fiscal_month integer, fiscal_year integer, days_to_earnings integer, earnings_report_recency integer, reporting_lag numeric, fiscal_year_progress numeric)
     stable
     parallel safe
     language sql

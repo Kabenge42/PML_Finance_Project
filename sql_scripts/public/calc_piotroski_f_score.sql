@@ -1,9 +1,5 @@
 create function calc_piotroski_f_score(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin              text,
-                piotroski_f_score integer
-            )
+    returns TABLE(isin text, piotroski_f_score integer)
     stable
     parallel safe
     language sql

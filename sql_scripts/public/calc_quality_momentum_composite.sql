@@ -1,9 +1,5 @@
 create function calc_quality_momentum_composite(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                   text,
-                quality_momentum_score numeric
-            )
+    returns TABLE(isin text, quality_momentum_score numeric)
     stable
     parallel safe
     language sql

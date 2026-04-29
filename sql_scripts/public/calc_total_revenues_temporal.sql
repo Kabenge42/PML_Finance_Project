@@ -1,19 +1,5 @@
 create function calc_total_revenues_temporal(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                  text,
-                revenue_fq            numeric,
-                revenue_ltm           numeric,
-                revenue_fy            numeric,
-                revenue_1fy           numeric,
-                revenue_5yavgfq       numeric,
-                revenue_5yavgltm      numeric,
-                revenue_growth_yoy    numeric,
-                revenue_vs_5y_avg_fq  numeric,
-                revenue_vs_5y_avg_ltm numeric,
-                revenue_fq_vs_avg     numeric,
-                revenue_momentum      numeric
-            )
+    returns TABLE(isin text, revenue_fq numeric, revenue_ltm numeric, revenue_fy numeric, revenue_1fy numeric, revenue_5yavgfq numeric, revenue_5yavgltm numeric, revenue_growth_yoy numeric, revenue_vs_5y_avg_fq numeric, revenue_vs_5y_avg_ltm numeric, revenue_fq_vs_avg numeric, revenue_momentum numeric)
     stable
     parallel safe
     language sql

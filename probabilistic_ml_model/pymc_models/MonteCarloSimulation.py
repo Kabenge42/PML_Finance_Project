@@ -11,15 +11,25 @@ keeping the MCMC parameter space small and the sampler fast.
 ``prob_positive`` is computed analytically from the Normal CDF rather than
 from Monte Carlo counts inside the sampler graph.
 
+Schema alignment
+----------------
+The model exposes its inputs as ``pm.Data`` containers (``historical_means``,
+``historical_stds``) so they appear in ``idata.constant_data`` and can be
+swapped via ``pm.set_data({...})`` for out-of-sample prediction — matching
+the pattern used by the other PyMC models in this package
+(``EarningsBeatBayesian``, ``CreditRiskBayesian``, ``DividendSafetyBayesian``,
+etc.).
+
 Reference: monte_carlo_price_target_simulation() in statistical_models.py;
            run_monte_carlo_analysis() in expected_returns_v3.py (line 1361);
-           build_monte_carlo_inference_data() in inference_schema.py (line 786).
+           build_monte_carlo_inference_data() in inference_schema.py (line 926).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from typing import Any, Optional, TYPE_CHECKING
 
 try:
     import arviz as az
@@ -38,6 +48,10 @@ try:
 except ImportError:
     pm = None  # type: ignore[assignment]
     pt = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    import arviz as az_typing  # noqa: F401
+    import pymc as pm_typing  # noqa: F401
 
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 
@@ -62,47 +76,14 @@ _MU_PRIOR_SIGMA = 0.5
 _SIGMA_PRIOR_SIGMA = 0.5
 
 
-def fit(
-        historical_means: np.ndarray,
-        historical_stds: np.ndarray,
-        tickers: np.ndarray,
-        n_sims: int = 1_000,
-        samples: int = 500,
-        tune: int = 500,
-        chains: int = 2,
-        cores: int = _CORES_DEFAULT,
-        target_accept: float = 0.90,
-        random_seed: int = _RANDOM_SEED,
-) -> "az.InferenceData":
-    """Fit return distribution model and generate simulations.
+def _sanitize_inputs(
+    historical_means: np.ndarray,
+    historical_stds: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate, NaN-fill, and clip inputs in place-safe fashion."""
+    historical_means = np.asarray(historical_means, dtype="float64").copy()
+    historical_stds = np.asarray(historical_stds, dtype="float64").copy()
 
-    Parameters
-    ----------
-    historical_means : array of float
-        Historical mean returns per stock (as decimals, e.g. 0.05 = 5%).
-    historical_stds : array of float
-        Historical return standard deviations per stock (as decimals).
-    tickers : array of str
-        Ticker symbols.
-    n_sims : int
-        Number of forward simulations per stock (generated post-hoc via
-        NumPy, **not** during MCMC).
-    samples, tune, chains, cores, target_accept, random_seed
-        MCMC sampling parameters.  ``cores`` defaults to the ``N_JOBS``
-        environment variable (clamped ≥ 1).
-
-    Returns
-    -------
-    az.InferenceData
-        Contains posterior (``mu_return``, ``sigma_return``,
-        ``prob_positive``) and posterior_predictive (``sim_returns``).
-    """
-    historical_means = np.asarray(historical_means, dtype="float64")
-    historical_stds = np.asarray(historical_stds, dtype="float64")
-
-    # ------------------------------------------------------------------
-    # Input validation & sanitisation
-    # ------------------------------------------------------------------
     nan_mask_mu = ~np.isfinite(historical_means)
     if nan_mask_mu.any():
         logger.warning(
@@ -124,6 +105,117 @@ def fit(
 
     if len(historical_means) == 0:
         raise ValueError("historical_means is empty — nothing to sample.")
+    if historical_means.shape != historical_stds.shape:
+        raise ValueError("historical_means and historical_stds must share shape.")
+
+    return historical_means, historical_stds
+
+
+def _build_mc_model(
+    historical_means: np.ndarray,
+    historical_stds: np.ndarray,
+    tickers: np.ndarray,
+) -> "pm_typing.Model":
+    """Build the Bayesian return-distribution model with `pm.Data` containers."""
+    coords = {"ticker": np.asarray(tickers)}
+    with pm.Model(coords=coords) as model:
+        # pm.Data containers — exposed in idata.constant_data, swappable via
+        # pm.set_data({"historical_means": ..., "historical_stds": ...}).
+        means_data = pm.Data("historical_means", historical_means, dims="ticker")
+        # `historical_stds` is currently informational (used post-hoc for the
+        # NumPy posterior-predictive draws and the analytical fallback) but is
+        # registered as a pm.Data container so it round-trips through
+        # `idata.constant_data` and can be swapped via `pm.set_data`.
+        pm.Data("historical_stds", historical_stds, dims="ticker")
+
+        # Weakly informative priors
+        mu_return = pm.Normal(
+            "mu_return",
+            mu=0.0,
+            sigma=_MU_PRIOR_SIGMA,
+            dims="ticker",
+        )
+        sigma_return = pm.HalfNormal(
+            "sigma_return",
+            sigma=_SIGMA_PRIOR_SIGMA,
+            dims="ticker",
+        )
+
+        # Observed likelihood — the historical means serve as a single
+        # observation per ticker drawn from Normal(mu, sigma).
+        pm.Normal(
+            "obs",
+            mu=mu_return,
+            sigma=sigma_return,
+            observed=means_data,
+            dims="ticker",
+        )
+
+        # Analytical P(return > 0) via Normal CDF — no simulation needed.
+        # P(X > 0) = 1 - Φ(-μ/σ) = Φ(μ/σ)
+        pm.Deterministic(
+            "prob_positive",
+            0.5 * (1.0 + pt.erf(mu_return / (sigma_return * pt.sqrt(2.0)))),
+            dims="ticker",
+        )
+    return model
+
+
+def fit(
+    historical_means: np.ndarray,
+    historical_stds: np.ndarray,
+    tickers: np.ndarray,
+    n_sims: int = 1_000,
+    samples: int = 500,
+    tune: int = 500,
+    chains: int = 2,
+    cores: int = _CORES_DEFAULT,
+    target_accept: float = 0.90,
+    random_seed: int = _RANDOM_SEED,
+    nuts_sampler: Optional[str] = None,
+    return_model: bool = False,
+    **sample_kwargs: Any,
+):
+    """Fit return-distribution model and generate simulations.
+
+    Parameters
+    ----------
+    historical_means : array of float
+        Historical mean returns per stock (as decimals, e.g. 0.05 = 5%).
+    historical_stds : array of float
+        Historical return standard deviations per stock (as decimals).
+    tickers : array of str
+        Ticker / ISIN symbols.
+    n_sims : int
+        Number of forward simulations per stock (generated post-hoc via
+        NumPy, **not** during MCMC).
+    samples, tune, chains, cores, target_accept, random_seed
+        MCMC sampling parameters.  ``cores`` defaults to the ``N_JOBS``
+        environment variable (clamped ≥ 1).
+    nuts_sampler : str, optional
+        Alternate NUTS implementation (e.g. ``"nutpie"``).  Forwarded to
+        ``pm.sample``.
+    return_model : bool
+        If True, return ``(InferenceData, pm.Model)`` to mirror the
+        class-based API used by the other PyMC models in this package.
+    **sample_kwargs
+        Extra keyword arguments forwarded to ``pm.sample`` (e.g.
+        ``idata_kwargs={"log_likelihood": False}``).
+
+    Returns
+    -------
+    az.InferenceData
+        Contains posterior (``mu_return``, ``sigma_return``,
+        ``prob_positive``), constant_data (``historical_means``,
+        ``historical_stds``) and posterior_predictive (``sim_returns``).
+        If ``return_model=True``, returns a ``(idata, model)`` tuple.
+    """
+    if pm is None:
+        raise ImportError(
+            "PyMC is not available. Install pymc + arviz to use MonteCarloReturnSimulation."
+        )
+
+    historical_means, historical_stds = _sanitize_inputs(historical_means, historical_stds)
 
     logger.info(
         "MC fit: %d tickers, means=[%.4f, %.4f], stds=[%.4f, %.4f]",
@@ -136,47 +228,14 @@ def fit(
 
     # ------------------------------------------------------------------
     # Phase 1 — MCMC: infer mu_return & sigma_return
-    # The model has 2 × N_tickers free parameters, conditioned on the
-    # historical means as observed data via a Normal likelihood.
     # ------------------------------------------------------------------
-    coords = {"ticker": list(tickers)}
     _compile_kwargs = get_pytensor_compile_kwargs()
 
-    def _run_sample(n_draws, n_tune, n_chains, accept):
+    def _run_sample(n_draws: int, n_tune: int, n_chains: int, accept: float):
         """Build model and run sampler with the given settings."""
-        with pm.Model(coords=coords) as model:
-            # Weakly informative priors
-            mu_return = pm.Normal(
-                "mu_return",
-                mu=0.0,
-                sigma=_MU_PRIOR_SIGMA,
-                dims="ticker",
-            )
-            sigma_return = pm.HalfNormal(
-                "sigma_return",
-                sigma=_SIGMA_PRIOR_SIGMA,
-                dims="ticker",
-            )
-
-            # Observed likelihood — the historical means serve as a single
-            # observation per ticker drawn from Normal(mu, sigma).
-            pm.Normal(
-                "obs",
-                mu=mu_return,
-                sigma=sigma_return,
-                observed=historical_means,
-                dims="ticker",
-            )
-
-            # Analytical P(return > 0) via Normal CDF — no simulation needed
-            # P(X > 0) = 1 - Φ(-μ/σ) = Φ(μ/σ)
-            pm.Deterministic(
-                "prob_positive",
-                0.5 * (1.0 + pt.erf(mu_return / (sigma_return * pt.sqrt(2.0)))),
-                dims="ticker",
-            )
-
-            idata = pm.sample(
+        model = _build_mc_model(historical_means, historical_stds, tickers)
+        with model:
+            scall: dict[str, Any] = dict(
                 draws=n_draws,
                 tune=n_tune,
                 chains=n_chains,
@@ -187,11 +246,17 @@ def fit(
                 progressbar=True,
                 compile_kwargs=_compile_kwargs,
             )
-        return idata
+            if nuts_sampler is not None:
+                scall["nuts_sampler"] = nuts_sampler
+            scall.setdefault("idata_kwargs", {"log_likelihood": False})
+            scall.update(sample_kwargs)
 
-    # Try with requested settings; on failure, retry with conservative settings
+            idata = pm.sample(**scall)
+        return idata, model
+
+    # Try with requested settings; on failure, retry with conservative settings.
     try:
-        idata = _run_sample(samples, tune, chains, target_accept)
+        idata, model = _run_sample(samples, tune, chains, target_accept)
     except Exception as exc:
         logger.warning(
             "Primary MCMC sampling failed (%s: %s). Retrying with conservative "
@@ -200,7 +265,7 @@ def fit(
             exc,
         )
         try:
-            idata = _run_sample(
+            idata, model = _run_sample(
                 n_draws=500, n_tune=500, n_chains=1, accept=0.99
             )
         except Exception as exc2:
@@ -210,26 +275,25 @@ def fit(
                 type(exc2).__name__,
                 exc2,
             )
-            return _analytical_fallback(
+            idata = _analytical_fallback(
                 historical_means, historical_stds, tickers, n_sims, random_seed
             )
+            return (idata, None) if return_model else idata
 
     # ------------------------------------------------------------------
     # Phase 2 — Generate forward simulations from the posterior
-    # Draw sim_returns directly from NumPy using posterior mu/sigma
-    # samples.  This avoids the overhead and potential pitfalls of a
-    # second PyMC model with Flat/HalfFlat priors.
+    # Draw sim_returns directly from NumPy using posterior mu/sigma samples.
     # ------------------------------------------------------------------
     idata = _generate_posterior_predictive(idata, tickers, n_sims, random_seed)
 
-    return idata
+    return (idata, model) if return_model else idata
 
 
 def _generate_posterior_predictive(
-        idata: "az.InferenceData",
-        tickers: np.ndarray,
-        n_sims: int,
-        random_seed: int,
+    idata: "az.InferenceData",
+    tickers: np.ndarray,
+    n_sims: int,
+    random_seed: int,
 ) -> "az.InferenceData":
     """Attach posterior-predictive sim_returns to *idata* using NumPy.
 
@@ -278,17 +342,19 @@ def _generate_posterior_predictive(
 
 
 def _analytical_fallback(
-        historical_means: np.ndarray,
-        historical_stds: np.ndarray,
-        tickers: np.ndarray,
-        n_sims: int,
-        random_seed: int,
+    historical_means: np.ndarray,
+    historical_stds: np.ndarray,
+    tickers: np.ndarray,
+    n_sims: int,
+    random_seed: int,
 ) -> "az.InferenceData":
     """Build an InferenceData object analytically when MCMC fails entirely.
 
     Uses the historical means/stds directly as point estimates, generating
     synthetic posterior draws from a narrow Normal centred on each estimate.
-    This ensures downstream code always receives a valid InferenceData.
+    This ensures downstream code always receives a valid InferenceData,
+    including a ``constant_data`` group that mirrors the schema-aligned
+    MCMC path.
     """
     import xarray as xr
 
@@ -330,6 +396,15 @@ def _analytical_fallback(
         },
     )
 
+    # Schema-aligned constant_data group mirrors the pm.Data containers.
+    constant_data = xr.Dataset(
+        {
+            "historical_means": (["ticker"], historical_means),
+            "historical_stds": (["ticker"], historical_stds),
+        },
+        coords={"ticker": list(tickers)},
+    )
+
     # Simulated returns
     sim_returns = rng.normal(
         loc=historical_means[None, None, :, None],
@@ -360,12 +435,14 @@ def _analytical_fallback(
             {
                 "posterior": xr.DataTree(posterior),
                 "posterior_predictive": xr.DataTree(posterior_predictive),
+                "constant_data": xr.DataTree(constant_data),
             }
         )
     else:
         idata = type("InferenceData", (), {
             "posterior": posterior,
             "posterior_predictive": posterior_predictive,
+            "constant_data": constant_data,
             "extend": lambda self, other: None,
         })()
 
@@ -384,7 +461,55 @@ class MonteCarloReturnSimulation:
     The MCMC step only infers ``mu_return`` and ``sigma_return`` (2 × N_tickers
     parameters).  ``prob_positive`` is derived analytically from the Normal CDF,
     and ``sim_returns`` are produced in a lightweight post-hoc NumPy pass.
+
+    Schema alignment
+    ----------------
+    Inputs are registered as ``pm.Data`` containers (``historical_means``,
+    ``historical_stds``) so they appear in ``idata.constant_data`` and can be
+    swapped via ``pm.set_data({...})`` for out-of-sample prediction —
+    matching the API of the other PyMC models in this package.
     """
 
     def __init__(self) -> None:
-        pass
+        self.model_: Optional[pm_typing.Model] = None
+        self.idata_: Optional[az_typing.InferenceData] = None
+
+    def fit(
+        self,
+        historical_means: np.ndarray,
+        historical_stds: np.ndarray,
+        tickers: np.ndarray,
+        n_sims: int = 1_000,
+        samples: int = 500,
+        tune: int = 500,
+        chains: int = 2,
+        cores: int = _CORES_DEFAULT,
+        target_accept: float = 0.90,
+        random_seed: int = _RANDOM_SEED,
+        nuts_sampler: Optional[str] = None,
+        **sample_kwargs: Any,
+    ) -> "tuple[az_typing.InferenceData, Optional[pm_typing.Model]]":
+        """Fit the model and return ``(InferenceData, Model)``.
+
+        Mirrors the ``fit`` signature of the other PyMC models in this
+        package (``EarningsBeatBayesian``, ``CreditRiskBayesian``,
+        ``DividendSafetyBayesian`` …).
+        """
+        idata, model = fit(
+            historical_means=historical_means,
+            historical_stds=historical_stds,
+            tickers=tickers,
+            n_sims=n_sims,
+            samples=samples,
+            tune=tune,
+            chains=chains,
+            cores=cores,
+            target_accept=target_accept,
+            random_seed=random_seed,
+            nuts_sampler=nuts_sampler,
+            return_model=True,
+            **sample_kwargs,
+        )
+        self.idata_ = idata
+        self.model_ = model
+        return idata, model

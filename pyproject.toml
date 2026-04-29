@@ -25,10 +25,8 @@ classifiers = [
 
 dependencies = [
     # --- Numerical Computing & Data Structures ---
-    "numpy>=1.26.0,<4.0.0",
-    "cython>3.2.0",
-    "numpyro>=0.14.0",
-    "nutpie>=0.1.0",
+    "numpy>=1.26.0,<3.0.0",
+    "cython>=3.0.0",
     "pandas>=2.2.0,<4.0.0",
     "scipy>=1.14.0,<4.0.0",
     "statsmodels>=0.14.0,<3.0.0",
@@ -53,17 +51,19 @@ dependencies = [
     "xlsxwriter>=3.2.0,<4.0.0",
     "psutil>=6.0.0,<8.0.0",
     "PyYAML>=6.0.0,<7.0.0",
-    # --- Bayesian / Probabilistic ---
-    "arviz>=1.0.0,<2.0.0",
-    "arviz-base>=1.0.0,<2.0.0",
-    "arviz-stats>=1.0.0,<2.0.0",
-    "arviz-plots>=1.0.0,<2.0.0",
-    "bambi>=0.14.0,<1.0.0",
-    "xarray>=2025.0.0,<2027.0.0",
-    "pymc>=5.0.0,<8.0.0",
-    "pytensor>=2.38.0,<5.0.0",
-    "jax>=0.10.0",
-    "nutpie>=0.1.0",
+    # --- Bayesian / Probabilistic stack (aligned, known-compatible window) ---
+    # PyMC 5.22+ requires PyTensor >=2.30,<2.34 and ArviZ >=0.20.
+    # Bambi 0.15+ depends on PyMC >=5.16. nutpie 0.13+ pairs with PyMC 5.22+.
+    # ArviZ 1.0 (and the split arviz-base/arviz-stats/arviz-plots) is still
+    # pre-release and not API-compatible with PyMC 5.x; stay on classic arviz.
+    "pymc>=5.22.0,<6.0.0",
+    "pytensor>=2.30.0,<2.34.0",
+    "arviz>=0.20.0,<1.0.0",
+    "bambi>=0.15.0,<1.0.0",
+    "nutpie>=0.13.0,<1.0.0",
+    "xarray>=2024.7.0,<2027.0.0",
+    "jax>=0.4.30,<1.0.0",
+    "jaxlib>=0.4.30,<1.0.0",
     # --- Hyperparameter Optimization ---
     "optuna>=4.1.0,<5.0.0",
     # --- Networking ---

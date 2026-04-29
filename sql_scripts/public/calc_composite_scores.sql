@@ -1,11 +1,5 @@
 create function calc_composite_scores(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                   text,
-                piotroski_f_score      integer,
-                dilution_score         numeric,
-                quality_momentum_score numeric
-            )
+    returns TABLE(isin text, piotroski_f_score integer, dilution_score numeric, quality_momentum_score numeric)
     stable
     parallel safe
     language plpgsql

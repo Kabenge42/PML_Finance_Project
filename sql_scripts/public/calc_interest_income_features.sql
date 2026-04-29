@@ -1,15 +1,5 @@
 create function calc_interest_income_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                        text,
-                interest_income_ltm         numeric,
-                interest_expense_ltm        numeric,
-                net_interest_income         numeric,
-                interest_coverage_ratio     numeric,
-                interest_income_to_revenue  numeric,
-                interest_expense_to_revenue numeric,
-                net_interest_margin_proxy   numeric
-            )
+    returns TABLE(isin text, interest_income_ltm numeric, interest_expense_ltm numeric, net_interest_income numeric, interest_coverage_ratio numeric, interest_income_to_revenue numeric, interest_expense_to_revenue numeric, net_interest_margin_proxy numeric)
     stable
     parallel safe
     language sql

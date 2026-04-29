@@ -148,7 +148,7 @@ class EarningsBeatBayesian:
             Number of earnings beats per stock.
         n_total : array of int
             Total number of earnings reports per stock.
-        isin : array of str
+        isins : array of str
             ISIN symbols (aligned to ``public.vw_identifier_columns.isin``).
         sectors : array of str, optional
             Sector labels — enables hierarchical sector-rate structure.

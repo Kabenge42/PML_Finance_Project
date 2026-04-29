@@ -1,20 +1,5 @@
 create function calc_cashflow_temporal_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                  text,
-                cfo_quarterly_trend   numeric,
-                cfo_yoy_quarterly     numeric,
-                cfi_quarterly_trend   numeric,
-                cff_quarterly_trend   numeric,
-                fcf_quarterly_trend   numeric,
-                cfo_positive_quarters integer,
-                cfi_negative_quarters integer,
-                cff_pattern_score     numeric,
-                cash_burn_rate        numeric,
-                cf_volatility_score   numeric,
-                operating_cf_momentum numeric,
-                financing_dependency  numeric
-            )
+    returns TABLE(isin text, cfo_quarterly_trend numeric, cfo_yoy_quarterly numeric, cfi_quarterly_trend numeric, cff_quarterly_trend numeric, fcf_quarterly_trend numeric, cfo_positive_quarters integer, cfi_negative_quarters integer, cff_pattern_score numeric, cash_burn_rate numeric, cf_volatility_score numeric, operating_cf_momentum numeric, financing_dependency numeric)
     stable
     parallel safe
     language sql

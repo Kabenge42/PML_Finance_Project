@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+    <component name="CsvFileAttributes">
+        <option name="attributeMap">
+            <map>
+                <entry key="C:\Users\markm\PycharmProjects\Finance_Analytics_Platform\data\screening_apac.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\data\playground\apac_data.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\data\playground\eu_data.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\data\playground\rotw_data.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\data\playground\screening_etf.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\data\playground\us_data.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\data\screening_apac.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\data\screening_eu.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\data\screening_rotw.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\data\screening_us.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\outputs\eps_streak_analysis.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\outputs\probability_analytics_summary.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\reference material\machine_learning\datasets\housing\housing.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+                <entry key="\sdk_ouputs\production\PML_Finance_Project\playground\screening_etf.csv">
+                    <value>
+                        <Attribute>
+                            <option name="separator" value=","/>
+                        </Attribute>
+                    </value>
+                </entry>
+            </map>
+        </option>
+    </component>
+</project>

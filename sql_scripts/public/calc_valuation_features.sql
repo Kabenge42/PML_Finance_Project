@@ -1,14 +1,5 @@
 create function calc_valuation_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin            text,
-                p_e_ratio       numeric,
-                p_b_ratio       numeric,
-                ev_ebitda_ratio numeric,
-                ev_sales_ratio  numeric,
-                dividend_yield  numeric,
-                peg_ratio       numeric
-            )
+    returns TABLE(isin text, p_e_ratio numeric, p_b_ratio numeric, ev_ebitda_ratio numeric, ev_sales_ratio numeric, dividend_yield numeric, peg_ratio numeric)
     stable
     parallel safe
     language sql

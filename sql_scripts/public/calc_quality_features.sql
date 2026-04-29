@@ -1,18 +1,5 @@
 create function calc_quality_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                        text,
-                has_goodwill_impairment     integer,
-                has_asset_writedown         integer,
-                has_restructuring           integer,
-                goodwill_to_assets_pct      numeric,
-                intangible_intensity        numeric,
-                exceptional_items_to_ebitda numeric,
-                altman_z_score              numeric,
-                altman_z_trend              numeric,
-                current_ratio               numeric,
-                quick_ratio                 numeric
-            )
+    returns TABLE(isin text, has_goodwill_impairment integer, has_asset_writedown integer, has_restructuring integer, goodwill_to_assets_pct numeric, intangible_intensity numeric, exceptional_items_to_ebitda numeric, altman_z_score numeric, altman_z_trend numeric, current_ratio numeric, quick_ratio numeric)
     stable
     parallel safe
     language sql

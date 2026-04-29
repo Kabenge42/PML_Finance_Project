@@ -1,15 +1,5 @@
 create function calc_cashflow_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                  text,
-                cfo_to_net_income     numeric,
-                fcf_to_net_income     numeric,
-                fcf_margin            numeric,
-                cfo_growth_yoy        numeric,
-                fcf_positive_ratio    numeric,
-                acquisition_intensity numeric,
-                self_funding_ratio    numeric
-            )
+    returns TABLE(isin text, cfo_to_net_income numeric, fcf_to_net_income numeric, fcf_margin numeric, cfo_growth_yoy numeric, fcf_positive_ratio numeric, acquisition_intensity numeric, self_funding_ratio numeric)
     stable
     parallel safe
     language sql

@@ -1,19 +1,5 @@
 create function calc_sentiment_features(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                      text,
-                analyst_bullish_pct       numeric,
-                analyst_bearish_pct       numeric,
-                analyst_neutral_pct       numeric,
-                analyst_conviction        numeric,
-                upside_potential          numeric,
-                price_target_spread_pct   numeric,
-                price_target_revision_1m  numeric,
-                price_target_revision_3m  numeric,
-                eps_revision_momentum     numeric,
-                analyst_rating_normalized numeric,
-                analyst_coverage_quality  numeric
-            )
+    returns TABLE(isin text, analyst_bullish_pct numeric, analyst_bearish_pct numeric, analyst_neutral_pct numeric, analyst_conviction numeric, upside_potential numeric, price_target_spread_pct numeric, price_target_revision_1m numeric, price_target_revision_3m numeric, eps_revision_momentum numeric, analyst_rating_normalized numeric, analyst_coverage_quality numeric)
     stable
     parallel safe
     language sql

@@ -1,10 +1,5 @@
 create function get_feature_registry_summary()
-    returns TABLE
-            (
-                category       text,
-                function_count integer,
-                total_features integer
-            )
+    returns TABLE(category text, function_count integer, total_features integer)
     stable
     language sql
 as

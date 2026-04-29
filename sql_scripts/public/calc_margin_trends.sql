@@ -1,14 +1,5 @@
 create function calc_margin_trends(p_isin text DEFAULT NULL::text)
-    returns TABLE
-            (
-                isin                   text,
-                gross_margin_trend_yoy numeric,
-                operating_margin_trend numeric,
-                net_margin_trend_yoy   numeric,
-                ebitda_margin_trend    numeric,
-                margin_expansion_flag  integer,
-                margin_stability_score numeric
-            )
+    returns TABLE(isin text, gross_margin_trend_yoy numeric, operating_margin_trend numeric, net_margin_trend_yoy numeric, ebitda_margin_trend numeric, margin_expansion_flag integer, margin_stability_score numeric)
     stable
     parallel safe
     language sql

@@ -10,9 +10,11 @@ Reference: compute_derived_price_target() in expected_returns_v3.py (line 2987).
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from typing import Any, Optional, TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
 try:
     import arviz as az
@@ -34,8 +36,14 @@ if TYPE_CHECKING:
     import pymc as pm_typing  # noqa: F401
 
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
 
 logger = logging.getLogger(__name__)
+
+# Canonical category names in public.calculated_features_registry whose
+# feature_aliases drive the auxiliary "dcf_feature" dim. Aligned with the
+# cash-flow / valuation features feeding the DCF intrinsic-value model.
+_DCF_CATEGORY_KEYS: tuple[str, ...] = ("Cash Flow", "Valuation Ratios")
 
 
 class DCFPriceTarget:
@@ -56,10 +64,58 @@ class DCFPriceTarget:
         self.model_: Optional[pm_typing.Model] = None
         self.idata_: Optional[az_typing.InferenceData] = None
 
+    @staticmethod
+    @lru_cache(maxsize=4)
+    def _resolve_dcf_feature_aliases(
+        connection_string: Optional[str] = None,
+    ) -> tuple[str, ...]:
+        """Resolve the DCF feature aliases from calculated_features_registry.
+
+        These serve as labelled coordinates along the ``dcf_feature`` dim
+        for the auxiliary ``pm.Data`` container of observed DCF-feature
+        values (cash-flow + valuation-ratio signals).
+        """
+        try:
+            categories = load_feature_categories_from_db(connection_string)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Could not load feature categories: %s", exc)
+            return tuple()
+        aliases: list[str] = []
+        seen: set[str] = set()
+        for key in _DCF_CATEGORY_KEYS:
+            for alias in categories.get(key, []):
+                if alias not in seen:
+                    seen.add(alias)
+                    aliases.append(alias)
+        return tuple(aliases)
+
+    @staticmethod
+    def _align_dcf_features(
+        dcf_features_df: Optional[pd.DataFrame],
+        isin: np.ndarray,
+        feature_aliases: list[str],
+    ) -> np.ndarray:
+        """Align an (isin × dcf_feature) matrix to the model dims.
+
+        Missing columns/rows are filled with ``0.0`` so the container always
+        has shape ``(n_isin, n_dcf_feature)``.
+        """
+        n_isin = len(isin)
+        n_feat = len(feature_aliases)
+        if dcf_features_df is None or n_feat == 0 or n_isin == 0:
+            return np.zeros((n_isin, max(n_feat, 0)), dtype="float64")
+
+        df = dcf_features_df.copy()
+        if "isin" in df.columns:
+            df = df.drop_duplicates(subset="isin").set_index("isin")
+
+        aligned = df.reindex(index=isin, columns=feature_aliases)
+        return aligned.astype("float64").fillna(0.0).to_numpy()
+
     def fit(
         self,
         historical_fcf: np.ndarray,
-        market_prices: np.ndarray,
+        price_target: np.ndarray,
         n_projection_years: int = 5,
         samples: int = 2000,
         tune: int = 1000,
@@ -78,9 +134,9 @@ class DCFPriceTarget:
             )
 
         hf = np.asarray(historical_fcf, dtype="float64")
-        mp = np.asarray(market_prices, dtype="float64")
+        mp = np.asarray(price_target, dtype="float64")
         if hf.size < 2 or mp.size == 0:
-            raise ValueError("Need ≥2 historical_fcf and ≥1 market_prices.")
+            raise ValueError("Need ≥2 historical_fcf and ≥1 price_target.")
 
         growth_rates = np.diff(hf) / np.abs(hf[:-1] + 1e-10)
         hist_growth = float(np.mean(growth_rates))
@@ -89,7 +145,7 @@ class DCFPriceTarget:
         t = np.arange(1, n_projection_years + 1, dtype="float64")
 
         with pm.Model() as model:
-            price_data = pm.Data("market_prices", mp)
+            price_data = pm.Data("price_target", mp)
 
             fcf_growth = pm.Normal("fcf_growth", mu=hist_growth, sigma=0.05)
             # WACC bounded strictly above terminal_growth → finite terminal value.
