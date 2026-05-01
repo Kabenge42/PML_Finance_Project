@@ -3,7 +3,7 @@
 A comprehensive platform for probabilistic equity screening, feature engineering, and machine learning modeling across global financial markets.
 
 [![Python Version](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue)](https://www.python.org/)
-[![Package Version](https://img.shields.io/badge/version-0.9.5-green)](pyproject.toml)
+[![Package Version](https://img.shields.io/badge/version-0.9.8.5-green)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
@@ -21,6 +21,43 @@ feature engineering, and reliable model evaluation, followed by a **Portfolio Op
 - **SQL Database Integration**: Centralized data storage using PostgreSQL with schema-driven feature catalogs.
 - **7-Phase Portfolio Optimization**: Stock selection, return prediction, risk-adjusted optimization (Efficient Frontier), backtesting, and interactive dashboards.
 - **Interactive Dashboards**: Integrated Streamlit, Dash, and Plotly applications for market monitoring, earnings analytics, and portfolio visualization.
+
+### PyMC Models Notebook (`pymc_expected_returns_model.ipynb`)
+
+End-to-end PyMC + ArviZ workflow that fits the seven Bayesian models from
+`probabilistic_ml_model/pymc_models/` (EarningsBeat, PriceTarget, Kalman,
+DCF, DividendSafety, CreditRisk, AccountingAnomaly). The notebook shares a
+single `MODEL_FEATURE_CONTAINERS` registry and a model-aware
+`attach_features(idata, features_df, model_name)` helper that appends a
+catalogue-aligned `(isin × feature)` matrix to `idata.constant_data`.
+Both the `pm.Data` dim name (`pt_feature`, `dcf_feature`,
+`earnings_feature`, …) and the canonical feature_alias list are derived
+from the same registry source of truth used by each model's
+`_resolve_*_feature_aliases()` helper, so the notebook helper cannot
+drift out of sync with the per-model `with pm.Model(coords=...)` block.
+
+Each model section ends with a runnable *Out-of-sample prediction via
+`pm.set_data`* code cell (§5, §6.6, §7.6, §8.6, §9.6, §10.6, §11.6). The
+cells build a 50-row holdout slice from the model's already-prepared
+inputs, re-align the auxiliary feature matrix via the corresponding
+`_align_*_features` helper, call `pm.set_data({...}, coords={'isin': ...})`
+inside the fitted `pm.Model` context, and visualise the resulting
+posterior predictive distribution (histogram, scatter, or fan chart
+depending on the model's likelihood).
+
+A new **§13 "Implementation — Actionable Recommendations from §12.3"**
+turns each `feature_catalogue`-aligned recommendation into a runnable
+code snippet (type-aware coercion, calculation-type-driven prior σ
+table, `source_function` provenance attrs, strict `attach_features`
+mode, catalogue-driven coverage check, per-`category` hyperprior PyMC
+sketch for `AccountingAnomalyBayesian`, OOS shape contract). The
+notebook helpers are backed by a new shared module
+`probabilistic_ml_model/pymc_models/_feature_alignment.py`
+(`coerce_by_data_type`, `stamp_feature_provenance`,
+`assert_disjoint_features`, `validate_oos_shape`,
+`load_feature_metadata_from_db`) used by all seven model
+`_align_*_features(use_typed_coercion=True)` paths and stamped onto
+`idata.constant_data[...].attrs` after every `*Model.fit(...)` call.
 
 ### Core Models (`probabilistic_ml_model/pml_models/`)
 

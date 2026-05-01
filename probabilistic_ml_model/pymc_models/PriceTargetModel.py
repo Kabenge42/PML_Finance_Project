@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Literal, Optional, TYPE_CHECKING
 
 try:
     import arviz as az
@@ -38,15 +38,27 @@ if TYPE_CHECKING:
     import pymc as pm_typing  # noqa: F401
 
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._feature_alignment import (
+    coerce_by_data_type,
+    load_feature_metadata_from_db,
+    stamp_feature_provenance,
+)
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
 
 logger = logging.getLogger(__name__)
+
+Parameterization = Literal["centered", "non_centered", "marginalized"]
 
 # Canonical category names in public.calculated_features_registry whose
 # feature_aliases drive the auxiliary "pt_feature" dim. Aligned with the
 # categories backing public.vw_features_analyst_sentiment and the
 # price-target dynamics calculator.
-_PT_CATEGORY_KEYS: tuple[str, ...] = ("Price Target Dynamics", "Analyst Sentiment")
+_PT_CATEGORY_KEYS: tuple[str, ...] = (
+    "Price Target Dynamics",
+    "Analyst Sentiment",
+    "Momentum & Technical",
+    "Composite Scores",
+)
 
 
 class PriceTargetAchievement:
@@ -108,11 +120,16 @@ class PriceTargetAchievement:
         pt_features_df: Optional[pd.DataFrame],
         isin: np.ndarray,
         feature_aliases: list[str],
+        *,
+        use_typed_coercion: bool = False,
+        connection_string: Optional[str] = None,
     ) -> np.ndarray:
         """Align an (isin × pt_feature) matrix to the model dims.
 
         Missing columns/rows are filled with ``0.0`` so the container always
-        has shape ``(n_isin, n_pt_feature)``.
+        has shape ``(n_isin, n_pt_feature)``. When ``use_typed_coercion=True``
+        the per-column dtype/clipping is driven by ``feature_catalogue.data_type``
+        via :func:`coerce_by_data_type` (recommendation §12.3 #1).
         """
         n_isin = len(isin)
         n_feat = len(feature_aliases)
@@ -122,21 +139,27 @@ class PriceTargetAchievement:
         df = pt_features_df.copy()
         if "isin" in df.columns:
             df = df.drop_duplicates(subset="isin").set_index("isin")
+        df = df.reindex(index=isin)
 
-        aligned = df.reindex(index=isin, columns=feature_aliases)
-        return aligned.astype("float64").fillna(0.0).to_numpy()
+        if use_typed_coercion:
+            metadata = load_feature_metadata_from_db(connection_string)
+            return coerce_by_data_type(df, list(feature_aliases), metadata)
+        return df.reindex(columns=feature_aliases).astype("float64").fillna(0.0).to_numpy()
 
     def fit(
         self,
         upside_potential: np.ndarray,
         analyst_conviction: np.ndarray,
         isins: np.ndarray,
+        pt_features_df: Optional[pd.DataFrame] = None,
+        connection_string: Optional[str] = None,
         samples: int = 2000,
         tune: int = 1000,
         chains: int = 4,
         cores: int = 1,
         target_accept: float = 0.9,
         random_seed: int = 42,
+        parameterization: Parameterization = "non_centered",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
     ) -> tuple[az_typing.InferenceData, pm_typing.Model]:
@@ -156,23 +179,57 @@ class PriceTargetAchievement:
 
         upside_potential = np.asarray(upside_potential, dtype="float64")
         analyst_conviction = np.asarray(analyst_conviction, dtype="float64")
+        isins_arr = np.asarray(isins)
         if upside_potential.size == 0:
             raise ValueError("PriceTargetAchievement.fit received empty upside_potential.")
         if upside_potential.shape != analyst_conviction.shape:
             raise ValueError("upside_potential and analyst_conviction must share shape.")
 
-        coords = {"isin": np.asarray(isins)}
+        # --- DB-aligned coords --------------------------------------------------
+        # `isin` mirrors public.vw_identifier_columns.isin (role='id').
+        coords: dict[str, Any] = {"isin": isins_arr}
+
+        # `pt_feature` is resolved from calculated_features_registry so the
+        # auxiliary pm.Data container carries human-readable feature_alias labels.
+        pt_feature_aliases = list(self._resolve_pt_feature_aliases(connection_string))
+        coords["pt_feature"] = list(pt_feature_aliases)
+
+        pt_features_arr = self._align_pt_features(pt_features_df, isins_arr, pt_feature_aliases)
 
         with pm.Model(coords=coords) as model:
             cu_data = pm.Data("upside_potential", upside_potential, dims="isin")
             ad_data = pm.Data("analyst_conviction", analyst_conviction, dims="isin")
-
-            pm.Beta(
-                "achieve_prob",
-                alpha=self.prior_alpha,
-                beta=self.prior_beta,
-                dims="isin",
+            pm.Data(
+                "pt_features",
+                pt_features_arr,
+                dims=("isin", "pt_feature"),
             )
+
+            if parameterization == "centered":
+                pm.Beta(
+                    "achieve_prob",
+                    alpha=self.prior_alpha,
+                    beta=self.prior_beta,
+                    dims="isin",
+                )
+            elif parameterization == "marginalized":
+                # Collapse per-ISIN latent: use Beta prior mean directly.
+                prior_mean = float(self.prior_alpha / (self.prior_alpha + self.prior_beta))
+                pm.Deterministic(
+                    "achieve_prob",
+                    pt.ones_like(cu_data) * prior_mean,
+                    dims="isin",
+                )
+            else:
+                # Non-centred logit-Normal hierarchy — better NUTS geometry.
+                mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
+                sigma_logit = pm.HalfNormal("sigma_logit", 1.0)
+                z_isin = pm.Normal("z_isin", 0.0, 1.0, dims="isin")
+                pm.Deterministic(
+                    "achieve_prob",
+                    pm.math.sigmoid(mu_logit + sigma_logit * z_isin),
+                    dims="isin",
+                )
 
             expected_return = pm.Normal(
                 "expected_return",
@@ -213,6 +270,17 @@ class PriceTargetAchievement:
             scall.update(sample_kwargs)
 
             idata = pm.sample(**scall)
+
+        # Recommendation §12.3 #3 — stamp feature_catalogue provenance.
+        try:
+            stamp_feature_provenance(
+                idata,
+                "pt_features",
+                pt_feature_aliases,
+                load_feature_metadata_from_db(connection_string),
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("PriceTarget provenance stamping failed: %s", exc)
 
         self.model_ = model
         self.idata_ = idata

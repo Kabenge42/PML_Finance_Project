@@ -39,6 +39,11 @@ if TYPE_CHECKING:
     import pymc as pm_typing  # noqa: F401
 
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._feature_alignment import (
+    coerce_by_data_type,
+    load_feature_metadata_from_db,
+    stamp_feature_provenance,
+)
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
 
 logger = logging.getLogger(__name__)
@@ -46,7 +51,7 @@ logger = logging.getLogger(__name__)
 # Canonical category names in public.calculated_features_registry
 # whose feature_aliases drive the auxiliary "earnings_feature" dim.
 # Aligned with categories backing public.vw_features_earnings.
-_EARNINGS_CATEGORY_KEYS: tuple[str, ...] = ("Earnings Quality", "EPS Trajectory")
+_EARNINGS_CATEGORY_KEYS: tuple[str, ...] = ("Earnings Quality", "EPS Trajectory", "Profitability")
 
 Parameterization = Literal["centered", "non_centered", "marginalized"]
 
@@ -105,6 +110,9 @@ class EarningsBeatBayesian:
         earnings_features_df: Optional[pd.DataFrame],
         isin: np.ndarray,
         feature_aliases: list[str],
+        *,
+        use_typed_coercion: bool = False,
+        connection_string: Optional[str] = None,
     ) -> np.ndarray:
         """Align an (isin × earnings_feature) matrix to the model dims.
 
@@ -119,9 +127,12 @@ class EarningsBeatBayesian:
         df = earnings_features_df.copy()
         if "isin" in df.columns:
             df = df.drop_duplicates(subset="isin").set_index("isin")
+        df = df.reindex(index=isin)
 
-        aligned = df.reindex(index=isin, columns=feature_aliases)
-        return aligned.astype("float64").fillna(0.0).to_numpy()
+        if use_typed_coercion:
+            metadata = load_feature_metadata_from_db(connection_string)
+            return coerce_by_data_type(df, list(feature_aliases), metadata)
+        return df.reindex(columns=feature_aliases).astype("float64").fillna(0.0).to_numpy()
 
     def fit(
         self,
@@ -319,6 +330,17 @@ class EarningsBeatBayesian:
             sample_call_kwargs.update(sample_kwargs)
 
             idata = pm.sample(**sample_call_kwargs)
+
+        # Recommendation §12.3 #3 — stamp feature_catalogue provenance.
+        try:
+            stamp_feature_provenance(
+                idata,
+                "earnings_features",
+                earnings_feature_aliases,
+                load_feature_metadata_from_db(connection_string),
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("EarningsBeat provenance stamping failed: %s", exc)
 
         self.model_ = model
         self.idata_ = idata

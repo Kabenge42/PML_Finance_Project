@@ -5,6 +5,153 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8.5] - 2026-04-30
+
+### Added — `feature_catalogue`-aligned model improvements (recommendations from §12.3)
+
+- **`probabilistic_ml_model/pymc_models/_feature_alignment.py`** — new
+  shared helper module implementing the actionable items from §12.3 of
+  `pymc_expected_returns_model.ipynb`:
+  - `load_feature_metadata_from_db(connection_string)` — loads the full
+    `(category, calculation_type, data_type, source_function)` tuple per
+    `feature_alias` from `public.calculated_features_registry` (LRU-cached).
+  - `coerce_by_data_type(df, feature_aliases, metadata)` — type-aware
+    analogue of `df.reindex(columns=...).astype('float64').fillna(0.0)`
+    that drives per-column dtype + bounded clipping from
+    `feature_catalogue.data_type` (`pct ∈ [-1, 1]`, `flag → int8`,
+    `score ∈ [0, 100]`, `growth ∈ [-5, 5]`, `zscore ∈ [-10, 10]`, …).
+    Implements **rec #1**.
+  - `stamp_feature_provenance(idata, var_name, aliases, metadata)` —
+    copies `feature_alias` / `source_function` / `calculation_type` /
+    `data_type` onto `idata.constant_data[var_name].attrs` for downstream
+    lineage tooling. Implements **rec #3**.
+  - `assert_disjoint_features(idata, new_aliases, new_var_name=...)` —
+    category-conflict guard that raises `ValueError` if the new alias
+    set overlaps with any previously attached `constant_data` variable's
+    alias set. Implements **rec #4**.
+  - `validate_oos_shape(new_arr, feature_aliases, var_name=...)` —
+    asserts `new_arr.shape[1] == len(feature_aliases)` before a
+    `pm.set_data({...})` swap. Implements **rec #7**.
+- **All seven PyMC models updated** (`PriceTargetModel.py`,
+  `EarningsBeatModel.py`, `DCF_PriceTargetModel.py`,
+  `DividendSafetyModel.py`, `CreditRiskModel.py`,
+  `AccountingAnomalyModel.py`, `KalmanFilterModel.py`):
+  - Each `_align_*_features(...)` static method gained an opt-in
+    `use_typed_coercion: bool = False` keyword (plus `connection_string`)
+    that routes through `coerce_by_data_type` when enabled.
+    Default behaviour unchanged for backwards compatibility.
+  - The six isin-keyed model `fit(...)` methods (all except Kalman, whose
+    `fit` is keyed on `time` rather than `isin`) now call
+    `stamp_feature_provenance(idata, "<model>_features", aliases, metadata)`
+    immediately after `pm.sample(...)`, so every fitted `idata.constant_data`
+    carries `source_function` / `calculation_type` / `data_type` lineage.
+- **`pymc_expected_returns_model.ipynb`** — appended a new **§13
+  "Implementation — Actionable Recommendations from §12.3"** with one
+  runnable code cell per recommendation (#1 type-aware coercion,
+  #2 calc-type-driven prior σ table, #3 provenance attrs check,
+  #4 strict `attach_features_strict` wrapper, #5 catalogue-driven
+  coverage check across all seven `_resolve_*_feature_aliases`,
+  #6 per-`category` hyperprior PyMC block sketch for
+  `AccountingAnomalyBayesian`, #7 OOS shape contract via
+  `validate_oos_shape`). 15 new cells (1 intro + 7 markdown +
+  7 code).
+
+### Notes
+
+- **Rec #2 (calc-type-driven priors)** and **rec #6 (per-category
+  hyperprior)** are surfaced as ready-to-use code snippets in §13.2 /
+  §13.6 of the notebook but are *not* wired into the per-model `fit(...)`
+  bodies in this release — those changes affect the sampler's parameter
+  count and posterior shape, so they are deferred to a follow-up version
+  alongside regression fixtures.
+- **Rec #5 (catalogue-driven test coverage)** is currently the §13.5
+  notebook cell; promotion to `tests/test_feature_catalogue_coverage.py`
+  is a follow-up.
+
+[0.9.8.5]: https://github.com/Kabenge42/PML_Finance_Project/compare/v0.9.8.4...v0.9.8.5
+
+## [0.9.8.4] - 2026-04-30
+
+### Added — Out-of-sample PPC code cells in `pymc_expected_returns_model.ipynb`
+
+- Replaced the seven *illustration-only* "Out-of-sample prediction via
+  `pm.set_data`" markdown sections (§5, §6.6, §7.6, §8.6, §9.6, §10.6,
+  §11.6) with runnable PyMC code cells. Each new cell now:
+  1. Builds a 50-row holdout slice from the corresponding model's
+     already-prepared `*_df` / arrays.
+  2. Re-aligns the auxiliary feature matrix via the per-model
+     `_align_*_features` static helper against the
+     `<model>_feature` coordinate stored in `idata.constant_data`,
+     so the swap respects the catalogue-aligned dim order.
+  3. Calls `pm.set_data({...}, coords={'isin': ...})` and
+     `pm.sample_posterior_predictive(idata, var_names=[...])` inside
+     the model context returned by `*Model.fit(...)`.
+  4. Visualises the predictive distribution: histogram of mean
+     predicted beat-rate (EarningsBeat), histogram of upside (PriceTarget),
+     time-series fan chart with 90 % PI (Kalman), observed-vs-PPC
+     scatter (DCF, DividendSafety), distress-probability histogram
+     (CreditRisk), and anomaly-probability histogram recomputed from
+     posterior `feature_scale` × `threshold` (AccountingAnomaly).
+- The CreditRisk cell additionally swaps the data-vector
+  `zone_adj` (precomputed Altman-zone factor) and `distress_target`
+  alongside `z_score_data`, `de_data`, `sector_idx`, and
+  `credit_features`, matching the full set of `pm.Data` containers
+  declared inside `CreditRiskBayesian.fit`.
+- The Kalman cell additionally re-sets `log_price_target`
+  (the log-space observation container) so the `obs` likelihood
+  remains shape-aligned along the `time` dim.
+- No source edits required in `probabilistic_ml_model/pymc_models/*` —
+  the existing `pm.Data(..., dims=("isin", "<dim>"))` containers and
+  `_align_*_features` helpers already expose the surface needed for
+  out-of-sample swaps.
+
+[0.9.8.4]: https://github.com/Kabenge42/PML_Finance_Project/compare/v0.9.8.3...v0.9.8.4
+
+## [0.9.8.3] - 2026-04-30
+
+### Changed — `attach_features` notebook helper made model-aware
+
+- **`pymc_expected_returns_model.ipynb`** — refactored the `attach_features`
+  helper used to append catalogue-aligned (isin × feature) matrices to
+  `idata.constant_data` for models that don't natively persist the
+  auxiliary feature matrix (`PriceTargetAchievement`,
+  `DividendSafetyBayesian`, `CreditRiskBayesian`, `DCFPriceTarget`).
+  The new signature is
+  `attach_features(idata, features_df, model_name, *, dim_name=None, var_name=None)`
+  with `model_name` keyed into `MODEL_FEATURE_CONTAINERS`. The helper
+  now derives the canonical `feature_alias` list from
+  `spec["observed"]` (registry-resolved) with fallback to
+  `spec["features"]` (`FEATURE_CATEGORIES`-derived), and the `pm.Data`
+  dim name from a new `_MODEL_FEATURE_DIM` mapping
+  (`EarningsBeat→earnings_feature`, `PriceTarget→pt_feature`,
+  `Kalman→kalman_feature`, `DCF→dcf_feature`,
+  `DividendSafety→dividend_feature`, `CreditRisk→credit_feature`,
+  `AccountingAnomaly→anomaly_feature`) so the notebook helper can
+  never drift out of sync with the per-model
+  `_resolve_*_feature_aliases()` contract declared inside each
+  `pymc_models/*.py` `with pm.Model(coords=...)` block. The data-var
+  name defaults to `f"{dim}s"` (e.g. `earnings_features`,
+  `dcf_features`), matching what each model already writes into
+  `constant_data`.
+- **Missing columns/rows behaviour** — features absent from
+  `features_df` are reindexed and filled with `0.0` (mirroring the
+  per-model `_align_*_features` static methods on the model classes)
+  instead of raising `KeyError`, and the `xr.Dataset.merge(ds)` call
+  now passes `compat="override"` so the helper can be re-attached
+  without conflicts on overlapping coord values.
+- **Validation** — `attach_features` raises `KeyError` listing the
+  valid `MODEL_FEATURE_CONTAINERS` keys when an unknown
+  `model_name` is supplied.
+- No source edits required in `probabilistic_ml_model/pymc_models/*` —
+  the per-model `pm.Data(..., dims=("isin", "<dim>"))` containers
+  (e.g. `pt_features`, `dcf_features`, `dividend_features`,
+  `credit_features`, `earnings_features`, `kalman_feature`,
+  `anomaly_features`) and their `_resolve_*_feature_aliases()` helpers
+  already match the new `_MODEL_FEATURE_DIM` mapping and naming
+  convention.
+
+[0.9.8.3]: https://github.com/Kabenge42/PML_Finance_Project/compare/v0.9.8.2...v0.9.8.3
+
 ## [0.9.8.2] - 2026-04-23
 
 ### Fixed — EPS streak pre-merge ordering (v3.10 §12.5 orchestration fix)

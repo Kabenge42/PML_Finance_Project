@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Literal, Optional, TYPE_CHECKING
 
 from arviz import InferenceData
 from pymc.backends.base import MultiTrace
@@ -56,9 +56,16 @@ if TYPE_CHECKING:
     import pymc as pm_typing  # noqa: F401
 
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._feature_alignment import (
+    coerce_by_data_type,
+    load_feature_metadata_from_db,
+    stamp_feature_provenance,
+)
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
 
 logger = logging.getLogger(__name__)
+
+Parameterization = Literal["centered", "non_centered", "marginalized"]
 
 # Canonical category names in public.calculated_features_registry whose
 # feature_aliases drive the auxiliary "anomaly_feature" dim. Aligned with
@@ -67,7 +74,12 @@ logger = logging.getLogger(__name__)
 _ANOMALY_CATEGORY_KEYS: tuple[str, ...] = (
     "Accounting Quality",
     "Quality & Risk",
-    "Unusual Items",
+    "Financial Distress",
+    "Earnings Quality",
+    "Cash Flow",
+    "GAAP vs Adjusted",
+    "Balance Sheet",
+    "Efficiency Ratios",
 )
 
 
@@ -115,6 +127,9 @@ class AccountingAnomalyBayesian:
         anomaly_features_df: Optional[pd.DataFrame],
         isin: np.ndarray,
         feature_aliases: list[str],
+        *,
+        use_typed_coercion: bool = False,
+        connection_string: Optional[str] = None,
     ) -> np.ndarray:
         """Align an (isin × anomaly_feature) matrix to the model dims.
 
@@ -129,24 +144,41 @@ class AccountingAnomalyBayesian:
         df = anomaly_features_df.copy()
         if "isin" in df.columns:
             df = df.drop_duplicates(subset="isin").set_index("isin")
+        df = df.reindex(index=isin)
 
-        aligned = df.reindex(index=isin, columns=feature_aliases)
-        return aligned.astype("float64").fillna(0.0).to_numpy()
+        if use_typed_coercion:
+            metadata = load_feature_metadata_from_db(connection_string)
+            return coerce_by_data_type(df, list(feature_aliases), metadata)
+        return df.reindex(columns=feature_aliases).astype("float64").fillna(0.0).to_numpy()
 
     def fit(
         self,
         feature_values: np.ndarray,
         isins: np.ndarray,
         feature_names: list[str] | None = None,
+        anomaly_features_df: Optional[pd.DataFrame] = None,
+        connection_string: Optional[str] = None,
         samples: int = 2000,
         tune: int = 1000,
         chains: int = 4,
         target_accept: float = 0.9,
         random_seed: int = 42,
+        parameterization: Parameterization = "non_centered",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
     ) -> tuple[InferenceData | MultiTrace, Any]:
-        """Fit anomaly model and return ``(InferenceData, Model)``."""
+        """Fit anomaly model and return ``(InferenceData, Model)``.
+
+        Parameters
+        ----------
+        parameterization : {"centered", "non_centered", "marginalized"}
+            Reparameterization strategy for the per-feature ``feature_scale``
+            prior. ``"centered"`` uses a direct ``HalfNormal`` (legacy).
+            ``"non_centered"`` (default) parameterizes ``feature_scale`` as
+            ``exp(mu + sigma * z)`` to improve NUTS geometry.
+            ``"marginalized"`` collapses ``feature_scale`` to a fixed unit
+            vector (no per-feature latent posterior; fastest path).
+        """
         if pm is None:
             raise ImportError(
                 "PyMC is not available. Install pymc + arviz to use AccountingAnomalyBayesian."
@@ -156,6 +188,7 @@ class AccountingAnomalyBayesian:
         if feature_values.ndim != 2 or feature_values.size == 0:
             raise ValueError("feature_values must be 2-D and non-empty.")
         n_stocks, n_features = feature_values.shape
+        isins_arr = np.asarray(isins)
 
         if feature_names is None:
             feature_names = [f"feat_{i}" for i in range(n_features)]
@@ -174,18 +207,54 @@ class AccountingAnomalyBayesian:
         # n_features (sum of n unit-variance terms has std sqrt(n)).
         norm = float(np.sqrt(max(n_features, 1)))
 
-        coords = {
-            "isin": np.asarray(isins),
+        # --- DB-aligned coords --------------------------------------------------
+        # `isin` mirrors public.vw_identifier_columns.isin (role='id').
+        # `feature` carries the per-column z-score feature names used for
+        # sampling. ``anomaly_feature`` is a separate DB-resolved dim used
+        # purely for the auxiliary pm.Data container of registry-aligned
+        # feature values (accounting-quality / risk / unusual-items).
+        coords: dict[str, Any] = {
+            "isin": isins_arr,
             "feature": list(feature_names),
         }
 
+        anomaly_feature_aliases = list(self._resolve_anomaly_feature_aliases(connection_string))
+        coords["anomaly_feature"] = list(anomaly_feature_aliases)
+
+        anomaly_features_arr = self._align_anomaly_features(
+            anomaly_features_df, isins_arr, anomaly_feature_aliases
+        )
+
         with pm.Model(coords=coords) as model:
             feat_data = pm.Data("feature_values", z_matrix, dims=("isin", "feature"))
+            pm.Data(
+                "anomaly_features",
+                anomaly_features_arr,
+                dims=("isin", "anomaly_feature"),
+            )
 
             # Small, identifiable Bayesian layer:
             # - per-feature positive scale (importance weight)
             # - learnable threshold around the user-supplied prior mean
-            feature_scale = pm.HalfNormal("feature_scale", sigma=1.0, dims="feature")
+            if parameterization == "centered":
+                feature_scale = pm.HalfNormal("feature_scale", sigma=1.0, dims="feature")
+            elif parameterization == "marginalized":
+                # Collapse per-feature latent: fixed unit-scale weights.
+                feature_scale = pm.Deterministic(
+                    "feature_scale",
+                    pt.ones((n_features,), dtype="float64"),
+                    dims="feature",
+                )
+            else:
+                # Non-centred log-Normal: feature_scale = exp(mu + sigma*z).
+                mu_scale = pm.Normal("mu_scale", 0.0, 1.0)
+                sigma_scale = pm.HalfNormal("sigma_scale", 1.0)
+                z_feature = pm.Normal("z_feature", 0.0, 1.0, dims="feature")
+                feature_scale = pm.Deterministic(
+                    "feature_scale",
+                    pm.math.exp(mu_scale + sigma_scale * z_feature),
+                    dims="feature",
+                )
             threshold = pm.Normal("threshold", mu=self.threshold, sigma=1.0)
 
             weighted = feat_data * feature_scale  # (isin, feature)
@@ -226,6 +295,17 @@ class AccountingAnomalyBayesian:
             scall.update(sample_kwargs)
 
             idata = pm.sample(**scall)
+
+        # Recommendation §12.3 #3 — stamp feature_catalogue provenance.
+        try:
+            stamp_feature_provenance(
+                idata,
+                "anomaly_features",
+                anomaly_feature_aliases,
+                load_feature_metadata_from_db(connection_string),
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("AccountingAnomaly provenance stamping failed: %s", exc)
 
         # Some external NUTS samplers (e.g. nutpie) return an InferenceData
         # without the ``constant_data`` group that PyMC normally attaches for

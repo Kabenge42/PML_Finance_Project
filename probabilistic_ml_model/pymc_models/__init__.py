@@ -1,6 +1,7 @@
 import importlib as _importlib
 
 # Maps public alias → (relative module path, attribute name inside that module).
+# Module paths mirror the on-disk layout of probabilistic_ml_model/pymc_models/.
 _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
     "ProbabilisticLinearRegression": (
         ".ProbabilisticLinearRegressionModel",
@@ -14,7 +15,20 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
     "AccountingAnomalyBayesian": (".AccountingAnomalyModel", "AccountingAnomalyBayesian"),
     "CreditRiskBayesian": (".CreditRiskModel", "CreditRiskBayesian"),
     "MonteCarloReturnSimulation": (".MonteCarloSimulation", "MonteCarloReturnSimulation"),
+    "monte_carlo_fit": (".MonteCarloSimulation", "fit"),
+    "baseline_main": (".BaselineProbabilityModel", "main"),
+    "PipelineConfig": (".BaselineProbabilityModel", "PipelineConfig"),
+    "assert_disjoint_features": ("._feature_alignment", "assert_disjoint_features"),
+    "coerce_by_data_type": ("._feature_alignment", "coerce_by_data_type"),
+    "load_feature_metadata_from_db": ("._feature_alignment", "load_feature_metadata_from_db"),
+    "stamp_feature_provenance": ("._feature_alignment", "stamp_feature_provenance"),
+    "validate_oos_shape": ("._feature_alignment", "validate_oos_shape"),
+    "get_pytensor_compile_kwargs": ("._pytensor_compat", "get_pytensor_compile_kwargs"),
 }
+
+# Correct the leading-underscore module paths above (they collapsed to "__"
+# in the table for visual alignment). The on-disk modules are
+# `_feature_alignment.py` and `_pytensor_compat.py` (single leading underscore).
 
 
 def __getattr__(name: str) -> object:

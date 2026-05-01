@@ -44,6 +44,38 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
         ".pymc_models.MonteCarloSimulation",
         "MonteCarloReturnSimulation",
     ),
+    # Top-level helper exposed alongside MonteCarloReturnSimulation
+    "monte_carlo_fit": (".pymc_models.MonteCarloSimulation", "fit"),
+    # Baseline orchestration entry points
+    "baseline_main": (".pymc_models.BaselineProbabilityModel", "main"),
+    "PipelineConfig": (".pymc_models.BaselineProbabilityModel", "PipelineConfig"),
+    # Shared feature-alignment helpers (used by every per-model `_align_*_features`
+    # and by §13 of `pymc_expected_returns_model.ipynb`).
+    "assert_disjoint_features": (
+        ".pymc_models._feature_alignment",
+        "assert_disjoint_features",
+    ),
+    "coerce_by_data_type": (
+        ".pymc_models._feature_alignment",
+        "coerce_by_data_type",
+    ),
+    "load_feature_metadata_from_db": (
+        ".pymc_models._feature_alignment",
+        "load_feature_metadata_from_db",
+    ),
+    "stamp_feature_provenance": (
+        ".pymc_models._feature_alignment",
+        "stamp_feature_provenance",
+    ),
+    "validate_oos_shape": (
+        ".pymc_models._feature_alignment",
+        "validate_oos_shape",
+    ),
+    # PyTensor compile-kwargs helper used internally by every model's `fit(...)`.
+    "get_pytensor_compile_kwargs": (
+        ".pymc_models._pytensor_compat",
+        "get_pytensor_compile_kwargs",
+    ),
 }
 
 # Lazy imports that use an absolute module path + identical attribute name.

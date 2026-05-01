@@ -509,6 +509,7 @@ class BayesianTechnicalResampler:
             "chain": np.arange(self.n_chains),
             "draw": np.arange(self.n_posterior_samples),
             "equity": tickers,
+            "scalar_dim": np.array([0]),
         }
 
         if ARVIZ_AVAILABLE and az is not None:
@@ -529,6 +530,10 @@ class BayesianTechnicalResampler:
                     "implied_return_pt": ["chain", "draw", "equity"],
                     "future_return": ["chain", "draw", "equity"],
                     "return_obs": ["chain", "draw", "equity"],
+                    "observed_return": ["equity"],
+                    "prior_mean": ["scalar_dim"],
+                    "prior_std": ["scalar_dim"],
+                    "frequency": ["scalar_dim"],
                 },
             )
         elif xr is not None:
