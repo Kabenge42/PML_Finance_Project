@@ -45,14 +45,16 @@
     <inspection_tool class="LanguageDetectionInspection" enabled="false" level="WEAK WARNING" enabled_by_default="false" />
     <inspection_tool class="MagicNumberJS" enabled="true" level="WARNING" enabled_by_default="true" />
     <inspection_tool class="Puppet3Deprecations" enabled="false" level="WARNING" enabled_by_default="false" />
+    <inspection_tool class="PyArgumentListInspection" enabled="false" level="WARNING" enabled_by_default="false" />
     <inspection_tool class="PyAssignmentToLoopOrWithParameterInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
       <scope name="Project Files" level="WARNING" enabled="true" editorAttributes="WARNING_ATTRIBUTES" />
     </inspection_tool>
-    <inspection_tool class="PyDataclassInspection" enabled="true" level="WARNING" enabled_by_default="true">
-      <scope name="Project Files" level="WARNING" enabled="true" editorAttributes="WARNING_ATTRIBUTES" />
+    <inspection_tool class="PyDataclassInspection" enabled="false" level="WARNING" enabled_by_default="false">
+      <scope name="Project Files" level="WARNING" enabled="false" editorAttributes="WARNING_ATTRIBUTES" />
     </inspection_tool>
-    <inspection_tool class="PyGlobalUndefinedInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
-      <scope name="Project Files" level="WARNING" enabled="true" editorAttributes="WARNING_ATTRIBUTES" />
+    <inspection_tool class="PyDecoratorInspection" enabled="false" level="WARNING" enabled_by_default="false" />
+    <inspection_tool class="PyGlobalUndefinedInspection" enabled="false" level="WEAK WARNING" enabled_by_default="false">
+      <scope name="Project Files" level="WARNING" enabled="false" editorAttributes="WARNING_ATTRIBUTES" />
     </inspection_tool>
     <inspection_tool class="PyInterpreterInspection" enabled="true" level="WARNING" enabled_by_default="true">
       <scope name="Project Files" level="WARNING" enabled="true" editorAttributes="WARNING_ATTRIBUTES" />
@@ -60,12 +62,16 @@
     <inspection_tool class="PyMissingOrEmptyDocstringInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
       <scope name="Project Files" level="WARNING" enabled="true" editorAttributes="WARNING_ATTRIBUTES" />
     </inspection_tool>
+    <inspection_tool class="PyPep8Inspection" enabled="false" level="INFORMATION" enabled_by_default="false" />
+    <inspection_tool class="PyPep8NamingInspection" enabled="false" level="WEAK WARNING" enabled_by_default="false" />
+    <inspection_tool class="PyProtectedMemberInspection" enabled="false" level="WEAK WARNING" enabled_by_default="false" />
     <inspection_tool class="PyRedeclarationInspection" enabled="true" level="WARNING" enabled_by_default="true">
       <scope name="Project Files" level="WARNING" enabled="true" editorAttributes="WARNING_ATTRIBUTES" />
     </inspection_tool>
     <inspection_tool class="PyStubPackagesAdvertiser" enabled="true" level="WARNING" enabled_by_default="true">
       <scope name="Project Files" level="WARNING" enabled="true" editorAttributes="WARNING_ATTRIBUTES" />
     </inspection_tool>
+    <inspection_tool class="PyTypeCheckerInspection" enabled="false" level="WARNING" enabled_by_default="false" />
     <inspection_tool class="RDplyrCallToPipeInspection" enabled="false" level="WARNING" enabled_by_default="false" />
     <inspection_tool class="RMissingPackage" enabled="false" level="ERROR" enabled_by_default="false" />
     <inspection_tool class="RUnusedVariable" enabled="false" level="WARNING" enabled_by_default="false" />

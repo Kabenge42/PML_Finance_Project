@@ -43,6 +43,11 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
     stamp_feature_provenance,
 )
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    build_hierarchy_indices,
+    build_nested_logit_normal_rates,
+    coerce_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +146,8 @@ class CreditRiskBayesian:
         debt_to_equity: np.ndarray,
         isins: np.ndarray,
         sectors: Optional[np.ndarray] = None,
+        categories_df: Optional[pd.DataFrame] = None,
+        hierarchy_levels: Optional[list[str]] = None,
         distress_observed: Optional[np.ndarray] = None,
         credit_features_df: Optional[pd.DataFrame] = None,
         connection_string: Optional[str] = None,
@@ -172,13 +179,23 @@ class CreditRiskBayesian:
         # `isin` mirrors public.vw_identifier_columns.isin (role='id')
         # `sector` mirrors public.vw_identifier_columns.sector (role='categorical')
         coords: dict[str, Any] = {"isin": isins_arr}
-        hierarchical = sectors is not None
-        sector_idx_arr: Optional[np.ndarray] = None
+        cats_df, levels = coerce_categories(
+            isins_arr,
+            sectors=sectors,
+            categories_df=categories_df,
+            hierarchy_levels=hierarchy_levels
+            or (
+                ["region", "country", "exchange", "sector", "industry"]
+                if categories_df is not None
+                else None
+            ),
+        )
+        hierarchical = cats_df is not None and levels
+        hierarchy_meta: Optional[dict] = None
         if hierarchical:
-            sectors_arr = np.asarray(sectors)
-            unique_sectors, sector_idx_arr = np.unique(sectors_arr, return_inverse=True)
-            sector_idx_arr = sector_idx_arr.astype("int32")
-            coords["sector"] = unique_sectors
+            hierarchy_meta = build_hierarchy_indices(cats_df, isins_arr, levels=levels)
+            for lv, meta in hierarchy_meta.items():
+                coords[lv] = meta["labels"]
 
         # `credit_feature` is resolved from calculated_features_registry so the
         # auxiliary pm.Data container carries human-readable feature_alias labels.
@@ -216,49 +233,41 @@ class CreditRiskBayesian:
             zone_adj_data = pm.Data("zone_adj", zone_adj_np, dims="isin")
 
             if hierarchical:
-                sector_idx_data = pm.Data("sector_idx", sector_idx_arr, dims="isin")
+                leaf_level = list(hierarchy_meta.keys())[-1]
                 if parameterization == "centered":
+                    leaf_idx_arr = hierarchy_meta[leaf_level]["idx"]
+                    leaf_idx_data = pm.Data(f"{leaf_level}_idx", leaf_idx_arr, dims="isin")
                     sector_rate = pm.Beta(
                         "sector_rate",
                         alpha=self.prior_alpha,
                         beta=self.prior_beta,
-                        dims="sector",
+                        dims=leaf_level,
                     )
                     kappa = pm.HalfNormal("kappa", sigma=5.0)
-                    a = sector_rate[sector_idx_data] * kappa
-                    b = (1.0 - sector_rate[sector_idx_data]) * kappa
+                    a = sector_rate[leaf_idx_data] * kappa
+                    b = (1.0 - sector_rate[leaf_idx_data]) * kappa
                     distress_prob = pm.Beta("distress_prob", alpha=a, beta=b, dims="isin")
-                elif parameterization == "marginalized":
-                    # Collapse the per-isin Beta latent: use sector_rate broadcast
-                    # to ISINs as a deterministic distress_prob (no per-stock
-                    # latent posterior).
-                    mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
-                    sigma_sector = pm.HalfNormal("sigma_sector", 1.0)
-                    z_sector = pm.Normal("z_sector", 0.0, 1.0, dims="sector")
-                    sector_rate = pm.Deterministic(
-                        "sector_rate",
-                        pm.math.sigmoid(mu_logit + sigma_sector * z_sector),
-                        dims="sector",
-                    )
-                    distress_prob = pm.Deterministic(
-                        "distress_prob",
-                        sector_rate[sector_idx_data],
-                        dims="isin",
-                    )
                 else:
-                    # Non-centred logit-Normal hierarchy — better NUTS geometry.
-                    mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
-                    sigma_sector = pm.HalfNormal("sigma_sector", 1.0)
-                    z_sector = pm.Normal("z_sector", 0.0, 1.0, dims="sector")
-                    sector_rate = pm.Deterministic(
-                        "sector_rate",
-                        pm.math.sigmoid(mu_logit + sigma_sector * z_sector),
-                        dims="sector",
+                    # Nested non-centred logit-Normal hierarchy across all
+                    # supplied levels (region → country → exchange → sector
+                    # → industry by default for CreditRisk).
+                    nested = build_nested_logit_normal_rates(
+                        hierarchy_meta,
+                        leaf_dim="isin",
+                        name="distress_rate",
                     )
-                    kappa = pm.Gamma("kappa", alpha=2.0, beta=0.1)
-                    a = sector_rate[sector_idx_data] * kappa
-                    b = (1.0 - sector_rate[sector_idx_data]) * kappa
-                    distress_prob = pm.Beta("distress_prob", alpha=a, beta=b, dims="isin")
+                    leaf_rate = nested["leaf_rate"]
+                    if parameterization == "marginalized":
+                        distress_prob = pm.Deterministic(
+                            "distress_prob",
+                            leaf_rate,
+                            dims="isin",
+                        )
+                    else:
+                        kappa = pm.Gamma("kappa", alpha=2.0, beta=0.1)
+                        a = leaf_rate * kappa
+                        b = (1.0 - leaf_rate) * kappa
+                        distress_prob = pm.Beta("distress_prob", alpha=a, beta=b, dims="isin")
             else:
                 if parameterization == "centered":
                     distress_prob = pm.Beta(

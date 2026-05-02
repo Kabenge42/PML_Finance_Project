@@ -62,6 +62,10 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
     stamp_feature_provenance,
 )
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    build_hierarchy_indices,
+    coerce_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +160,9 @@ class AccountingAnomalyBayesian:
         feature_values: np.ndarray,
         isins: np.ndarray,
         feature_names: list[str] | None = None,
+        sectors: Optional[np.ndarray] = None,
+        categories_df: Optional[pd.DataFrame] = None,
+        hierarchy_levels: Optional[list[str]] = None,
         anomaly_features_df: Optional[pd.DataFrame] = None,
         connection_string: Optional[str] = None,
         samples: int = 2000,
@@ -217,6 +224,25 @@ class AccountingAnomalyBayesian:
             "isin": isins_arr,
             "feature": list(feature_names),
         }
+
+        # Optional category hierarchy registers coords + level idx pm.Data
+        # containers so downstream tooling can pivot / shrink anomaly_prob
+        # by sector / industry without re-fitting.
+        cats_df, levels = coerce_categories(
+            isins_arr,
+            sectors=sectors,
+            categories_df=categories_df,
+            hierarchy_levels=hierarchy_levels
+            or (["sector", "industry"] if categories_df is not None else None),
+        )
+        hierarchy_meta = (
+            build_hierarchy_indices(cats_df, isins_arr, levels=levels)
+            if cats_df is not None and levels
+            else None
+        )
+        if hierarchy_meta is not None:
+            for lv, meta in hierarchy_meta.items():
+                coords[lv] = meta["labels"]
 
         anomaly_feature_aliases = list(self._resolve_anomaly_feature_aliases(connection_string))
         coords["anomaly_feature"] = list(anomaly_feature_aliases)

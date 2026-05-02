@@ -940,17 +940,29 @@ def hierarchical_mcmc_by_sector(
 
 
 # ── Category columns available for hierarchical grouping ──
-_HIERARCHICAL_CATEGORY_COLS: list[str] = [
-    "region",
-    "country",
-    "trading_country",
-    "exchange",
-    "unit",
-    "sector",
-    "industry",
-    "style_class",
-    "size_class",
-]
+# The canonical tuple now lives in ``probabilistic_ml_model.pymc_models._hierarchy``
+# so PyMC models, the multi-level shrinkage helper below, and downstream code
+# share a single source of truth (recommendation §12.4 #1).
+try:
+    from probabilistic_ml_model.pymc_models._hierarchy import (
+        HIERARCHICAL_CATEGORY_COLS as _CANONICAL_HIERARCHICAL_CATEGORY_COLS,
+        PARENT_MAP as _CANONICAL_PARENT_MAP,
+    )
+
+    _HIERARCHICAL_CATEGORY_COLS: list[str] = list(_CANONICAL_HIERARCHICAL_CATEGORY_COLS)
+except ImportError:  # pragma: no cover - defensive fallback
+    _HIERARCHICAL_CATEGORY_COLS: list[str] = [
+        "region",
+        "country",
+        "trading_country",
+        "exchange",
+        "unit",
+        "sector",
+        "industry",
+        "style_class",
+        "size_class",
+    ]
+    _CANONICAL_PARENT_MAP = None
 
 
 def hierarchical_mcmc_multi_level(

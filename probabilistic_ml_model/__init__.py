@@ -76,6 +76,26 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
         ".pymc_models._pytensor_compat",
         "get_pytensor_compile_kwargs",
     ),
+    # Multi-level hierarchical shrinkage infrastructure (see
+    # ``probabilistic_ml_model/pymc_models/_hierarchy.py``). Re-exported at
+    # the top level so callers can ``from probabilistic_ml_model import
+    # HIERARCHICAL_CATEGORY_COLS, build_hierarchy_indices`` etc. without
+    # reaching into the ``pymc_models`` subpackage.
+    "HIERARCHICAL_CATEGORY_COLS": (
+        ".pymc_models._hierarchy",
+        "HIERARCHICAL_CATEGORY_COLS",
+    ),
+    "PARENT_MAP": (".pymc_models._hierarchy", "PARENT_MAP"),
+    "build_hierarchy_indices": (
+        ".pymc_models._hierarchy",
+        "build_hierarchy_indices",
+    ),
+    "build_nested_logit_normal_rates": (
+        ".pymc_models._hierarchy",
+        "build_nested_logit_normal_rates",
+    ),
+    "coerce_categories": (".pymc_models._hierarchy", "coerce_categories"),
+    "_resolve_prior_sigma": (".pymc_models._hierarchy", "_resolve_prior_sigma"),
 }
 
 # Lazy imports that use an absolute module path + identical attribute name.

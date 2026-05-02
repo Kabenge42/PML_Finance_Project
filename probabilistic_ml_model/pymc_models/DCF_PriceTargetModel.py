@@ -42,6 +42,10 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
     stamp_feature_provenance,
 )
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    build_hierarchy_indices,
+    coerce_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +57,7 @@ Parameterization = Literal["centered", "non_centered", "marginalized"]
 _DCF_CATEGORY_KEYS: tuple[str, ...] = (
     "Cash Flow",
     "Valuation Ratios",
+    "Valuation Timeseries",
     "Revenue Forecasting",
     "Growth Metrics",
     "Profitability",
@@ -137,6 +142,9 @@ class DCFPriceTarget:
         historical_fcf: np.ndarray,
         price_target: np.ndarray,
         isins: Optional[np.ndarray] = None,
+        sectors: Optional[np.ndarray] = None,
+        categories_df: Optional[pd.DataFrame] = None,
+        hierarchy_levels: Optional[list[str]] = None,
         dcf_features_df: Optional[pd.DataFrame] = None,
         connection_string: Optional[str] = None,
         n_projection_years: int = 5,
@@ -203,6 +211,19 @@ class DCFPriceTarget:
         else:
             isins_arr = np.arange(mp.size).astype("int64")
         coords: dict[str, Any] = {"isin": isins_arr}
+
+        # Optional category hierarchy registers coords for downstream pivots.
+        cats_df, levels = coerce_categories(
+            isins_arr,
+            sectors=sectors,
+            categories_df=categories_df,
+            hierarchy_levels=hierarchy_levels
+            or (["sector", "industry"] if categories_df is not None else None),
+        )
+        if cats_df is not None and levels:
+            hierarchy_meta = build_hierarchy_indices(cats_df, isins_arr, levels=levels)
+            for lv, meta in hierarchy_meta.items():
+                coords[lv] = meta["labels"]
 
         # `dcf_feature` is resolved from calculated_features_registry so the
         # auxiliary pm.Data container carries human-readable feature_alias labels.

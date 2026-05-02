@@ -5,6 +5,87 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.1] - 2026-05-02
+
+### Added — Centralised OOS leaf-index resolution helpers in `_hierarchy.py`
+
+- **`probabilistic_ml_model/pymc_models/_hierarchy.py`** — added three new
+  helpers that centralise the foot-gun-prone leaf-index swap every PyMC
+  model's out-of-sample (`pm.set_data`) cell needed to repeat:
+  - `find_leaf_idx_var(idata)` — returns the `{leaf_level}_idx` data_var
+    name registered on `idata.constant_data` by
+    `build_nested_logit_normal_rates`, or `None`.
+  - `resolve_leaf_train_labels(idata, leaf_level)` — returns the trained
+    labels for `leaf_level` from a fitted `idata`. Inspects **both**
+    `constant_data.coords` and `posterior.coords` (the level coords
+    typically live on `posterior`, not `constant_data` — this was the
+    missing piece for the §9.6 DividendSafety crash).
+  - `build_oos_setdata(idata, categories_df, new_isins, *, extra_data)`
+    — builds a `pm.set_data` payload that auto-includes the
+    `{leaf_level}_idx` swap whenever a hierarchy was registered, with
+    unknown labels mapped to `0` for `KeyError` safety.
+- **`pymc_expected_returns_model.ipynb`** — refactored the §5
+  EarningsBeat, §9.6 DividendSafety and §10.6 CreditRisk OOS cells to
+  delegate the leaf-idx lookup to `build_oos_setdata`. The
+  DividendSafety cell previously omitted the leaf-idx swap entirely,
+  causing the (2072,) vs (50,) broadcast failure inside
+  `risk_adj` / `expected_coverage`; the new helper restores the shape
+  contract end-to-end.
+
+## [0.9.9.0] - 2026-05-02
+
+### Added — Multi-Level Hierarchical Shrinkage for PyMC Models (§12 / §13 plan)
+
+- **New `probabilistic_ml_model/pymc_models/_hierarchy.py`** — shared
+  infrastructure (single source of truth) for the canonical category
+  hierarchy used by every PyMC model:
+  - `HIERARCHICAL_CATEGORY_COLS` and `PARENT_MAP` — canonical column tuple
+    and parent-of-child relationships (region → country → exchange →
+    sector → industry, plus independent `style_class` / `size_class`
+    and `unit` / `trading_country` branches). Now re-imported by
+    `statistical_functions/statistical_models.py` so PyMC models and the
+    multi-level shrinkage helper share one definition.
+  - `build_hierarchy_indices(df, isins, levels=None)` — pure-NumPy helper
+    returning per-level metadata (unique labels, isin → level idx, level
+    → parent idx). Generalises the previous flat
+    `np.unique(sectors, return_inverse=True)` block to N nested levels.
+  - `build_nested_logit_normal_rates(hierarchy, ...)` — PyMC helper that
+    materialises a nested non-centred logit-Normal chain
+    `mu_L[g] = mu_P[parent_of(g)] + sigma_L * z_L[g]`, returning the
+    leaf-level rate broadcast to `isin`.
+  - `_resolve_prior_sigma(data_type, calculation_type)` — calculation-
+    type-driven prior sigma helper (recommendation §12.3 #2).
+  - `coerce_categories(...)` — backward-compat shim that wraps the legacy
+    `sectors=` argument into a single-level `categories_df` with
+    `hierarchy_levels=["sector"]`.
+- **All seven PyMC models** (`EarningsBeatModel`, `PriceTargetModel`,
+  `DCF_PriceTargetModel`, `AccountingAnomalyModel`, `DividendSafetyModel`,
+  `KalmanFilterModel`, `CreditRiskModel`) now accept a unified
+  `categories_df` + `hierarchy_levels` pair on `fit(...)` while preserving
+  the legacy `sectors=` argument. Default `hierarchy_levels`:
+  - EarningsBeat: `["exchange", "sector", "industry"]`
+  - PriceTarget: `["exchange", "sector", "industry", "size_class"]`
+  - DividendSafety: `["region", "country", "sector", "industry"]`
+  - CreditRisk: `["region", "country", "exchange", "sector", "industry"]`
+  - AccountingAnomaly / DCF: `["sector", "industry"]`
+- **EarningsBeat / CreditRisk / PriceTarget / DividendSafety** route the
+  nested non-centred logit-Normal chain through
+  `build_nested_logit_normal_rates`, so the leaf rate inherits shrinkage
+  from every parent level instead of a single flat `sector` layer.
+- **Tests** — `tests/test_hierarchical_pymc_models.py` adds 11 tests
+  covering the canonical constants, `build_hierarchy_indices` shapes /
+  parent-of consistency, `_resolve_prior_sigma` bounds, and the
+  backward-compat shim (legacy `sectors=` still produces a `sector`
+  coord on EarningsBeat and CreditRisk; multi-level `categories_df`
+  registers every level as a coord).
+- **`pymc_expected_returns_model.ipynb`** — every model `fit(...)` cell
+  (EarningsBeat, PriceTarget, DCF, DividendSafety, CreditRisk,
+  AccountingAnomaly) now passes `categories_df=` + `hierarchy_levels=`
+  built from `HIERARCHICAL_CATEGORY_COLS` instead of the legacy flat
+  `sectors=` argument. A small `_build_categories_df(df, isins)` helper
+  is introduced in §1 (Earnings Beat preparation) and reused by every
+  later section to align the notebook with the new shared infra.
+
 ## [0.9.8.5] - 2026-04-30
 
 ### Added — `feature_catalogue`-aligned model improvements (recommendations from §12.3)
