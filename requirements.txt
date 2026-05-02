@@ -39,12 +39,23 @@ psutil>= 6.0.0, <8.0.0
 
 # --- Bayesian / Probabilistic (aligned, known-compatible window) ---
 # Keep this block in sync with pyproject.toml [project.dependencies].
-# PyMC 5.22+ <-> PyTensor 2.30-2.33 <-> ArviZ 0.20+ (classic, pre-1.0)
+# PyMC 5.22+ <-> PyTensor 2.30-2.33 <-> ArviZ 0.20+ (classic) AND arviz-base 1.x.
 # Bambi 0.15+ requires PyMC >=5.16; nutpie 0.13+ pairs with PyMC 5.22+.
-# Do NOT mix arviz==0.23.x with the experimental arviz-base/stats/plots 1.x split.
+#
+# ArviZ migration (https://python.arviz.org/en/latest/user_guide/migration_guide.html):
+# arviz-base 1.x replaces ``arviz.InferenceData`` with ``xarray.DataTree``.
+# We install BOTH the classic ``arviz`` package (still required by PyMC 5.x
+# at runtime — pm.sample() returns arviz.InferenceData) AND the new
+# ``arviz-base``/``arviz-stats``/``arviz-plots`` 1.x split, with the
+# compatibility shim at ``probabilistic_ml_model/_pymc_arviz_compat.py``
+# bridging the two. Downstream code uses the ``InferenceLike`` typing alias
+# (Union[arviz.InferenceData, xarray.DataTree]) exposed by that shim.
 pymc>=5.22.0,<6.0.0
 pytensor>=2.30.0,<2.40.0.0
 arviz>=0.20.0,<1.0.0
+arviz-base>=1.0.0,<2.0.0
+arviz-stats>=1.0.0,<2.0.0
+arviz-plots>=1.0.0,<2.0.0
 bambi>=0.15.0,<1.0.0
 nutpie>=0.13.0,<1.0.0
 xarray>=2024.7.0,<2027.0.0

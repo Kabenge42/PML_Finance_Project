@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
     import pymc as pm_typing  # noqa: F401
 
+from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 from probabilistic_ml_model.pymc_models._feature_alignment import (
     coerce_by_data_type,
@@ -44,6 +45,11 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
     stamp_feature_provenance,
 )
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    build_hierarchy_indices,
+    build_nested_logit_normal_rates,
+    coerce_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +62,7 @@ Parameterization = Literal["centered", "non_centered", "marginalized"]
 _PT_CATEGORY_KEYS: tuple[str, ...] = (
     "Price Target Dynamics",
     "Analyst Sentiment",
-    "Momentum & Technical",
+    "Technical Analysis",
     "Composite Scores",
 )
 
@@ -84,7 +90,7 @@ class PriceTargetAchievement:
         self.prior_beta = prior_beta
         self.risk_penalty = risk_penalty
         self.model_: Optional[pm_typing.Model] = None
-        self.idata_: Optional[az_typing.InferenceData] = None
+        self.idata_: Optional[InferenceLike] = None
 
     @staticmethod
     @lru_cache(maxsize=4)
@@ -151,6 +157,9 @@ class PriceTargetAchievement:
         upside_potential: np.ndarray,
         analyst_conviction: np.ndarray,
         isins: np.ndarray,
+        sectors: Optional[np.ndarray] = None,
+        categories_df: Optional[pd.DataFrame] = None,
+        hierarchy_levels: Optional[list[str]] = None,
         pt_features_df: Optional[pd.DataFrame] = None,
         connection_string: Optional[str] = None,
         samples: int = 2000,
@@ -162,7 +171,7 @@ class PriceTargetAchievement:
         parameterization: Parameterization = "non_centered",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
-    ) -> tuple[az_typing.InferenceData, pm_typing.Model]:
+    ) -> tuple[InferenceLike, pm_typing.Model]:
         """Fit price target achievement model and return ``(InferenceData, Model)``.
 
         Notes
@@ -188,6 +197,24 @@ class PriceTargetAchievement:
         # --- DB-aligned coords --------------------------------------------------
         # `isin` mirrors public.vw_identifier_columns.isin (role='id').
         coords: dict[str, Any] = {"isin": isins_arr}
+
+        cats_df, levels = coerce_categories(
+            isins_arr,
+            sectors=sectors,
+            categories_df=categories_df,
+            hierarchy_levels=hierarchy_levels
+            or (
+                ["exchange", "sector", "industry", "size_class"]
+                if categories_df is not None
+                else None
+            ),
+        )
+        hierarchical = cats_df is not None and levels
+        hierarchy_meta: Optional[dict] = None
+        if hierarchical:
+            hierarchy_meta = build_hierarchy_indices(cats_df, isins_arr, levels=levels)
+            for lv, meta in hierarchy_meta.items():
+                coords[lv] = meta["labels"]
 
         # `pt_feature` is resolved from calculated_features_registry so the
         # auxiliary pm.Data container carries human-readable feature_alias labels.
@@ -221,15 +248,26 @@ class PriceTargetAchievement:
                     dims="isin",
                 )
             else:
-                # Non-centred logit-Normal hierarchy — better NUTS geometry.
-                mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
-                sigma_logit = pm.HalfNormal("sigma_logit", 1.0)
-                z_isin = pm.Normal("z_isin", 0.0, 1.0, dims="isin")
-                pm.Deterministic(
-                    "achieve_prob",
-                    pm.math.sigmoid(mu_logit + sigma_logit * z_isin),
-                    dims="isin",
-                )
+                if hierarchical:
+                    nested = build_nested_logit_normal_rates(
+                        hierarchy_meta,
+                        leaf_dim="isin",
+                        name="achieve_rate",
+                    )
+                    pm.Deterministic(
+                        "achieve_prob",
+                        nested["leaf_rate"],
+                        dims="isin",
+                    )
+                else:
+                    mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
+                    sigma_logit = pm.HalfNormal("sigma_logit", 1.0)
+                    z_isin = pm.Normal("z_isin", 0.0, 1.0, dims="isin")
+                    pm.Deterministic(
+                        "achieve_prob",
+                        pm.math.sigmoid(mu_logit + sigma_logit * z_isin),
+                        dims="isin",
+                    )
 
             expected_return = pm.Normal(
                 "expected_return",

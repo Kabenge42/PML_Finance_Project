@@ -73,6 +73,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\outputs\earnings_probability_analysis.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\outputs\eps_streak_analysis.csv">
           <value>
             <Attribute>
@@ -95,6 +102,13 @@
           </value>
         </entry>
         <entry key="\sdk_ouputs\production\PML_Finance_Project\playground\screening_etf.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\sdk_ouputs\production\PML_Finance_Project\screening_eu.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

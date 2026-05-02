@@ -25,7 +25,14 @@ joblib = ">=1.4.0,<4.0.0"
 xlsxwriter = ">=3.2.0,<4.0.0"
 psutil = ">=6.0.0,<8.0.0"
 # --- Bayesian / Probabilistic ---
-arviz = ">=1.0.0,<2.0.0"
+# Classic ArviZ (<1.0) is still required by PyMC 5.x at runtime: pm.sample()
+# returns arviz.InferenceData. The arviz-base/stats/plots 1.x split provides
+# the new xarray.DataTree-based API per the ArviZ migration guide
+# (https://python.arviz.org/en/latest/user_guide/migration_guide.html).
+# The shim at probabilistic_ml_model/_pymc_arviz_compat.py bridges the two
+# and exposes an `InferenceLike = Union[arviz.InferenceData, xarray.DataTree]`
+# typing alias for downstream type annotations.
+arviz = ">=0.20.0,<1.0.0"
 arviz-base = ">=1.0.0,<2.0.0"
 arviz-stats = ">=1.0.0,<2.0.0"
 arviz-plots = ">=1.0.0,<2.0.0"

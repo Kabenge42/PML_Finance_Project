@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
     import pymc as pm_typing  # noqa: F401
 
+from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 from probabilistic_ml_model.pymc_models._feature_alignment import (
     coerce_by_data_type,
@@ -45,13 +46,19 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
     stamp_feature_provenance,
 )
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    HIERARCHICAL_CATEGORY_COLS,
+    build_hierarchy_indices,
+    build_nested_logit_normal_rates,
+    coerce_categories,
+)
 
 logger = logging.getLogger(__name__)
 
 # Canonical category names in public.calculated_features_registry
 # whose feature_aliases drive the auxiliary "earnings_feature" dim.
 # Aligned with categories backing public.vw_features_earnings.
-_EARNINGS_CATEGORY_KEYS: tuple[str, ...] = ("Earnings Quality", "EPS Trajectory", "Profitability")
+_EARNINGS_CATEGORY_KEYS: tuple[str, ...] = ("Earnings Quality", "EPS Trajectory", "Profitability","Efficiency Ratios","Growth Metrics","Revenue Forecasting","Valuation Ratios","Temporal Patterns")
 
 Parameterization = Literal["centered", "non_centered", "marginalized"]
 
@@ -75,7 +82,7 @@ class EarningsBeatBayesian:
         self.prior_alpha = prior_alpha
         self.prior_beta = prior_beta
         self.model_: Optional[pm_typing.Model] = None
-        self.idata_: Optional[az_typing.InferenceData] = None
+        self.idata_: Optional[InferenceLike] = None
 
     @staticmethod
     @lru_cache(maxsize=4)
@@ -140,6 +147,8 @@ class EarningsBeatBayesian:
         n_total: np.ndarray,
         isins: np.ndarray,
         sectors: Optional[np.ndarray] = None,
+        categories_df: Optional[pd.DataFrame] = None,
+        hierarchy_levels: Optional[list[str]] = None,
         earnings_features_df: Optional[pd.DataFrame] = None,
         connection_string: Optional[str] = None,
         samples: int = 500,
@@ -150,7 +159,7 @@ class EarningsBeatBayesian:
         parameterization: Parameterization = "non_centered",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
-    ) -> tuple[az_typing.InferenceData, pm_typing.Model]:
+    ) -> tuple[InferenceLike, pm_typing.Model]:
         """Fit the Beta-Binomial model and return (InferenceData, Model).
 
         Parameters
@@ -205,17 +214,24 @@ class EarningsBeatBayesian:
             raise ValueError("n_beats cannot exceed n_total for any ISIN.")
 
         # --- DB-aligned coords --------------------------------------------------
-        # `isin` mirrors public.vw_identifier_columns.isin (role='id')
-        # `sector` mirrors public.vw_identifier_columns.sector (role='categorical')
+        # `isin` mirrors public.vw_identifier_columns.isin (role='id').  When
+        # ``categories_df`` (or the legacy ``sectors=``) is supplied, every
+        # column from ``hierarchy_levels`` becomes a coord and contributes a
+        # nested non-centred logit-Normal layer to ``beat_prob``.
         coords: dict[str, Any] = {"isin": isins_arr}
-        hierarchical = sectors is not None
-        sector_idx_arr: Optional[np.ndarray] = None
-
+        cats_df, levels = coerce_categories(
+            isins_arr,
+            sectors=sectors,
+            categories_df=categories_df,
+            hierarchy_levels=hierarchy_levels
+            or (["exchange", "sector", "industry"] if categories_df is not None else None),
+        )
+        hierarchical = cats_df is not None and levels
+        hierarchy_meta: Optional[dict] = None
         if hierarchical:
-            sectors_arr = np.asarray(sectors)
-            unique_sectors, sector_idx_arr = np.unique(sectors_arr, return_inverse=True)
-            sector_idx_arr = sector_idx_arr.astype("int32")
-            coords["sector"] = unique_sectors
+            hierarchy_meta = build_hierarchy_indices(cats_df, isins_arr, levels=levels)
+            for lv, meta in hierarchy_meta.items():
+                coords[lv] = meta["labels"]
 
         # `earnings_feature` is resolved from calculated_features_registry so the
         # auxiliary pm.Data container carries human-readable feature_alias labels.
@@ -240,35 +256,39 @@ class EarningsBeatBayesian:
             )
 
             if hierarchical:
-                sector_idx_data = pm.Data("sector_idx", sector_idx_arr, dims="isin")
-
                 if parameterization == "centered":
+                    # Legacy single-level Beta hierarchy (still supported for
+                    # reproducibility; only honoured when a single level was
+                    # supplied via the legacy ``sectors=`` argument).
+                    leaf_level = list(hierarchy_meta.keys())[-1]
+                    leaf_idx_arr = hierarchy_meta[leaf_level]["idx"]
+                    leaf_idx_data = pm.Data(f"{leaf_level}_idx", leaf_idx_arr, dims="isin")
                     sector_rate = pm.Beta(
                         "sector_rate",
                         alpha=self.prior_alpha,
                         beta=self.prior_beta,
-                        dims="sector",
+                        dims=leaf_level,
                     )
                     kappa = pm.HalfNormal("kappa", sigma=10.0)
+                    leaf_rate = sector_rate[leaf_idx_data]
                 else:
-                    # Non-centred logit-Normal hierarchy — better NUTS geometry.
-                    mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
-                    sigma_sector = pm.HalfNormal("sigma_sector", 1.0)
-                    z_sector = pm.Normal("z_sector", 0.0, 1.0, dims="sector")
-                    sector_logit = pm.Deterministic(
-                        "sector_logit",
-                        mu_logit + sigma_sector * z_sector,
-                        dims="sector",
+                    # Nested non-centred logit-Normal — single shared helper.
+                    nested = build_nested_logit_normal_rates(
+                        hierarchy_meta,
+                        leaf_dim="isin",
+                        name="beat_rate",
                     )
-                    sector_rate = pm.Deterministic(
-                        "sector_rate",
-                        pm.math.sigmoid(sector_logit),
-                        dims="sector",
-                    )
+                    leaf_rate = nested["leaf_rate"]
                     kappa = pm.Gamma("kappa", alpha=2.0, beta=0.1)
 
-                a = sector_rate[sector_idx_data] * kappa
-                b = (1.0 - sector_rate[sector_idx_data]) * kappa
+                # IMPORTANT: do NOT wrap (a, b) as pm.Deterministic with
+                # dims="isin" — that would store them in idata.posterior at
+                # the trained cohort length and break pm.set_data swaps for
+                # OOS prediction. Keep them as plain PyTensor expressions so
+                # they are recomputed from parent (non-isin) variables every
+                # time pm.sample_posterior_predictive is invoked.
+                a = leaf_rate * kappa
+                b = (1.0 - leaf_rate) * kappa
 
                 if parameterization == "marginalized":
                     # Collapse per-stock beat_prob latent — fastest path.

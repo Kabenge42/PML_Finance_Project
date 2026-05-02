@@ -83984,3 +83984,1294 @@ Group: /posterior
 2026-05-01 12:15:07,397 - __main__ - INFO -   Probability Analytics:
 2026-05-01 12:15:07,397 - __main__ - INFO -     Categories analyzed:       17
 2026-05-01 12:15:07,397 - __main__ - INFO -   Outputs: outputs/
+2026-05-04 12:13:50,854 - __main__ - INFO - ================================================================================
+2026-05-04 12:13:50,855 - __main__ - INFO - Expected Returns Analytics Pipeline v3.7
+2026-05-04 12:13:50,855 - __main__ - INFO - ================================================================================
+2026-05-04 12:13:50,855 - __main__ - INFO - 🔧 Numba: True, Joblib: True, ArviZ: True
+2026-05-04 12:13:50,855 - __main__ - INFO -    n_jobs=-1, max_features/cat=25, caching=on (TTL=24.0h)
+2026-05-04 12:13:50,855 - probabilistic_ml_model.pipeline_runners - INFO - Cache cleanup (full purge): removed 0 files from .cache
+2026-05-04 12:13:50,860 - __main__ - INFO - 📦 Step 1: Loading feature data (v3.6: equities MV + feature views + all stock features MV)...
+2026-05-04 12:13:50,860 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:13:51,214 - probabilistic_ml_model.data_utils.feature_catalog - INFO - FeatureViewCatalog loaded: 27 categories, 17 views, 869 total features
+2026-05-04 12:13:51,214 - __main__ - INFO - ✓ FeatureViewCatalog: 27 categories, 17 views
+2026-05-04 12:13:51,214 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-05-04 12:13:55,915 - root - INFO - Loaded 6646 rows from public.mv_all_stock_features
+2026-05-04 12:13:55,963 - root - INFO - Backfill complete. Columns: 821
+2026-05-04 12:13:56,034 - __main__ - INFO - Kalman momentum filter applied to 5 columns
+2026-05-04 12:13:56,043 - __main__ - INFO - Loaded mv_all_stock_features: 6646 rows × 831 columns
+2026-05-04 12:13:56,044 - __main__ - INFO - ✓ Loaded mv_all_stock_features: 6,646 stocks × 831 features
+2026-05-04 12:13:56,047 - __main__ - INFO -   Deduplicated to 6,646 unique isins
+2026-05-04 12:13:56,088 - root - INFO - Loaded 26 feature categories from database
+2026-05-04 12:13:56,088 - __main__ - INFO - Loaded 26 feature categories (403 total features)
+2026-05-04 12:13:56,089 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-05-04 12:13:59,181 - root - INFO - Loaded 6646 rows from public.mv_equities
+2026-05-04 12:13:59,217 - root - INFO - Backfill complete. Columns: 680
+2026-05-04 12:13:59,228 - __main__ - INFO - Loaded 26 feature categories (369 total features)
+2026-05-04 12:13:59,229 - __main__ - INFO - All feature categories have ≥80%% coverage
+2026-05-04 12:13:59,229 - __main__ - INFO - Loaded expected returns data: 6646 stocks × 680 features
+2026-05-04 12:13:59,229 - __main__ - INFO - ✓ Loaded mv_equities (historical cols): 6,646 stocks × 680 features
+2026-05-04 12:13:59,265 - __main__ - INFO -   Merged 507 historical columns from mv_equities
+2026-05-04 12:13:59,360 - __main__ - INFO -   Schema metadata: 675 columns
+2026-05-04 12:13:59,361 - __main__ - INFO -   Feature registry: 74 functions
+2026-05-04 12:13:59,364 - __main__ - INFO -   mv_equities spec: 89 price, 122 financial, 9 historical cols
+2026-05-04 12:13:59,364 - __main__ - INFO - 📦 Step 1b: Pre-computing historical target drift enrichment...
+2026-05-04 12:13:59,365 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:13:59,408 - root - INFO - Loaded 675 column definitions from public.equities_schema_metadata
+2026-05-04 12:13:59,408 - root - INFO - Cached equities schema: 675 columns across 26 roles
+2026-05-04 12:13:59,408 - __main__ - INFO - Column lists derived from equities schema (46 total columns)
+2026-05-04 12:13:59,408 - __main__ - INFO - Historical price/target coverage: 40 / 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 12:13:59,463 - __main__ - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 12:13:59,496 - __main__ - INFO - ✓ Historical drift enrichment complete (12 derived columns)
+2026-05-04 12:13:59,500 - __main__ - INFO -   ⏱ Step 1 completed in 8.6s
+2026-05-04 12:13:59,501 - __main__ - INFO - 🎲 Step 2: Monte Carlo price target simulation (50,000 samples)...
+2026-05-04 12:13:59,501 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:13:59,609 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 12:13:59,616 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 12:14:11,954 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_mc for 5751 / 6646 stocks (mean=6622.19)
+2026-05-04 12:14:11,954 - probabilistic_ml_model.pipeline_runners - INFO - Monte Carlo simulation: 6646 stocks processed
+2026-05-04 12:14:11,956 - __main__ - INFO -   ⏱ Step 2 completed in 12.5s
+2026-05-04 12:14:11,956 - __main__ - INFO - 🎯 Step 3: Price target achievement model...
+2026-05-04 12:14:11,956 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:14:11,996 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 12:14:12,003 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 12:14:12,272 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-05-04 12:14:13,178 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_prob_weighted for 6646 / 6646 stocks (mean=5276.37)
+2026-05-04 12:14:13,178 - probabilistic_ml_model.pipeline_runners - INFO - Price target achievement: 6646 stocks processed
+2026-05-04 12:14:13,181 - __main__ - INFO -   ⏱ Step 3 completed in 1.2s
+2026-05-04 12:14:13,181 - __main__ - INFO - 📐 Step 4: Kalman-filtered price targets...
+2026-05-04 12:14:13,181 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:14:13,213 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 12:14:13,221 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 12:14:14,012 - probabilistic_ml_model.pipeline_runners - INFO - Kalman filter: 6646 stocks processed
+2026-05-04 12:14:14,015 - __main__ - INFO -   ⏱ Step 4 completed in 0.8s
+2026-05-04 12:14:14,015 - __main__ - INFO - 📊 Step 5: Bayesian earnings beat analysis...
+2026-05-04 12:14:14,015 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:14:23,062 - probabilistic_ml_model.pipeline_runners - INFO - Earnings beat analysis: 6646 stocks processed
+2026-05-04 12:14:23,067 - probabilistic_ml_model.pipeline_runners - INFO - EPS streak enrichment: 8 columns added
+2026-05-04 12:15:35,881 - probabilistic_ml_model.pipeline_runners - INFO - Resampled beat enrichment: 18 columns added
+2026-05-04 12:15:36,388 - __main__ - INFO -   ⏱ Step 5 completed in 82.4s
+2026-05-04 12:15:36,388 - __main__ - INFO - 🔬 Step 5b: Accounting anomaly detection & analytics...
+2026-05-04 12:15:36,388 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:16:07,441 - probabilistic_ml_model.statistical_functions.probability_models - INFO - AccountingAnomalyProbabilityModel: severity computed for 6646 stocks, 1512 multi-flag alerts, mean conditional P(anomaly)=0.042
+2026-05-04 12:16:12,613 - probabilistic_ml_model.pipeline_runners - INFO - MCMC anomaly posterior: location=44.646
+2026-05-04 12:16:12,613 - probabilistic_ml_model.pipeline_runners - INFO - Accounting anomaly analysis: 6646 stocks processed
+2026-05-04 12:16:17,904 - probabilistic_ml_model.pipeline_runners - INFO - accounting_anomaly results cached → mcmc_accounting_anomaly_d07463b6f4fd2d03365d3adce94b597960553e9e_chains8_n10000.json
+2026-05-04 12:16:17,904 - __main__ - INFO -   ⏱ Step 5b completed in 41.5s
+2026-05-04 12:16:17,904 - __main__ - INFO - 🛡️ Step 5c: Credit risk & dividend safety analysis...
+2026-05-04 12:16:17,904 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:16:17,940 - probabilistic_ml_model.statistical_functions.probability_models - INFO - CreditRiskProbabilityModel v3.9 config: student_t=True, garch=True, macro=True, df_floor=3.00, n_samples=10000, burn_in=2000
+2026-05-04 12:16:28,440 - probabilistic_ml_model.pipeline_runners - INFO - Hierarchical MCMC credit risk: 1 sectors enriched
+2026-05-04 12:16:28,800 - probabilistic_ml_model.pipeline_runners - INFO - Ruin probability enrichment: 6 columns added
+2026-05-04 12:16:28,800 - probabilistic_ml_model.pipeline_runners - INFO - Credit risk analysis: 6646 stocks processed
+2026-05-04 12:16:29,085 - probabilistic_ml_model.pipeline_runners - INFO - credit_risk results cached → mcmc_credit_risk_10e67a8e9c85a039911758adee62da17b855ce29_chains8_n10000.json
+2026-05-04 12:16:39,379 - probabilistic_ml_model.pipeline_runners - INFO - Dividend safety analysis (v3.10 per-isin): 6646 stocks processed
+2026-05-04 12:16:39,608 - probabilistic_ml_model.pipeline_runners - INFO - dividend_safety results cached → mcmc_dividend_safety_c4494fbbfbab8aa155b05e37c5396a8bb547e597_chains8_n10000.json
+2026-05-04 12:16:39,608 - __main__ - INFO -   ⏱ Step 5c completed in 21.7s
+2026-05-04 12:16:39,608 - __main__ - INFO - 🔍 Step 5d: Running stock screening strategies...
+2026-05-04 12:16:39,608 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:16:39,670 - __main__ - INFO -   ✓ Productivity frontier scores added
+2026-05-04 12:16:39,672 - __main__ - INFO -    Reporting lag sentiment: corr=0.203, p=0.0000, hypothesis=marginally significant (p < 0.10)
+2026-05-04 12:16:41,655 - __main__ - INFO - Quality screen: 279 stocks
+2026-05-04 12:16:43,064 - __main__ - INFO - Earnings quality screen: 4286 stocks
+2026-05-04 12:16:44,252 - __main__ - INFO - Value screen: 1445 stocks
+2026-05-04 12:16:45,495 - __main__ - INFO - Growth screen: 3004 stocks
+2026-05-04 12:16:47,098 - __main__ - INFO - GARP screen: 1316 stocks
+2026-05-04 12:16:48,540 - __main__ - INFO - Dividend screen: 1307 stocks
+2026-05-04 12:16:49,885 - __main__ - INFO - Financial health screen: 1342 stocks
+2026-05-04 12:16:51,162 - __main__ - INFO - Valuation reversion screen: 521 stocks
+2026-05-04 12:16:52,459 - __main__ - INFO - Integrity growth screen: 1162 stocks
+2026-05-04 12:16:54,328 - __main__ - INFO - High-yield safe dividend screen: 1527 stocks
+2026-05-04 12:16:54,328 - __main__ - INFO - Sector-relative ranking: 6646 stocks
+2026-05-04 12:16:55,786 - __main__ - INFO - Low-volatility quality screen: 3160 stocks
+2026-05-04 12:16:57,351 - __main__ - INFO - FCF compounders screen: 731 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO - Total return leaders screen: 3552 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO -   ✓ quality: 279 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO -   ✓ earnings_quality: 4,286 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO -   ✓ value: 1,445 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO -   ✓ growth: 3,004 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO -   ✓ garp: 1,316 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO -   ✓ dividend: 1,307 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO -   ✓ healthy: 1,342 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO -   ✓ valuation_reversion: 521 stocks
+2026-05-04 12:16:58,217 - __main__ - INFO -   ✓ integrity_growth: 1,162 stocks
+2026-05-04 12:16:58,218 - __main__ - INFO -   ✓ high_yield_safe: 1,527 stocks
+2026-05-04 12:16:58,218 - __main__ - INFO -   ✓ sector_relative: 6,646 stocks
+2026-05-04 12:16:58,218 - __main__ - INFO -   ✓ low_vol_quality: 3,160 stocks
+2026-05-04 12:16:58,218 - __main__ - INFO -   ✓ fcf_compounders: 731 stocks
+2026-05-04 12:16:58,218 - __main__ - INFO -   ✓ total_return_leaders: 3,552 stocks
+2026-05-04 12:16:58,218 - __main__ - INFO -   ⏱ Step 5d completed in 18.6s
+2026-05-04 12:16:58,218 - __main__ - INFO - 🧪 Step 5e: Resampled Bayesian posterior returns...
+2026-05-04 12:16:58,218 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:17:28,896 - __main__ - WARNING - Resampled posterior returns failed: conflicting sizes for dimension 'chain': length 1 on the data but length 8 on coordinate 'chain'
+2026-05-04 12:17:29,345 - __main__ - INFO -   ⏱ Step 5e completed in 31.1s
+2026-05-04 12:17:29,345 - __main__ - INFO - 🔗 Step 6: Cross-model alignment...
+2026-05-04 12:17:29,346 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:17:29,467 - __main__ - INFO - Tri-model alignment: 6646 stocks, 2746 strong bullish
+2026-05-04 12:17:29,670 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 12:17:29,676 - __main__ - INFO - Dividend safety signal merged: 432/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 12:17:29,680 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 86.0
+2026-05-04 12:17:29,688 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=86.0)
+2026-05-04 12:17:29,690 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 487
+2026-05-04 12:17:29,713 - __main__ - INFO - Strong consensus picks: 435 stocks
+2026-05-04 12:17:29,713 - __main__ - INFO -   ⏱ Step 6 completed in 0.4s
+2026-05-04 12:17:29,713 - __main__ - INFO - 📋 Step 7: Building expected_returns_summary (multi-model merge)...
+2026-05-04 12:17:29,713 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:17:29,792 - __main__ - INFO - Enriched expected_returns_summary with 60 anomaly columns
+2026-05-04 12:17:29,801 - __main__ - INFO - Enriched expected_returns_summary with 15 credit risk columns
+2026-05-04 12:17:29,810 - __main__ - INFO - Enriched expected_returns_summary with 10 dividend safety columns
+2026-05-04 12:17:29,839 - __main__ - INFO - Enriched expected_returns_summary with 32 columns from mv_all_stock_features
+2026-05-04 12:17:29,849 - __main__ - INFO - Enriched expected_returns_summary with 8 forward consensus columns
+2026-05-04 12:17:29,857 - __main__ - INFO - Merged quad alignment scores into summary (single source of truth)
+2026-05-04 12:17:29,866 - __main__ - INFO - Expected returns summary: 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 487
+2026-05-04 12:17:29,871 - __main__ - INFO -   ✓ 6,646 stocks in expected_returns_summary
+2026-05-04 12:17:30,146 - __main__ - INFO - Quality scoring: 6646 stocks scored (mean=45.3, median=46.5)
+2026-05-04 12:17:30,147 - __main__ - INFO -   Premium: 665 stocks
+2026-05-04 12:17:30,148 - __main__ - INFO -   High: 1329 stocks
+2026-05-04 12:17:30,148 - __main__ - INFO -   Above Avg: 1329 stocks
+2026-05-04 12:17:30,148 - __main__ - INFO -   Below Avg: 1329 stocks
+2026-05-04 12:17:30,148 - __main__ - INFO -   Low: 1329 stocks
+2026-05-04 12:17:30,148 - __main__ - INFO -   Very Low: 665 stocks
+2026-05-04 12:17:30,148 - __main__ - INFO -   Financially healthy (score ≥ 45): 3670 stocks
+2026-05-04 12:17:30,244 - __main__ - INFO - Added z-scores and percentile ranks for 5 return metrics
+2026-05-04 12:17:30,291 - __main__ - INFO - 🔀 Step 7a: Parallel MCMC return analysis...
+2026-05-04 12:17:30,291 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:17:41,862 - __main__ - INFO - Parallel MCMC: R̂=1.0003, converged=True, posterior mean=7.15
+2026-05-04 12:17:41,862 - __main__ - INFO -   95% CI: [6.83, 7.47], posterior std=0.16
+2026-05-04 12:17:41,862 - __main__ - INFO -   Chain means: 7.16, 7.15, 7.15, 7.15, 7.16, 7.16, 7.15, 7.15
+2026-05-04 12:17:41,862 - __main__ - INFO -   Chain stds:  0.16, 0.17, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16
+2026-05-04 12:17:51,305 - __main__ - INFO -   MCMC Student-t: μ=7.88 (±0.08), df=2.0
+2026-05-04 12:17:51,778 - probabilistic_ml_model.statistical_functions.statistical_models - INFO - Multi-level hierarchical MCMC: 9 levels, 161 total groups for 'implied_return_pt'
+2026-05-04 12:17:51,778 - __main__ - INFO -   Hierarchical MCMC: global mean=7.16, std=13.13, n=6646
+2026-05-04 12:17:51,778 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 12:17:51,779 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2073, P(>0)=100.0%
+2026-05-04 12:17:51,779 - __main__ - INFO -       Asia / Pacific: posterior=4.63 (raw=4.58), shrinkage=0.981, n=2062, P(>0)=100.0%
+2026-05-04 12:17:51,779 - __main__ - INFO -       United States and Canada: posterior=8.05 (raw=8.07), shrinkage=0.978, n=1786, P(>0)=100.0%
+2026-05-04 12:17:51,779 - __main__ - INFO -       Africa / Middle East: posterior=5.58 (raw=5.45), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 12:17:51,779 - __main__ - INFO -       Latin America and Caribbean: posterior=9.17 (raw=9.48), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 12:17:51,779 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 12:17:51,779 - __main__ - INFO -       US: posterior=8.01 (raw=8.01), shrinkage=0.974, n=1518, P(>0)=100.0%
+2026-05-04 12:17:51,779 - __main__ - INFO -       CN: posterior=5.31 (raw=5.34), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       GB: posterior=13.48 (raw=13.96), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       JP: posterior=4.37 (raw=4.34), shrinkage=0.897, n=349, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       CA: posterior=8.41 (raw=8.47), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 12:17:51,781 - __main__ - INFO -       US: posterior=7.92 (raw=7.93), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       CN: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       JP: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       CA: posterior=8.82 (raw=9.06), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 12:17:51,781 - __main__ - INFO -       NYSE: posterior=6.27 (raw=6.19), shrinkage=0.954, n=821, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       NasdaqGS: posterior=7.71 (raw=7.69), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       SHSE: posterior=5.04 (raw=5.01), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       SZSE: posterior=4.44 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       TSE: posterior=4.31 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 12:17:51,781 - __main__ - INFO -       USD: posterior=7.92 (raw=7.94), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       CNY: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       GBP: posterior=13.76 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       JPY: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 12:17:51,781 - __main__ - INFO -       Industrials: posterior=6.44 (raw=6.45), shrinkage=0.974, n=1488, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       Information Technology: posterior=4.07 (raw=3.92), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 12:17:51,781 - __main__ - INFO -       Consumer Discretionary: posterior=8.50 (raw=8.60), shrinkage=0.958, n=923, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Health Care: posterior=12.57 (raw=12.80), shrinkage=0.956, n=864, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Materials: posterior=6.36 (raw=6.28), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 12:17:51,784 - __main__ - INFO -       Metals and Mining: posterior=7.90 (raw=8.06), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Machinery: posterior=6.63 (raw=6.66), shrinkage=0.886, n=311, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.69 (raw=6.74), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Chemicals: posterior=3.80 (raw=3.44), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Biotechnology: posterior=17.38 (raw=18.08), shrinkage=0.873, n=274, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 12:17:51,784 - __main__ - INFO -       Core: posterior=7.21 (raw=7.21), shrinkage=0.990, n=4002, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Value: posterior=7.80 (raw=7.81), shrinkage=0.979, n=1863, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Growth: posterior=5.40 (raw=5.31), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 12:17:51,784 - __main__ - INFO -       Small Cap: posterior=8.81 (raw=8.82), shrinkage=0.990, n=3909, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Mid Cap: posterior=4.98 (raw=4.93), shrinkage=0.977, n=1671, P(>0)=100.0%
+2026-05-04 12:17:51,784 - __main__ - INFO -       Large Cap: posterior=4.63 (raw=4.53), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 12:17:51,808 - __main__ - INFO - MCMC return analysis cached → mcmc_return_e3641404f9b51fed9e8bb12b9ae1a5aa30e13ade_chains8_n10000.json
+2026-05-04 12:17:51,809 - __main__ - INFO -   R̂=1.0003, converged=True, posterior mean=7.15
+2026-05-04 12:17:51,809 - __main__ - INFO -   95% CI: [6.83, 7.47], posterior std=0.16
+2026-05-04 12:17:51,809 - __main__ - INFO -   MCMC Student-t: μ=7.88, df=2.0
+2026-05-04 12:17:51,809 - __main__ - INFO -   Hierarchical MCMC: global mean=7.16, std=13.13, n=6646
+2026-05-04 12:17:51,809 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 12:17:51,809 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2073, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       Asia / Pacific: posterior=4.63 (raw=4.58), shrinkage=0.981, n=2062, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       United States and Canada: posterior=8.05 (raw=8.07), shrinkage=0.978, n=1786, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       Africa / Middle East: posterior=5.58 (raw=5.45), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       Latin America and Caribbean: posterior=9.17 (raw=9.48), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 12:17:51,809 - __main__ - INFO -       US: posterior=8.01 (raw=8.01), shrinkage=0.974, n=1518, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       CN: posterior=5.31 (raw=5.34), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       GB: posterior=13.48 (raw=13.96), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       JP: posterior=4.37 (raw=4.34), shrinkage=0.897, n=349, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       CA: posterior=8.41 (raw=8.47), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 12:17:51,809 - __main__ - INFO -       US: posterior=7.92 (raw=7.93), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       CN: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       JP: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       CA: posterior=8.82 (raw=9.06), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 12:17:51,809 - __main__ - INFO -       NYSE: posterior=6.27 (raw=6.19), shrinkage=0.954, n=821, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       NasdaqGS: posterior=7.71 (raw=7.69), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       SHSE: posterior=5.04 (raw=5.01), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       SZSE: posterior=4.44 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       TSE: posterior=4.31 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 12:17:51,809 - __main__ - INFO -       USD: posterior=7.92 (raw=7.94), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       CNY: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       GBP: posterior=13.76 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -       JPY: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:17:51,809 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 12:17:51,809 - __main__ - INFO -       Industrials: posterior=6.44 (raw=6.45), shrinkage=0.974, n=1488, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Information Technology: posterior=4.07 (raw=3.92), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Consumer Discretionary: posterior=8.50 (raw=8.60), shrinkage=0.958, n=923, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Health Care: posterior=12.57 (raw=12.80), shrinkage=0.956, n=864, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Materials: posterior=6.36 (raw=6.28), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 12:17:51,813 - __main__ - INFO -       Metals and Mining: posterior=7.90 (raw=8.06), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Machinery: posterior=6.63 (raw=6.66), shrinkage=0.886, n=311, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.69 (raw=6.74), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Chemicals: posterior=3.80 (raw=3.44), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Biotechnology: posterior=17.38 (raw=18.08), shrinkage=0.873, n=274, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 12:17:51,813 - __main__ - INFO -       Core: posterior=7.21 (raw=7.21), shrinkage=0.990, n=4002, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Value: posterior=7.80 (raw=7.81), shrinkage=0.979, n=1863, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -       Growth: posterior=5.40 (raw=5.31), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 12:17:51,813 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 12:17:51,814 - __main__ - INFO -       Small Cap: posterior=8.81 (raw=8.82), shrinkage=0.990, n=3909, P(>0)=100.0%
+2026-05-04 12:17:51,814 - __main__ - INFO -       Mid Cap: posterior=4.98 (raw=4.93), shrinkage=0.977, n=1671, P(>0)=100.0%
+2026-05-04 12:17:51,814 - __main__ - INFO -       Large Cap: posterior=4.63 (raw=4.53), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 12:17:51,864 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 12:17:51,868 - __main__ - INFO - Dividend safety signal merged: 432/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 12:17:51,869 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 86.0
+2026-05-04 12:17:51,871 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=86.0)
+2026-05-04 12:17:51,873 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 495
+2026-05-04 12:17:51,885 - __main__ - INFO -   ✓ Risk-adjusted returns computed for 6,646 stocks
+2026-05-04 12:17:51,885 - __main__ - INFO -   ⏱ Step 7a completed in 21.6s
+2026-05-04 12:17:51,885 - __main__ - INFO - 🧮 Step 7b: Per-category Bayesian probability analytics...
+2026-05-04 12:17:51,885 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:17:52,119 - root - WARNING - Could not load view category mapping from DB: too many values to unpack (expected 2). Using fallback.
+2026-05-04 12:17:52,120 - __main__ - INFO -   Feature categories from 17 views → 17 categories, 679 total features
+2026-05-04 12:17:52,147 - __main__ - INFO - Sampling budget: Analyst Sentiment trimmed to 25 features (from 26)
+2026-05-04 12:17:52,152 - __main__ - INFO - Sampling budget: Balance Sheet trimmed to 25 features (from 58)
+2026-05-04 12:17:52,156 - __main__ - INFO - Sampling budget: Cash Flow trimmed to 25 features (from 81)
+2026-05-04 12:17:52,159 - __main__ - INFO - Sampling budget: Composite Scores trimmed to 25 features (from 30)
+2026-05-04 12:17:52,162 - __main__ - INFO - Sampling budget: Cost Structure trimmed to 25 features (from 43)
+2026-05-04 12:17:52,167 - __main__ - INFO - Sampling budget: Earnings Quality trimmed to 25 features (from 68)
+2026-05-04 12:17:52,172 - __main__ - INFO - Sampling budget: Growth Metrics trimmed to 25 features (from 62)
+2026-05-04 12:17:52,177 - __main__ - INFO - Sampling budget: Leverage & Liquidity trimmed to 25 features (from 71)
+2026-05-04 12:17:52,183 - __main__ - INFO - Sampling budget: Profitability trimmed to 25 features (from 68)
+2026-05-04 12:17:52,186 - __main__ - INFO - Sampling budget: Quality & Risk trimmed to 25 features (from 44)
+2026-05-04 12:17:52,189 - __main__ - INFO - Sampling budget: Valuation Ratios trimmed to 25 features (from 28)
+2026-05-04 12:26:30,359 - __main__ - INFO - Category Analyst Sentiment: 25 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Balance Sheet: 25 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Cash Flow: 25 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Composite Scores: 25 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Cost Structure: 25 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Dividend Features: 25 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Earnings Quality: 25 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Employment Metrics: 17 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Growth Metrics: 25 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Leverage & Liquidity: 25 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Momentum: 19 features analyzed
+2026-05-04 12:26:30,374 - __main__ - INFO - Category Profitability: 25 features analyzed
+2026-05-04 12:26:30,375 - __main__ - INFO - Category Quality & Risk: 25 features analyzed
+2026-05-04 12:26:30,375 - __main__ - INFO - Category Technical Analysis: 11 features analyzed
+2026-05-04 12:26:30,375 - __main__ - INFO - Category Temporal Features: 16 features analyzed
+2026-05-04 12:26:30,375 - __main__ - INFO - Category Unusual Items: 9 features analyzed
+2026-05-04 12:26:30,375 - __main__ - INFO - Category Valuation Ratios: 25 features analyzed
+2026-05-04 12:26:31,309 - __main__ - INFO - Category analytics cached → category_analytics_9627e3cc25700e73ec3dc41538f7e92ae02fd3d1_cats17_mcmc1_n10000_b1000_max25.json
+2026-05-04 12:26:31,312 - __main__ - INFO -   ✓ Analyzed 17 categories
+2026-05-04 12:26:31,312 - __main__ - INFO -     Analyst Sentiment: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Balance Sheet: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Cash Flow: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Composite Scores: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Cost Structure: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Dividend Features: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Earnings Quality: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Employment Metrics: 17 features — 17 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Growth Metrics: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Leverage & Liquidity: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Momentum: 19 features — 19 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Profitability: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Quality & Risk: 25 features — 25 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Technical Analysis: 11 features — 11 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Temporal Features: 16 features — 13 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Unusual Items: 9 features — 9 posteriors
+2026-05-04 12:26:31,312 - __main__ - INFO -     Valuation Ratios: 25 features — 25 posteriors
+2026-05-04 12:26:31,313 - __main__ - INFO -   ⏱ Step 7b completed in 519.4s
+2026-05-04 12:26:31,314 - __main__ - INFO - 🧪 Step 8: Building InferenceData (ArviZ)...
+2026-05-04 12:26:31,314 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:26:42,058 - __main__ - INFO -    ⚠️ InferenceData error: conflicting sizes for dimension 'draw': length 1 on the data but length 25000 on coordinate 'draw'
+2026-05-04 12:26:42,162 - __main__ - INFO - 
+2026-05-04 12:26:42,162 - __main__ - INFO -   ⏱ Step 8 completed in 10.8s
+2026-05-04 12:26:42,689 - __main__ - INFO -   ⚠️ Viz column coverage gaps after enrichment: {'create_distress_early_warning_dashboard': ['combined_distress_score,']}
+2026-05-04 12:26:42,689 - __main__ - INFO - 📈 Step 9: Generating visualizations...
+2026-05-04 12:26:42,689 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:26:44,631 - __main__ - INFO -    ✓ er_mc_distribution.html
+2026-05-04 12:26:44,970 - __main__ - INFO -    ✓ er_sector_risk_reward.html
+2026-05-04 12:26:45,046 - __main__ - INFO -    ✓ er_var_analysis.html
+2026-05-04 12:26:45,120 - __main__ - INFO -    ✓ er_posterior_return_forest.html
+2026-05-04 12:26:45,373 - __main__ - INFO -    ✓ er_kalman_vs_raw.html
+2026-05-04 12:26:45,430 - __main__ - INFO -    ✓ er_tri_model_agreement.html
+2026-05-04 12:26:45,562 - __main__ - INFO -    ✓ er_sector_heatmap.html
+2026-05-04 12:26:45,600 - __main__ - INFO -    ✓ er_strong_consensus.html
+2026-05-04 12:26:45,992 - __main__ - INFO -    ✓ er_tri_model_posterior.html
+2026-05-04 12:26:46,033 - __main__ - INFO -    ✓ er_beat_vs_achievement.html
+2026-05-04 12:26:46,076 - __main__ - INFO -    ✓ er_beat_probability_posterior.html
+2026-05-04 12:26:46,169 - __main__ - INFO -    ✓ er_earnings_probability_dashboard.html
+2026-05-04 12:26:46,352 - __main__ - INFO -    ✓ er_revision_momentum.html
+2026-05-04 12:26:46,453 - __main__ - INFO -    ✓ er_gaap_divergence.html
+2026-05-04 12:26:46,539 - __main__ - INFO -    ✓ er_enhanced_beat_probability.html
+2026-05-04 12:26:46,805 - __main__ - INFO -    ✓ er_quality_risk_quadrant.html
+2026-05-04 12:26:46,908 - __main__ - INFO -    ✓ er_distress_early_warning.html
+2026-05-04 12:26:46,945 - __main__ - INFO -    ✓ er_piotroski_fscore.html
+2026-05-04 12:26:47,175 - __main__ - INFO -    ✓ er_altman_zscore.html
+2026-05-04 12:26:47,219 - __main__ - INFO -    ✓ er_beneish_mscore.html
+2026-05-04 12:26:47,657 - __main__ - INFO -    ✓ er_accounting_anomaly_dashboard.html
+2026-05-04 12:26:47,933 - __main__ - INFO -    ✓ er_anomaly_severity_dashboard.html
+2026-05-04 12:26:48,081 - __main__ - INFO -    ✓ er_anomaly_conditional_probability.html
+2026-05-04 12:26:48,174 - __main__ - INFO -    ✓ er_mcmc_anomaly_posterior.html
+2026-05-04 12:26:48,280 - __main__ - INFO -    ✓ er_mcmc_credit_risk_posterior.html
+2026-05-04 12:26:48,353 - __main__ - INFO -    ✓ er_mcmc_dividend_cut_posterior.html
+2026-05-04 12:26:48,432 - __main__ - INFO -    ✓ er_ruin_probability_diagnostic.html
+2026-05-04 12:26:48,893 - __main__ - INFO -    ✓ er_expected_returns_summary_posterior.html
+2026-05-04 12:26:49,619 - __main__ - INFO -    ✓ er_return_distribution_fit.html
+2026-05-04 12:26:49,944 - __main__ - INFO -    ✓ er_sector_return_analytics.html
+2026-05-04 12:26:49,973 - __main__ - INFO -    ✓ er_screening_summary.html
+2026-05-04 12:26:50,007 - __main__ - INFO -    ✓ er_price_target_drift.html
+2026-05-04 12:26:50,043 - __main__ - INFO -    ✓ er_valuation_multiples.html
+2026-05-04 12:26:51,413 - __main__ - INFO -    ✓ er_valuation_distribution.html
+2026-05-04 12:26:52,415 - __main__ - INFO -    ✓ er_relative_valuation_matrix.html
+2026-05-04 12:26:52,738 - __main__ - INFO -    ✓ er_valuation_vs_growth.html
+2026-05-04 12:26:53,049 - __main__ - INFO -    ✓ er_historical_valuation_percentile.html
+2026-05-04 12:26:53,319 - __main__ - INFO -    ✓ er_earnings_surprise.html
+2026-05-04 12:26:53,390 - __main__ - INFO -    ✓ er_eps_trajectory.html
+2026-05-04 12:26:53,513 - __main__ - INFO -    ✓ er_earnings_quality_decomposition.html
+2026-05-04 12:26:53,754 - __main__ - INFO -    ✓ er_beat_rate_heatmap.html
+2026-05-04 12:26:53,989 - __main__ - INFO -    ✓ er_earnings_consistency_matrix.html
+2026-05-04 12:26:54,081 - __main__ - INFO -    ✓ er_growth_waterfall.html
+2026-05-04 12:26:54,277 - __main__ - INFO -    ✓ er_growth_consistency_matrix.html
+2026-05-04 12:26:54,628 - __main__ - INFO -    ✓ er_growth_vs_profitability.html
+2026-05-04 12:26:54,696 - __main__ - INFO -    ✓ er_growth_acceleration.html
+2026-05-04 12:26:55,018 - __main__ - INFO -    ✓ er_sustainable_growth.html
+2026-05-04 12:26:55,163 - __main__ - INFO -    ✓ er_bayesian_sentiment_ridge.html
+2026-05-04 12:26:55,214 - __main__ - INFO -    ✓ er_mcmc_category_sentiment_posterior.html
+2026-05-04 12:26:55,385 - __main__ - INFO -    ✓ er_bayesian_profitability_ridge.html
+2026-05-04 12:26:55,385 - __main__ - INFO -    📊 Generating ArviZ diagnostic visualizations...
+2026-05-04 12:27:18,239 - __main__ - INFO -    ✓ er_model_alignment_density.png
+2026-05-04 12:27:18,239 - __main__ - INFO -    ✓ er_model_alignment_pair.png
+2026-05-04 12:27:18,239 - __main__ - INFO -    ✓ er_model_alignment_ecdf.png
+2026-05-04 12:27:52,443 - __main__ - INFO -    ✓ er_agreement_by_sector.png
+2026-05-04 12:27:53,315 - __main__ - INFO -    ✓ er_hierarchical_shrinkage.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_analyst_sentiment_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_analyst_sentiment_forest.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_balance_sheet_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_balance_sheet_forest.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_cash_flow_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_cash_flow_forest.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_composite_scores_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_composite_scores_forest.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_cost_structure_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_cost_structure_forest.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_dividend_features_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_dividend_features_forest.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_earnings_quality_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_earnings_quality_forest.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_employment_metrics_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_employment_metrics_forest.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_growth_metrics_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_growth_metrics_forest.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_leverage_and_liquidity_ridge.png
+2026-05-04 12:28:11,629 - __main__ - INFO -    ✓ er_category_leverage_and_liquidity_forest.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_momentum_ridge.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_momentum_forest.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_profitability_ridge.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_profitability_forest.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_quality_and_risk_ridge.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_quality_and_risk_forest.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_technical_analysis_ridge.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_technical_analysis_forest.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_temporal_features_ridge.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_temporal_features_forest.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_unusual_items_ridge.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_unusual_items_forest.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_valuation_ratios_ridge.png
+2026-05-04 12:28:11,630 - __main__ - INFO -    ✓ er_category_valuation_ratios_forest.png
+2026-05-04 12:28:11,902 - __main__ - INFO -    ✓ er_cross_category_posterior.png
+2026-05-04 12:28:25,605 - __main__ - INFO -    ✓ er_cross_model_ecdf.png
+2026-05-04 12:28:26,329 - probabilistic_ml_model.visualizations.convergence_diagnostics - INFO - Unified R̂ diagnostics: <xarray.DataTree 'posterior'>
+Group: /posterior
+    Dimensions:            ()
+    Data variables:
+        anomaly_posterior  float64 8B 1.0
+        risk_adj_return    float64 8B 0.9999
+2026-05-04 12:28:26,333 - __main__ - INFO -    ✓ er_unified_mcmc_trace.png
+2026-05-04 12:28:26,333 - __main__ - INFO -    ✓ er_unified_ess_evolution.png
+2026-05-04 12:28:26,333 - __main__ - INFO -   ⏱ Step 9 completed in 103.6s
+2026-05-04 12:28:26,333 - __main__ - INFO - 💾 Step 10: Exporting results...
+2026-05-04 12:28:26,333 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:28:26,695 - root - INFO - Exporting 435 rows to analytics.strong_consensus_picks
+2026-05-04 12:28:26,725 - root - INFO - Exporting 6646 rows to analytics.kalman_filtered_price_targets
+2026-05-04 12:28:26,733 - root - INFO - Exporting 6646 rows to analytics.monte_carlo_simulation
+2026-05-04 12:28:26,789 - root - INFO - Exporting 6646 rows to analytics.expected_returns_tri_model
+2026-05-04 12:28:26,794 - root - INFO - Exporting 6646 rows to analytics.price_target_achievement
+2026-05-04 12:28:26,841 - root - INFO - Exporting 6646 rows to analytics.earnings_probability_analysis
+2026-05-04 12:28:27,552 - root - INFO - Export complete: analytics.strong_consensus_picks
+2026-05-04 12:28:27,580 - __main__ - INFO - Exported 435 rows → analytics.strong_consensus_picks
+2026-05-04 12:28:27,787 - root - INFO - Export complete: analytics.kalman_filtered_price_targets
+2026-05-04 12:28:27,892 - __main__ - INFO - Exported 6646 rows → analytics.kalman_filtered_price_targets
+2026-05-04 12:28:27,928 - root - INFO - Export complete: analytics.monte_carlo_simulation
+2026-05-04 12:28:27,973 - __main__ - INFO - Exported 6646 rows → analytics.monte_carlo_simulation
+2026-05-04 12:28:28,894 - root - INFO - Export complete: analytics.expected_returns_tri_model
+2026-05-04 12:28:28,925 - __main__ - INFO - Exported 6646 rows → analytics.expected_returns_tri_model
+2026-05-04 12:28:29,428 - root - INFO - Export complete: analytics.price_target_achievement
+2026-05-04 12:28:29,455 - __main__ - INFO - Exported 6646 rows → analytics.price_target_achievement
+2026-05-04 12:28:29,681 - root - INFO - Exporting 279 rows to analytics.quality_stocks
+2026-05-04 12:28:29,718 - root - INFO - Exporting 6646 rows to analytics.credit_risk_analysis
+2026-05-04 12:28:29,721 - root - INFO - Exporting 6646 rows to analytics.dividend_safety_analysis
+2026-05-04 12:28:30,107 - root - INFO - Export complete: analytics.quality_stocks
+2026-05-04 12:28:30,109 - __main__ - INFO - Exported 279 rows → analytics.quality_stocks
+2026-05-04 12:28:31,617 - root - INFO - Export complete: analytics.dividend_safety_analysis
+2026-05-04 12:28:31,618 - __main__ - INFO - Exported 6646 rows → analytics.dividend_safety_analysis
+2026-05-04 12:28:32,649 - root - INFO - Export complete: analytics.credit_risk_analysis
+2026-05-04 12:28:32,656 - __main__ - INFO - Exported 6646 rows → analytics.credit_risk_analysis
+2026-05-04 12:28:32,693 - root - INFO - Export complete: analytics.earnings_probability_analysis
+2026-05-04 12:28:32,713 - __main__ - INFO - Exported 6646 rows → analytics.earnings_probability_analysis
+2026-05-04 12:28:32,865 - root - INFO - Exporting 4286 rows to analytics.earnings_quality_stocks
+2026-05-04 12:28:32,881 - root - INFO - Exporting 6646 rows to analytics.expected_returns_summary
+2026-05-04 12:28:32,896 - root - INFO - Exporting 1445 rows to analytics.value_stocks
+2026-05-04 12:28:32,929 - root - INFO - Exporting 3004 rows to analytics.growth_momentum_stocks
+2026-05-04 12:28:32,935 - root - INFO - Exporting 1316 rows to analytics.garp_stocks
+2026-05-04 12:28:33,994 - root - INFO - Export complete: analytics.garp_stocks
+2026-05-04 12:28:33,994 - __main__ - INFO - Exported 1316 rows → analytics.garp_stocks
+2026-05-04 12:28:34,910 - root - INFO - Export complete: analytics.earnings_quality_stocks
+2026-05-04 12:28:34,913 - __main__ - INFO - Exported 4286 rows → analytics.earnings_quality_stocks
+2026-05-04 12:28:34,924 - root - INFO - Export complete: analytics.value_stocks
+2026-05-04 12:28:34,924 - __main__ - INFO - Exported 1445 rows → analytics.value_stocks
+2026-05-04 12:28:34,951 - root - INFO - Export complete: analytics.growth_momentum_stocks
+2026-05-04 12:28:34,957 - __main__ - INFO - Exported 3004 rows → analytics.growth_momentum_stocks
+2026-05-04 12:28:35,705 - root - INFO - Exporting 521 rows to analytics.valuation_reversion_stocks
+2026-05-04 12:28:35,712 - root - INFO - Exporting 1307 rows to analytics.dividend_quality_stocks
+2026-05-04 12:28:35,715 - root - INFO - Exporting 6646 rows to analytics.accounting_anomaly_analysis
+2026-05-04 12:28:35,717 - root - INFO - Exporting 1342 rows to analytics.healthy_stocks
+2026-05-04 12:28:35,718 - root - INFO - Exporting 1162 rows to analytics.integrity_filtered_growth_stocks
+2026-05-04 12:28:36,955 - root - INFO - Export complete: analytics.dividend_quality_stocks
+2026-05-04 12:28:36,955 - __main__ - INFO - Exported 1307 rows → analytics.dividend_quality_stocks
+2026-05-04 12:28:36,956 - root - INFO - Export complete: analytics.healthy_stocks
+2026-05-04 12:28:36,959 - __main__ - INFO - Exported 1342 rows → analytics.healthy_stocks
+2026-05-04 12:28:37,057 - root - INFO - Export complete: analytics.integrity_filtered_growth_stocks
+2026-05-04 12:28:37,058 - __main__ - INFO - Exported 1162 rows → analytics.integrity_filtered_growth_stocks
+2026-05-04 12:28:37,235 - root - INFO - Export complete: analytics.valuation_reversion_stocks
+2026-05-04 12:28:37,266 - __main__ - INFO - Exported 521 rows → analytics.valuation_reversion_stocks
+2026-05-04 12:28:38,564 - root - INFO - Exporting 731 rows to analytics.screen_fcf_compounders
+2026-05-04 12:28:38,719 - root - INFO - Exporting 1527 rows to analytics.high_yield_safe_dividend_stocks
+2026-05-04 12:28:38,955 - root - INFO - Exporting 6646 rows to analytics.sector_relative_ranking
+2026-05-04 12:28:39,758 - root - INFO - Exporting 3160 rows to analytics.screen_low_vol_quality
+2026-05-04 12:28:40,550 - root - INFO - Export complete: analytics.screen_fcf_compounders
+2026-05-04 12:28:40,627 - __main__ - INFO - Exported 731 rows → analytics.screen_fcf_compounders
+2026-05-04 12:28:41,293 - root - INFO - Export complete: analytics.high_yield_safe_dividend_stocks
+2026-05-04 12:28:41,293 - __main__ - INFO - Exported 1527 rows → analytics.high_yield_safe_dividend_stocks
+2026-05-04 12:28:43,832 - root - INFO - Export complete: analytics.expected_returns_summary
+2026-05-04 12:28:43,945 - __main__ - INFO - Exported 6646 rows → analytics.expected_returns_summary
+2026-05-04 12:28:45,656 - root - INFO - Export complete: analytics.screen_low_vol_quality
+2026-05-04 12:28:45,657 - __main__ - INFO - Exported 3160 rows → analytics.screen_low_vol_quality
+2026-05-04 12:28:46,588 - root - INFO - Export complete: analytics.sector_relative_ranking
+2026-05-04 12:28:46,588 - __main__ - INFO - Exported 6646 rows → analytics.sector_relative_ranking
+2026-05-04 12:28:46,596 - root - INFO - Exporting 3552 rows to analytics.screen_total_return_leaders
+2026-05-04 12:28:48,208 - root - INFO - Export complete: analytics.screen_total_return_leaders
+2026-05-04 12:28:48,208 - __main__ - INFO - Exported 3552 rows → analytics.screen_total_return_leaders
+2026-05-04 12:28:48,937 - root - INFO - Export complete: analytics.accounting_anomaly_analysis
+2026-05-04 12:28:48,938 - __main__ - INFO - Exported 6646 rows → analytics.accounting_anomaly_analysis
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ strong_consensus_picks → analytics.strong_consensus_picks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ kalman_filtered_price_targets → analytics.kalman_filtered_price_targets
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ monte_carlo_simulation → analytics.monte_carlo_simulation
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ expected_returns_tri_model → analytics.expected_returns_tri_model
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ price_target_achievement → analytics.price_target_achievement
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ quality_stocks → analytics.quality_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ dividend_safety_analysis → analytics.dividend_safety_analysis
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ credit_risk_analysis → analytics.credit_risk_analysis
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ earnings_probability_analysis → analytics.earnings_probability_analysis
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ garp_stocks → analytics.garp_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ earnings_quality_stocks → analytics.earnings_quality_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ value_stocks → analytics.value_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ growth_momentum_stocks → analytics.growth_momentum_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ dividend_quality_stocks → analytics.dividend_quality_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ healthy_stocks → analytics.healthy_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ integrity_filtered_growth_stocks → analytics.integrity_filtered_growth_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ valuation_reversion_stocks → analytics.valuation_reversion_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ screen_fcf_compounders → analytics.screen_fcf_compounders
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ high_yield_safe_dividend_stocks → analytics.high_yield_safe_dividend_stocks
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ expected_returns_summary → analytics.expected_returns_summary
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ screen_low_vol_quality → analytics.screen_low_vol_quality
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ sector_relative_ranking → analytics.sector_relative_ranking
+2026-05-04 12:28:48,948 - __main__ - INFO -    ✓ screen_total_return_leaders → analytics.screen_total_return_leaders
+2026-05-04 12:28:48,949 - __main__ - INFO -    ✓ accounting_anomaly_analysis → analytics.accounting_anomaly_analysis
+2026-05-04 12:28:51,027 - root - INFO - Exporting 6646 rows to analytics.earnings_probability_analysis
+2026-05-04 12:28:53,414 - root - INFO - Export complete: analytics.earnings_probability_analysis
+2026-05-04 12:28:53,752 - root - INFO - Exported 6646 rows to outputs\earnings_probability_analysis.csv
+2026-05-04 12:28:53,914 - root - INFO - Exported 6646 rows to outputs\earnings_probability_analysis.json
+2026-05-04 12:28:53,915 - root - INFO - Exporting 6646 rows to analytics.eps_streak_analysis
+2026-05-04 12:28:55,108 - root - INFO - Export complete: analytics.eps_streak_analysis
+2026-05-04 12:28:55,296 - root - INFO - Exported 6646 rows to outputs\eps_streak_analysis.csv
+2026-05-04 12:28:55,399 - root - INFO - Exported 6646 rows to outputs\eps_streak_analysis.json
+2026-05-04 12:28:55,402 - root - INFO - Exporting 8 rows to analytics.probability_analytics_summary
+2026-05-04 12:28:55,501 - root - INFO - Export complete: analytics.probability_analytics_summary
+2026-05-04 12:28:55,503 - root - INFO - Exported 8 rows to outputs\probability_analytics_summary.csv
+2026-05-04 12:28:55,504 - root - INFO - Exported 8 rows to outputs\probability_analytics_summary.json
+2026-05-04 12:28:55,504 - probabilistic_ml_model.statistical_functions.probability_models - INFO - Exported probability analytics results to database and outputs
+2026-05-04 12:28:55,505 - __main__ - INFO -    ✓ earnings_probability_analysis_db → analytics.earnings_probability_analysis
+2026-05-04 12:28:55,505 - __main__ - INFO -    ✓ earnings_probability_analysis_csv → outputs\earnings_probability_analysis.csv
+2026-05-04 12:28:55,505 - __main__ - INFO -    ✓ eps_streak_analysis_db → analytics.eps_streak_analysis
+2026-05-04 12:28:55,505 - __main__ - INFO -    ✓ eps_streak_analysis_csv → outputs\eps_streak_analysis.csv
+2026-05-04 12:28:55,505 - __main__ - INFO -    ✓ probability_analytics_summary_db → analytics.probability_analytics_summary
+2026-05-04 12:28:55,505 - __main__ - INFO -    ✓ probability_analytics_summary_csv → outputs\probability_analytics_summary.csv
+2026-05-04 12:28:55,505 - root - INFO - Exporting 25 rows to analytics.prob_analyst_sentiment
+2026-05-04 12:28:55,583 - root - INFO - Export complete: analytics.prob_analyst_sentiment
+2026-05-04 12:28:55,584 - __main__ - INFO - Aggregated probability export: Analyst Sentiment (25 rows)
+2026-05-04 12:28:55,584 - root - INFO - Exporting 25 rows to analytics.prob_balance_sheet
+2026-05-04 12:28:55,793 - root - INFO - Export complete: analytics.prob_balance_sheet
+2026-05-04 12:28:55,793 - __main__ - INFO - Aggregated probability export: Balance Sheet (25 rows)
+2026-05-04 12:28:55,793 - root - INFO - Exporting 25 rows to analytics.prob_cash_flow
+2026-05-04 12:28:55,891 - root - INFO - Export complete: analytics.prob_cash_flow
+2026-05-04 12:28:55,891 - __main__ - INFO - Aggregated probability export: Cash Flow (25 rows)
+2026-05-04 12:28:55,892 - root - INFO - Exporting 25 rows to analytics.prob_composite_scores
+2026-05-04 12:28:55,997 - root - INFO - Export complete: analytics.prob_composite_scores
+2026-05-04 12:28:55,997 - __main__ - INFO - Aggregated probability export: Composite Scores (25 rows)
+2026-05-04 12:28:55,998 - root - INFO - Exporting 25 rows to analytics.prob_cost_structure
+2026-05-04 12:28:56,074 - root - INFO - Export complete: analytics.prob_cost_structure
+2026-05-04 12:28:56,074 - __main__ - INFO - Aggregated probability export: Cost Structure (25 rows)
+2026-05-04 12:28:56,075 - root - INFO - Exporting 25 rows to analytics.prob_dividend_features
+2026-05-04 12:28:56,263 - root - INFO - Export complete: analytics.prob_dividend_features
+2026-05-04 12:28:56,263 - __main__ - INFO - Aggregated probability export: Dividend Features (25 rows)
+2026-05-04 12:28:56,263 - root - INFO - Exporting 25 rows to analytics.prob_earnings_quality
+2026-05-04 12:28:56,351 - root - INFO - Export complete: analytics.prob_earnings_quality
+2026-05-04 12:28:56,351 - __main__ - INFO - Aggregated probability export: Earnings Quality (25 rows)
+2026-05-04 12:28:56,352 - root - INFO - Exporting 17 rows to analytics.prob_employment_metrics
+2026-05-04 12:28:56,437 - root - INFO - Export complete: analytics.prob_employment_metrics
+2026-05-04 12:28:56,437 - __main__ - INFO - Aggregated probability export: Employment Metrics (17 rows)
+2026-05-04 12:28:56,437 - root - INFO - Exporting 25 rows to analytics.prob_growth_metrics
+2026-05-04 12:28:56,516 - root - INFO - Export complete: analytics.prob_growth_metrics
+2026-05-04 12:28:56,516 - __main__ - INFO - Aggregated probability export: Growth Metrics (25 rows)
+2026-05-04 12:28:56,516 - root - INFO - Exporting 25 rows to analytics.prob_leverage_&_liquidity
+2026-05-04 12:28:56,698 - root - INFO - Export complete: analytics.prob_leverage_&_liquidity
+2026-05-04 12:28:56,698 - __main__ - INFO - Aggregated probability export: Leverage & Liquidity (25 rows)
+2026-05-04 12:28:56,698 - root - INFO - Exporting 19 rows to analytics.prob_momentum
+2026-05-04 12:28:56,779 - root - INFO - Export complete: analytics.prob_momentum
+2026-05-04 12:28:56,779 - __main__ - INFO - Aggregated probability export: Momentum (19 rows)
+2026-05-04 12:28:56,779 - root - INFO - Exporting 25 rows to analytics.prob_profitability
+2026-05-04 12:28:56,856 - root - INFO - Export complete: analytics.prob_profitability
+2026-05-04 12:28:56,856 - __main__ - INFO - Aggregated probability export: Profitability (25 rows)
+2026-05-04 12:28:56,856 - root - INFO - Exporting 25 rows to analytics.prob_quality_&_risk
+2026-05-04 12:28:56,937 - root - INFO - Export complete: analytics.prob_quality_&_risk
+2026-05-04 12:28:56,937 - __main__ - INFO - Aggregated probability export: Quality & Risk (25 rows)
+2026-05-04 12:28:56,938 - root - INFO - Exporting 11 rows to analytics.prob_technical_analysis
+2026-05-04 12:28:57,014 - root - INFO - Export complete: analytics.prob_technical_analysis
+2026-05-04 12:28:57,014 - __main__ - INFO - Aggregated probability export: Technical Analysis (11 rows)
+2026-05-04 12:28:57,015 - root - INFO - Exporting 16 rows to analytics.prob_temporal_features
+2026-05-04 12:28:57,094 - root - INFO - Export complete: analytics.prob_temporal_features
+2026-05-04 12:28:57,094 - __main__ - INFO - Aggregated probability export: Temporal Features (16 rows)
+2026-05-04 12:28:57,094 - root - INFO - Exporting 9 rows to analytics.prob_unusual_items
+2026-05-04 12:28:57,172 - root - INFO - Export complete: analytics.prob_unusual_items
+2026-05-04 12:28:57,172 - __main__ - INFO - Aggregated probability export: Unusual Items (9 rows)
+2026-05-04 12:28:57,173 - root - INFO - Exporting 25 rows to analytics.prob_valuation_ratios
+2026-05-04 12:28:57,255 - root - INFO - Export complete: analytics.prob_valuation_ratios
+2026-05-04 12:28:57,255 - __main__ - INFO - Aggregated probability export: Valuation Ratios (25 rows)
+2026-05-04 12:28:57,256 - root - INFO - Exporting 162 rows to analytics.mcmc_return_analysis
+2026-05-04 12:28:57,346 - root - INFO - Export complete: analytics.mcmc_return_analysis
+2026-05-04 12:28:57,346 - __main__ - INFO -    ✓ mcmc_return_analysis → analytics.mcmc_return_analysis (162 rows)
+2026-05-04 12:28:57,346 - __main__ - INFO -   ⏱ Step 10 completed in 31.0s
+2026-05-04 12:28:57,346 - __main__ - INFO - ================================================================================
+2026-05-04 12:28:57,346 - __main__ - INFO - ✅ EXPECTED RETURNS ANALYTICS v3.7 COMPLETE
+2026-05-04 12:28:57,346 - __main__ - INFO - ================================================================================
+2026-05-04 12:28:57,346 - __main__ - INFO -   Data sources:
+2026-05-04 12:28:57,346 - __main__ - INFO -     mv_expected_returns:       6,646 stocks × 1338 features
+2026-05-04 12:28:57,347 - __main__ - INFO -     mv_all_stock_features:     6,646 stocks × 1343 features
+2026-05-04 12:28:57,347 - __main__ - INFO -   Models:
+2026-05-04 12:28:57,347 - __main__ - INFO -     Monte Carlo simulations:   6,646
+2026-05-04 12:28:57,347 - __main__ - INFO -     Price target achievements: 6,646
+2026-05-04 12:28:57,347 - __main__ - INFO -     Kalman-filtered targets:   6,646
+2026-05-04 12:28:57,347 - __main__ - INFO -     Earnings beat analyses:    6,646
+2026-05-04 12:28:57,347 - __main__ - INFO -     Credit risk analyses:      6,646
+2026-05-04 12:28:57,347 - __main__ - INFO -     Dividend safety analyses:  6,646
+2026-05-04 12:28:57,347 - __main__ - INFO -     Accounting anomaly analyses: 6,646
+2026-05-04 12:28:57,347 - __main__ - INFO -   Alignment:
+2026-05-04 12:28:57,347 - __main__ - INFO -     Tri-model aligned:         6,646
+2026-05-04 12:28:57,347 - __main__ - INFO -     Strong consensus picks:    435
+2026-05-04 12:28:57,348 - __main__ - INFO -     Quad-model full consensus: 20
+2026-05-04 12:28:57,348 - __main__ - INFO -     Expected returns summary:  6,646 stocks, 1523 full consensus
+2026-05-04 12:28:57,348 - __main__ - INFO -     MC ↔ Kalman correlation:   0.984
+2026-05-04 12:28:57,348 - __main__ - INFO -   Screening:
+2026-05-04 12:28:57,348 - __main__ - INFO -     quality: 279 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     earnings_quality: 4,286 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     value: 1,445 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     growth: 3,004 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     garp: 1,316 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     dividend: 1,307 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     healthy: 1,342 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     valuation_reversion: 521 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     integrity_growth: 1,162 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     high_yield_safe: 1,527 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     sector_relative: 6,646 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     low_vol_quality: 3,160 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     fcf_compounders: 731 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -     total_return_leaders: 3,552 stocks
+2026-05-04 12:28:57,348 - __main__ - INFO -   Probability Analytics:
+2026-05-04 12:28:57,348 - __main__ - INFO -     Categories analyzed:       17
+2026-05-04 12:28:57,348 - __main__ - INFO -   Outputs: outputs/
+2026-05-04 12:32:49,873 - __main__ - INFO - ================================================================================
+2026-05-04 12:32:49,873 - __main__ - INFO - Expected Returns Analytics Pipeline v3.7
+2026-05-04 12:32:49,873 - __main__ - INFO - ================================================================================
+2026-05-04 12:32:49,873 - __main__ - INFO - 🔧 Numba: True, Joblib: True, ArviZ: True
+2026-05-04 12:32:49,873 - __main__ - INFO -    n_jobs=-1, max_features/cat=25, caching=on (TTL=24.0h)
+2026-05-04 12:32:49,874 - probabilistic_ml_model.pipeline_runners - INFO - Cache cleanup (full purge): removed 0 files from .cache
+2026-05-04 12:32:49,874 - __main__ - INFO - 📦 Step 1: Loading feature data (v3.6: equities MV + feature views + all stock features MV)...
+2026-05-04 12:32:49,875 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:32:50,287 - probabilistic_ml_model.data_utils.feature_catalog - INFO - FeatureViewCatalog loaded: 27 categories, 17 views, 869 total features
+2026-05-04 12:32:50,288 - __main__ - INFO - ✓ FeatureViewCatalog: 27 categories, 17 views
+2026-05-04 12:32:50,288 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-05-04 12:32:55,703 - root - INFO - Loaded 6646 rows from public.mv_all_stock_features
+2026-05-04 12:32:55,755 - root - INFO - Backfill complete. Columns: 821
+2026-05-04 12:32:55,830 - __main__ - INFO - Kalman momentum filter applied to 5 columns
+2026-05-04 12:32:55,839 - __main__ - INFO - Loaded mv_all_stock_features: 6646 rows × 831 columns
+2026-05-04 12:32:55,840 - __main__ - INFO - ✓ Loaded mv_all_stock_features: 6,646 stocks × 831 features
+2026-05-04 12:32:55,844 - __main__ - INFO -   Deduplicated to 6,646 unique isins
+2026-05-04 12:32:55,894 - root - INFO - Loaded 26 feature categories from database
+2026-05-04 12:32:55,895 - __main__ - INFO - Loaded 26 feature categories (403 total features)
+2026-05-04 12:32:55,895 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-05-04 12:32:59,635 - root - INFO - Loaded 6646 rows from public.mv_equities
+2026-05-04 12:32:59,671 - root - INFO - Backfill complete. Columns: 680
+2026-05-04 12:32:59,684 - __main__ - INFO - Loaded 26 feature categories (369 total features)
+2026-05-04 12:32:59,685 - __main__ - INFO - All feature categories have ≥80%% coverage
+2026-05-04 12:32:59,685 - __main__ - INFO - Loaded expected returns data: 6646 stocks × 680 features
+2026-05-04 12:32:59,685 - __main__ - INFO - ✓ Loaded mv_equities (historical cols): 6,646 stocks × 680 features
+2026-05-04 12:32:59,724 - __main__ - INFO -   Merged 507 historical columns from mv_equities
+2026-05-04 12:32:59,813 - __main__ - INFO -   Schema metadata: 675 columns
+2026-05-04 12:32:59,813 - __main__ - INFO -   Feature registry: 74 functions
+2026-05-04 12:32:59,818 - __main__ - INFO -   mv_equities spec: 89 price, 122 financial, 9 historical cols
+2026-05-04 12:32:59,818 - __main__ - INFO - 📦 Step 1b: Pre-computing historical target drift enrichment...
+2026-05-04 12:32:59,818 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:32:59,865 - root - INFO - Loaded 675 column definitions from public.equities_schema_metadata
+2026-05-04 12:32:59,865 - root - INFO - Cached equities schema: 675 columns across 26 roles
+2026-05-04 12:32:59,866 - __main__ - INFO - Column lists derived from equities schema (46 total columns)
+2026-05-04 12:32:59,866 - __main__ - INFO - Historical price/target coverage: 40 / 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 12:32:59,920 - __main__ - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 12:32:59,947 - __main__ - INFO - ✓ Historical drift enrichment complete (12 derived columns)
+2026-05-04 12:32:59,950 - __main__ - INFO -   ⏱ Step 1 completed in 10.1s
+2026-05-04 12:32:59,950 - __main__ - INFO - 🎲 Step 2: Monte Carlo price target simulation (50,000 samples)...
+2026-05-04 12:32:59,950 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:33:00,050 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 12:33:00,057 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 12:33:12,521 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_mc for 5751 / 6646 stocks (mean=6623.25)
+2026-05-04 12:33:12,522 - probabilistic_ml_model.pipeline_runners - INFO - Monte Carlo simulation: 6646 stocks processed
+2026-05-04 12:33:12,524 - __main__ - INFO -   ⏱ Step 2 completed in 12.6s
+2026-05-04 12:33:12,524 - __main__ - INFO - 🎯 Step 3: Price target achievement model...
+2026-05-04 12:33:12,525 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:33:12,605 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 12:33:12,616 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 12:33:12,872 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-05-04 12:33:13,831 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_prob_weighted for 6646 / 6646 stocks (mean=5276.37)
+2026-05-04 12:33:13,832 - probabilistic_ml_model.pipeline_runners - INFO - Price target achievement: 6646 stocks processed
+2026-05-04 12:33:13,834 - __main__ - INFO -   ⏱ Step 3 completed in 1.3s
+2026-05-04 12:33:13,835 - __main__ - INFO - 📐 Step 4: Kalman-filtered price targets...
+2026-05-04 12:33:13,835 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:33:13,869 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 12:33:13,877 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 12:33:14,768 - probabilistic_ml_model.pipeline_runners - INFO - Kalman filter: 6646 stocks processed
+2026-05-04 12:33:14,771 - __main__ - INFO -   ⏱ Step 4 completed in 0.9s
+2026-05-04 12:33:14,771 - __main__ - INFO - 📊 Step 5: Bayesian earnings beat analysis...
+2026-05-04 12:33:14,771 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:33:23,754 - probabilistic_ml_model.pipeline_runners - INFO - Earnings beat analysis: 6646 stocks processed
+2026-05-04 12:33:23,758 - probabilistic_ml_model.pipeline_runners - INFO - EPS streak enrichment: 8 columns added
+2026-05-04 12:34:36,707 - probabilistic_ml_model.pipeline_runners - INFO - Resampled beat enrichment: 18 columns added
+2026-05-04 12:34:37,221 - __main__ - INFO -   ⏱ Step 5 completed in 82.4s
+2026-05-04 12:34:37,221 - __main__ - INFO - 🔬 Step 5b: Accounting anomaly detection & analytics...
+2026-05-04 12:34:37,221 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:35:08,277 - probabilistic_ml_model.statistical_functions.probability_models - INFO - AccountingAnomalyProbabilityModel: severity computed for 6646 stocks, 1512 multi-flag alerts, mean conditional P(anomaly)=0.042
+2026-05-04 12:35:13,448 - probabilistic_ml_model.pipeline_runners - INFO - MCMC anomaly posterior: location=44.647
+2026-05-04 12:35:13,448 - probabilistic_ml_model.pipeline_runners - INFO - Accounting anomaly analysis: 6646 stocks processed
+2026-05-04 12:35:18,644 - probabilistic_ml_model.pipeline_runners - INFO - accounting_anomaly results cached → mcmc_accounting_anomaly_7830a5a98a7a9b307b7fc8d4155c406de9a22c3d_chains8_n10000.json
+2026-05-04 12:35:18,645 - __main__ - INFO -   ⏱ Step 5b completed in 41.4s
+2026-05-04 12:35:18,645 - __main__ - INFO - 🛡️ Step 5c: Credit risk & dividend safety analysis...
+2026-05-04 12:35:18,645 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:35:18,679 - probabilistic_ml_model.statistical_functions.probability_models - INFO - CreditRiskProbabilityModel v3.9 config: student_t=True, garch=True, macro=True, df_floor=3.00, n_samples=10000, burn_in=2000
+2026-05-04 12:35:29,224 - probabilistic_ml_model.pipeline_runners - INFO - Hierarchical MCMC credit risk: 1 sectors enriched
+2026-05-04 12:35:29,580 - probabilistic_ml_model.pipeline_runners - INFO - Ruin probability enrichment: 6 columns added
+2026-05-04 12:35:29,580 - probabilistic_ml_model.pipeline_runners - INFO - Credit risk analysis: 6646 stocks processed
+2026-05-04 12:35:29,861 - probabilistic_ml_model.pipeline_runners - INFO - credit_risk results cached → mcmc_credit_risk_76c8c89da58df938e22ba36828f3d5ea79b92016_chains8_n10000.json
+2026-05-04 12:35:40,200 - probabilistic_ml_model.pipeline_runners - INFO - Dividend safety analysis (v3.10 per-isin): 6646 stocks processed
+2026-05-04 12:35:40,415 - probabilistic_ml_model.pipeline_runners - INFO - dividend_safety results cached → mcmc_dividend_safety_db28b21bb776d0543771a3b967dd0da4e1752ed1_chains8_n10000.json
+2026-05-04 12:35:40,415 - __main__ - INFO -   ⏱ Step 5c completed in 21.8s
+2026-05-04 12:35:40,415 - __main__ - INFO - 🔍 Step 5d: Running stock screening strategies...
+2026-05-04 12:35:40,415 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:35:40,477 - __main__ - INFO -   ✓ Productivity frontier scores added
+2026-05-04 12:35:40,479 - __main__ - INFO -    Reporting lag sentiment: corr=0.203, p=0.0000, hypothesis=marginally significant (p < 0.10)
+2026-05-04 12:35:42,459 - __main__ - INFO - Quality screen: 279 stocks
+2026-05-04 12:35:43,858 - __main__ - INFO - Earnings quality screen: 4286 stocks
+2026-05-04 12:35:45,083 - __main__ - INFO - Value screen: 1445 stocks
+2026-05-04 12:35:46,324 - __main__ - INFO - Growth screen: 3004 stocks
+2026-05-04 12:35:47,922 - __main__ - INFO - GARP screen: 1316 stocks
+2026-05-04 12:35:49,364 - __main__ - INFO - Dividend screen: 1307 stocks
+2026-05-04 12:35:50,686 - __main__ - INFO - Financial health screen: 1342 stocks
+2026-05-04 12:35:51,964 - __main__ - INFO - Valuation reversion screen: 521 stocks
+2026-05-04 12:35:53,267 - __main__ - INFO - Integrity growth screen: 1162 stocks
+2026-05-04 12:35:55,166 - __main__ - INFO - High-yield safe dividend screen: 1527 stocks
+2026-05-04 12:35:55,166 - __main__ - INFO - Sector-relative ranking: 6646 stocks
+2026-05-04 12:35:56,626 - __main__ - INFO - Low-volatility quality screen: 3160 stocks
+2026-05-04 12:35:58,165 - __main__ - INFO - FCF compounders screen: 731 stocks
+2026-05-04 12:35:59,011 - __main__ - INFO - Total return leaders screen: 3552 stocks
+2026-05-04 12:35:59,011 - __main__ - INFO -   ✓ quality: 279 stocks
+2026-05-04 12:35:59,011 - __main__ - INFO -   ✓ earnings_quality: 4,286 stocks
+2026-05-04 12:35:59,011 - __main__ - INFO -   ✓ value: 1,445 stocks
+2026-05-04 12:35:59,011 - __main__ - INFO -   ✓ growth: 3,004 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ garp: 1,316 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ dividend: 1,307 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ healthy: 1,342 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ valuation_reversion: 521 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ integrity_growth: 1,162 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ high_yield_safe: 1,527 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ sector_relative: 6,646 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ low_vol_quality: 3,160 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ fcf_compounders: 731 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ✓ total_return_leaders: 3,552 stocks
+2026-05-04 12:35:59,012 - __main__ - INFO -   ⏱ Step 5d completed in 18.6s
+2026-05-04 12:35:59,012 - __main__ - INFO - 🧪 Step 5e: Resampled Bayesian posterior returns...
+2026-05-04 12:35:59,012 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:36:26,100 - __main__ - INFO - Resampled posterior returns: 6646 stocks, mean posterior=13.98%
+2026-05-04 12:36:26,445 - __main__ - INFO -   ⏱ Step 5e completed in 27.4s
+2026-05-04 12:36:26,446 - __main__ - INFO - 🔗 Step 6: Cross-model alignment...
+2026-05-04 12:36:26,447 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:36:26,565 - __main__ - INFO - Tri-model alignment: 6646 stocks, 2744 strong bullish
+2026-05-04 12:36:26,714 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 12:36:26,722 - __main__ - INFO - Dividend safety signal merged: 432/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 12:36:26,724 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 86.0
+2026-05-04 12:36:26,730 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=86.0)
+2026-05-04 12:36:26,734 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 488
+2026-05-04 12:36:26,751 - __main__ - INFO - Strong consensus picks: 434 stocks
+2026-05-04 12:36:26,751 - __main__ - INFO -   ⏱ Step 6 completed in 0.3s
+2026-05-04 12:36:26,751 - __main__ - INFO - 📋 Step 7: Building expected_returns_summary (multi-model merge)...
+2026-05-04 12:36:26,752 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:36:26,822 - __main__ - INFO - Enriched expected_returns_summary with 60 anomaly columns
+2026-05-04 12:36:26,828 - __main__ - INFO - Enriched expected_returns_summary with 15 credit risk columns
+2026-05-04 12:36:26,834 - __main__ - INFO - Enriched expected_returns_summary with 10 dividend safety columns
+2026-05-04 12:36:26,861 - __main__ - INFO - Enriched expected_returns_summary with 32 columns from mv_all_stock_features
+2026-05-04 12:36:26,866 - __main__ - INFO - Enriched expected_returns_summary with 8 forward consensus columns
+2026-05-04 12:36:26,873 - __main__ - INFO - Merged quad alignment scores into summary (single source of truth)
+2026-05-04 12:36:26,882 - __main__ - INFO - Expected returns summary: 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 488
+2026-05-04 12:36:26,887 - __main__ - INFO -   ✓ 6,646 stocks in expected_returns_summary
+2026-05-04 12:36:27,056 - __main__ - INFO - Quality scoring: 6646 stocks scored (mean=45.3, median=46.5)
+2026-05-04 12:36:27,057 - __main__ - INFO -   Premium: 665 stocks
+2026-05-04 12:36:27,057 - __main__ - INFO -   High: 1329 stocks
+2026-05-04 12:36:27,057 - __main__ - INFO -   Above Avg: 1329 stocks
+2026-05-04 12:36:27,057 - __main__ - INFO -   Below Avg: 1329 stocks
+2026-05-04 12:36:27,057 - __main__ - INFO -   Low: 1329 stocks
+2026-05-04 12:36:27,057 - __main__ - INFO -   Very Low: 665 stocks
+2026-05-04 12:36:27,058 - __main__ - INFO -   Financially healthy (score ≥ 45): 3670 stocks
+2026-05-04 12:36:27,135 - __main__ - INFO - Added z-scores and percentile ranks for 5 return metrics
+2026-05-04 12:36:27,263 - __main__ - INFO - 🔀 Step 7a: Parallel MCMC return analysis...
+2026-05-04 12:36:27,263 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:36:37,935 - __main__ - INFO - Parallel MCMC: R̂=1.0003, converged=True, posterior mean=7.15
+2026-05-04 12:36:37,935 - __main__ - INFO -   95% CI: [6.83, 7.47], posterior std=0.16
+2026-05-04 12:36:37,936 - __main__ - INFO -   Chain means: 7.16, 7.15, 7.15, 7.15, 7.16, 7.16, 7.15, 7.15
+2026-05-04 12:36:37,936 - __main__ - INFO -   Chain stds:  0.16, 0.17, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16
+2026-05-04 12:36:47,328 - __main__ - INFO -   MCMC Student-t: μ=7.89 (±0.08), df=2.0
+2026-05-04 12:36:47,779 - probabilistic_ml_model.statistical_functions.statistical_models - INFO - Multi-level hierarchical MCMC: 9 levels, 161 total groups for 'implied_return_pt'
+2026-05-04 12:36:47,779 - __main__ - INFO -   Hierarchical MCMC: global mean=7.16, std=13.13, n=6646
+2026-05-04 12:36:47,779 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 12:36:47,779 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2073, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       Asia / Pacific: posterior=4.63 (raw=4.58), shrinkage=0.981, n=2062, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       United States and Canada: posterior=8.05 (raw=8.07), shrinkage=0.978, n=1786, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       Africa / Middle East: posterior=5.58 (raw=5.45), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       Latin America and Caribbean: posterior=9.17 (raw=9.48), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 12:36:47,779 - __main__ - INFO -       US: posterior=8.01 (raw=8.01), shrinkage=0.974, n=1518, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       CN: posterior=5.31 (raw=5.34), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       GB: posterior=13.48 (raw=13.96), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       JP: posterior=4.37 (raw=4.34), shrinkage=0.897, n=349, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       CA: posterior=8.41 (raw=8.47), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 12:36:47,779 - __main__ - INFO -       US: posterior=7.92 (raw=7.93), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       CN: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 12:36:47,779 - __main__ - INFO -       JP: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       CA: posterior=8.82 (raw=9.06), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 12:36:47,780 - __main__ - INFO -       NYSE: posterior=6.27 (raw=6.19), shrinkage=0.954, n=821, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       NasdaqGS: posterior=7.71 (raw=7.69), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       SHSE: posterior=5.04 (raw=5.01), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       SZSE: posterior=4.44 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       TSE: posterior=4.31 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 12:36:47,780 - __main__ - INFO -       USD: posterior=7.92 (raw=7.94), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       CNY: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       GBP: posterior=13.76 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       JPY: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 12:36:47,780 - __main__ - INFO -       Industrials: posterior=6.44 (raw=6.45), shrinkage=0.974, n=1488, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Information Technology: posterior=4.07 (raw=3.92), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Consumer Discretionary: posterior=8.50 (raw=8.60), shrinkage=0.958, n=923, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Health Care: posterior=12.57 (raw=12.80), shrinkage=0.956, n=864, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Materials: posterior=6.36 (raw=6.28), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 12:36:47,780 - __main__ - INFO -       Metals and Mining: posterior=7.90 (raw=8.06), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Machinery: posterior=6.63 (raw=6.66), shrinkage=0.886, n=311, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.69 (raw=6.74), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Chemicals: posterior=3.80 (raw=3.44), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Biotechnology: posterior=17.38 (raw=18.08), shrinkage=0.873, n=274, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 12:36:47,780 - __main__ - INFO -       Core: posterior=7.21 (raw=7.21), shrinkage=0.990, n=4002, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Value: posterior=7.80 (raw=7.81), shrinkage=0.979, n=1863, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Growth: posterior=5.40 (raw=5.31), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 12:36:47,780 - __main__ - INFO -       Small Cap: posterior=8.81 (raw=8.82), shrinkage=0.990, n=3909, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Mid Cap: posterior=4.98 (raw=4.93), shrinkage=0.977, n=1671, P(>0)=100.0%
+2026-05-04 12:36:47,780 - __main__ - INFO -       Large Cap: posterior=4.63 (raw=4.53), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO - MCMC return analysis cached → mcmc_return_870b9ce9267dbfe6ce1a4482e6a8df54dd2e62ac_chains8_n10000.json
+2026-05-04 12:36:47,799 - __main__ - INFO -   R̂=1.0003, converged=True, posterior mean=7.15
+2026-05-04 12:36:47,799 - __main__ - INFO -   95% CI: [6.83, 7.47], posterior std=0.16
+2026-05-04 12:36:47,799 - __main__ - INFO -   MCMC Student-t: μ=7.89, df=2.0
+2026-05-04 12:36:47,799 - __main__ - INFO -   Hierarchical MCMC: global mean=7.16, std=13.13, n=6646
+2026-05-04 12:36:47,799 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 12:36:47,799 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2073, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO -       Asia / Pacific: posterior=4.63 (raw=4.58), shrinkage=0.981, n=2062, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO -       United States and Canada: posterior=8.05 (raw=8.07), shrinkage=0.978, n=1786, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO -       Africa / Middle East: posterior=5.58 (raw=5.45), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO -       Latin America and Caribbean: posterior=9.17 (raw=9.48), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 12:36:47,799 - __main__ - INFO -       US: posterior=8.01 (raw=8.01), shrinkage=0.974, n=1518, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO -       CN: posterior=5.31 (raw=5.34), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO -       GB: posterior=13.48 (raw=13.96), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO -       JP: posterior=4.37 (raw=4.34), shrinkage=0.897, n=349, P(>0)=100.0%
+2026-05-04 12:36:47,799 - __main__ - INFO -       CA: posterior=8.41 (raw=8.47), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 12:36:47,800 - __main__ - INFO -       US: posterior=7.92 (raw=7.93), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       CN: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       JP: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       CA: posterior=8.82 (raw=9.06), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 12:36:47,800 - __main__ - INFO -       NYSE: posterior=6.27 (raw=6.19), shrinkage=0.954, n=821, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       NasdaqGS: posterior=7.71 (raw=7.69), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       SHSE: posterior=5.04 (raw=5.01), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       SZSE: posterior=4.44 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       TSE: posterior=4.31 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 12:36:47,800 - __main__ - INFO -       USD: posterior=7.92 (raw=7.94), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       CNY: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       GBP: posterior=13.76 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -       JPY: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 12:36:47,800 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 12:36:47,800 - __main__ - INFO -       Industrials: posterior=6.44 (raw=6.45), shrinkage=0.974, n=1488, P(>0)=100.0%
+2026-05-04 12:36:47,803 - __main__ - INFO -       Information Technology: posterior=4.07 (raw=3.92), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 12:36:47,803 - __main__ - INFO -       Consumer Discretionary: posterior=8.50 (raw=8.60), shrinkage=0.958, n=923, P(>0)=100.0%
+2026-05-04 12:36:47,803 - __main__ - INFO -       Health Care: posterior=12.57 (raw=12.80), shrinkage=0.956, n=864, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -       Materials: posterior=6.36 (raw=6.28), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 12:36:47,804 - __main__ - INFO -       Metals and Mining: posterior=7.90 (raw=8.06), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -       Machinery: posterior=6.63 (raw=6.66), shrinkage=0.886, n=311, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.69 (raw=6.74), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -       Chemicals: posterior=3.80 (raw=3.44), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -       Biotechnology: posterior=17.38 (raw=18.08), shrinkage=0.873, n=274, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 12:36:47,804 - __main__ - INFO -       Core: posterior=7.21 (raw=7.21), shrinkage=0.990, n=4002, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -       Value: posterior=7.80 (raw=7.81), shrinkage=0.979, n=1863, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -       Growth: posterior=5.40 (raw=5.31), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 12:36:47,804 - __main__ - INFO -       Small Cap: posterior=8.81 (raw=8.82), shrinkage=0.990, n=3909, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -       Mid Cap: posterior=4.98 (raw=4.93), shrinkage=0.977, n=1671, P(>0)=100.0%
+2026-05-04 12:36:47,804 - __main__ - INFO -       Large Cap: posterior=4.63 (raw=4.53), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 12:36:47,851 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 12:36:47,854 - __main__ - INFO - Dividend safety signal merged: 432/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 12:36:47,855 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 86.0
+2026-05-04 12:36:47,858 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=86.0)
+2026-05-04 12:36:47,859 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 496
+2026-05-04 12:36:47,874 - __main__ - INFO -   ✓ Risk-adjusted returns computed for 6,646 stocks
+2026-05-04 12:36:47,874 - __main__ - INFO -   ⏱ Step 7a completed in 20.6s
+2026-05-04 12:36:47,874 - __main__ - INFO - 🧮 Step 7b: Per-category Bayesian probability analytics...
+2026-05-04 12:36:47,874 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:36:48,103 - root - WARNING - Could not load view category mapping from DB: too many values to unpack (expected 2). Using fallback.
+2026-05-04 12:36:48,104 - __main__ - INFO -   Feature categories from 17 views → 17 categories, 679 total features
+2026-05-04 12:36:48,134 - __main__ - INFO - Sampling budget: Analyst Sentiment trimmed to 25 features (from 26)
+2026-05-04 12:36:48,139 - __main__ - INFO - Sampling budget: Balance Sheet trimmed to 25 features (from 58)
+2026-05-04 12:36:48,143 - __main__ - INFO - Sampling budget: Cash Flow trimmed to 25 features (from 81)
+2026-05-04 12:36:48,145 - __main__ - INFO - Sampling budget: Composite Scores trimmed to 25 features (from 30)
+2026-05-04 12:36:48,148 - __main__ - INFO - Sampling budget: Cost Structure trimmed to 25 features (from 43)
+2026-05-04 12:36:48,153 - __main__ - INFO - Sampling budget: Earnings Quality trimmed to 25 features (from 68)
+2026-05-04 12:36:48,157 - __main__ - INFO - Sampling budget: Growth Metrics trimmed to 25 features (from 62)
+2026-05-04 12:36:48,162 - __main__ - INFO - Sampling budget: Leverage & Liquidity trimmed to 25 features (from 71)
+2026-05-04 12:36:48,167 - __main__ - INFO - Sampling budget: Profitability trimmed to 25 features (from 68)
+2026-05-04 12:36:48,169 - __main__ - INFO - Sampling budget: Quality & Risk trimmed to 25 features (from 44)
+2026-05-04 12:36:48,172 - __main__ - INFO - Sampling budget: Valuation Ratios trimmed to 25 features (from 28)
+2026-05-04 12:45:04,439 - __main__ - INFO - Category Analyst Sentiment: 25 features analyzed
+2026-05-04 12:45:04,450 - __main__ - INFO - Category Balance Sheet: 25 features analyzed
+2026-05-04 12:45:04,450 - __main__ - INFO - Category Cash Flow: 25 features analyzed
+2026-05-04 12:45:04,450 - __main__ - INFO - Category Composite Scores: 25 features analyzed
+2026-05-04 12:45:04,450 - __main__ - INFO - Category Cost Structure: 25 features analyzed
+2026-05-04 12:45:04,450 - __main__ - INFO - Category Dividend Features: 25 features analyzed
+2026-05-04 12:45:04,450 - __main__ - INFO - Category Earnings Quality: 25 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Employment Metrics: 17 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Growth Metrics: 25 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Leverage & Liquidity: 25 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Momentum: 19 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Profitability: 25 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Quality & Risk: 25 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Technical Analysis: 11 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Temporal Features: 16 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Unusual Items: 9 features analyzed
+2026-05-04 12:45:04,451 - __main__ - INFO - Category Valuation Ratios: 25 features analyzed
+2026-05-04 12:45:05,110 - __main__ - INFO - Category analytics cached → category_analytics_0266aada6a8bd8ff3c291e7a628e1bf11ccad826_cats17_mcmc1_n10000_b1000_max25.json
+2026-05-04 12:45:05,117 - __main__ - INFO -   ✓ Analyzed 17 categories
+2026-05-04 12:45:05,117 - __main__ - INFO -     Analyst Sentiment: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Balance Sheet: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Cash Flow: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Composite Scores: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Cost Structure: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Dividend Features: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Earnings Quality: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Employment Metrics: 17 features — 17 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Growth Metrics: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Leverage & Liquidity: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Momentum: 19 features — 19 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Profitability: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Quality & Risk: 25 features — 25 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Technical Analysis: 11 features — 11 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Temporal Features: 16 features — 13 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Unusual Items: 9 features — 9 posteriors
+2026-05-04 12:45:05,117 - __main__ - INFO -     Valuation Ratios: 25 features — 25 posteriors
+2026-05-04 12:45:05,120 - __main__ - INFO -   ⏱ Step 7b completed in 497.2s
+2026-05-04 12:45:05,121 - __main__ - INFO - 🧪 Step 8: Building InferenceData (ArviZ)...
+2026-05-04 12:45:05,122 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:45:11,361 - __main__ - INFO -    ⚠️ InferenceData error: conflicting sizes for dimension 'draw': length 1 on the data but length 25000 on coordinate 'draw'
+2026-05-04 12:45:11,485 - __main__ - INFO - 
+2026-05-04 12:45:11,485 - __main__ - INFO -   ⏱ Step 8 completed in 6.4s
+2026-05-04 12:45:11,883 - __main__ - INFO -   ⚠️ Viz column coverage gaps after enrichment: {'create_distress_early_warning_dashboard': ['combined_distress_score,']}
+2026-05-04 12:45:11,884 - __main__ - INFO - 📈 Step 9: Generating visualizations...
+2026-05-04 12:45:11,884 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:45:12,819 - __main__ - INFO -    ✓ er_mc_distribution.html
+2026-05-04 12:45:13,071 - __main__ - INFO -    ✓ er_sector_risk_reward.html
+2026-05-04 12:45:13,129 - __main__ - INFO -    ✓ er_var_analysis.html
+2026-05-04 12:45:13,180 - __main__ - INFO -    ✓ er_posterior_return_forest.html
+2026-05-04 12:45:13,355 - __main__ - INFO -    ✓ er_kalman_vs_raw.html
+2026-05-04 12:45:13,397 - __main__ - INFO -    ✓ er_tri_model_agreement.html
+2026-05-04 12:45:13,463 - __main__ - INFO -    ✓ er_sector_heatmap.html
+2026-05-04 12:45:13,492 - __main__ - INFO -    ✓ er_strong_consensus.html
+2026-05-04 12:45:13,830 - __main__ - INFO -    ✓ er_tri_model_posterior.html
+2026-05-04 12:45:13,867 - __main__ - INFO -    ✓ er_beat_vs_achievement.html
+2026-05-04 12:45:13,907 - __main__ - INFO -    ✓ er_beat_probability_posterior.html
+2026-05-04 12:45:13,981 - __main__ - INFO -    ✓ er_earnings_probability_dashboard.html
+2026-05-04 12:45:14,112 - __main__ - INFO -    ✓ er_revision_momentum.html
+2026-05-04 12:45:14,199 - __main__ - INFO -    ✓ er_gaap_divergence.html
+2026-05-04 12:45:14,269 - __main__ - INFO -    ✓ er_enhanced_beat_probability.html
+2026-05-04 12:45:14,499 - __main__ - INFO -    ✓ er_quality_risk_quadrant.html
+2026-05-04 12:45:14,604 - __main__ - INFO -    ✓ er_distress_early_warning.html
+2026-05-04 12:45:14,640 - __main__ - INFO -    ✓ er_piotroski_fscore.html
+2026-05-04 12:45:14,841 - __main__ - INFO -    ✓ er_altman_zscore.html
+2026-05-04 12:45:14,883 - __main__ - INFO -    ✓ er_beneish_mscore.html
+2026-05-04 12:45:15,176 - __main__ - INFO -    ✓ er_accounting_anomaly_dashboard.html
+2026-05-04 12:45:15,344 - __main__ - INFO -    ✓ er_anomaly_severity_dashboard.html
+2026-05-04 12:45:15,450 - __main__ - INFO -    ✓ er_anomaly_conditional_probability.html
+2026-05-04 12:45:15,522 - __main__ - INFO -    ✓ er_mcmc_anomaly_posterior.html
+2026-05-04 12:45:15,581 - __main__ - INFO -    ✓ er_mcmc_credit_risk_posterior.html
+2026-05-04 12:45:15,651 - __main__ - INFO -    ✓ er_mcmc_dividend_cut_posterior.html
+2026-05-04 12:45:15,723 - __main__ - INFO -    ✓ er_ruin_probability_diagnostic.html
+2026-05-04 12:45:16,068 - __main__ - INFO -    ✓ er_expected_returns_summary_posterior.html
+2026-05-04 12:45:16,403 - __main__ - INFO -    ✓ er_return_distribution_fit.html
+2026-05-04 12:45:16,837 - __main__ - INFO -    ✓ er_sector_return_analytics.html
+2026-05-04 12:45:16,859 - __main__ - INFO -    ✓ er_screening_summary.html
+2026-05-04 12:45:16,885 - __main__ - INFO -    ✓ er_price_target_drift.html
+2026-05-04 12:45:16,911 - __main__ - INFO -    ✓ er_valuation_multiples.html
+2026-05-04 12:45:17,665 - __main__ - INFO -    ✓ er_valuation_distribution.html
+2026-05-04 12:45:18,324 - __main__ - INFO -    ✓ er_relative_valuation_matrix.html
+2026-05-04 12:45:18,514 - __main__ - INFO -    ✓ er_valuation_vs_growth.html
+2026-05-04 12:45:18,705 - __main__ - INFO -    ✓ er_historical_valuation_percentile.html
+2026-05-04 12:45:18,868 - __main__ - INFO -    ✓ er_earnings_surprise.html
+2026-05-04 12:45:18,929 - __main__ - INFO -    ✓ er_eps_trajectory.html
+2026-05-04 12:45:18,987 - __main__ - INFO -    ✓ er_earnings_quality_decomposition.html
+2026-05-04 12:45:19,140 - __main__ - INFO -    ✓ er_beat_rate_heatmap.html
+2026-05-04 12:45:19,313 - __main__ - INFO -    ✓ er_earnings_consistency_matrix.html
+2026-05-04 12:45:19,353 - __main__ - INFO -    ✓ er_growth_waterfall.html
+2026-05-04 12:45:19,517 - __main__ - INFO -    ✓ er_growth_consistency_matrix.html
+2026-05-04 12:45:19,726 - __main__ - INFO -    ✓ er_growth_vs_profitability.html
+2026-05-04 12:45:19,782 - __main__ - INFO -    ✓ er_growth_acceleration.html
+2026-05-04 12:45:19,990 - __main__ - INFO -    ✓ er_sustainable_growth.html
+2026-05-04 12:45:20,113 - __main__ - INFO -    ✓ er_bayesian_sentiment_ridge.html
+2026-05-04 12:45:20,139 - __main__ - INFO -    ✓ er_mcmc_category_sentiment_posterior.html
+2026-05-04 12:45:20,271 - __main__ - INFO -    ✓ er_bayesian_profitability_ridge.html
+2026-05-04 12:45:20,271 - __main__ - INFO -    📊 Generating ArviZ diagnostic visualizations...
+2026-05-04 12:45:22,058 - probabilistic_ml_model.visualizations.arviz_diagnostics - INFO - Resampled posterior R̂: <xarray.DataTree 'posterior'>
+Group: /posterior
+    Dimensions:                ()
+    Data variables:
+        posterior_return       float64 8B 1.012
+        posterior_uncertainty  float64 8B 1.018
+2026-05-04 12:45:22,062 - __main__ - INFO -    ✓ er_resampled_trace.png
+2026-05-04 12:45:22,062 - __main__ - INFO -    ✓ er_resampled_rank.png
+2026-05-04 12:45:22,062 - __main__ - INFO -    ✓ er_resampled_dotplot.png
+2026-05-04 12:45:39,342 - __main__ - INFO -    ✓ er_model_alignment_density.png
+2026-05-04 12:45:39,342 - __main__ - INFO -    ✓ er_model_alignment_pair.png
+2026-05-04 12:45:39,342 - __main__ - INFO -    ✓ er_model_alignment_ecdf.png
+2026-05-04 12:46:12,903 - __main__ - INFO -    ✓ er_agreement_by_sector.png
+2026-05-04 12:46:13,790 - __main__ - INFO -    ✓ er_hierarchical_shrinkage.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_analyst_sentiment_ridge.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_analyst_sentiment_forest.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_balance_sheet_ridge.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_balance_sheet_forest.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_cash_flow_ridge.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_cash_flow_forest.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_composite_scores_ridge.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_composite_scores_forest.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_cost_structure_ridge.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_cost_structure_forest.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_dividend_features_ridge.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_dividend_features_forest.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_earnings_quality_ridge.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_earnings_quality_forest.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_employment_metrics_ridge.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_employment_metrics_forest.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_growth_metrics_ridge.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_growth_metrics_forest.png
+2026-05-04 12:46:32,219 - __main__ - INFO -    ✓ er_category_leverage_and_liquidity_ridge.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_leverage_and_liquidity_forest.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_momentum_ridge.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_momentum_forest.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_profitability_ridge.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_profitability_forest.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_quality_and_risk_ridge.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_quality_and_risk_forest.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_technical_analysis_ridge.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_technical_analysis_forest.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_temporal_features_ridge.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_temporal_features_forest.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_unusual_items_ridge.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_unusual_items_forest.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_valuation_ratios_ridge.png
+2026-05-04 12:46:32,220 - __main__ - INFO -    ✓ er_category_valuation_ratios_forest.png
+2026-05-04 12:46:32,495 - __main__ - INFO -    ✓ er_cross_category_posterior.png
+2026-05-04 12:46:46,309 - __main__ - INFO -    ✓ er_cross_model_ecdf.png
+2026-05-04 12:46:47,002 - probabilistic_ml_model.visualizations.convergence_diagnostics - INFO - Unified R̂ diagnostics: <xarray.DataTree 'posterior'>
+Group: /posterior
+    Dimensions:            ()
+    Data variables:
+        anomaly_posterior  float64 8B 1.0
+        risk_adj_return    float64 8B 0.9994
+2026-05-04 12:46:47,003 - __main__ - INFO -    ✓ er_unified_mcmc_trace.png
+2026-05-04 12:46:47,003 - __main__ - INFO -    ✓ er_unified_ess_evolution.png
+2026-05-04 12:46:47,003 - __main__ - INFO -   ⏱ Step 9 completed in 95.1s
+2026-05-04 12:46:47,003 - __main__ - INFO - 💾 Step 10: Exporting results...
+2026-05-04 12:46:47,003 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 12:46:47,285 - root - INFO - Exporting 434 rows to analytics.strong_consensus_picks
+2026-05-04 12:46:47,327 - root - INFO - Exporting 6646 rows to analytics.kalman_filtered_price_targets
+2026-05-04 12:46:47,329 - root - INFO - Exporting 6646 rows to analytics.monte_carlo_simulation
+2026-05-04 12:46:47,383 - root - INFO - Exporting 6646 rows to analytics.expected_returns_tri_model
+2026-05-04 12:46:47,385 - root - INFO - Exporting 6646 rows to analytics.price_target_achievement
+2026-05-04 12:46:47,430 - root - INFO - Exporting 6646 rows to analytics.earnings_probability_analysis
+2026-05-04 12:46:47,861 - root - INFO - Export complete: analytics.strong_consensus_picks
+2026-05-04 12:46:47,868 - __main__ - INFO - Exported 434 rows → analytics.strong_consensus_picks
+2026-05-04 12:46:48,452 - root - INFO - Export complete: analytics.kalman_filtered_price_targets
+2026-05-04 12:46:48,481 - __main__ - INFO - Exported 6646 rows → analytics.kalman_filtered_price_targets
+2026-05-04 12:46:48,645 - root - INFO - Export complete: analytics.monte_carlo_simulation
+2026-05-04 12:46:48,646 - __main__ - INFO - Exported 6646 rows → analytics.monte_carlo_simulation
+2026-05-04 12:46:49,622 - root - INFO - Export complete: analytics.expected_returns_tri_model
+2026-05-04 12:46:49,669 - __main__ - INFO - Exported 6646 rows → analytics.expected_returns_tri_model
+2026-05-04 12:46:50,359 - root - INFO - Export complete: analytics.price_target_achievement
+2026-05-04 12:46:50,360 - __main__ - INFO - Exported 6646 rows → analytics.price_target_achievement
+2026-05-04 12:46:50,493 - root - INFO - Exporting 279 rows to analytics.quality_stocks
+2026-05-04 12:46:50,807 - root - INFO - Exporting 6646 rows to analytics.dividend_safety_analysis
+2026-05-04 12:46:50,812 - root - INFO - Exporting 6646 rows to analytics.credit_risk_analysis
+2026-05-04 12:46:50,935 - root - INFO - Export complete: analytics.quality_stocks
+2026-05-04 12:46:50,935 - __main__ - INFO - Exported 279 rows → analytics.quality_stocks
+2026-05-04 12:46:52,705 - root - INFO - Export complete: analytics.dividend_safety_analysis
+2026-05-04 12:46:52,706 - __main__ - INFO - Exported 6646 rows → analytics.dividend_safety_analysis
+2026-05-04 12:46:52,809 - root - INFO - Export complete: analytics.earnings_probability_analysis
+2026-05-04 12:46:52,811 - __main__ - INFO - Exported 6646 rows → analytics.earnings_probability_analysis
+2026-05-04 12:46:53,023 - root - INFO - Exporting 4286 rows to analytics.earnings_quality_stocks
+2026-05-04 12:46:53,209 - root - INFO - Exporting 1445 rows to analytics.value_stocks
+2026-05-04 12:46:53,220 - root - INFO - Exporting 6646 rows to analytics.expected_returns_summary
+2026-05-04 12:46:53,295 - root - INFO - Exporting 3004 rows to analytics.growth_momentum_stocks
+2026-05-04 12:46:53,669 - root - INFO - Export complete: analytics.credit_risk_analysis
+2026-05-04 12:46:53,672 - __main__ - INFO - Exported 6646 rows → analytics.credit_risk_analysis
+2026-05-04 12:46:54,339 - root - INFO - Export complete: analytics.value_stocks
+2026-05-04 12:46:54,341 - __main__ - INFO - Exported 1445 rows → analytics.value_stocks
+2026-05-04 12:46:55,107 - root - INFO - Export complete: analytics.earnings_quality_stocks
+2026-05-04 12:46:55,108 - __main__ - INFO - Exported 4286 rows → analytics.earnings_quality_stocks
+2026-05-04 12:46:55,511 - root - INFO - Export complete: analytics.growth_momentum_stocks
+2026-05-04 12:46:55,528 - __main__ - INFO - Exported 3004 rows → analytics.growth_momentum_stocks
+2026-05-04 12:46:55,984 - root - INFO - Exporting 1316 rows to analytics.garp_stocks
+2026-05-04 12:46:55,995 - root - INFO - Exporting 521 rows to analytics.valuation_reversion_stocks
+2026-05-04 12:46:56,001 - root - INFO - Exporting 1307 rows to analytics.dividend_quality_stocks
+2026-05-04 12:46:56,011 - root - INFO - Exporting 1342 rows to analytics.healthy_stocks
+2026-05-04 12:46:56,016 - root - INFO - Exporting 6646 rows to analytics.accounting_anomaly_analysis
+2026-05-04 12:46:57,063 - root - INFO - Export complete: analytics.garp_stocks
+2026-05-04 12:46:57,200 - __main__ - INFO - Exported 1316 rows → analytics.garp_stocks
+2026-05-04 12:46:57,578 - root - INFO - Export complete: analytics.dividend_quality_stocks
+2026-05-04 12:46:57,695 - __main__ - INFO - Exported 1307 rows → analytics.dividend_quality_stocks
+2026-05-04 12:46:57,889 - root - INFO - Export complete: analytics.healthy_stocks
+2026-05-04 12:46:57,904 - __main__ - INFO - Exported 1342 rows → analytics.healthy_stocks
+2026-05-04 12:46:57,966 - root - INFO - Export complete: analytics.valuation_reversion_stocks
+2026-05-04 12:46:57,973 - __main__ - INFO - Exported 521 rows → analytics.valuation_reversion_stocks
+2026-05-04 12:46:58,721 - root - INFO - Exporting 1162 rows to analytics.integrity_filtered_growth_stocks
+2026-05-04 12:46:59,799 - root - INFO - Exporting 1527 rows to analytics.high_yield_safe_dividend_stocks
+2026-05-04 12:47:00,152 - root - INFO - Exporting 3160 rows to analytics.screen_low_vol_quality
+2026-05-04 12:47:01,239 - root - INFO - Exporting 6646 rows to analytics.sector_relative_ranking
+2026-05-04 12:47:01,345 - root - INFO - Export complete: analytics.integrity_filtered_growth_stocks
+2026-05-04 12:47:01,406 - __main__ - INFO - Exported 1162 rows → analytics.integrity_filtered_growth_stocks
+2026-05-04 12:47:02,608 - root - INFO - Export complete: analytics.high_yield_safe_dividend_stocks
+2026-05-04 12:47:02,684 - __main__ - INFO - Exported 1527 rows → analytics.high_yield_safe_dividend_stocks
+2026-05-04 12:47:03,300 - root - INFO - Export complete: analytics.expected_returns_summary
+2026-05-04 12:47:03,301 - __main__ - INFO - Exported 6646 rows → analytics.expected_returns_summary
+2026-05-04 12:47:04,966 - root - INFO - Export complete: analytics.screen_low_vol_quality
+2026-05-04 12:47:04,967 - __main__ - INFO - Exported 3160 rows → analytics.screen_low_vol_quality
+2026-05-04 12:47:07,418 - root - INFO - Export complete: analytics.sector_relative_ranking
+2026-05-04 12:47:07,420 - __main__ - INFO - Exported 6646 rows → analytics.sector_relative_ranking
+2026-05-04 12:47:07,461 - root - INFO - Exporting 731 rows to analytics.screen_fcf_compounders
+2026-05-04 12:47:07,527 - root - INFO - Exporting 3552 rows to analytics.screen_total_return_leaders
+2026-05-04 12:47:09,222 - root - INFO - Export complete: analytics.screen_fcf_compounders
+2026-05-04 12:47:09,222 - __main__ - INFO - Exported 731 rows → analytics.screen_fcf_compounders
+2026-05-04 12:47:09,396 - root - INFO - Export complete: analytics.screen_total_return_leaders
+2026-05-04 12:47:09,396 - __main__ - INFO - Exported 3552 rows → analytics.screen_total_return_leaders
+2026-05-04 12:47:09,408 - root - INFO - Export complete: analytics.accounting_anomaly_analysis
+2026-05-04 12:47:09,408 - __main__ - INFO - Exported 6646 rows → analytics.accounting_anomaly_analysis
+2026-05-04 12:47:09,434 - __main__ - INFO -    ✓ strong_consensus_picks → analytics.strong_consensus_picks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ kalman_filtered_price_targets → analytics.kalman_filtered_price_targets
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ monte_carlo_simulation → analytics.monte_carlo_simulation
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ expected_returns_tri_model → analytics.expected_returns_tri_model
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ price_target_achievement → analytics.price_target_achievement
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ quality_stocks → analytics.quality_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ dividend_safety_analysis → analytics.dividend_safety_analysis
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ earnings_probability_analysis → analytics.earnings_probability_analysis
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ credit_risk_analysis → analytics.credit_risk_analysis
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ value_stocks → analytics.value_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ earnings_quality_stocks → analytics.earnings_quality_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ growth_momentum_stocks → analytics.growth_momentum_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ garp_stocks → analytics.garp_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ dividend_quality_stocks → analytics.dividend_quality_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ healthy_stocks → analytics.healthy_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ valuation_reversion_stocks → analytics.valuation_reversion_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ integrity_filtered_growth_stocks → analytics.integrity_filtered_growth_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ high_yield_safe_dividend_stocks → analytics.high_yield_safe_dividend_stocks
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ expected_returns_summary → analytics.expected_returns_summary
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ screen_low_vol_quality → analytics.screen_low_vol_quality
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ sector_relative_ranking → analytics.sector_relative_ranking
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ screen_fcf_compounders → analytics.screen_fcf_compounders
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ screen_total_return_leaders → analytics.screen_total_return_leaders
+2026-05-04 12:47:09,435 - __main__ - INFO -    ✓ accounting_anomaly_analysis → analytics.accounting_anomaly_analysis
+2026-05-04 12:47:11,513 - root - INFO - Exporting 6646 rows to analytics.earnings_probability_analysis
+2026-05-04 12:47:13,939 - root - INFO - Export complete: analytics.earnings_probability_analysis
+2026-05-04 12:47:14,287 - root - INFO - Exported 6646 rows to outputs\earnings_probability_analysis.csv
+2026-05-04 12:47:14,462 - root - INFO - Exported 6646 rows to outputs\earnings_probability_analysis.json
+2026-05-04 12:47:14,464 - root - INFO - Exporting 6646 rows to analytics.eps_streak_analysis
+2026-05-04 12:47:15,717 - root - INFO - Export complete: analytics.eps_streak_analysis
+2026-05-04 12:47:15,881 - root - INFO - Exported 6646 rows to outputs\eps_streak_analysis.csv
+2026-05-04 12:47:15,981 - root - INFO - Exported 6646 rows to outputs\eps_streak_analysis.json
+2026-05-04 12:47:15,984 - root - INFO - Exporting 8 rows to analytics.probability_analytics_summary
+2026-05-04 12:47:16,053 - root - INFO - Export complete: analytics.probability_analytics_summary
+2026-05-04 12:47:16,054 - root - INFO - Exported 8 rows to outputs\probability_analytics_summary.csv
+2026-05-04 12:47:16,055 - root - INFO - Exported 8 rows to outputs\probability_analytics_summary.json
+2026-05-04 12:47:16,056 - probabilistic_ml_model.statistical_functions.probability_models - INFO - Exported probability analytics results to database and outputs
+2026-05-04 12:47:16,056 - __main__ - INFO -    ✓ earnings_probability_analysis_db → analytics.earnings_probability_analysis
+2026-05-04 12:47:16,056 - __main__ - INFO -    ✓ earnings_probability_analysis_csv → outputs\earnings_probability_analysis.csv
+2026-05-04 12:47:16,056 - __main__ - INFO -    ✓ eps_streak_analysis_db → analytics.eps_streak_analysis
+2026-05-04 12:47:16,056 - __main__ - INFO -    ✓ eps_streak_analysis_csv → outputs\eps_streak_analysis.csv
+2026-05-04 12:47:16,056 - __main__ - INFO -    ✓ probability_analytics_summary_db → analytics.probability_analytics_summary
+2026-05-04 12:47:16,056 - __main__ - INFO -    ✓ probability_analytics_summary_csv → outputs\probability_analytics_summary.csv
+2026-05-04 12:47:16,056 - root - INFO - Exporting 25 rows to analytics.prob_analyst_sentiment
+2026-05-04 12:47:16,140 - root - INFO - Export complete: analytics.prob_analyst_sentiment
+2026-05-04 12:47:16,140 - __main__ - INFO - Aggregated probability export: Analyst Sentiment (25 rows)
+2026-05-04 12:47:16,140 - root - INFO - Exporting 25 rows to analytics.prob_balance_sheet
+2026-05-04 12:47:16,224 - root - INFO - Export complete: analytics.prob_balance_sheet
+2026-05-04 12:47:16,224 - __main__ - INFO - Aggregated probability export: Balance Sheet (25 rows)
+2026-05-04 12:47:16,225 - root - INFO - Exporting 25 rows to analytics.prob_cash_flow
+2026-05-04 12:47:16,308 - root - INFO - Export complete: analytics.prob_cash_flow
+2026-05-04 12:47:16,308 - __main__ - INFO - Aggregated probability export: Cash Flow (25 rows)
+2026-05-04 12:47:16,309 - root - INFO - Exporting 25 rows to analytics.prob_composite_scores
+2026-05-04 12:47:16,400 - root - INFO - Export complete: analytics.prob_composite_scores
+2026-05-04 12:47:16,400 - __main__ - INFO - Aggregated probability export: Composite Scores (25 rows)
+2026-05-04 12:47:16,401 - root - INFO - Exporting 25 rows to analytics.prob_cost_structure
+2026-05-04 12:47:16,483 - root - INFO - Export complete: analytics.prob_cost_structure
+2026-05-04 12:47:16,483 - __main__ - INFO - Aggregated probability export: Cost Structure (25 rows)
+2026-05-04 12:47:16,483 - root - INFO - Exporting 25 rows to analytics.prob_dividend_features
+2026-05-04 12:47:16,670 - root - INFO - Export complete: analytics.prob_dividend_features
+2026-05-04 12:47:16,671 - __main__ - INFO - Aggregated probability export: Dividend Features (25 rows)
+2026-05-04 12:47:16,671 - root - INFO - Exporting 25 rows to analytics.prob_earnings_quality
+2026-05-04 12:47:16,863 - root - INFO - Export complete: analytics.prob_earnings_quality
+2026-05-04 12:47:16,863 - __main__ - INFO - Aggregated probability export: Earnings Quality (25 rows)
+2026-05-04 12:47:16,863 - root - INFO - Exporting 17 rows to analytics.prob_employment_metrics
+2026-05-04 12:47:16,940 - root - INFO - Export complete: analytics.prob_employment_metrics
+2026-05-04 12:47:16,940 - __main__ - INFO - Aggregated probability export: Employment Metrics (17 rows)
+2026-05-04 12:47:16,941 - root - INFO - Exporting 25 rows to analytics.prob_growth_metrics
+2026-05-04 12:47:17,019 - root - INFO - Export complete: analytics.prob_growth_metrics
+2026-05-04 12:47:17,019 - __main__ - INFO - Aggregated probability export: Growth Metrics (25 rows)
+2026-05-04 12:47:17,020 - root - INFO - Exporting 25 rows to analytics.prob_leverage_&_liquidity
+2026-05-04 12:47:17,101 - root - INFO - Export complete: analytics.prob_leverage_&_liquidity
+2026-05-04 12:47:17,101 - __main__ - INFO - Aggregated probability export: Leverage & Liquidity (25 rows)
+2026-05-04 12:47:17,102 - root - INFO - Exporting 19 rows to analytics.prob_momentum
+2026-05-04 12:47:17,193 - root - INFO - Export complete: analytics.prob_momentum
+2026-05-04 12:47:17,193 - __main__ - INFO - Aggregated probability export: Momentum (19 rows)
+2026-05-04 12:47:17,194 - root - INFO - Exporting 25 rows to analytics.prob_profitability
+2026-05-04 12:47:17,281 - root - INFO - Export complete: analytics.prob_profitability
+2026-05-04 12:47:17,281 - __main__ - INFO - Aggregated probability export: Profitability (25 rows)
+2026-05-04 12:47:17,282 - root - INFO - Exporting 25 rows to analytics.prob_quality_&_risk
+2026-05-04 12:47:17,387 - root - INFO - Export complete: analytics.prob_quality_&_risk
+2026-05-04 12:47:17,388 - __main__ - INFO - Aggregated probability export: Quality & Risk (25 rows)
+2026-05-04 12:47:17,388 - root - INFO - Exporting 11 rows to analytics.prob_technical_analysis
+2026-05-04 12:47:17,475 - root - INFO - Export complete: analytics.prob_technical_analysis
+2026-05-04 12:47:17,476 - __main__ - INFO - Aggregated probability export: Technical Analysis (11 rows)
+2026-05-04 12:47:17,476 - root - INFO - Exporting 16 rows to analytics.prob_temporal_features
+2026-05-04 12:47:17,602 - root - INFO - Export complete: analytics.prob_temporal_features
+2026-05-04 12:47:17,602 - __main__ - INFO - Aggregated probability export: Temporal Features (16 rows)
+2026-05-04 12:47:17,603 - root - INFO - Exporting 9 rows to analytics.prob_unusual_items
+2026-05-04 12:47:17,714 - root - INFO - Export complete: analytics.prob_unusual_items
+2026-05-04 12:47:17,714 - __main__ - INFO - Aggregated probability export: Unusual Items (9 rows)
+2026-05-04 12:47:17,714 - root - INFO - Exporting 25 rows to analytics.prob_valuation_ratios
+2026-05-04 12:47:17,816 - root - INFO - Export complete: analytics.prob_valuation_ratios
+2026-05-04 12:47:17,816 - __main__ - INFO - Aggregated probability export: Valuation Ratios (25 rows)
+2026-05-04 12:47:17,818 - root - INFO - Exporting 162 rows to analytics.mcmc_return_analysis
+2026-05-04 12:47:17,913 - root - INFO - Export complete: analytics.mcmc_return_analysis
+2026-05-04 12:47:17,913 - __main__ - INFO -    ✓ mcmc_return_analysis → analytics.mcmc_return_analysis (162 rows)
+2026-05-04 12:47:17,913 - __main__ - INFO -   ⏱ Step 10 completed in 30.9s
+2026-05-04 12:47:17,914 - __main__ - INFO - ================================================================================
+2026-05-04 12:47:17,914 - __main__ - INFO - ✅ EXPECTED RETURNS ANALYTICS v3.7 COMPLETE
+2026-05-04 12:47:17,914 - __main__ - INFO - ================================================================================
+2026-05-04 12:47:17,914 - __main__ - INFO -   Data sources:
+2026-05-04 12:47:17,914 - __main__ - INFO -     mv_expected_returns:       6,646 stocks × 1338 features
+2026-05-04 12:47:17,914 - __main__ - INFO -     mv_all_stock_features:     6,646 stocks × 1343 features
+2026-05-04 12:47:17,914 - __main__ - INFO -   Models:
+2026-05-04 12:47:17,914 - __main__ - INFO -     Monte Carlo simulations:   6,646
+2026-05-04 12:47:17,914 - __main__ - INFO -     Price target achievements: 6,646
+2026-05-04 12:47:17,914 - __main__ - INFO -     Kalman-filtered targets:   6,646
+2026-05-04 12:47:17,914 - __main__ - INFO -     Earnings beat analyses:    6,646
+2026-05-04 12:47:17,914 - __main__ - INFO -     Credit risk analyses:      6,646
+2026-05-04 12:47:17,914 - __main__ - INFO -     Dividend safety analyses:  6,646
+2026-05-04 12:47:17,914 - __main__ - INFO -     Accounting anomaly analyses: 6,646
+2026-05-04 12:47:17,914 - __main__ - INFO -   Alignment:
+2026-05-04 12:47:17,914 - __main__ - INFO -     Tri-model aligned:         6,646
+2026-05-04 12:47:17,914 - __main__ - INFO -     Strong consensus picks:    434
+2026-05-04 12:47:17,914 - __main__ - INFO -     Quad-model full consensus: 20
+2026-05-04 12:47:17,915 - __main__ - INFO -     Expected returns summary:  6,646 stocks, 1524 full consensus
+2026-05-04 12:47:17,915 - __main__ - INFO -     MC ↔ Kalman correlation:   0.984
+2026-05-04 12:47:17,915 - __main__ - INFO -   Screening:
+2026-05-04 12:47:17,915 - __main__ - INFO -     quality: 279 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     earnings_quality: 4,286 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     value: 1,445 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     growth: 3,004 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     garp: 1,316 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     dividend: 1,307 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     healthy: 1,342 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     valuation_reversion: 521 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     integrity_growth: 1,162 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     high_yield_safe: 1,527 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     sector_relative: 6,646 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     low_vol_quality: 3,160 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     fcf_compounders: 731 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -     total_return_leaders: 3,552 stocks
+2026-05-04 12:47:17,915 - __main__ - INFO -   Probability Analytics:
+2026-05-04 12:47:17,915 - __main__ - INFO -     Categories analyzed:       17
+2026-05-04 12:47:17,915 - __main__ - INFO -   Outputs: outputs/

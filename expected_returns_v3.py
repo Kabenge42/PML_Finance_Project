@@ -5789,7 +5789,7 @@ def _step_screening(r: PipelineResult, cfg: PipelineConfig) -> None:
 def _step_resampled_posterior(r: PipelineResult, cfg: PipelineConfig) -> None:
     """Step 5e: Resampled Bayesian posterior returns."""
     try:
-        r.resampled_posterior = run_resampled_posterior_analysis(r.df)
+        r.resampled_posterior = run_resampled_posterior_analysis(r.df_all)
         if not r.resampled_posterior.empty:
             _log_and_print(
                 f"  ✓ Resampled posteriors: {len(r.resampled_posterior):,} stocks"
@@ -6247,14 +6247,37 @@ def main(config: PipelineConfig | None = None) -> PipelineResult:
     idata_mc = None
     idata_beat = None
     idata_credit = None
+    idata_anomaly = None
+    idata_resampled = None
+    idata_category: dict = {}
     if ARVIZ_AVAILABLE:
         _log_and_print("🧪 Step 8: Building InferenceData (ArviZ)...")
         _log_and_print("-" * 80)
-        try:
-            if not r.mc.empty:
-                idata_mc = build_monte_carlo_inference_data(
-                    r.mc, r.df_all, n_simulations=25_000
+
+        # Per-builder isolation: a failure in one builder must not
+        # cascade and silently skip every subsequent InferenceData.
+        def _safe_build(label: str, builder, *args, **kwargs):
+            """Run a single InferenceData builder; log on failure, never raise."""
+            try:
+                result = builder(*args, **kwargs)
+                if result is None:
+                    _log_and_print(f"   ⏭️  {label}: builder returned None")
+                return result
+            except Exception as exc:  # noqa: BLE001 — must not propagate
+                logger.warning(
+                    "Step 8 builder '%s' failed: %s", label, exc, exc_info=True
                 )
+                _log_and_print(f"   ⚠️ {label} InferenceData error: {exc}")
+                return None
+
+        # ── Monte Carlo ──
+        if not r.mc.empty:
+            idata_mc = _safe_build(
+                "MC",
+                build_monte_carlo_inference_data,
+                r.mc, r.df_all, n_simulations=25_000,
+            )
+            if idata_mc is not None:
                 idata_summary = summarize_inference_data(idata_mc)
                 _log_and_print(
                     f"   ✓ MC InferenceData: {idata_summary.get('n_draws', 0)} draws, "
@@ -6264,105 +6287,112 @@ def main(config: PipelineConfig | None = None) -> PipelineResult:
                     for var, rhat in idata_summary["r_hat"].items():
                         _log_and_print(f"     R̂ ({var}): {rhat:.4f}")
 
-            if not r.beat.empty and "posterior_alpha" in r.beat.columns:
-                idata_beat = build_beat_probability_inference_data(
-                    r.beat, r.df_all, n_posterior_samples=4000, n_chains=4
-                )
+        # ── Beat ──
+        if not r.beat.empty and "posterior_alpha" in r.beat.columns:
+            idata_beat = _safe_build(
+                "Beat",
+                build_beat_probability_inference_data,
+                r.beat, r.df_all, n_posterior_samples=4000, n_chains=4,
+            )
+            if idata_beat is not None:
                 beat_summary = summarize_inference_data(idata_beat)
                 _log_and_print(
                     f"   ✓ Beat InferenceData: {beat_summary.get('n_chains', 0)} chains × "
                     f"{beat_summary.get('n_draws', 0)} draws"
                 )
-            if not r.credit.empty:
-                idata_credit = build_credit_risk_inference_data(r.credit, r.df_all)
+
+        # ── Credit ──
+        if not r.credit.empty:
+            idata_credit = _safe_build(
+                "Credit",
+                build_credit_risk_inference_data,
+                r.credit, r.df_all,
+            )
+            if idata_credit is not None:
                 credit_summary = summarize_inference_data(idata_credit)
                 _log_and_print(
                     f"   ✓ Credit Risk InferenceData: "
                     f"{credit_summary.get('n_equities', 0)} equities"
                 )
 
-            # Accounting Anomaly InferenceData
-            if (
-                not r.anomaly_results.empty
-                and "accounting_anomaly_score" in r.anomaly_results.columns
-            ):
-                idata_anomaly = build_accounting_anomaly_inference_data(
-                    r.anomaly_results, n_posterior_samples=4000, n_chains=4
-                )
+        # ── Accounting Anomaly ──
+        if (
+            not r.anomaly_results.empty
+            and "accounting_anomaly_score" in r.anomaly_results.columns
+        ):
+            idata_anomaly = _safe_build(
+                "Anomaly",
+                build_accounting_anomaly_inference_data,
+                r.anomaly_results, n_posterior_samples=4000, n_chains=4,
+            )
+            if idata_anomaly is not None:
                 anomaly_idata_summary = summarize_inference_data(idata_anomaly)
                 _log_and_print(
                     f"   ✓ Anomaly InferenceData: "
                     f"{anomaly_idata_summary.get('n_equities', 0)} equities"
                 )
 
-            # Category Analysis InferenceData (one per category)
-            idata_category: dict = {}
-            if r.category_analytics and not r.df_all.empty:
-                for cat_name, cat_results in r.category_analytics.items():
-                    try:
-                        features = [f for f in cat_results if f != "_meta"]
-                        if not features:
-                            continue
-                        idata_cat = build_category_analysis_inference_data(
-                            cat_results,
-                            r.df_all,
-                            category_name=cat_name,
-                            features=features,
-                        )
-                        idata_category[cat_name] = idata_cat
-                        cat_summary = summarize_inference_data(idata_cat)
-                        _log_and_print(
-                            f"   ✓ Category '{cat_name}' InferenceData: "
-                            f"{cat_summary.get('n_draws', 0)} draws"
-                        )
-                    except Exception as e:
-                        logger.debug(
-                            "Category InferenceData for %s failed: %s", cat_name, e
-                        )
-
-            # Resampled Technical InferenceData
-            idata_resampled = None
-            if not r.df_all.empty:
-                try:
-                    idata_resampled = build_resampled_technical_inference_data(r.df_all, freq="1QE")
-                    if idata_resampled is not None:
-                        resampled_summary = summarize_inference_data(idata_resampled)
-                        _log_and_print(
-                            f"   ✓ Resampled Technical InferenceData: "
-                            f"{resampled_summary.get('n_draws', 0)} draws"
-                        )
-                except Exception as e:
-                    logger.debug("Resampled Technical InferenceData failed: %s", e)
-
-            # Log EquityCoordinates for traceability
-            if EquityCoordinates is not None and not r.df_all.empty:
-                try:
-                    coords = EquityCoordinates.from_dataframe(r.df_all)
+        # ── Per-category ──
+        if r.category_analytics and not r.df_all.empty:
+            for cat_name, cat_results in r.category_analytics.items():
+                features = [f for f in cat_results if f != "_meta"]
+                if not features:
+                    continue
+                idata_cat = _safe_build(
+                    f"Category[{cat_name}]",
+                    build_category_analysis_inference_data,
+                    cat_results, r.df_all,
+                    category_name=cat_name, features=features,
+                )
+                if idata_cat is not None:
+                    idata_category[cat_name] = idata_cat
+                    cat_summary = summarize_inference_data(idata_cat)
                     _log_and_print(
-                        f"   ✓ EquityCoordinates: {len(coords.isins)} isins, "
-                        f"{len(coords.sectors)} sectors"
+                        f"   ✓ Category '{cat_name}' InferenceData: "
+                        f"{cat_summary.get('n_draws', 0)} draws"
                     )
-                except Exception as e:
-                    logger.debug("EquityCoordinates construction skipped: %s", e)
 
-            # Build per-view InferenceData for ArviZ diagnostics
-            if not r.df_features.empty:
-                _log_and_print("   Building per-view feature InferenceData...")
-                for view_name in FEATURE_VIEW_REGISTRY:
-                    try:
-                        idata_view = build_feature_view_inference_data(
-                            view_name, r.df_features
-                        )
-                        view_summary = summarize_inference_data(idata_view)
-                        _log_and_print(
-                            f"     ✓ {view_name}: "
-                            f"{view_summary.get('n_equities', 0)} equities"
-                        )
-                    except Exception as e:
-                        logger.debug("InferenceData for %s failed: %s", view_name, e)
+        # ── Resampled Technical ──
+        if not r.df_all.empty:
+            idata_resampled = _safe_build(
+                "Resampled",
+                build_resampled_technical_inference_data,
+                r.df_all, freq="1QE",
+            )
+            if idata_resampled is not None:
+                resampled_summary = summarize_inference_data(idata_resampled)
+                _log_and_print(
+                    f"   ✓ Resampled Technical InferenceData: "
+                    f"{resampled_summary.get('n_draws', 0)} draws"
+                )
 
-        except Exception as e:
-            _log_and_print(f"   ⚠️ InferenceData error: {e}")
+        # ── EquityCoordinates traceability log (non-failing) ──
+        if EquityCoordinates is not None and not r.df_all.empty:
+            try:
+                coords = EquityCoordinates.from_dataframe(r.df_all)
+                _log_and_print(
+                    f"   ✓ EquityCoordinates: {len(coords.isins)} isins, "
+                    f"{len(coords.sectors)} sectors"
+                )
+            except Exception as e:
+                logger.debug("EquityCoordinates construction skipped: %s", e)
+
+        # ── Per-view feature InferenceData (most likely to fail) ──
+        if not r.df_features.empty:
+            _log_and_print("   Building per-view feature InferenceData...")
+            for view_name in FEATURE_VIEW_REGISTRY:
+                idata_view = _safe_build(
+                    f"FeatureView[{view_name}]",
+                    build_feature_view_inference_data,
+                    view_name, r.df_features,
+                )
+                if idata_view is not None:
+                    view_summary = summarize_inference_data(idata_view)
+                    _log_and_print(
+                        f"     ✓ {view_name}: "
+                        f"{view_summary.get('n_equities', 0)} equities"
+                    )
+
         _log_and_print()
     else:
         # Task 4.1: Graceful degradation — log what's missing and continue
@@ -6376,9 +6406,9 @@ def main(config: PipelineConfig | None = None) -> PipelineResult:
 
     # Sync local aliases back to BaselinePipelineResult for return
     r.idata_mc, r.idata_beat, r.idata_credit = idata_mc, idata_beat, idata_credit
-    r.idata_anomaly = locals().get("idata_anomaly")
-    r.idata_category = locals().get("idata_category", {})
-    r.idata_resampled = locals().get("idata_resampled")
+    r.idata_anomaly = idata_anomaly
+    r.idata_category = idata_category
+    r.idata_resampled = idata_resampled
 
     # ========================================================================
     # 8b. ENRICH DataFrames WITH VIZ-CRITICAL COLUMNS

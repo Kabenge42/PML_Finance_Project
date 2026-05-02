@@ -34,6 +34,7 @@ if not os.environ.get("PYTENSOR_FLAGS"):
 elif "cxx=" not in os.environ["PYTENSOR_FLAGS"]:
     os.environ["PYTENSOR_FLAGS"] += ",cxx="
 
+from probabilistic_ml_model._pymc_arviz_compat import InferenceLike  # noqa: F401
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 
 import numpy as np
@@ -141,7 +142,10 @@ class ProbabilisticLinearRegression:
 
         Returns
         -------
-        az.InferenceData
+        InferenceLike
+            Either ``arviz.InferenceData`` (PyMC 5.x runtime) or
+            ``xarray.DataTree`` (arviz-base 1.x); see
+            ``probabilistic_ml_model._pymc_arviz_compat`` for the alias.
         """
         if pm is None:
             raise ImportError(

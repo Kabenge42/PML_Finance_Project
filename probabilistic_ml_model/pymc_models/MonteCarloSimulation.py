@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
     import pymc as pm_typing  # noqa: F401
 
+from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 
 logger = logging.getLogger(__name__)
@@ -290,11 +291,11 @@ def fit(
 
 
 def _generate_posterior_predictive(
-    idata: "az.InferenceData",
+    idata: "InferenceLike",
     tickers: np.ndarray,
     n_sims: int,
     random_seed: int,
-) -> "az.InferenceData":
+) -> "InferenceLike":
     """Attach posterior-predictive sim_returns to *idata* using NumPy.
 
     For each posterior draw of (mu_return, sigma_return), generate
@@ -347,8 +348,8 @@ def _analytical_fallback(
     tickers: np.ndarray,
     n_sims: int,
     random_seed: int,
-) -> "az.InferenceData":
-    """Build an InferenceData object analytically when MCMC fails entirely.
+) -> "InferenceLike":
+    """Build an InferenceData / DataTree object analytically when MCMC fails entirely.
 
     Uses the historical means/stds directly as point estimates, generating
     synthetic posterior draws from a narrow Normal centred on each estimate.
@@ -472,7 +473,7 @@ class MonteCarloReturnSimulation:
 
     def __init__(self) -> None:
         self.model_: Optional[pm_typing.Model] = None
-        self.idata_: Optional[az_typing.InferenceData] = None
+        self.idata_: Optional[InferenceLike] = None
 
     def fit(
         self,
@@ -488,7 +489,7 @@ class MonteCarloReturnSimulation:
         random_seed: int = _RANDOM_SEED,
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
-    ) -> "tuple[az_typing.InferenceData, Optional[pm_typing.Model]]":
+    ) -> "tuple[InferenceLike, Optional[pm_typing.Model]]":
         """Fit the model and return ``(InferenceData, Model)``.
 
         Mirrors the ``fit`` signature of the other PyMC models in this

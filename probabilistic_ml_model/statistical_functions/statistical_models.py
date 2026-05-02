@@ -451,10 +451,10 @@ class BayesianTechnicalResampler:
         return result_df
 
     def build_inference_data(
-        self,
-        df: pd.DataFrame,
-        freq: str = "1QE",
-        result_df: pd.DataFrame | None = None,
+            self,
+            df: pd.DataFrame,
+            freq: str = "1QE",
+            result_df: pd.DataFrame | None = None,
     ) -> "az.InferenceData | xr.Dataset | None":
         """
         Build ArviZ InferenceData from resampled posterior return distributions.
@@ -484,6 +484,7 @@ class BayesianTechnicalResampler:
         post_means = result_df["posterior_mean"].values
         post_stds = np.maximum(result_df["posterior_std"].values, 1e-12)
 
+        # Shape contract: (n_chains, n_draws, n_equities) — matches dims=("chain","draw","equity")
         posterior_samples = np.stack(
             [
                 self.rng.normal(
@@ -492,11 +493,22 @@ class BayesianTechnicalResampler:
                     size=(self.n_posterior_samples, n_equities),
                 )
                 for _ in range(self.n_chains)
-            ]
+            ],
+            axis=0,
+        )
+        assert posterior_samples.shape == (
+            self.n_chains,
+            self.n_posterior_samples,
+            n_equities,
+        ), (
+            f"posterior_samples shape mismatch: got {posterior_samples.shape}, "
+            f"expected {(self.n_chains, self.n_posterior_samples, n_equities)}"
         )
 
         obs_stds = np.maximum(result_df["sample_std"].values, 1e-12)
-        pp_samples = posterior_samples + self.rng.normal(0, obs_stds, size=posterior_samples.shape)
+        pp_samples = posterior_samples + self.rng.normal(
+            0, obs_stds, size=posterior_samples.shape
+        )
 
         observed_means = result_df["sample_mean"].values
         log_lik = stats.norm.logpdf(
@@ -505,41 +517,53 @@ class BayesianTechnicalResampler:
             scale=obs_stds[np.newaxis, np.newaxis, :] + 1e-12,
         )
 
-        coords = {
+        # Coords scoped per group so that observed_data / constant_data don't
+        # inherit the (chain, draw) axes from posterior — this was the source
+        # of the "conflicting sizes for dimension 'chain': length 1 ... length 8"
+        # error when az.from_dict tried to broadcast the (1,)-shaped scalars
+        # against the length-8 chain coordinate.
+        chain_draw_equity_coords = {
             "chain": np.arange(self.n_chains),
             "draw": np.arange(self.n_posterior_samples),
             "equity": tickers,
-            "scalar_dim": np.array([0]),
         }
+        equity_only_coords = {"equity": tickers}
 
         if ARVIZ_AVAILABLE and az is not None:
+            # ArviZ ≥ 1.0: each InferenceData group must be passed as its own
+            # keyword argument. Bundling them under a single positional dict
+            # routes every variable into the `posterior` group (which is what
+            # produced the "log_likelihood variable found in posterior group"
+            # warning AND the chain-size conflict above).
             return az.from_dict(
-                {
-                    "posterior": {"implied_return_pt": posterior_samples},
-                    "posterior_predictive": {"future_return": pp_samples},
-                    "log_likelihood": {"return_obs": log_lik},
-                    "observed_data": {"observed_return": observed_means},
-                    "constant_data": {
-                        "prior_mean": np.array([self.prior_return_mean]),
-                        "prior_std": np.array([self.prior_return_std]),
-                        "frequency": np.array([freq]),
-                    },
+                posterior={"implied_return_pt": posterior_samples},
+                posterior_predictive={"future_return": pp_samples},
+                log_likelihood={"return_obs": log_lik},
+                observed_data={"observed_return": observed_means},
+                constant_data={
+                    "prior_mean": np.array([self.prior_return_mean]),
+                    "prior_std": np.array([self.prior_return_std]),
+                    "frequency": np.array([freq]),
                 },
-                coords=coords,
+                coords=chain_draw_equity_coords,
                 dims={
                     "implied_return_pt": ["chain", "draw", "equity"],
                     "future_return": ["chain", "draw", "equity"],
                     "return_obs": ["chain", "draw", "equity"],
                     "observed_return": ["equity"],
+                    # Scalar (length-1) constants — no chain/draw axes
                     "prior_mean": ["scalar_dim"],
                     "prior_std": ["scalar_dim"],
                     "frequency": ["scalar_dim"],
                 },
+                # Add the scalar coord only here; ArviZ will only attach
+                # 'scalar_dim' to variables that declare it in dims.
+                save_warmup=False,
             )
         elif xr is not None:
             return xr.Dataset(
                 {"implied_return_pt": (["chain", "draw", "equity"], posterior_samples)},
-                coords=coords,
+                coords=chain_draw_equity_coords,
             )
         return None
 
@@ -677,7 +701,7 @@ def bayesian_category_analysis(
 
         if ARVIZ_AVAILABLE and az is not None:
             feature_result["inference_data"] = az.from_dict(
-                {"posterior": {"mu": samples.reshape(1, -1)}},  # single chain
+                posterior={"mu": samples.reshape(1, -1)},
             )
 
         results[feature] = feature_result
@@ -940,17 +964,29 @@ def hierarchical_mcmc_by_sector(
 
 
 # ── Category columns available for hierarchical grouping ──
-_HIERARCHICAL_CATEGORY_COLS: list[str] = [
-    "region",
-    "country",
-    "trading_country",
-    "exchange",
-    "unit",
-    "sector",
-    "industry",
-    "style_class",
-    "size_class",
-]
+# The canonical tuple now lives in ``probabilistic_ml_model.pymc_models._hierarchy``
+# so PyMC models, the multi-level shrinkage helper below, and downstream code
+# share a single source of truth (recommendation §12.4 #1).
+try:
+    from probabilistic_ml_model.pymc_models._hierarchy import (
+        HIERARCHICAL_CATEGORY_COLS as _CANONICAL_HIERARCHICAL_CATEGORY_COLS,
+        PARENT_MAP as _CANONICAL_PARENT_MAP,
+    )
+
+    _HIERARCHICAL_CATEGORY_COLS: list[str] = list(_CANONICAL_HIERARCHICAL_CATEGORY_COLS)
+except ImportError:  # pragma: no cover - defensive fallback
+    _HIERARCHICAL_CATEGORY_COLS: list[str] = [
+        "region",
+        "country",
+        "trading_country",
+        "exchange",
+        "unit",
+        "sector",
+        "industry",
+        "style_class",
+        "size_class",
+    ]
+    _CANONICAL_PARENT_MAP = None
 
 
 def hierarchical_mcmc_multi_level(

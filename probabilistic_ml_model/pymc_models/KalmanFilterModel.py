@@ -14,7 +14,6 @@ import logging
 from functools import lru_cache
 from typing import Any, Literal, Optional, TYPE_CHECKING
 
-from arviz import InferenceData
 from pymc.backends.base import MultiTrace
 
 try:
@@ -36,10 +35,15 @@ if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
     import pymc as pm_typing  # noqa: F401
 
+from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 from probabilistic_ml_model.pymc_models._feature_alignment import (
     coerce_by_data_type,
     load_feature_metadata_from_db,
+)
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    build_hierarchy_indices,
+    coerce_categories,
 )
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
 
@@ -110,7 +114,7 @@ class KalmanFilterPriceTarget:
 
     def __init__(self) -> None:
         self.model_: Optional[pm_typing.Model] = None
-        self.idata_: Optional[az_typing.InferenceData] = None
+        self.idata_: Optional[InferenceLike] = None
 
     @staticmethod
     @lru_cache(maxsize=4)
@@ -332,6 +336,9 @@ class KalmanFilterPriceTarget:
         price_targets: np.ndarray,
         isin: Optional[str] = None,
         dates: Optional[pd.DatetimeIndex] = None,
+        sectors: Optional[np.ndarray] = None,
+        categories_df: Optional[pd.DataFrame] = None,
+        hierarchy_levels: Optional[list[str]] = None,
         samples: int = 2000,
         tune: int = 1000,
         chains: int = 4,
@@ -340,7 +347,7 @@ class KalmanFilterPriceTarget:
         parameterization: Parameterization = "non_centered",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
-    ) -> tuple[InferenceData | MultiTrace, Any]:
+    ) -> tuple[InferenceLike | MultiTrace, Any]:
         """
         Fit a state-space model to the provided price targets using a Kalman filter
         approach in log-space. The function handles inference via PyMC and returns
@@ -359,6 +366,19 @@ class KalmanFilterPriceTarget:
             Time index corresponding to `price_targets`. If provided, it will be used
             for naming and plotting axes. Non-finite dates will be dropped alongside
             corresponding price targets.
+        sectors : numpy.ndarray, optional
+            Optional 1-D array of sector labels aligned to the (singleton) ``isin``
+            coord. Forwarded to :func:`coerce_categories` so the model registers a
+            ``sector`` coord even when ``categories_df`` is not supplied.
+        categories_df : pandas.DataFrame, optional
+            Optional ISIN-indexed (or ISIN-columned) frame carrying category columns
+            (``sector``, ``industry``, …). When provided, its columns become
+            additional model coords keyed by hierarchy level so downstream
+            consumers can pivot the latent state by sector / industry.
+        hierarchy_levels : list of str, optional
+            Subset of column names from ``categories_df`` to register as coords.
+            Defaults to ``["sector", "industry"]`` when ``categories_df`` is
+            supplied and this argument is omitted.
         samples : int
             Number of posterior samples to draw during the MCMC process. Default is
             2000.
@@ -454,8 +474,29 @@ class KalmanFilterPriceTarget:
         scale = float(np.clip(raw_scale if np.isfinite(raw_scale) else 0.0, 1e-3, 1.0))
         time_coords = dates if dates is not None else np.arange(T, dtype=np.int64)
         coords: dict[str, Any] = {"time": time_coords}
+
+        # --- DB-aligned coords --------------------------------------------------
+        # `isin` mirrors public.vw_identifier_columns.isin (role='id'). When
+        # ``isin`` is not supplied we fall back to a singleton positional index
+        # so the optional category-hierarchy coords can still be wired in.
         if isin is not None:
-            coords["isin"] = [isin]
+            isins_arr = np.asarray([isin])
+        else:
+            isins_arr = np.arange(1, dtype="int64")
+        coords["isin"] = isins_arr
+
+        # Optional category hierarchy registers coords for downstream pivots.
+        cats_df, levels = coerce_categories(
+            isins_arr,
+            sectors=sectors,
+            categories_df=categories_df,
+            hierarchy_levels=hierarchy_levels
+            or (["sector", "industry"] if categories_df is not None else None),
+        )
+        if cats_df is not None and levels:
+            hierarchy_meta = build_hierarchy_indices(cats_df, isins_arr, levels=levels)
+            for lv, meta in hierarchy_meta.items():
+                coords[lv] = meta["labels"]
 
         with pm.Model(coords=coords) as model:
             # Store the raw price target series for downstream consumers /
@@ -536,7 +577,11 @@ class KalmanFilterPriceTarget:
                 pass
 
         self.model_ = model
-        self.idata_ = idata if isinstance(idata, InferenceData) else None
+        # Detect ArviZ InferenceData (or arviz-base xarray.DataTree per migration
+        # guide) at runtime via the shim's typing alias. Falls back to MultiTrace
+        # detection so external NUTS samplers that bypass ArviZ still work.
+        _az_inference = getattr(az, "InferenceData", None) if az is not None else None
+        self.idata_ = idata if (_az_inference is not None and isinstance(idata, _az_inference)) else None
         return idata, model
 
     def fit_from_snapshot(
@@ -550,7 +595,7 @@ class KalmanFilterPriceTarget:
         timestamp_col: str = "feature_calculated_at",
         now_cols: tuple[str, ...] = ("price_target", "last_price"),
         **fit_kwargs: Any,
-    ) -> tuple[Optional[InferenceData | MultiTrace], Any]:
+    ) -> tuple[Optional[InferenceLike | MultiTrace], Any]:
         """Build a per-ISIN history from a snapshot frame and fit the model.
 
         Convenience wrapper around :meth:`build_price_target_history`,

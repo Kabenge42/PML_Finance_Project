@@ -1315,11 +1315,35 @@ def build_resampled_technical_inference_data(
         BayesianTechnicalResampler,
     )
 
-    resampler = BayesianTechnicalResampler(prior_return_mean=prior_return_mean, prior_return_std=prior_return_std,
-                                           n_posterior_samples=n_posterior_samples, n_chains=n_chains,
-                                           random_seed=random_seed)
+    resampler = BayesianTechnicalResampler(
+        prior_return_mean=prior_return_mean,
+        prior_return_std=prior_return_std,
+        n_posterior_samples=n_posterior_samples,
+        n_chains=n_chains,
+        random_seed=random_seed,
+    )
     result_df = resampler.resample_returns(equities_df, freq=freq)
-    return resampler.build_inference_data(equities_df, freq=freq, result_df=result_df)
+    idata = resampler.build_inference_data(equities_df, freq=freq, result_df=result_df)
+
+    # Defensive shape verification — only runs when both ArviZ + a
+    # posterior group are present.
+    if (
+        ARVIZ_AVAILABLE
+        and idata is not None
+        and hasattr(idata, "posterior")
+        and idata.posterior is not None
+    ):
+        post = idata.posterior
+        actual_chains = int(post.sizes.get("chain", 0))
+        actual_draws = int(post.sizes.get("draw", 0))
+        if actual_chains != n_chains or actual_draws != n_posterior_samples:
+            logger.warning(
+                "build_resampled_technical_inference_data: posterior shape drift — "
+                "got (chains=%d, draws=%d), expected (chains=%d, draws=%d). "
+                "Downstream ArviZ diagnostics may be inconsistent.",
+                actual_chains, actual_draws, n_chains, n_posterior_samples,
+            )
+    return idata
 
 
 # =============================================================================
@@ -1835,29 +1859,43 @@ def build_feature_view_inference_data(
     equity_coords = EquityCoordinates.from_dataframe(df)
     n_equities = len(equity_coords.tickers)
 
-    observed_ds = spec.to_xarray_dataset(df)
-
     feature_cols = [c for c in spec.feature_columns if c in df.columns]
     if not feature_cols:
-        return observed_ds
+        # Nothing to model — return the bare observed Dataset.
+        return spec.to_xarray_dataset(df)
 
     coords = _build_xarray_coords(equity_coords, n_chains, n_posterior_samples)
 
-    posterior_vars = {}
+    posterior_arrays: dict[str, np.ndarray] = {}
+    observed_arrays: dict[str, np.ndarray] = {}
+    dims: dict[str, list[str]] = {}
+
     for col in feature_cols:
-        vals = df[col].fillna(0).values.astype(float)
-        mu = vals
+        vals = np.asarray(df[col].fillna(0).values, dtype="float64")
         sigma = np.abs(vals) * 0.1 + 1e-6
         samples = _build_posterior_samples_normal(
-            rng, mu, sigma, n_chains, n_posterior_samples, n_equities
+            rng, vals, sigma, n_chains, n_posterior_samples, n_equities
         )
-        posterior_vars[col] = (["chain", "draw", "equity"], samples)
-
-    posterior_ds = xr.Dataset(posterior_vars, coords=coords)
-
-    if ARVIZ_AVAILABLE:
-        return az.from_dict(
-            {"posterior": {v: posterior_ds[v].values for v in posterior_ds.data_vars}},
-            coords={k: v.values for k, v in posterior_ds.coords.items()},
+        assert samples.shape == (n_chains, n_posterior_samples, n_equities), (
+            f"build_feature_view_inference_data: posterior shape mismatch for "
+            f"'{col}' — got {samples.shape}, expected "
+            f"{(n_chains, n_posterior_samples, n_equities)}"
         )
-    return posterior_ds
+        posterior_arrays[col] = samples
+        dims[col] = ["chain", "draw", "equity"]
+
+        observed_arrays[col] = vals
+        dims[f"{col}_observed"] = ["equity"]
+
+    # Re-key observed arrays so dim names don't collide with posterior variables.
+    observed_data = {f"{k}_observed": v for k, v in observed_arrays.items()}
+
+    return _build_arviz_or_xarray(
+        posterior=posterior_arrays,
+        observed_data=observed_data,
+        coords=coords,
+        dims=dims,
+        fallback_var_name=feature_cols[0],
+        fallback_data=posterior_arrays[feature_cols[0]],
+        fallback_dims=["chain", "draw", "equity"],
+    )

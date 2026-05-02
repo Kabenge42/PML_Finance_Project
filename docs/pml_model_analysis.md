@@ -1227,7 +1227,7 @@ missing_df
       <td>9.7000</td>
     </tr>
     <tr>
-      <th>Enhanced Cash Flow</th>
+      <th>Cash flow</th>
       <td>28.0000</td>
       <td>28.0000</td>
       <td>9.4000</td>
@@ -5262,7 +5262,7 @@ for cat_name in FEATURE_CATEGORIES:
 </div>
 
     ============================================================
-      Enhanced Cash Flow (28 features)
+      Cash flow (28 features)
     ============================================================
 
 <div>
@@ -15681,7 +15681,7 @@ for cat_name, features in FEATURE_CATEGORIES.items():
         prob_positive: 1.0000
     
     ============================================================
-      Bayesian Analysis: Enhanced Cash Flow (19 features)
+      Bayesian Analysis: Cash flow (19 features)
     ============================================================
     
       self_funding_flag:
@@ -17966,7 +17966,7 @@ for cat_name, features in FEATURE_CATEGORIES.items():
       sustainable_growth_flag: best_distribution=skew_normal, aic=1460.1120, params=(np.float64(14319612.031740222), np.float64(-2.0199272218025872e-07), np.float64(0.5396286461119082)), simulated_mean=0.4390, simulated_std=0.3217, cvar_5_pct=0.0187
     
     ============================================================
-      Distribution Fitting: Enhanced Cash Flow (19 features)
+      Distribution Fitting: Cash flow (19 features)
     ============================================================
       self_funding_flag: best_distribution=skew_normal, aic=3508.2340, params=(np.float64(-10227146.208805233), np.float64(1.0000003280281877), np.float64(0.6291632366255606)), simulated_mean=0.4932, simulated_std=0.3855, cvar_5_pct=-0.4929
       capex_qoq_growth: best_distribution=student_t, aic=63972.4253, params=(np.float64(1.2691391791824307), np.float64(3.3163874145147276), np.float64(27.06817362884069)), simulated_mean=-0.2031, simulated_std=311.0252, cvar_5_pct=-464.2989

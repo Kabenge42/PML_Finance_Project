@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
     import pymc as pm_typing  # noqa: F401
 
+from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 from probabilistic_ml_model.pymc_models._feature_alignment import (
     coerce_by_data_type,
@@ -42,6 +43,11 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
     stamp_feature_provenance,
 )
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    build_hierarchy_indices,
+    build_nested_logit_normal_rates,
+    coerce_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +61,7 @@ _DIVIDEND_CATEGORY_KEYS: tuple[str, ...] = (
     "Cash Flow",
     "Growth Metrics",
     "Efficiency Ratios",
+    "Leverage & Liquidity",
     "Earnings Quality",
     "Profitability",
     "Valuation Ratios",
@@ -86,7 +93,7 @@ class DividendSafetyBayesian:
         self.prior_beta = prior_beta
         self.high_payout_threshold = high_payout_threshold
         self.model_: Optional[pm_typing.Model] = None
-        self.idata_: Optional[az_typing.InferenceData] = None
+        self.idata_: Optional[InferenceLike] = None
 
     @staticmethod
     @lru_cache(maxsize=4)
@@ -147,6 +154,9 @@ class DividendSafetyBayesian:
         payout_ratios: np.ndarray,
         fcf_coverage: np.ndarray,
         isins: np.ndarray,
+        sectors: Optional[np.ndarray] = None,
+        categories_df: Optional[pd.DataFrame] = None,
+        hierarchy_levels: Optional[list[str]] = None,
         dividend_features_df: Optional[pd.DataFrame] = None,
         connection_string: Optional[str] = None,
         samples: int = 2000,
@@ -157,7 +167,7 @@ class DividendSafetyBayesian:
         parameterization: Parameterization = "non_centered",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
-    ) -> tuple[az_typing.InferenceData, pm_typing.Model]:
+    ) -> tuple[InferenceLike, pm_typing.Model]:
         """Fit dividend safety model and return ``(InferenceData, Model)``.
 
         Parameters
@@ -187,6 +197,20 @@ class DividendSafetyBayesian:
         # --- DB-aligned coords --------------------------------------------------
         # `isin` mirrors public.vw_identifier_columns.isin (role='id').
         coords: dict[str, Any] = {"isin": isins_arr}
+
+        cats_df, levels = coerce_categories(
+            isins_arr,
+            sectors=sectors,
+            categories_df=categories_df,
+            hierarchy_levels=hierarchy_levels
+            or (["region", "country", "sector", "industry"] if categories_df is not None else None),
+        )
+        hierarchical = cats_df is not None and levels
+        hierarchy_meta: Optional[dict] = None
+        if hierarchical:
+            hierarchy_meta = build_hierarchy_indices(cats_df, isins_arr, levels=levels)
+            for lv, meta in hierarchy_meta.items():
+                coords[lv] = meta["labels"]
 
         # `dividend_feature` is resolved from calculated_features_registry so the
         # auxiliary pm.Data container carries human-readable feature_alias labels.
@@ -222,15 +246,26 @@ class DividendSafetyBayesian:
                     dims="isin",
                 )
             else:
-                # Non-centred logit-Normal hierarchy — better NUTS geometry.
-                mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
-                sigma_logit = pm.HalfNormal("sigma_logit", 1.0)
-                z_isin = pm.Normal("z_isin", 0.0, 1.0, dims="isin")
-                cut_prob = pm.Deterministic(
-                    "cut_prob",
-                    pm.math.sigmoid(mu_logit + sigma_logit * z_isin),
-                    dims="isin",
-                )
+                if hierarchical:
+                    nested = build_nested_logit_normal_rates(
+                        hierarchy_meta,
+                        leaf_dim="isin",
+                        name="cut_rate",
+                    )
+                    cut_prob = pm.Deterministic(
+                        "cut_prob",
+                        nested["leaf_rate"],
+                        dims="isin",
+                    )
+                else:
+                    mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
+                    sigma_logit = pm.HalfNormal("sigma_logit", 1.0)
+                    z_isin = pm.Normal("z_isin", 0.0, 1.0, dims="isin")
+                    cut_prob = pm.Deterministic(
+                        "cut_prob",
+                        pm.math.sigmoid(mu_logit + sigma_logit * z_isin),
+                        dims="isin",
+                    )
 
             risk_adj = pm.Deterministic(
                 "risk_adj",

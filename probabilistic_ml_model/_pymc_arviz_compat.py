@@ -18,11 +18,13 @@ from __future__ import annotations
 import logging
 import sys
 import types
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Union, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
 _PATCHED = False
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -347,3 +349,65 @@ def patch() -> None:
 
     _PATCHED = True
     logger.debug("arviz patched for PyMC 5.x compatibility with arviz >= 1.0")
+
+
+# ---------------------------------------------------------------------------
+# Typing alias — ArviZ migration (classic InferenceData <-> arviz-base DataTree)
+# ---------------------------------------------------------------------------
+# Per the ArviZ migration guide
+# (https://python.arviz.org/en/latest/user_guide/migration_guide.html),
+# arviz-base 1.x replaces ``arviz.InferenceData`` with ``xarray.DataTree``.
+# PyMC 5.x still emits ``arviz.InferenceData`` from ``pm.sample()``, so this
+# alias lets downstream type annotations accept either object. Runtime
+# behaviour is unchanged: PyMC returns InferenceData, the shim above keeps
+# that working against arviz-base 1.x, and downstream callers can transparently
+# consume ``xarray.DataTree`` instances when produced (e.g. via xarray I/O).
+if TYPE_CHECKING:
+    import xarray as _xr
+    import arviz as _az
+
+    InferenceLike = Union[_az.InferenceData, _xr.DataTree]
+else:
+    try:
+        import xarray as _xr  # noqa: F401
+
+        _DataTree = getattr(_xr, "DataTree", None)
+        try:
+            import arviz as _az
+
+            _AzInferenceData = getattr(_az, "InferenceData", InferenceData)
+        except Exception:
+            _AzInferenceData = InferenceData
+        if _DataTree is not None:
+            InferenceLike = Union[_AzInferenceData, _DataTree]  # type: ignore[misc]
+        else:
+            InferenceLike = _AzInferenceData  # type: ignore[misc]
+    except Exception:  # pragma: no cover - defensive
+        InferenceLike = Any  # type: ignore[misc]
+
+
+def to_datatree(idata: Any) -> Any:
+    """Best-effort conversion of an ``arviz.InferenceData`` to ``xarray.DataTree``.
+
+    Returns ``idata`` unchanged when conversion is not possible (e.g. arviz-base
+    not installed, or ``idata`` is already a ``DataTree``). PyMC's ``pm.sample()``
+    currently returns ``InferenceData``; downstream code that prefers the new
+    ``DataTree`` interface (per the arviz-base 1.x migration) can route results
+    through this helper without breaking the legacy code path.
+    """
+    try:
+        import xarray as xr
+    except Exception:
+        return idata
+    DataTree = getattr(xr, "DataTree", None)
+    if DataTree is None:
+        return idata
+    if isinstance(idata, DataTree):
+        return idata
+    # InferenceData is dict-like ({group_name: Dataset}); DataTree.from_dict
+    # accepts exactly that mapping.
+    try:
+        groups = {name: getattr(idata, name) for name in idata.groups()}
+        return DataTree.from_dict(groups)
+    except Exception:  # pragma: no cover - defensive
+        return idata

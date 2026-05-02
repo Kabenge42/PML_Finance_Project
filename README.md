@@ -59,6 +59,44 @@ notebook helpers are backed by a new shared module
 `_align_*_features(use_typed_coercion=True)` paths and stamped onto
 `idata.constant_data[...].attrs` after every `*Model.fit(...)` call.
 
+### Multi-Level Hierarchical Shrinkage (`probabilistic_ml_model/pymc_models/_hierarchy.py`)
+
+Every PyMC model in `probabilistic_ml_model/pymc_models/` now shares a
+single, canonical category hierarchy defined in `_hierarchy.py`:
+
+- `HIERARCHICAL_CATEGORY_COLS` — `(region, country, trading_country,
+  exchange, unit, sector, industry, style_class, size_class)`.
+- `PARENT_MAP` — parent-of-child relationships
+  (`region → country → exchange → sector → industry`, plus the
+  independent `style_class → size_class` and `unit` / `trading_country`
+  branches). Re-imported by `statistical_functions/statistical_models.py`
+  so PyMC models and `hierarchical_mcmc_multi_level` share one source of
+  truth (recommendation §12.4 #1).
+- `build_hierarchy_indices(df, isins, levels=None)` — pure-NumPy helper
+  returning per-level metadata (unique labels, `isin → level idx`,
+  `level idx → parent idx`).
+- `build_nested_logit_normal_rates(hierarchy, ...)` — PyMC helper that
+  wires nested non-centred logit-Normal rates
+  (`mu_L[g] = mu_P[parent_of(g)] + sigma_L * z_L[g]`) and returns the
+  leaf rate broadcast to the `isin` dim.
+
+Every model's `fit(...)` accepts a unified
+`categories_df` + `hierarchy_levels` pair (back-compat: legacy
+`sectors=` is auto-wrapped into a single-level
+`categories_df({"sector": sectors})` with
+`hierarchy_levels=["sector"]`).
+
+```python
+from probabilistic_ml_model.pymc_models import EarningsBeatBayesian
+
+model = EarningsBeatBayesian()
+idata, _ = model.fit(
+    n_beats, n_total, isins,
+    categories_df=df_categories,        # cols ⊆ HIERARCHICAL_CATEGORY_COLS
+    hierarchy_levels=["exchange", "sector", "industry"],
+)
+```
+
 ### Core Models (`probabilistic_ml_model/pml_models/`)
 
 Managed via a unified `PipelineRunner` in `probabilistic_ml_model/pipeline_runners.py`:

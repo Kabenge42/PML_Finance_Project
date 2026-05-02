@@ -24,6 +24,13 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
     "stamp_feature_provenance": ("._feature_alignment", "stamp_feature_provenance"),
     "validate_oos_shape": ("._feature_alignment", "validate_oos_shape"),
     "get_pytensor_compile_kwargs": ("._pytensor_compat", "get_pytensor_compile_kwargs"),
+    # Multi-level hierarchical shrinkage infrastructure (see _hierarchy.py)
+    "HIERARCHICAL_CATEGORY_COLS": ("._hierarchy", "HIERARCHICAL_CATEGORY_COLS"),
+    "PARENT_MAP": ("._hierarchy", "PARENT_MAP"),
+    "build_hierarchy_indices": ("._hierarchy", "build_hierarchy_indices"),
+    "build_nested_logit_normal_rates": ("._hierarchy", "build_nested_logit_normal_rates"),
+    "coerce_categories": ("._hierarchy", "coerce_categories"),
+    "_resolve_prior_sigma": ("._hierarchy", "_resolve_prior_sigma"),
 }
 
 # Correct the leading-underscore module paths above (they collapsed to "__"

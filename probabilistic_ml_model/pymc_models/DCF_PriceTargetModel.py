@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
     import pymc as pm_typing  # noqa: F401
 
+from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 from probabilistic_ml_model.pymc_models._feature_alignment import (
     coerce_by_data_type,
@@ -42,6 +43,10 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
     stamp_feature_provenance,
 )
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    build_hierarchy_indices,
+    coerce_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +58,18 @@ Parameterization = Literal["centered", "non_centered", "marginalized"]
 _DCF_CATEGORY_KEYS: tuple[str, ...] = (
     "Cash Flow",
     "Valuation Ratios",
+    "Valuation Timeseries",
     "Revenue Forecasting",
     "Growth Metrics",
     "Profitability",
     "Efficiency Ratios",
+    "EPS Trajectory",
+    "Temporal Patterns",
+    "Leverage & Liquidity",
+    "Interest Income",
+    "Employement Dynamics",
+    "Employement Productivity",
+    "Dividend Reliability",
 )
 
 
@@ -76,7 +89,7 @@ class DCFPriceTarget:
     def __init__(self, terminal_growth: float = 0.02) -> None:
         self.terminal_growth = terminal_growth
         self.model_: Optional[pm_typing.Model] = None
-        self.idata_: Optional[az_typing.InferenceData] = None
+        self.idata_: Optional[InferenceLike] = None
 
     @staticmethod
     @lru_cache(maxsize=4)
@@ -137,6 +150,9 @@ class DCFPriceTarget:
         historical_fcf: np.ndarray,
         price_target: np.ndarray,
         isins: Optional[np.ndarray] = None,
+        sectors: Optional[np.ndarray] = None,
+        categories_df: Optional[pd.DataFrame] = None,
+        hierarchy_levels: Optional[list[str]] = None,
         dcf_features_df: Optional[pd.DataFrame] = None,
         connection_string: Optional[str] = None,
         n_projection_years: int = 5,
@@ -149,11 +165,14 @@ class DCFPriceTarget:
         parameterization: Parameterization = "non_centered",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
-    ) -> tuple[az_typing.InferenceData, pm_typing.Model]:
+    ) -> tuple[InferenceLike, pm_typing.Model]:
         """Fit DCF model and return ``(InferenceData, Model)``.
 
         Parameters
         ----------
+        hierarchy_levels
+        categories_df
+        sectors
         nuts_sampler
         random_seed
         target_accept
@@ -203,6 +222,19 @@ class DCFPriceTarget:
         else:
             isins_arr = np.arange(mp.size).astype("int64")
         coords: dict[str, Any] = {"isin": isins_arr}
+
+        # Optional category hierarchy registers coords for downstream pivots.
+        cats_df, levels = coerce_categories(
+            isins_arr,
+            sectors=sectors,
+            categories_df=categories_df,
+            hierarchy_levels=hierarchy_levels
+            or (["sector", "industry"] if categories_df is not None else None),
+        )
+        if cats_df is not None and levels:
+            hierarchy_meta = build_hierarchy_indices(cats_df, isins_arr, levels=levels)
+            for lv, meta in hierarchy_meta.items():
+                coords[lv] = meta["labels"]
 
         # `dcf_feature` is resolved from calculated_features_registry so the
         # auxiliary pm.Data container carries human-readable feature_alias labels.
@@ -275,7 +307,7 @@ class DCFPriceTarget:
                 cores=cores,
                 target_accept=target_accept,
                 random_seed=random_seed,
-                progressbar=False,
+                progressbar=True,
                 compile_kwargs=get_pytensor_compile_kwargs(),
             )
             if nuts_sampler is not None:
