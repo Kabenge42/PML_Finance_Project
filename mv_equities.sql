@@ -669,7 +669,7 @@ SELECT
     e."EPS GAAP Est Avg Rev % (FY1E - 3M)"               AS eps_gaap_est_avg_rev_pct_fy1e_3m,
     e."EPS GAAP Est Avg Rev % (FY1E - 6M)"               AS eps_gaap_est_avg_rev_pct_fy1e_6m,
     e."EPS GAAP Est Avg Rev % (FY1E - 1Y)"               AS eps_gaap_est_avg_rev_pct_fy1e_1y,
-    e."Target % (Avg)"                                   AS target_pct,
+    e."Target % (Avg)"                                   AS target_vs_price_pct,
 
     -- COUNTS
     e."Dividend Streak"                                  AS dividend_streak,

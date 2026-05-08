@@ -31,6 +31,20 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\data\playground\screening_bonds.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\data\playground\screening_bonds_transformed.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\data\playground\screening_etf.csv">
           <value>
             <Attribute>
@@ -39,6 +53,34 @@
           </value>
         </entry>
         <entry key="\data\playground\us_data.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\data\pml\pml_apac.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\data\pml\pml_eu.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\data\pml\pml_rotw.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\data\pml\pml_us.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

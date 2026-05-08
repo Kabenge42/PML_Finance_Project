@@ -101,7 +101,7 @@ class PriceTargetAchievement:
 
         These serve as labelled coordinates along the ``pt_feature`` dim
         for the auxiliary ``pm.Data`` container of observed pt-feature
-        values (e.g. 'upside_potential', 'price_target_spread_pct',
+        values (e.g. 'target_vs_price_pct', 'price_target_spread_pct',
         'price_target_revision_1m', 'pe_forward_discount').
 
         Returns a tuple so the result is hashable / cache-friendly; callers
@@ -154,7 +154,7 @@ class PriceTargetAchievement:
 
     def fit(
         self,
-        upside_potential: np.ndarray,
+        target_vs_price_pct: np.ndarray,
         analyst_conviction: np.ndarray,
         isins: np.ndarray,
         sectors: Optional[np.ndarray] = None,
@@ -176,7 +176,7 @@ class PriceTargetAchievement:
 
         Notes
         -----
-        ``upside_potential`` is observed *once* via ``upside_obs``; the
+        ``target_vs_price_pct`` is observed *once* via ``upside_obs``; the
         latent ``expected_return`` has a prior centred at 0 with a
         dispersion-aware sigma to avoid the previous degenerate likelihood
         where the same series acted as both prior mean and observation.
@@ -186,13 +186,13 @@ class PriceTargetAchievement:
                 "PyMC is not available. Install pymc + arviz to use PriceTargetAchievement."
             )
 
-        upside_potential = np.asarray(upside_potential, dtype="float64")
+        target_vs_price_pct = np.asarray(target_vs_price_pct, dtype="float64")
         analyst_conviction = np.asarray(analyst_conviction, dtype="float64")
         isins_arr = np.asarray(isins)
-        if upside_potential.size == 0:
-            raise ValueError("PriceTargetAchievement.fit received empty upside_potential.")
-        if upside_potential.shape != analyst_conviction.shape:
-            raise ValueError("upside_potential and analyst_conviction must share shape.")
+        if target_vs_price_pct.size == 0:
+            raise ValueError("PriceTargetAchievement.fit received empty target_vs_price_pct.")
+        if target_vs_price_pct.shape != analyst_conviction.shape:
+            raise ValueError("target_vs_price_pct and analyst_conviction must share shape.")
 
         # --- DB-aligned coords --------------------------------------------------
         # `isin` mirrors public.vw_identifier_columns.isin (role='id').
@@ -224,7 +224,7 @@ class PriceTargetAchievement:
         pt_features_arr = self._align_pt_features(pt_features_df, isins_arr, pt_feature_aliases)
 
         with pm.Model(coords=coords) as model:
-            cu_data = pm.Data("upside_potential", upside_potential, dims="isin")
+            cu_data = pm.Data("target_vs_price_pct", target_vs_price_pct, dims="isin")
             ad_data = pm.Data("analyst_conviction", analyst_conviction, dims="isin")
             pm.Data(
                 "pt_features",

@@ -774,7 +774,7 @@ SELECT "ISIN"                                                                   
                                    "# Sell Ratings" + "# Strong Sell Ratings", 0) * 100
                    END
        )                                                                        AS analyst_conviction,
-       ("Price Target - Median" - "Last Price") / NULLIF("Last Price", 0) * 100 AS upside_potential,
+       ("Price Target - Median" - "Last Price") / NULLIF("Last Price", 0) AS upside_potential,
        ("Price Target - High" - "Price Target - Low") / NULLIF("Price Target - Median", 0) *
        100                                                                      AS price_target_spread_pct,
        ("Price Target" - "Price Target (1M Ago)") /
@@ -5915,6 +5915,7 @@ SELECT id.*,
        e."Shrs Out (-1FY)"                 AS shrs_out_1fy,
        e."Analyst Rating"                  AS analyst_rating,
        e."Price Target - #"                AS price_target_count,
+       e."Target % (Avg)"                  AS target_vs_price_pct,
 
        -- =========================================================================
        -- Enhancement 6: Analyst Rating Breakdown
@@ -8368,6 +8369,7 @@ VALUES
      'Enterprise Value', 'direct', 'NUMERIC', CURRENT_TIMESTAMP),
     ('feat_last_price', 'last_price', 'Market Data', NULL, 'Last traded price', ARRAY ['Last Price'], 'Last Price',
      'direct', 'NUMERIC', CURRENT_TIMESTAMP),
+    ('feat_target_vs_price_pct','target_vs_price_pct','Market Data',Null,'Delta between Stock Price Target and last Price',ARRAY['Target % (Avg)'], 'Target % (Avg)', 'direct', 'NUMERIC', CURRENT_TIMESTAMP),
 
     -- COST STRUCTURE FEATURES
     ('feat_cogs_to_revenue', 'cogs_to_revenue', 'Efficiency Ratios', 'calc_cost_structure_features',

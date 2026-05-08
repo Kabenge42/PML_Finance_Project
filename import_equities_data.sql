@@ -1161,17 +1161,17 @@ CREATE TEMP TABLE screening_staging
     "Interest And Investment Income (-2FY)"            TEXT, -- alias: interest_and_investment_income_2fy
     "Interest And Investment Income (-3FY)"            TEXT, -- alias: interest_and_investment_income_3fy
     "Interest And Investment Income (-4FY)"            TEXT, -- alias: interest_and_investment_income_4fy
-    "Effective Tax Rate - (Ratio) (LTM)"    TEXT,            -- alias: effective_tax_rate_ltm
-    "Effective Tax Rate - (Ratio) (FQ)"     TEXT,            -- alias: effective_tax_rate_fq
-    "Effective Tax Rate - (Ratio) (-1FQFQ)" TEXT,            -- alias: effective_tax_rate_1fqfq
-    "Effective Tax Rate - (Ratio) (-2FQFQ)" TEXT,            -- alias: effective_tax_rate_2fqfq
-    "Effective Tax Rate - (Ratio) (-4FQFQ)" TEXT,            -- alias: effective_tax_rate_4fqfq
-    "Effective Tax Rate - (Ratio) (-3FQFQ)" TEXT,            -- alias: effective_tax_rate_3fqfq
-    "Effective Tax Rate - (Ratio) (FY)"     TEXT,            -- alias: effective_tax_rate_fy
-    "Effective Tax Rate - (Ratio) (-1FY)"   TEXT,            -- alias: effective_tax_rate_1fy
-    "Effective Tax Rate - (Ratio) (-2FY)"   TEXT,            -- alias: effective_tax_rate_2fy
-    "Effective Tax Rate - (Ratio) (-3FY)"   TEXT,            -- alias: effective_tax_rate_3fy
-    "Effective Tax Rate - (Ratio) (-4FY)"   TEXT,            -- alias: effective_tax_rate_4fy
+    "Effective Tax Rate - (Ratio) (LTM)"               TEXT, -- alias: effective_tax_rate_ltm
+    "Effective Tax Rate - (Ratio) (FQ)"                TEXT, -- alias: effective_tax_rate_fq
+    "Effective Tax Rate - (Ratio) (-1FQFQ)"            TEXT, -- alias: effective_tax_rate_1fqfq
+    "Effective Tax Rate - (Ratio) (-2FQFQ)"            TEXT, -- alias: effective_tax_rate_2fqfq
+    "Effective Tax Rate - (Ratio) (-4FQFQ)"            TEXT, -- alias: effective_tax_rate_4fqfq
+    "Effective Tax Rate - (Ratio) (-3FQFQ)"            TEXT, -- alias: effective_tax_rate_3fqfq
+    "Effective Tax Rate - (Ratio) (FY)"                TEXT, -- alias: effective_tax_rate_fy
+    "Effective Tax Rate - (Ratio) (-1FY)"              TEXT, -- alias: effective_tax_rate_1fy
+    "Effective Tax Rate - (Ratio) (-2FY)"              TEXT, -- alias: effective_tax_rate_2fy
+    "Effective Tax Rate - (Ratio) (-3FY)"              TEXT, -- alias: effective_tax_rate_3fy
+    "Effective Tax Rate - (Ratio) (-4FY)"              TEXT, -- alias: effective_tax_rate_4fy
     "FCF - Est Avg (FY1E)"                             TEXT, -- alias: fcf_est_avg_fy1e
     "FCF - Est Avg (FY2E)"                             TEXT, -- alias: fcf_est_avg_fy2e
     "FCF - Est Avg (FY3E)"                             TEXT, -- alias: fcf_est_avg_fy3e
@@ -1187,7 +1187,7 @@ CREATE TEMP TABLE screening_staging
     "Total Operating Expenses (-2FY)"                  TEXT, -- alias: total_operating_expenses_2fy
     "Total Operating Expenses (-3FY)"                  TEXT, -- alias: total_operating_expenses_3fy
     "Total Operating Expenses (-4FY)"                  TEXT, -- alias: total_operating_expenses_4fy
-    "Target % (Avg)"                                   TEXT  -- alias: target_avg
+    "Target % (Avg)"                                   TEXT  -- alias: target_vs_price_pct
 );
 -- ===================================================================
 -- DATA IMPORT EXECUTION
@@ -1887,7 +1887,7 @@ INSERT INTO equities ("Ticker", -- alias: ticker
                       "Total Operating Expenses (-2FY)", -- alias: total_operating_expenses_2fy
                       "Total Operating Expenses (-3FY)", -- alias: total_operating_expenses_3fy
                       "Total Operating Expenses (-4FY)", -- alias: total_operating_expenses_4fy
-                      "Target % (Avg)", -- alias: target_avg
+                      "Target % (Avg)", -- alias: target_vs_price_pct
 
                       "Fiscal Month", -- alias: fiscal_month
                       "Fiscal Quarter", -- alias: fiscal_quarter
@@ -2713,7 +2713,7 @@ SELECT NULLIF(TRIM(s."Ticker"), '')                                        AS ti
        COALESCE(text_to_numeric_safe(s."Total Operating Expenses (-4FY)"),
                 0)                                                         AS total_operating_expenses_4fy,
        COALESCE(text_to_numeric_safe(s."Target % (Avg)"),
-                0)                                                         AS target_avg,
+                0)                                                         AS target_vs_price_pct,
 
        report_fiscal.fiscal_month                                          AS fiscal_month,
        report_fiscal.fiscal_quarter                                        AS fiscal_quarter,
