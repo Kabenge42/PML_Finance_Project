@@ -8,7 +8,6 @@
 outputs
 analytics
 archive
-sql_scripts
 .cache
 .venv
 sdk_ouputs

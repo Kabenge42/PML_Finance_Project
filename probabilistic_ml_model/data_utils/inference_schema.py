@@ -417,8 +417,37 @@ def _build_arviz_or_xarray(
             groups["log_likelihood"] = log_likelihood
         if constant_data is not None:
             groups["constant_data"] = constant_data
+
+        # Auto-infer dims for variables in observed_data / constant_data that
+        # don't have explicit dims registered. Without this, ArviZ defaults to
+        # (chain, draw) and raises CoordinateValidationError when array shapes
+        # do not match the chain/draw coordinate sizes.
+        dims = dict(dims) if dims else {}
+        coord_size_to_name: dict[int, str] = {}
+        for cname, cvals in (coords or {}).items():
+            try:
+                coord_size_to_name.setdefault(len(cvals), cname)
+            except TypeError:
+                continue
+        for group_dict in (observed_data, constant_data):
+            if not group_dict:
+                continue
+            for var_name, arr in group_dict.items():
+                if var_name in dims:
+                    continue
+                arr_np = np.asarray(arr)
+                inferred: list[str] = []
+                for size in arr_np.shape:
+                    cname = coord_size_to_name.get(size)
+                    if cname is None or cname in ("chain", "draw"):
+                        inferred = []
+                        break
+                    inferred.append(cname)
+                if inferred:
+                    dims[var_name] = inferred
+
         return az.from_dict(
-            groups,
+            **groups,
             coords=coords,
             dims=dims,
         )
@@ -974,7 +1003,14 @@ def build_monte_carlo_inference_data(
         )
 
     coords = _build_xarray_coords(equity_coords, n_chains=1, n_draws=n_simulations)
-    dims = {"simulated_price": ["chain", "draw", "equity"]}
+    dims = {
+        "simulated_price": ["chain", "draw", "equity"],
+        "last_price": ["equity"],
+        "expected_return_mc": ["equity"],
+        "pt_low": ["equity"],
+        "pt_median": ["equity"],
+        "pt_high": ["equity"],
+    }
 
     # expected_return_mc: mean simulated price per equity (dollar-denominated)
     expected_return_mc = simulated_prices[0].mean(axis=0)  # (n_equities,)
@@ -994,6 +1030,31 @@ def build_monte_carlo_inference_data(
 # =============================================================================
 # 5. InferenceData Factory — Bayesian Category Analysis
 # =============================================================================
+
+
+def _unwrap_category_results(analysis_results: dict) -> dict[str, dict]:
+    """Normalize category analysis results to ``{feature: {posterior_mean, ...}}``.
+
+    Some upstream callers pass the full per-category dict produced by
+    ``run_category_probability_analysis()``, which has the shape
+    ``{"features_analyzed": int, "bayesian_results": {feature: {...}}, ...}``.
+    Others pass the direct output of ``bayesian_category_analysis()``,
+    which is already ``{feature: {posterior_mean, ...}}``.
+
+    This helper returns the inner per-feature dict in both cases.
+    """
+    if not isinstance(analysis_results, dict):
+        return {}
+    if "bayesian_results" in analysis_results and isinstance(
+        analysis_results["bayesian_results"], dict
+    ):
+        return analysis_results["bayesian_results"]
+    # Filter to entries that look like per-feature dicts
+    return {
+        k: v
+        for k, v in analysis_results.items()
+        if isinstance(v, dict) and "posterior_mean" in v
+    }
 
 
 def _extract_category_posterior_params(
@@ -1069,7 +1130,18 @@ def build_category_analysis_inference_data(
     """
     rng = np.random.default_rng(random_seed)
 
-    analysed_features = [f for f in features if f in analysis_results]
+    # Normalize: accept either the bayesian_category_analysis() output
+    # (``{feature: {...}}``) or the run_category_probability_analysis()
+    # per-category dict (``{"bayesian_results": {feature: {...}}, ...}``).
+    analysis_results = _unwrap_category_results(analysis_results)
+
+    analysed_features = [
+        f
+        for f in features
+        if f in analysis_results
+        and isinstance(analysis_results[f], dict)
+        and "posterior_mean" in analysis_results[f]
+    ]
     n_features = len(analysed_features)
     if n_features == 0:
         raise ValueError(f"No analysed features found for category '{category_name}'")
@@ -1860,6 +1932,25 @@ def build_feature_view_inference_data(
     n_equities = len(equity_coords.tickers)
 
     feature_cols = [c for c in spec.feature_columns if c in df.columns]
+    # Skip columns that cannot be coerced to float (e.g. 'Q2 2026' fiscal
+    # period strings, categorical labels). These should not be modeled as
+    # numeric posteriors and would otherwise raise inside
+    # ``np.asarray(..., dtype='float64')``.
+    numeric_cols: list[str] = []
+    for c in feature_cols:
+        s = df[c]
+        if pd.api.types.is_numeric_dtype(s) or pd.api.types.is_bool_dtype(s):
+            numeric_cols.append(c)
+            continue
+        try:
+            pd.to_numeric(s, errors="raise")
+            numeric_cols.append(c)
+        except (ValueError, TypeError):
+            logger.debug(
+                "build_feature_view_inference_data: skipping non-numeric column '%s' in %s",
+                c, view_name,
+            )
+    feature_cols = numeric_cols
     if not feature_cols:
         # Nothing to model — return the bare observed Dataset.
         return spec.to_xarray_dataset(df)
@@ -1871,7 +1962,8 @@ def build_feature_view_inference_data(
     dims: dict[str, list[str]] = {}
 
     for col in feature_cols:
-        vals = np.asarray(df[col].fillna(0).values, dtype="float64")
+        col_series = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        vals = np.asarray(col_series.values, dtype="float64")
         sigma = np.abs(vals) * 0.1 + 1e-6
         samples = _build_posterior_samples_normal(
             rng, vals, sigma, n_chains, n_posterior_samples, n_equities

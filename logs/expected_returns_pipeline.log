@@ -85275,3 +85275,2100 @@ Group: /posterior
 2026-05-04 12:47:17,915 - __main__ - INFO -   Probability Analytics:
 2026-05-04 12:47:17,915 - __main__ - INFO -     Categories analyzed:       17
 2026-05-04 12:47:17,915 - __main__ - INFO -   Outputs: outputs/
+2026-05-04 13:25:17,136 - __main__ - INFO - ================================================================================
+2026-05-04 13:25:17,136 - __main__ - INFO - Expected Returns Analytics Pipeline v3.7
+2026-05-04 13:25:17,137 - __main__ - INFO - ================================================================================
+2026-05-04 13:25:17,137 - __main__ - INFO - 🔧 Numba: True, Joblib: True, ArviZ: True
+2026-05-04 13:25:17,137 - __main__ - INFO -    n_jobs=-1, max_features/cat=25, caching=on (TTL=24.0h)
+2026-05-04 13:25:17,137 - probabilistic_ml_model.pipeline_runners - INFO - Cache cleanup (full purge): removed 0 files from .cache
+2026-05-04 13:25:17,139 - __main__ - INFO - 📦 Step 1: Loading feature data (v3.6: equities MV + feature views + all stock features MV)...
+2026-05-04 13:25:17,139 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:25:17,451 - probabilistic_ml_model.data_utils.feature_catalog - INFO - FeatureViewCatalog loaded: 27 categories, 17 views, 869 total features
+2026-05-04 13:25:17,451 - __main__ - INFO - ✓ FeatureViewCatalog: 27 categories, 17 views
+2026-05-04 13:25:17,451 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-05-04 13:25:22,205 - root - INFO - Loaded 6646 rows from public.mv_all_stock_features
+2026-05-04 13:25:22,257 - root - INFO - Backfill complete. Columns: 821
+2026-05-04 13:25:22,325 - __main__ - INFO - Kalman momentum filter applied to 5 columns
+2026-05-04 13:25:22,335 - __main__ - INFO - Loaded mv_all_stock_features: 6646 rows × 831 columns
+2026-05-04 13:25:22,335 - __main__ - INFO - ✓ Loaded mv_all_stock_features: 6,646 stocks × 831 features
+2026-05-04 13:25:22,339 - __main__ - INFO -   Deduplicated to 6,646 unique isins
+2026-05-04 13:25:22,374 - root - INFO - Loaded 26 feature categories from database
+2026-05-04 13:25:22,375 - __main__ - INFO - Loaded 26 feature categories (403 total features)
+2026-05-04 13:25:22,375 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-05-04 13:25:25,869 - root - INFO - Loaded 6646 rows from public.mv_equities
+2026-05-04 13:25:25,906 - root - INFO - Backfill complete. Columns: 680
+2026-05-04 13:25:25,918 - __main__ - INFO - Loaded 26 feature categories (369 total features)
+2026-05-04 13:25:25,919 - __main__ - INFO - All feature categories have ≥80%% coverage
+2026-05-04 13:25:25,919 - __main__ - INFO - Loaded expected returns data: 6646 stocks × 680 features
+2026-05-04 13:25:25,919 - __main__ - INFO - ✓ Loaded mv_equities (historical cols): 6,646 stocks × 680 features
+2026-05-04 13:25:25,966 - __main__ - INFO -   Merged 507 historical columns from mv_equities
+2026-05-04 13:25:26,051 - __main__ - INFO -   Schema metadata: 675 columns
+2026-05-04 13:25:26,052 - __main__ - INFO -   Feature registry: 74 functions
+2026-05-04 13:25:26,056 - __main__ - INFO -   mv_equities spec: 89 price, 122 financial, 9 historical cols
+2026-05-04 13:25:26,056 - __main__ - INFO - 📦 Step 1b: Pre-computing historical target drift enrichment...
+2026-05-04 13:25:26,056 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:25:26,095 - root - INFO - Loaded 675 column definitions from public.equities_schema_metadata
+2026-05-04 13:25:26,096 - root - INFO - Cached equities schema: 675 columns across 26 roles
+2026-05-04 13:25:26,096 - __main__ - INFO - Column lists derived from equities schema (46 total columns)
+2026-05-04 13:25:26,096 - __main__ - INFO - Historical price/target coverage: 40 / 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 13:25:26,174 - __main__ - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 13:25:26,204 - __main__ - INFO - ✓ Historical drift enrichment complete (12 derived columns)
+2026-05-04 13:25:26,207 - __main__ - INFO -   ⏱ Step 1 completed in 9.1s
+2026-05-04 13:25:26,207 - __main__ - INFO - 🎲 Step 2: Monte Carlo price target simulation (50,000 samples)...
+2026-05-04 13:25:26,207 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:25:26,303 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 13:25:26,310 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 13:25:38,590 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_mc for 5751 / 6646 stocks (mean=6624.13)
+2026-05-04 13:25:38,590 - probabilistic_ml_model.pipeline_runners - INFO - Monte Carlo simulation: 6646 stocks processed
+2026-05-04 13:25:38,593 - __main__ - INFO -   ⏱ Step 2 completed in 12.4s
+2026-05-04 13:25:38,593 - __main__ - INFO - 🎯 Step 3: Price target achievement model...
+2026-05-04 13:25:38,593 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:25:38,632 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 13:25:38,639 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 13:25:38,886 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-05-04 13:25:39,791 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_prob_weighted for 6646 / 6646 stocks (mean=5276.37)
+2026-05-04 13:25:39,791 - probabilistic_ml_model.pipeline_runners - INFO - Price target achievement: 6646 stocks processed
+2026-05-04 13:25:39,793 - __main__ - INFO -   ⏱ Step 3 completed in 1.2s
+2026-05-04 13:25:39,793 - __main__ - INFO - 📐 Step 4: Kalman-filtered price targets...
+2026-05-04 13:25:39,793 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:25:39,825 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 13:25:39,832 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 13:25:40,616 - probabilistic_ml_model.pipeline_runners - INFO - Kalman filter: 6646 stocks processed
+2026-05-04 13:25:40,619 - __main__ - INFO -   ⏱ Step 4 completed in 0.8s
+2026-05-04 13:25:40,619 - __main__ - INFO - 📊 Step 5: Bayesian earnings beat analysis...
+2026-05-04 13:25:40,619 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:25:49,398 - probabilistic_ml_model.pipeline_runners - INFO - Earnings beat analysis: 6646 stocks processed
+2026-05-04 13:25:49,402 - probabilistic_ml_model.pipeline_runners - INFO - EPS streak enrichment: 8 columns added
+2026-05-04 13:27:08,598 - probabilistic_ml_model.pipeline_runners - INFO - Resampled beat enrichment: 18 columns added
+2026-05-04 13:27:09,100 - __main__ - INFO -   ⏱ Step 5 completed in 88.5s
+2026-05-04 13:27:09,100 - __main__ - INFO - 🔬 Step 5b: Accounting anomaly detection & analytics...
+2026-05-04 13:27:09,100 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:27:40,529 - probabilistic_ml_model.statistical_functions.probability_models - INFO - AccountingAnomalyProbabilityModel: severity computed for 6646 stocks, 1512 multi-flag alerts, mean conditional P(anomaly)=0.042
+2026-05-04 13:27:45,831 - probabilistic_ml_model.pipeline_runners - INFO - MCMC anomaly posterior: location=44.648
+2026-05-04 13:27:45,831 - probabilistic_ml_model.pipeline_runners - INFO - Accounting anomaly analysis: 6646 stocks processed
+2026-05-04 13:27:51,523 - probabilistic_ml_model.pipeline_runners - INFO - accounting_anomaly results cached → mcmc_accounting_anomaly_ecd15336c7e9eb36decd5f4772a2b9d60579e64a_chains8_n10000.json
+2026-05-04 13:27:51,524 - __main__ - INFO -   ⏱ Step 5b completed in 42.4s
+2026-05-04 13:27:51,524 - __main__ - INFO - 🛡️ Step 5c: Credit risk & dividend safety analysis...
+2026-05-04 13:27:51,524 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:27:51,559 - probabilistic_ml_model.statistical_functions.probability_models - INFO - CreditRiskProbabilityModel v3.9 config: student_t=True, garch=True, macro=True, df_floor=3.00, n_samples=10000, burn_in=2000
+2026-05-04 13:28:02,104 - probabilistic_ml_model.pipeline_runners - INFO - Hierarchical MCMC credit risk: 1 sectors enriched
+2026-05-04 13:28:02,463 - probabilistic_ml_model.pipeline_runners - INFO - Ruin probability enrichment: 6 columns added
+2026-05-04 13:28:02,464 - probabilistic_ml_model.pipeline_runners - INFO - Credit risk analysis: 6646 stocks processed
+2026-05-04 13:28:02,751 - probabilistic_ml_model.pipeline_runners - INFO - credit_risk results cached → mcmc_credit_risk_c92e04dd087c9edd63ed9590a9793ef9a4713b78_chains8_n10000.json
+2026-05-04 13:28:13,226 - probabilistic_ml_model.pipeline_runners - INFO - Dividend safety analysis (v3.10 per-isin): 6646 stocks processed
+2026-05-04 13:28:13,459 - probabilistic_ml_model.pipeline_runners - INFO - dividend_safety results cached → mcmc_dividend_safety_cfec3689740454a662e772c86f9f7890c635601e_chains8_n10000.json
+2026-05-04 13:28:13,459 - __main__ - INFO -   ⏱ Step 5c completed in 21.9s
+2026-05-04 13:28:13,459 - __main__ - INFO - 🔍 Step 5d: Running stock screening strategies...
+2026-05-04 13:28:13,459 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:28:13,521 - __main__ - INFO -   ✓ Productivity frontier scores added
+2026-05-04 13:28:13,523 - __main__ - INFO -    Reporting lag sentiment: corr=0.203, p=0.0000, hypothesis=marginally significant (p < 0.10)
+2026-05-04 13:28:15,571 - __main__ - INFO - Quality screen: 279 stocks
+2026-05-04 13:28:17,013 - __main__ - INFO - Earnings quality screen: 4286 stocks
+2026-05-04 13:28:18,195 - __main__ - INFO - Value screen: 1445 stocks
+2026-05-04 13:28:19,447 - __main__ - INFO - Growth screen: 3004 stocks
+2026-05-04 13:28:21,060 - __main__ - INFO - GARP screen: 1316 stocks
+2026-05-04 13:28:22,545 - __main__ - INFO - Dividend screen: 1307 stocks
+2026-05-04 13:28:23,904 - __main__ - INFO - Financial health screen: 1342 stocks
+2026-05-04 13:28:25,203 - __main__ - INFO - Valuation reversion screen: 521 stocks
+2026-05-04 13:28:26,531 - __main__ - INFO - Integrity growth screen: 1162 stocks
+2026-05-04 13:28:28,441 - __main__ - INFO - High-yield safe dividend screen: 1527 stocks
+2026-05-04 13:28:28,441 - __main__ - INFO - Sector-relative ranking: 6646 stocks
+2026-05-04 13:28:29,933 - __main__ - INFO - Low-volatility quality screen: 3160 stocks
+2026-05-04 13:28:31,539 - __main__ - INFO - FCF compounders screen: 731 stocks
+2026-05-04 13:28:32,413 - __main__ - INFO - Total return leaders screen: 3552 stocks
+2026-05-04 13:28:32,413 - __main__ - INFO -   ✓ quality: 279 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ earnings_quality: 4,286 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ value: 1,445 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ growth: 3,004 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ garp: 1,316 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ dividend: 1,307 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ healthy: 1,342 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ valuation_reversion: 521 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ integrity_growth: 1,162 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ high_yield_safe: 1,527 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ sector_relative: 6,646 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ low_vol_quality: 3,160 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ fcf_compounders: 731 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ✓ total_return_leaders: 3,552 stocks
+2026-05-04 13:28:32,414 - __main__ - INFO -   ⏱ Step 5d completed in 19.0s
+2026-05-04 13:28:32,414 - __main__ - INFO - 🧪 Step 5e: Resampled Bayesian posterior returns...
+2026-05-04 13:28:32,414 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:29:09,643 - __main__ - INFO - Resampled posterior returns: 6646 stocks, mean posterior=13.98%
+2026-05-04 13:29:09,782 - __main__ - INFO -   ⏱ Step 5e completed in 37.4s
+2026-05-04 13:29:09,783 - __main__ - INFO - 🔗 Step 6: Cross-model alignment...
+2026-05-04 13:29:09,783 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:29:09,873 - __main__ - INFO - Tri-model alignment: 6646 stocks, 2746 strong bullish
+2026-05-04 13:29:10,127 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 13:29:10,133 - __main__ - INFO - Dividend safety signal merged: 432/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 13:29:10,134 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 86.0
+2026-05-04 13:29:10,137 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=86.0)
+2026-05-04 13:29:10,139 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 487
+2026-05-04 13:29:10,155 - __main__ - INFO - Strong consensus picks: 435 stocks
+2026-05-04 13:29:10,155 - __main__ - INFO -   ⏱ Step 6 completed in 0.4s
+2026-05-04 13:29:10,155 - __main__ - INFO - 📋 Step 7: Building expected_returns_summary (multi-model merge)...
+2026-05-04 13:29:10,155 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:29:10,218 - __main__ - INFO - Enriched expected_returns_summary with 60 anomaly columns
+2026-05-04 13:29:10,224 - __main__ - INFO - Enriched expected_returns_summary with 15 credit risk columns
+2026-05-04 13:29:10,228 - __main__ - INFO - Enriched expected_returns_summary with 10 dividend safety columns
+2026-05-04 13:29:10,240 - __main__ - INFO - Enriched expected_returns_summary with 32 columns from mv_all_stock_features
+2026-05-04 13:29:10,245 - __main__ - INFO - Enriched expected_returns_summary with 8 forward consensus columns
+2026-05-04 13:29:10,249 - __main__ - INFO - Merged quad alignment scores into summary (single source of truth)
+2026-05-04 13:29:10,256 - __main__ - INFO - Expected returns summary: 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 487
+2026-05-04 13:29:10,260 - __main__ - INFO -   ✓ 6,646 stocks in expected_returns_summary
+2026-05-04 13:29:10,500 - __main__ - INFO - Quality scoring: 6646 stocks scored (mean=45.3, median=46.5)
+2026-05-04 13:29:10,501 - __main__ - INFO -   Premium: 665 stocks
+2026-05-04 13:29:10,501 - __main__ - INFO -   High: 1329 stocks
+2026-05-04 13:29:10,501 - __main__ - INFO -   Above Avg: 1329 stocks
+2026-05-04 13:29:10,501 - __main__ - INFO -   Below Avg: 1329 stocks
+2026-05-04 13:29:10,501 - __main__ - INFO -   Low: 1329 stocks
+2026-05-04 13:29:10,501 - __main__ - INFO -   Very Low: 665 stocks
+2026-05-04 13:29:10,502 - __main__ - INFO -   Financially healthy (score ≥ 45): 3670 stocks
+2026-05-04 13:29:10,569 - __main__ - INFO - Added z-scores and percentile ranks for 5 return metrics
+2026-05-04 13:29:10,602 - __main__ - INFO - 🔀 Step 7a: Parallel MCMC return analysis...
+2026-05-04 13:29:10,602 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:29:20,713 - __main__ - INFO - Parallel MCMC: R̂=1.0003, converged=True, posterior mean=7.15
+2026-05-04 13:29:20,713 - __main__ - INFO -   95% CI: [6.83, 7.47], posterior std=0.16
+2026-05-04 13:29:20,713 - __main__ - INFO -   Chain means: 7.16, 7.15, 7.15, 7.15, 7.16, 7.16, 7.15, 7.15
+2026-05-04 13:29:20,713 - __main__ - INFO -   Chain stds:  0.16, 0.17, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16
+2026-05-04 13:29:30,525 - __main__ - INFO -   MCMC Student-t: μ=7.88 (±0.08), df=2.0
+2026-05-04 13:29:31,058 - probabilistic_ml_model.statistical_functions.statistical_models - INFO - Multi-level hierarchical MCMC: 9 levels, 161 total groups for 'implied_return_pt'
+2026-05-04 13:29:31,058 - __main__ - INFO -   Hierarchical MCMC: global mean=7.16, std=13.13, n=6646
+2026-05-04 13:29:31,058 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 13:29:31,059 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2073, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       Asia / Pacific: posterior=4.63 (raw=4.58), shrinkage=0.981, n=2062, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       United States and Canada: posterior=8.05 (raw=8.07), shrinkage=0.978, n=1786, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       Africa / Middle East: posterior=5.58 (raw=5.45), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       Latin America and Caribbean: posterior=9.17 (raw=9.48), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 13:29:31,059 - __main__ - INFO -       US: posterior=8.01 (raw=8.01), shrinkage=0.974, n=1518, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       CN: posterior=5.31 (raw=5.34), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       GB: posterior=13.48 (raw=13.96), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       JP: posterior=4.37 (raw=4.34), shrinkage=0.897, n=349, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       CA: posterior=8.41 (raw=8.47), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 13:29:31,059 - __main__ - INFO -       US: posterior=7.92 (raw=7.93), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       CN: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       JP: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       CA: posterior=8.82 (raw=9.06), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 13:29:31,059 - __main__ - INFO -       NYSE: posterior=6.27 (raw=6.19), shrinkage=0.954, n=821, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       NasdaqGS: posterior=7.71 (raw=7.69), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       SHSE: posterior=5.04 (raw=5.01), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       SZSE: posterior=4.44 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       TSE: posterior=4.31 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 13:29:31,059 - __main__ - INFO -       USD: posterior=7.92 (raw=7.94), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       CNY: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       GBP: posterior=13.76 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       JPY: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 13:29:31,059 - __main__ - INFO -       Industrials: posterior=6.44 (raw=6.45), shrinkage=0.974, n=1488, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       Information Technology: posterior=4.07 (raw=3.92), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 13:29:31,059 - __main__ - INFO -       Consumer Discretionary: posterior=8.50 (raw=8.60), shrinkage=0.958, n=923, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -       Health Care: posterior=12.57 (raw=12.80), shrinkage=0.956, n=864, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -       Materials: posterior=6.36 (raw=6.28), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 13:29:31,060 - __main__ - INFO -       Metals and Mining: posterior=7.90 (raw=8.06), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -       Machinery: posterior=6.63 (raw=6.66), shrinkage=0.886, n=311, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.69 (raw=6.74), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -       Chemicals: posterior=3.80 (raw=3.44), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -       Biotechnology: posterior=17.38 (raw=18.08), shrinkage=0.873, n=274, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 13:29:31,060 - __main__ - INFO -       Core: posterior=7.21 (raw=7.21), shrinkage=0.990, n=4002, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -       Value: posterior=7.80 (raw=7.81), shrinkage=0.979, n=1863, P(>0)=100.0%
+2026-05-04 13:29:31,060 - __main__ - INFO -       Growth: posterior=5.40 (raw=5.31), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 13:29:31,061 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 13:29:31,061 - __main__ - INFO -       Small Cap: posterior=8.81 (raw=8.82), shrinkage=0.990, n=3909, P(>0)=100.0%
+2026-05-04 13:29:31,061 - __main__ - INFO -       Mid Cap: posterior=4.98 (raw=4.93), shrinkage=0.977, n=1671, P(>0)=100.0%
+2026-05-04 13:29:31,061 - __main__ - INFO -       Large Cap: posterior=4.63 (raw=4.53), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 13:29:31,076 - __main__ - INFO - MCMC return analysis cached → mcmc_return_117edf63c7fbd1bb4043faabc64f2fd6ad00a84b_chains8_n10000.json
+2026-05-04 13:29:31,077 - __main__ - INFO -   R̂=1.0003, converged=True, posterior mean=7.15
+2026-05-04 13:29:31,077 - __main__ - INFO -   95% CI: [6.83, 7.47], posterior std=0.16
+2026-05-04 13:29:31,077 - __main__ - INFO -   MCMC Student-t: μ=7.88, df=2.0
+2026-05-04 13:29:31,077 - __main__ - INFO -   Hierarchical MCMC: global mean=7.16, std=13.13, n=6646
+2026-05-04 13:29:31,077 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 13:29:31,077 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2073, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       Asia / Pacific: posterior=4.63 (raw=4.58), shrinkage=0.981, n=2062, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       United States and Canada: posterior=8.05 (raw=8.07), shrinkage=0.978, n=1786, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       Africa / Middle East: posterior=5.58 (raw=5.45), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       Latin America and Caribbean: posterior=9.17 (raw=9.48), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 13:29:31,077 - __main__ - INFO -       US: posterior=8.01 (raw=8.01), shrinkage=0.974, n=1518, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       CN: posterior=5.31 (raw=5.34), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       GB: posterior=13.48 (raw=13.96), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       JP: posterior=4.37 (raw=4.34), shrinkage=0.897, n=349, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       CA: posterior=8.41 (raw=8.47), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 13:29:31,077 - __main__ - INFO -       US: posterior=7.92 (raw=7.93), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       CN: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       JP: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       CA: posterior=8.82 (raw=9.06), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 13:29:31,077 - __main__ - INFO -       NYSE: posterior=6.27 (raw=6.19), shrinkage=0.954, n=821, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       NasdaqGS: posterior=7.71 (raw=7.69), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       SHSE: posterior=5.04 (raw=5.01), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       SZSE: posterior=4.44 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       TSE: posterior=4.31 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 13:29:31,077 - __main__ - INFO -       USD: posterior=7.92 (raw=7.94), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       CNY: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       GBP: posterior=13.76 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -       JPY: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:29:31,077 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 13:29:31,077 - __main__ - INFO -       Industrials: posterior=6.44 (raw=6.45), shrinkage=0.974, n=1488, P(>0)=100.0%
+2026-05-04 13:29:31,079 - __main__ - INFO -       Information Technology: posterior=4.07 (raw=3.92), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 13:29:31,079 - __main__ - INFO -       Consumer Discretionary: posterior=8.50 (raw=8.60), shrinkage=0.958, n=923, P(>0)=100.0%
+2026-05-04 13:29:31,079 - __main__ - INFO -       Health Care: posterior=12.57 (raw=12.80), shrinkage=0.956, n=864, P(>0)=100.0%
+2026-05-04 13:29:31,079 - __main__ - INFO -       Materials: posterior=6.36 (raw=6.28), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 13:29:31,079 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 13:29:31,079 - __main__ - INFO -       Metals and Mining: posterior=7.90 (raw=8.06), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 13:29:31,079 - __main__ - INFO -       Machinery: posterior=6.63 (raw=6.66), shrinkage=0.886, n=311, P(>0)=100.0%
+2026-05-04 13:29:31,080 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.69 (raw=6.74), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 13:29:31,080 - __main__ - INFO -       Chemicals: posterior=3.80 (raw=3.44), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 13:29:31,080 - __main__ - INFO -       Biotechnology: posterior=17.38 (raw=18.08), shrinkage=0.873, n=274, P(>0)=100.0%
+2026-05-04 13:29:31,080 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 13:29:31,080 - __main__ - INFO -       Core: posterior=7.21 (raw=7.21), shrinkage=0.990, n=4002, P(>0)=100.0%
+2026-05-04 13:29:31,080 - __main__ - INFO -       Value: posterior=7.80 (raw=7.81), shrinkage=0.979, n=1863, P(>0)=100.0%
+2026-05-04 13:29:31,080 - __main__ - INFO -       Growth: posterior=5.40 (raw=5.31), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 13:29:31,080 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 13:29:31,080 - __main__ - INFO -       Small Cap: posterior=8.81 (raw=8.82), shrinkage=0.990, n=3909, P(>0)=100.0%
+2026-05-04 13:29:31,080 - __main__ - INFO -       Mid Cap: posterior=4.98 (raw=4.93), shrinkage=0.977, n=1671, P(>0)=100.0%
+2026-05-04 13:29:31,080 - __main__ - INFO -       Large Cap: posterior=4.63 (raw=4.53), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 13:29:31,127 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 13:29:31,130 - __main__ - INFO - Dividend safety signal merged: 432/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 13:29:31,132 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 86.0
+2026-05-04 13:29:31,134 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=86.0)
+2026-05-04 13:29:31,136 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 495
+2026-05-04 13:29:31,148 - __main__ - INFO -   ✓ Risk-adjusted returns computed for 6,646 stocks
+2026-05-04 13:29:31,148 - __main__ - INFO -   ⏱ Step 7a completed in 20.5s
+2026-05-04 13:29:31,148 - __main__ - INFO - 🧮 Step 7b: Per-category Bayesian probability analytics...
+2026-05-04 13:29:31,148 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:29:31,255 - root - WARNING - Could not load view category mapping from DB: too many values to unpack (expected 2). Using fallback.
+2026-05-04 13:29:31,255 - __main__ - INFO -   Feature categories from 17 views → 17 categories, 679 total features
+2026-05-04 13:29:31,285 - __main__ - INFO - Sampling budget: Analyst Sentiment trimmed to 25 features (from 26)
+2026-05-04 13:29:31,290 - __main__ - INFO - Sampling budget: Balance Sheet trimmed to 25 features (from 58)
+2026-05-04 13:29:31,294 - __main__ - INFO - Sampling budget: Cash Flow trimmed to 25 features (from 81)
+2026-05-04 13:29:31,297 - __main__ - INFO - Sampling budget: Composite Scores trimmed to 25 features (from 30)
+2026-05-04 13:29:31,301 - __main__ - INFO - Sampling budget: Cost Structure trimmed to 25 features (from 43)
+2026-05-04 13:29:31,306 - __main__ - INFO - Sampling budget: Earnings Quality trimmed to 25 features (from 68)
+2026-05-04 13:29:31,311 - __main__ - INFO - Sampling budget: Growth Metrics trimmed to 25 features (from 62)
+2026-05-04 13:29:31,316 - __main__ - INFO - Sampling budget: Leverage & Liquidity trimmed to 25 features (from 71)
+2026-05-04 13:29:31,322 - __main__ - INFO - Sampling budget: Profitability trimmed to 25 features (from 68)
+2026-05-04 13:29:31,325 - __main__ - INFO - Sampling budget: Quality & Risk trimmed to 25 features (from 44)
+2026-05-04 13:29:31,328 - __main__ - INFO - Sampling budget: Valuation Ratios trimmed to 25 features (from 28)
+2026-05-04 13:38:11,462 - __main__ - INFO - Category Analyst Sentiment: 25 features analyzed
+2026-05-04 13:38:11,468 - __main__ - INFO - Category Balance Sheet: 25 features analyzed
+2026-05-04 13:38:11,468 - __main__ - INFO - Category Cash Flow: 25 features analyzed
+2026-05-04 13:38:11,468 - __main__ - INFO - Category Composite Scores: 25 features analyzed
+2026-05-04 13:38:11,468 - __main__ - INFO - Category Cost Structure: 25 features analyzed
+2026-05-04 13:38:11,468 - __main__ - INFO - Category Dividend Features: 25 features analyzed
+2026-05-04 13:38:11,468 - __main__ - INFO - Category Earnings Quality: 25 features analyzed
+2026-05-04 13:38:11,468 - __main__ - INFO - Category Employment Metrics: 17 features analyzed
+2026-05-04 13:38:11,468 - __main__ - INFO - Category Growth Metrics: 25 features analyzed
+2026-05-04 13:38:11,468 - __main__ - INFO - Category Leverage & Liquidity: 25 features analyzed
+2026-05-04 13:38:11,469 - __main__ - INFO - Category Momentum: 19 features analyzed
+2026-05-04 13:38:11,469 - __main__ - INFO - Category Profitability: 25 features analyzed
+2026-05-04 13:38:11,469 - __main__ - INFO - Category Quality & Risk: 25 features analyzed
+2026-05-04 13:38:11,469 - __main__ - INFO - Category Technical Analysis: 11 features analyzed
+2026-05-04 13:38:11,469 - __main__ - INFO - Category Temporal Features: 16 features analyzed
+2026-05-04 13:38:11,469 - __main__ - INFO - Category Unusual Items: 9 features analyzed
+2026-05-04 13:38:11,469 - __main__ - INFO - Category Valuation Ratios: 25 features analyzed
+2026-05-04 13:38:12,554 - __main__ - INFO - Category analytics cached → category_analytics_03af3d0916be15bfbbd7912be98baf5e16f34a29_cats17_mcmc1_n10000_b1000_max25.json
+2026-05-04 13:38:12,558 - __main__ - INFO -   ✓ Analyzed 17 categories
+2026-05-04 13:38:12,558 - __main__ - INFO -     Analyst Sentiment: 25 features — 25 posteriors
+2026-05-04 13:38:12,558 - __main__ - INFO -     Balance Sheet: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Cash Flow: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Composite Scores: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Cost Structure: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Dividend Features: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Earnings Quality: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Employment Metrics: 17 features — 17 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Growth Metrics: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Leverage & Liquidity: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Momentum: 19 features — 19 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Profitability: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Quality & Risk: 25 features — 25 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Technical Analysis: 11 features — 11 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Temporal Features: 16 features — 13 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Unusual Items: 9 features — 9 posteriors
+2026-05-04 13:38:12,559 - __main__ - INFO -     Valuation Ratios: 25 features — 25 posteriors
+2026-05-04 13:38:12,560 - __main__ - INFO -   ⏱ Step 7b completed in 521.4s
+2026-05-04 13:38:12,560 - __main__ - INFO - 🧪 Step 8: Building InferenceData (ArviZ)...
+2026-05-04 13:38:12,560 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:38:25,463 - __main__ - WARNING - Step 8 builder 'MC' failed: conflicting sizes for dimension 'draw': length 1 on the data but length 25000 on coordinate 'draw'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 982, in build_monte_carlo_inference_data
+    return _build_arviz_or_xarray(
+        posterior_predictive={"simulated_price": simulated_prices},
+    ...<6 lines>...
+        fallback_dims=["chain", "draw", "equity"],
+    )
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 420, in _build_arviz_or_xarray
+    return az.from_dict(
+           ~~~~~~~~~~~~^
+        groups,
+        ^^^^^^^
+        coords=coords,
+        ^^^^^^^^^^^^^^
+        dims=dims,
+        ^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 459, in from_dict
+    ).to_inference_data()
+      ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 334, in to_inference_data
+    "posterior": self.posterior_to_xarray(),
+                 ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 71, in wrapped
+    return func(cls)
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 97, in posterior_to_xarray
+    dict_to_dataset(
+    ~~~~~~~~~~~~~~~^
+        data,
+        ^^^^^
+    ...<4 lines>...
+        index_origin=self.index_origin,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 406, in dict_to_dataset
+    key: numpy_to_data_array(
+         ~~~~~~~~~~~~~~~~~~~^
+        values,
+        ^^^^^^^
+    ...<5 lines>...
+        skip_event_dims=skip_event_dims,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 306, in numpy_to_data_array
+    return xr.DataArray(ary, coords=coords, dims=dims)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 463, in __init__
+    coords, dims = _infer_coords_and_dims(data.shape, coords, dims)
+                   ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 193, in _infer_coords_and_dims
+    validate_dataarray_coords(shape, new_coords, dims_tuple)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\coordinates.py", line 1346, in validate_dataarray_coords
+    raise CoordinateValidationError(
+    ...<3 lines>...
+    )
+xarray.core.coordinates.CoordinateValidationError: conflicting sizes for dimension 'draw': length 1 on the data but length 25000 on coordinate 'draw'
+2026-05-04 13:38:25,620 - __main__ - INFO -    ⚠️ MC InferenceData error: conflicting sizes for dimension 'draw': length 1 on the data but length 25000 on coordinate 'draw'
+2026-05-04 13:38:38,864 - __main__ - WARNING - Step 8 builder 'Credit' failed: conflicting sizes for dimension 'chain': length 1 on the data but length 8 on coordinate 'chain'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 679, in build_credit_risk_inference_data
+    return _build_arviz_or_xarray(
+        posterior={"ruin_probability": posterior_samples},
+    ...<3 lines>...
+        dims=dims,
+    )
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 420, in _build_arviz_or_xarray
+    return az.from_dict(
+           ~~~~~~~~~~~~^
+        groups,
+        ^^^^^^^
+        coords=coords,
+        ^^^^^^^^^^^^^^
+        dims=dims,
+        ^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 459, in from_dict
+    ).to_inference_data()
+      ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 334, in to_inference_data
+    "posterior": self.posterior_to_xarray(),
+                 ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 71, in wrapped
+    return func(cls)
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 97, in posterior_to_xarray
+    dict_to_dataset(
+    ~~~~~~~~~~~~~~~^
+        data,
+        ^^^^^
+    ...<4 lines>...
+        index_origin=self.index_origin,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 406, in dict_to_dataset
+    key: numpy_to_data_array(
+         ~~~~~~~~~~~~~~~~~~~^
+        values,
+        ^^^^^^^
+    ...<5 lines>...
+        skip_event_dims=skip_event_dims,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 306, in numpy_to_data_array
+    return xr.DataArray(ary, coords=coords, dims=dims)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 463, in __init__
+    coords, dims = _infer_coords_and_dims(data.shape, coords, dims)
+                   ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 193, in _infer_coords_and_dims
+    validate_dataarray_coords(shape, new_coords, dims_tuple)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\coordinates.py", line 1346, in validate_dataarray_coords
+    raise CoordinateValidationError(
+    ...<3 lines>...
+    )
+xarray.core.coordinates.CoordinateValidationError: conflicting sizes for dimension 'chain': length 1 on the data but length 8 on coordinate 'chain'
+2026-05-04 13:38:38,867 - __main__ - INFO -    ⚠️ Credit InferenceData error: conflicting sizes for dimension 'chain': length 1 on the data but length 8 on coordinate 'chain'
+2026-05-04 13:38:43,416 - __main__ - WARNING - Step 8 builder 'Anomaly' failed: conflicting sizes for dimension 'chain': length 1 on the data but length 4 on coordinate 'chain'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 864, in build_accounting_anomaly_inference_data
+    return _build_arviz_or_xarray(
+        posterior={"anomaly_score": posterior_samples},
+    ...<3 lines>...
+        dims=dims,
+    )
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 420, in _build_arviz_or_xarray
+    return az.from_dict(
+           ~~~~~~~~~~~~^
+        groups,
+        ^^^^^^^
+        coords=coords,
+        ^^^^^^^^^^^^^^
+        dims=dims,
+        ^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 459, in from_dict
+    ).to_inference_data()
+      ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 334, in to_inference_data
+    "posterior": self.posterior_to_xarray(),
+                 ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 71, in wrapped
+    return func(cls)
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 97, in posterior_to_xarray
+    dict_to_dataset(
+    ~~~~~~~~~~~~~~~^
+        data,
+        ^^^^^
+    ...<4 lines>...
+        index_origin=self.index_origin,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 406, in dict_to_dataset
+    key: numpy_to_data_array(
+         ~~~~~~~~~~~~~~~~~~~^
+        values,
+        ^^^^^^^
+    ...<5 lines>...
+        skip_event_dims=skip_event_dims,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 306, in numpy_to_data_array
+    return xr.DataArray(ary, coords=coords, dims=dims)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 463, in __init__
+    coords, dims = _infer_coords_and_dims(data.shape, coords, dims)
+                   ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 193, in _infer_coords_and_dims
+    validate_dataarray_coords(shape, new_coords, dims_tuple)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\coordinates.py", line 1346, in validate_dataarray_coords
+    raise CoordinateValidationError(
+    ...<3 lines>...
+    )
+xarray.core.coordinates.CoordinateValidationError: conflicting sizes for dimension 'chain': length 1 on the data but length 4 on coordinate 'chain'
+2026-05-04 13:38:43,419 - __main__ - INFO -    ⚠️ Anomaly InferenceData error: conflicting sizes for dimension 'chain': length 1 on the data but length 4 on coordinate 'chain'
+2026-05-04 13:38:43,454 - __main__ - WARNING - Step 8 builder 'Category[Analyst Sentiment]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,458 - __main__ - INFO -    ⚠️ Category[Analyst Sentiment] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,458 - __main__ - WARNING - Step 8 builder 'Category[Balance Sheet]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,459 - __main__ - INFO -    ⚠️ Category[Balance Sheet] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,460 - __main__ - WARNING - Step 8 builder 'Category[Cash Flow]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,460 - __main__ - INFO -    ⚠️ Category[Cash Flow] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,460 - __main__ - WARNING - Step 8 builder 'Category[Composite Scores]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,461 - __main__ - INFO -    ⚠️ Category[Composite Scores] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,461 - __main__ - WARNING - Step 8 builder 'Category[Cost Structure]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,461 - __main__ - INFO -    ⚠️ Category[Cost Structure] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,461 - __main__ - WARNING - Step 8 builder 'Category[Dividend Features]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,466 - __main__ - INFO -    ⚠️ Category[Dividend Features] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,466 - __main__ - WARNING - Step 8 builder 'Category[Earnings Quality]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,468 - __main__ - INFO -    ⚠️ Category[Earnings Quality] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,468 - __main__ - WARNING - Step 8 builder 'Category[Employment Metrics]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,469 - __main__ - INFO -    ⚠️ Category[Employment Metrics] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,469 - __main__ - WARNING - Step 8 builder 'Category[Growth Metrics]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,469 - __main__ - INFO -    ⚠️ Category[Growth Metrics] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,469 - __main__ - WARNING - Step 8 builder 'Category[Leverage & Liquidity]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,469 - __main__ - INFO -    ⚠️ Category[Leverage & Liquidity] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,469 - __main__ - WARNING - Step 8 builder 'Category[Momentum]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,470 - __main__ - INFO -    ⚠️ Category[Momentum] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,470 - __main__ - WARNING - Step 8 builder 'Category[Profitability]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,471 - __main__ - INFO -    ⚠️ Category[Profitability] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,471 - __main__ - WARNING - Step 8 builder 'Category[Quality & Risk]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,471 - __main__ - INFO -    ⚠️ Category[Quality & Risk] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,471 - __main__ - WARNING - Step 8 builder 'Category[Technical Analysis]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,472 - __main__ - INFO -    ⚠️ Category[Technical Analysis] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,472 - __main__ - WARNING - Step 8 builder 'Category[Temporal Features]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,473 - __main__ - INFO -    ⚠️ Category[Temporal Features] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,473 - __main__ - WARNING - Step 8 builder 'Category[Unusual Items]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,473 - __main__ - INFO -    ⚠️ Category[Unusual Items] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:38:43,473 - __main__ - WARNING - Step 8 builder 'Category[Valuation Ratios]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1077, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1010, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:38:43,474 - __main__ - INFO -    ⚠️ Category[Valuation Ratios] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:42:14,868 - __main__ - INFO - ================================================================================
+2026-05-04 13:42:14,868 - __main__ - INFO - Expected Returns Analytics Pipeline v3.7
+2026-05-04 13:42:14,868 - __main__ - INFO - ================================================================================
+2026-05-04 13:42:14,868 - __main__ - INFO - 🔧 Numba: True, Joblib: True, ArviZ: True
+2026-05-04 13:42:14,869 - __main__ - INFO -    n_jobs=-1, max_features/cat=25, caching=on (TTL=24.0h)
+2026-05-04 13:42:14,869 - probabilistic_ml_model.pipeline_runners - INFO - Cache cleanup (full purge): removed 0 files from .cache
+2026-05-04 13:42:14,869 - __main__ - INFO - 📦 Step 1: Loading feature data (v3.6: equities MV + feature views + all stock features MV)...
+2026-05-04 13:42:14,869 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:42:15,120 - probabilistic_ml_model.data_utils.feature_catalog - INFO - FeatureViewCatalog loaded: 27 categories, 17 views, 869 total features
+2026-05-04 13:42:15,120 - __main__ - INFO - ✓ FeatureViewCatalog: 27 categories, 17 views
+2026-05-04 13:42:15,121 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-05-04 13:42:19,848 - root - INFO - Loaded 6646 rows from public.mv_all_stock_features
+2026-05-04 13:42:19,896 - root - INFO - Backfill complete. Columns: 821
+2026-05-04 13:42:19,967 - __main__ - INFO - Kalman momentum filter applied to 5 columns
+2026-05-04 13:42:19,976 - __main__ - INFO - Loaded mv_all_stock_features: 6646 rows × 831 columns
+2026-05-04 13:42:19,976 - __main__ - INFO - ✓ Loaded mv_all_stock_features: 6,646 stocks × 831 features
+2026-05-04 13:42:19,978 - __main__ - INFO -   Deduplicated to 6,646 unique isins
+2026-05-04 13:42:20,015 - root - INFO - Loaded 26 feature categories from database
+2026-05-04 13:42:20,015 - __main__ - INFO - Loaded 26 feature categories (403 total features)
+2026-05-04 13:42:20,015 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-05-04 13:42:23,321 - root - INFO - Loaded 6646 rows from public.mv_equities
+2026-05-04 13:42:23,357 - root - INFO - Backfill complete. Columns: 680
+2026-05-04 13:42:23,369 - __main__ - INFO - Loaded 26 feature categories (369 total features)
+2026-05-04 13:42:23,370 - __main__ - INFO - All feature categories have ≥80%% coverage
+2026-05-04 13:42:23,370 - __main__ - INFO - Loaded expected returns data: 6646 stocks × 680 features
+2026-05-04 13:42:23,370 - __main__ - INFO - ✓ Loaded mv_equities (historical cols): 6,646 stocks × 680 features
+2026-05-04 13:42:23,406 - __main__ - INFO -   Merged 507 historical columns from mv_equities
+2026-05-04 13:42:23,715 - __main__ - INFO -   Schema metadata: 675 columns
+2026-05-04 13:42:23,715 - __main__ - INFO -   Feature registry: 74 functions
+2026-05-04 13:42:23,719 - __main__ - INFO -   mv_equities spec: 89 price, 122 financial, 9 historical cols
+2026-05-04 13:42:23,719 - __main__ - INFO - 📦 Step 1b: Pre-computing historical target drift enrichment...
+2026-05-04 13:42:23,719 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:42:23,755 - root - INFO - Loaded 675 column definitions from public.equities_schema_metadata
+2026-05-04 13:42:23,755 - root - INFO - Cached equities schema: 675 columns across 26 roles
+2026-05-04 13:42:23,755 - __main__ - INFO - Column lists derived from equities schema (46 total columns)
+2026-05-04 13:42:23,755 - __main__ - INFO - Historical price/target coverage: 40 / 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 13:42:23,802 - __main__ - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 13:42:23,829 - __main__ - INFO - ✓ Historical drift enrichment complete (12 derived columns)
+2026-05-04 13:42:23,833 - __main__ - INFO -   ⏱ Step 1 completed in 9.0s
+2026-05-04 13:42:23,833 - __main__ - INFO - 🎲 Step 2: Monte Carlo price target simulation (50,000 samples)...
+2026-05-04 13:42:23,833 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:42:23,934 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 13:42:23,942 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 13:42:34,294 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_mc for 5751 / 6646 stocks (mean=6622.49)
+2026-05-04 13:42:34,294 - probabilistic_ml_model.pipeline_runners - INFO - Monte Carlo simulation: 6646 stocks processed
+2026-05-04 13:42:34,297 - __main__ - INFO -   ⏱ Step 2 completed in 10.5s
+2026-05-04 13:42:34,297 - __main__ - INFO - 🎯 Step 3: Price target achievement model...
+2026-05-04 13:42:34,297 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:42:34,338 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 13:42:34,345 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 13:42:34,589 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-05-04 13:42:35,586 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_prob_weighted for 6646 / 6646 stocks (mean=5276.37)
+2026-05-04 13:42:35,587 - probabilistic_ml_model.pipeline_runners - INFO - Price target achievement: 6646 stocks processed
+2026-05-04 13:42:35,589 - __main__ - INFO -   ⏱ Step 3 completed in 1.3s
+2026-05-04 13:42:35,589 - __main__ - INFO - 📐 Step 4: Kalman-filtered price targets...
+2026-05-04 13:42:35,589 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:42:35,623 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 13:42:35,630 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 13:42:36,398 - probabilistic_ml_model.pipeline_runners - INFO - Kalman filter: 6646 stocks processed
+2026-05-04 13:42:36,400 - __main__ - INFO -   ⏱ Step 4 completed in 0.8s
+2026-05-04 13:42:36,400 - __main__ - INFO - 📊 Step 5: Bayesian earnings beat analysis...
+2026-05-04 13:42:36,400 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:42:48,561 - probabilistic_ml_model.pipeline_runners - INFO - Earnings beat analysis: 6646 stocks processed
+2026-05-04 13:42:48,566 - probabilistic_ml_model.pipeline_runners - INFO - EPS streak enrichment: 8 columns added
+2026-05-04 13:44:42,188 - probabilistic_ml_model.pipeline_runners - INFO - Resampled beat enrichment: 18 columns added
+2026-05-04 13:44:42,798 - __main__ - INFO -   ⏱ Step 5 completed in 126.4s
+2026-05-04 13:44:42,798 - __main__ - INFO - 🔬 Step 5b: Accounting anomaly detection & analytics...
+2026-05-04 13:44:42,798 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:45:14,981 - probabilistic_ml_model.statistical_functions.probability_models - INFO - AccountingAnomalyProbabilityModel: severity computed for 6646 stocks, 1512 multi-flag alerts, mean conditional P(anomaly)=0.042
+2026-05-04 13:45:20,360 - probabilistic_ml_model.pipeline_runners - INFO - MCMC anomaly posterior: location=44.635
+2026-05-04 13:45:20,360 - probabilistic_ml_model.pipeline_runners - INFO - Accounting anomaly analysis: 6646 stocks processed
+2026-05-04 13:45:25,855 - probabilistic_ml_model.pipeline_runners - INFO - accounting_anomaly results cached → mcmc_accounting_anomaly_e996029212ee5637ec8723e45925fcc5e249033a_chains8_n10000.json
+2026-05-04 13:45:25,855 - __main__ - INFO -   ⏱ Step 5b completed in 43.1s
+2026-05-04 13:45:25,855 - __main__ - INFO - 🛡️ Step 5c: Credit risk & dividend safety analysis...
+2026-05-04 13:45:25,855 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:45:25,893 - probabilistic_ml_model.statistical_functions.probability_models - INFO - CreditRiskProbabilityModel v3.9 config: student_t=True, garch=True, macro=True, df_floor=3.00, n_samples=10000, burn_in=2000
+2026-05-04 13:45:36,603 - probabilistic_ml_model.pipeline_runners - INFO - Hierarchical MCMC credit risk: 1 sectors enriched
+2026-05-04 13:45:36,966 - probabilistic_ml_model.pipeline_runners - INFO - Ruin probability enrichment: 6 columns added
+2026-05-04 13:45:36,966 - probabilistic_ml_model.pipeline_runners - INFO - Credit risk analysis: 6646 stocks processed
+2026-05-04 13:45:37,262 - probabilistic_ml_model.pipeline_runners - INFO - credit_risk results cached → mcmc_credit_risk_e377588d36320e58fb1539976975117261930149_chains8_n10000.json
+2026-05-04 13:45:47,720 - probabilistic_ml_model.pipeline_runners - INFO - Dividend safety analysis (v3.10 per-isin): 6646 stocks processed
+2026-05-04 13:45:47,944 - probabilistic_ml_model.pipeline_runners - INFO - dividend_safety results cached → mcmc_dividend_safety_fce2c3280089cdd4cc1a2f51bad6d6d7f8e2cd4d_chains8_n10000.json
+2026-05-04 13:45:47,945 - __main__ - INFO -   ⏱ Step 5c completed in 22.1s
+2026-05-04 13:45:47,945 - __main__ - INFO - 🔍 Step 5d: Running stock screening strategies...
+2026-05-04 13:45:47,945 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:45:48,006 - __main__ - INFO -   ✓ Productivity frontier scores added
+2026-05-04 13:45:48,008 - __main__ - INFO -    Reporting lag sentiment: corr=0.203, p=0.0000, hypothesis=marginally significant (p < 0.10)
+2026-05-04 13:45:50,018 - __main__ - INFO - Quality screen: 279 stocks
+2026-05-04 13:45:51,439 - __main__ - INFO - Earnings quality screen: 4286 stocks
+2026-05-04 13:45:52,651 - __main__ - INFO - Value screen: 1445 stocks
+2026-05-04 13:45:53,920 - __main__ - INFO - Growth screen: 3004 stocks
+2026-05-04 13:45:55,555 - __main__ - INFO - GARP screen: 1316 stocks
+2026-05-04 13:45:57,035 - __main__ - INFO - Dividend screen: 1307 stocks
+2026-05-04 13:45:58,383 - __main__ - INFO - Financial health screen: 1342 stocks
+2026-05-04 13:45:59,716 - __main__ - INFO - Valuation reversion screen: 521 stocks
+2026-05-04 13:46:01,118 - __main__ - INFO - Integrity growth screen: 1162 stocks
+2026-05-04 13:46:03,126 - __main__ - INFO - High-yield safe dividend screen: 1527 stocks
+2026-05-04 13:46:03,126 - __main__ - INFO - Sector-relative ranking: 6646 stocks
+2026-05-04 13:46:04,604 - __main__ - INFO - Low-volatility quality screen: 3160 stocks
+2026-05-04 13:46:06,158 - __main__ - INFO - FCF compounders screen: 731 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO - Total return leaders screen: 3552 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ quality: 279 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ earnings_quality: 4,286 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ value: 1,445 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ growth: 3,004 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ garp: 1,316 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ dividend: 1,307 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ healthy: 1,342 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ valuation_reversion: 521 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ integrity_growth: 1,162 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ high_yield_safe: 1,527 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ sector_relative: 6,646 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ low_vol_quality: 3,160 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ fcf_compounders: 731 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ✓ total_return_leaders: 3,552 stocks
+2026-05-04 13:46:07,022 - __main__ - INFO -   ⏱ Step 5d completed in 19.1s
+2026-05-04 13:46:07,022 - __main__ - INFO - 🧪 Step 5e: Resampled Bayesian posterior returns...
+2026-05-04 13:46:07,022 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:46:33,757 - __main__ - INFO - Resampled posterior returns: 6646 stocks, mean posterior=13.98%
+2026-05-04 13:46:34,035 - __main__ - INFO -   ⏱ Step 5e completed in 27.0s
+2026-05-04 13:46:34,035 - __main__ - INFO - 🔗 Step 6: Cross-model alignment...
+2026-05-04 13:46:34,036 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:46:34,156 - __main__ - INFO - Tri-model alignment: 6646 stocks, 2745 strong bullish
+2026-05-04 13:46:34,407 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 13:46:34,414 - __main__ - INFO - Dividend safety signal merged: 432/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 13:46:34,417 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 86.0
+2026-05-04 13:46:34,422 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=86.0)
+2026-05-04 13:46:34,424 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 487
+2026-05-04 13:46:34,441 - __main__ - INFO - Strong consensus picks: 436 stocks
+2026-05-04 13:46:34,441 - __main__ - INFO -   ⏱ Step 6 completed in 0.4s
+2026-05-04 13:46:34,442 - __main__ - INFO - 📋 Step 7: Building expected_returns_summary (multi-model merge)...
+2026-05-04 13:46:34,442 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:46:34,513 - __main__ - INFO - Enriched expected_returns_summary with 60 anomaly columns
+2026-05-04 13:46:34,519 - __main__ - INFO - Enriched expected_returns_summary with 15 credit risk columns
+2026-05-04 13:46:34,524 - __main__ - INFO - Enriched expected_returns_summary with 10 dividend safety columns
+2026-05-04 13:46:34,558 - __main__ - INFO - Enriched expected_returns_summary with 32 columns from mv_all_stock_features
+2026-05-04 13:46:34,567 - __main__ - INFO - Enriched expected_returns_summary with 8 forward consensus columns
+2026-05-04 13:46:34,574 - __main__ - INFO - Merged quad alignment scores into summary (single source of truth)
+2026-05-04 13:46:34,583 - __main__ - INFO - Expected returns summary: 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 487
+2026-05-04 13:46:34,587 - __main__ - INFO -   ✓ 6,646 stocks in expected_returns_summary
+2026-05-04 13:46:34,775 - __main__ - INFO - Quality scoring: 6646 stocks scored (mean=45.3, median=46.5)
+2026-05-04 13:46:34,776 - __main__ - INFO -   Premium: 665 stocks
+2026-05-04 13:46:34,776 - __main__ - INFO -   High: 1329 stocks
+2026-05-04 13:46:34,776 - __main__ - INFO -   Above Avg: 1329 stocks
+2026-05-04 13:46:34,777 - __main__ - INFO -   Below Avg: 1329 stocks
+2026-05-04 13:46:34,777 - __main__ - INFO -   Low: 1329 stocks
+2026-05-04 13:46:34,777 - __main__ - INFO -   Very Low: 665 stocks
+2026-05-04 13:46:34,777 - __main__ - INFO -   Financially healthy (score ≥ 45): 3670 stocks
+2026-05-04 13:46:34,872 - __main__ - INFO - Added z-scores and percentile ranks for 5 return metrics
+2026-05-04 13:46:34,913 - __main__ - INFO - 🔀 Step 7a: Parallel MCMC return analysis...
+2026-05-04 13:46:34,913 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:46:45,866 - __main__ - INFO - Parallel MCMC: R̂=1.0003, converged=True, posterior mean=7.15
+2026-05-04 13:46:45,867 - __main__ - INFO -   95% CI: [6.83, 7.47], posterior std=0.16
+2026-05-04 13:46:45,867 - __main__ - INFO -   Chain means: 7.16, 7.15, 7.15, 7.15, 7.16, 7.16, 7.15, 7.15
+2026-05-04 13:46:45,867 - __main__ - INFO -   Chain stds:  0.16, 0.17, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16
+2026-05-04 13:46:55,456 - __main__ - INFO -   MCMC Student-t: μ=7.89 (±0.08), df=2.0
+2026-05-04 13:46:55,939 - probabilistic_ml_model.statistical_functions.statistical_models - INFO - Multi-level hierarchical MCMC: 9 levels, 161 total groups for 'implied_return_pt'
+2026-05-04 13:46:55,940 - __main__ - INFO -   Hierarchical MCMC: global mean=7.16, std=13.13, n=6646
+2026-05-04 13:46:55,940 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 13:46:55,940 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2073, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       Asia / Pacific: posterior=4.63 (raw=4.58), shrinkage=0.981, n=2062, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       United States and Canada: posterior=8.05 (raw=8.07), shrinkage=0.978, n=1786, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       Africa / Middle East: posterior=5.58 (raw=5.45), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       Latin America and Caribbean: posterior=9.17 (raw=9.48), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 13:46:55,940 - __main__ - INFO -       US: posterior=8.01 (raw=8.01), shrinkage=0.974, n=1518, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       CN: posterior=5.31 (raw=5.34), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       GB: posterior=13.48 (raw=13.96), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       JP: posterior=4.37 (raw=4.34), shrinkage=0.897, n=349, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       CA: posterior=8.41 (raw=8.47), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 13:46:55,940 - __main__ - INFO -       US: posterior=7.92 (raw=7.93), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       CN: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       JP: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       CA: posterior=8.82 (raw=9.06), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 13:46:55,940 - __main__ - INFO -       NYSE: posterior=6.27 (raw=6.19), shrinkage=0.954, n=821, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       NasdaqGS: posterior=7.71 (raw=7.69), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       SHSE: posterior=5.04 (raw=5.01), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       SZSE: posterior=4.44 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -       TSE: posterior=4.31 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:46:55,940 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 13:46:55,941 - __main__ - INFO -       USD: posterior=7.92 (raw=7.94), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 13:46:55,941 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 13:46:55,941 - __main__ - INFO -       CNY: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 13:46:55,941 - __main__ - INFO -       GBP: posterior=13.76 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 13:46:55,941 - __main__ - INFO -       JPY: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:46:55,941 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 13:46:55,941 - __main__ - INFO -       Industrials: posterior=6.44 (raw=6.45), shrinkage=0.974, n=1488, P(>0)=100.0%
+2026-05-04 13:46:55,941 - __main__ - INFO -       Information Technology: posterior=4.07 (raw=3.92), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 13:46:55,941 - __main__ - INFO -       Consumer Discretionary: posterior=8.50 (raw=8.60), shrinkage=0.958, n=923, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Health Care: posterior=12.57 (raw=12.80), shrinkage=0.956, n=864, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Materials: posterior=6.36 (raw=6.28), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 13:46:55,945 - __main__ - INFO -       Metals and Mining: posterior=7.90 (raw=8.06), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Machinery: posterior=6.63 (raw=6.66), shrinkage=0.886, n=311, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.69 (raw=6.74), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Chemicals: posterior=3.80 (raw=3.44), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Biotechnology: posterior=17.38 (raw=18.08), shrinkage=0.873, n=274, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 13:46:55,945 - __main__ - INFO -       Core: posterior=7.21 (raw=7.21), shrinkage=0.990, n=4002, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Value: posterior=7.80 (raw=7.81), shrinkage=0.979, n=1863, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Growth: posterior=5.40 (raw=5.31), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 13:46:55,945 - __main__ - INFO -       Small Cap: posterior=8.81 (raw=8.82), shrinkage=0.990, n=3909, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Mid Cap: posterior=4.98 (raw=4.93), shrinkage=0.977, n=1671, P(>0)=100.0%
+2026-05-04 13:46:55,945 - __main__ - INFO -       Large Cap: posterior=4.63 (raw=4.53), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 13:46:55,969 - __main__ - INFO - MCMC return analysis cached → mcmc_return_ede6e1961aae8d9f29cc9dde2aba2e49a28335e2_chains8_n10000.json
+2026-05-04 13:46:55,970 - __main__ - INFO -   R̂=1.0003, converged=True, posterior mean=7.15
+2026-05-04 13:46:55,970 - __main__ - INFO -   95% CI: [6.83, 7.47], posterior std=0.16
+2026-05-04 13:46:55,970 - __main__ - INFO -   MCMC Student-t: μ=7.89, df=2.0
+2026-05-04 13:46:55,970 - __main__ - INFO -   Hierarchical MCMC: global mean=7.16, std=13.13, n=6646
+2026-05-04 13:46:55,970 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 13:46:55,970 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2073, P(>0)=100.0%
+2026-05-04 13:46:55,970 - __main__ - INFO -       Asia / Pacific: posterior=4.63 (raw=4.58), shrinkage=0.981, n=2062, P(>0)=100.0%
+2026-05-04 13:46:55,970 - __main__ - INFO -       United States and Canada: posterior=8.05 (raw=8.07), shrinkage=0.978, n=1786, P(>0)=100.0%
+2026-05-04 13:46:55,970 - __main__ - INFO -       Africa / Middle East: posterior=5.58 (raw=5.45), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 13:46:55,970 - __main__ - INFO -       Latin America and Caribbean: posterior=9.17 (raw=9.48), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 13:46:55,970 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 13:46:55,970 - __main__ - INFO -       US: posterior=8.01 (raw=8.01), shrinkage=0.974, n=1518, P(>0)=100.0%
+2026-05-04 13:46:55,970 - __main__ - INFO -       CN: posterior=5.31 (raw=5.34), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 13:46:55,970 - __main__ - INFO -       GB: posterior=13.48 (raw=13.96), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       JP: posterior=4.37 (raw=4.34), shrinkage=0.897, n=349, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       CA: posterior=8.41 (raw=8.47), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 13:46:55,971 - __main__ - INFO -       US: posterior=7.92 (raw=7.93), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       CN: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       JP: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       CA: posterior=8.82 (raw=9.06), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 13:46:55,971 - __main__ - INFO -       NYSE: posterior=6.27 (raw=6.19), shrinkage=0.954, n=821, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       NasdaqGS: posterior=7.71 (raw=7.69), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       SHSE: posterior=5.04 (raw=5.01), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       SZSE: posterior=4.44 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       TSE: posterior=4.31 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 13:46:55,971 - __main__ - INFO -       USD: posterior=7.92 (raw=7.94), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       CNY: posterior=4.81 (raw=4.69), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       GBP: posterior=13.76 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -       JPY: posterior=4.60 (raw=4.31), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 13:46:55,971 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 13:46:55,971 - __main__ - INFO -       Industrials: posterior=6.44 (raw=6.45), shrinkage=0.974, n=1488, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -       Information Technology: posterior=4.07 (raw=3.92), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -       Consumer Discretionary: posterior=8.50 (raw=8.60), shrinkage=0.958, n=923, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -       Health Care: posterior=12.57 (raw=12.80), shrinkage=0.956, n=864, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -       Materials: posterior=6.36 (raw=6.28), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 13:46:55,973 - __main__ - INFO -       Metals and Mining: posterior=7.90 (raw=8.06), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -       Machinery: posterior=6.63 (raw=6.66), shrinkage=0.886, n=311, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.69 (raw=6.74), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -       Chemicals: posterior=3.80 (raw=3.44), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -       Biotechnology: posterior=17.38 (raw=18.08), shrinkage=0.873, n=274, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 13:46:55,973 - __main__ - INFO -       Core: posterior=7.21 (raw=7.21), shrinkage=0.990, n=4002, P(>0)=100.0%
+2026-05-04 13:46:55,973 - __main__ - INFO -       Value: posterior=7.80 (raw=7.81), shrinkage=0.979, n=1863, P(>0)=100.0%
+2026-05-04 13:46:55,974 - __main__ - INFO -       Growth: posterior=5.40 (raw=5.31), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 13:46:55,974 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 13:46:55,974 - __main__ - INFO -       Small Cap: posterior=8.81 (raw=8.82), shrinkage=0.990, n=3909, P(>0)=100.0%
+2026-05-04 13:46:55,974 - __main__ - INFO -       Mid Cap: posterior=4.98 (raw=4.93), shrinkage=0.977, n=1671, P(>0)=100.0%
+2026-05-04 13:46:55,974 - __main__ - INFO -       Large Cap: posterior=4.63 (raw=4.53), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 13:46:56,030 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 13:46:56,035 - __main__ - INFO - Dividend safety signal merged: 432/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 13:46:56,036 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 86.0
+2026-05-04 13:46:56,040 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=86.0)
+2026-05-04 13:46:56,043 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 495
+2026-05-04 13:46:56,060 - __main__ - INFO -   ✓ Risk-adjusted returns computed for 6,646 stocks
+2026-05-04 13:46:56,060 - __main__ - INFO -   ⏱ Step 7a completed in 21.1s
+2026-05-04 13:46:56,060 - __main__ - INFO - 🧮 Step 7b: Per-category Bayesian probability analytics...
+2026-05-04 13:46:56,060 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:46:56,314 - root - WARNING - Could not load view category mapping from DB: too many values to unpack (expected 2). Using fallback.
+2026-05-04 13:46:56,314 - __main__ - INFO -   Feature categories from 17 views → 17 categories, 679 total features
+2026-05-04 13:46:56,346 - __main__ - INFO - Sampling budget: Analyst Sentiment trimmed to 25 features (from 26)
+2026-05-04 13:46:56,351 - __main__ - INFO - Sampling budget: Balance Sheet trimmed to 25 features (from 58)
+2026-05-04 13:46:56,356 - __main__ - INFO - Sampling budget: Cash Flow trimmed to 25 features (from 81)
+2026-05-04 13:46:56,359 - __main__ - INFO - Sampling budget: Composite Scores trimmed to 25 features (from 30)
+2026-05-04 13:46:56,363 - __main__ - INFO - Sampling budget: Cost Structure trimmed to 25 features (from 43)
+2026-05-04 13:46:56,368 - __main__ - INFO - Sampling budget: Earnings Quality trimmed to 25 features (from 68)
+2026-05-04 13:46:56,373 - __main__ - INFO - Sampling budget: Growth Metrics trimmed to 25 features (from 62)
+2026-05-04 13:46:56,378 - __main__ - INFO - Sampling budget: Leverage & Liquidity trimmed to 25 features (from 71)
+2026-05-04 13:46:56,385 - __main__ - INFO - Sampling budget: Profitability trimmed to 25 features (from 68)
+2026-05-04 13:46:56,388 - __main__ - INFO - Sampling budget: Quality & Risk trimmed to 25 features (from 44)
+2026-05-04 13:46:56,391 - __main__ - INFO - Sampling budget: Valuation Ratios trimmed to 25 features (from 28)
+2026-05-04 13:55:37,125 - __main__ - INFO - Category Analyst Sentiment: 25 features analyzed
+2026-05-04 13:55:37,125 - __main__ - INFO - Category Balance Sheet: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Cash Flow: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Composite Scores: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Cost Structure: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Dividend Features: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Earnings Quality: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Employment Metrics: 17 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Growth Metrics: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Leverage & Liquidity: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Momentum: 19 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Profitability: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Quality & Risk: 25 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Technical Analysis: 11 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Temporal Features: 16 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Unusual Items: 9 features analyzed
+2026-05-04 13:55:37,126 - __main__ - INFO - Category Valuation Ratios: 25 features analyzed
+2026-05-04 13:55:37,493 - __main__ - INFO - Category analytics cached → category_analytics_c7610eac170c09a0c8b2247215f9eb0b250e3a9c_cats17_mcmc1_n10000_b1000_max25.json
+2026-05-04 13:55:37,494 - __main__ - INFO -   ✓ Analyzed 17 categories
+2026-05-04 13:55:37,494 - __main__ - INFO -     Analyst Sentiment: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Balance Sheet: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Cash Flow: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Composite Scores: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Cost Structure: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Dividend Features: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Earnings Quality: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Employment Metrics: 17 features — 17 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Growth Metrics: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Leverage & Liquidity: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Momentum: 19 features — 19 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Profitability: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Quality & Risk: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Technical Analysis: 11 features — 11 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Temporal Features: 16 features — 13 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Unusual Items: 9 features — 9 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -     Valuation Ratios: 25 features — 25 posteriors
+2026-05-04 13:55:37,494 - __main__ - INFO -   ⏱ Step 7b completed in 521.4s
+2026-05-04 13:55:37,494 - __main__ - INFO - 🧪 Step 8: Building InferenceData (ArviZ)...
+2026-05-04 13:55:37,494 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 13:55:43,294 - __main__ - WARNING - Step 8 builder 'MC' failed: conflicting sizes for dimension 'draw': length 1 on the data but length 25000 on coordinate 'draw'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1018, in build_monte_carlo_inference_data
+    return _build_arviz_or_xarray(
+        posterior_predictive={"simulated_price": simulated_prices},
+    ...<6 lines>...
+        fallback_dims=["chain", "draw", "equity"],
+    )
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 449, in _build_arviz_or_xarray
+    return az.from_dict(
+           ~~~~~~~~~~~~^
+        groups,
+        ^^^^^^^
+        coords=coords,
+        ^^^^^^^^^^^^^^
+        dims=dims,
+        ^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 459, in from_dict
+    ).to_inference_data()
+      ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 334, in to_inference_data
+    "posterior": self.posterior_to_xarray(),
+                 ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 71, in wrapped
+    return func(cls)
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 97, in posterior_to_xarray
+    dict_to_dataset(
+    ~~~~~~~~~~~~~~~^
+        data,
+        ^^^^^
+    ...<4 lines>...
+        index_origin=self.index_origin,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 406, in dict_to_dataset
+    key: numpy_to_data_array(
+         ~~~~~~~~~~~~~~~~~~~^
+        values,
+        ^^^^^^^
+    ...<5 lines>...
+        skip_event_dims=skip_event_dims,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 306, in numpy_to_data_array
+    return xr.DataArray(ary, coords=coords, dims=dims)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 463, in __init__
+    coords, dims = _infer_coords_and_dims(data.shape, coords, dims)
+                   ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 193, in _infer_coords_and_dims
+    validate_dataarray_coords(shape, new_coords, dims_tuple)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\coordinates.py", line 1346, in validate_dataarray_coords
+    raise CoordinateValidationError(
+    ...<3 lines>...
+    )
+xarray.core.coordinates.CoordinateValidationError: conflicting sizes for dimension 'draw': length 1 on the data but length 25000 on coordinate 'draw'
+2026-05-04 13:55:43,307 - __main__ - INFO -    ⚠️ MC InferenceData error: conflicting sizes for dimension 'draw': length 1 on the data but length 25000 on coordinate 'draw'
+2026-05-04 13:55:53,108 - __main__ - WARNING - Step 8 builder 'Credit' failed: conflicting sizes for dimension 'chain': length 1 on the data but length 8 on coordinate 'chain'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 708, in build_credit_risk_inference_data
+    return _build_arviz_or_xarray(
+        posterior={"ruin_probability": posterior_samples},
+    ...<3 lines>...
+        dims=dims,
+    )
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 449, in _build_arviz_or_xarray
+    return az.from_dict(
+           ~~~~~~~~~~~~^
+        groups,
+        ^^^^^^^
+        coords=coords,
+        ^^^^^^^^^^^^^^
+        dims=dims,
+        ^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 459, in from_dict
+    ).to_inference_data()
+      ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 334, in to_inference_data
+    "posterior": self.posterior_to_xarray(),
+                 ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 71, in wrapped
+    return func(cls)
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 97, in posterior_to_xarray
+    dict_to_dataset(
+    ~~~~~~~~~~~~~~~^
+        data,
+        ^^^^^
+    ...<4 lines>...
+        index_origin=self.index_origin,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 406, in dict_to_dataset
+    key: numpy_to_data_array(
+         ~~~~~~~~~~~~~~~~~~~^
+        values,
+        ^^^^^^^
+    ...<5 lines>...
+        skip_event_dims=skip_event_dims,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 306, in numpy_to_data_array
+    return xr.DataArray(ary, coords=coords, dims=dims)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 463, in __init__
+    coords, dims = _infer_coords_and_dims(data.shape, coords, dims)
+                   ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 193, in _infer_coords_and_dims
+    validate_dataarray_coords(shape, new_coords, dims_tuple)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\coordinates.py", line 1346, in validate_dataarray_coords
+    raise CoordinateValidationError(
+    ...<3 lines>...
+    )
+xarray.core.coordinates.CoordinateValidationError: conflicting sizes for dimension 'chain': length 1 on the data but length 8 on coordinate 'chain'
+2026-05-04 13:55:53,110 - __main__ - INFO -    ⚠️ Credit InferenceData error: conflicting sizes for dimension 'chain': length 1 on the data but length 8 on coordinate 'chain'
+2026-05-04 13:55:57,022 - __main__ - WARNING - Step 8 builder 'Anomaly' failed: conflicting sizes for dimension 'chain': length 1 on the data but length 4 on coordinate 'chain'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 893, in build_accounting_anomaly_inference_data
+    return _build_arviz_or_xarray(
+        posterior={"anomaly_score": posterior_samples},
+    ...<3 lines>...
+        dims=dims,
+    )
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 449, in _build_arviz_or_xarray
+    return az.from_dict(
+           ~~~~~~~~~~~~^
+        groups,
+        ^^^^^^^
+        coords=coords,
+        ^^^^^^^^^^^^^^
+        dims=dims,
+        ^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 459, in from_dict
+    ).to_inference_data()
+      ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 334, in to_inference_data
+    "posterior": self.posterior_to_xarray(),
+                 ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 71, in wrapped
+    return func(cls)
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\io_dict.py", line 97, in posterior_to_xarray
+    dict_to_dataset(
+    ~~~~~~~~~~~~~~~^
+        data,
+        ^^^^^
+    ...<4 lines>...
+        index_origin=self.index_origin,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ),
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 406, in dict_to_dataset
+    key: numpy_to_data_array(
+         ~~~~~~~~~~~~~~~~~~~^
+        values,
+        ^^^^^^^
+    ...<5 lines>...
+        skip_event_dims=skip_event_dims,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\arviz\data\base.py", line 306, in numpy_to_data_array
+    return xr.DataArray(ary, coords=coords, dims=dims)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 463, in __init__
+    coords, dims = _infer_coords_and_dims(data.shape, coords, dims)
+                   ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\dataarray.py", line 193, in _infer_coords_and_dims
+    validate_dataarray_coords(shape, new_coords, dims_tuple)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\xarray\core\coordinates.py", line 1346, in validate_dataarray_coords
+    raise CoordinateValidationError(
+    ...<3 lines>...
+    )
+xarray.core.coordinates.CoordinateValidationError: conflicting sizes for dimension 'chain': length 1 on the data but length 4 on coordinate 'chain'
+2026-05-04 13:55:57,024 - __main__ - INFO -    ⚠️ Anomaly InferenceData error: conflicting sizes for dimension 'chain': length 1 on the data but length 4 on coordinate 'chain'
+2026-05-04 13:55:57,063 - __main__ - WARNING - Step 8 builder 'Category[Analyst Sentiment]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,065 - __main__ - INFO -    ⚠️ Category[Analyst Sentiment] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,065 - __main__ - WARNING - Step 8 builder 'Category[Balance Sheet]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,066 - __main__ - INFO -    ⚠️ Category[Balance Sheet] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,066 - __main__ - WARNING - Step 8 builder 'Category[Cash Flow]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,067 - __main__ - INFO -    ⚠️ Category[Cash Flow] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,067 - __main__ - WARNING - Step 8 builder 'Category[Composite Scores]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,069 - __main__ - INFO -    ⚠️ Category[Composite Scores] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,070 - __main__ - WARNING - Step 8 builder 'Category[Cost Structure]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,070 - __main__ - INFO -    ⚠️ Category[Cost Structure] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,070 - __main__ - WARNING - Step 8 builder 'Category[Dividend Features]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,071 - __main__ - INFO -    ⚠️ Category[Dividend Features] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,071 - __main__ - WARNING - Step 8 builder 'Category[Earnings Quality]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,071 - __main__ - INFO -    ⚠️ Category[Earnings Quality] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,071 - __main__ - WARNING - Step 8 builder 'Category[Employment Metrics]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,072 - __main__ - INFO -    ⚠️ Category[Employment Metrics] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,072 - __main__ - WARNING - Step 8 builder 'Category[Growth Metrics]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,072 - __main__ - INFO -    ⚠️ Category[Growth Metrics] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,072 - __main__ - WARNING - Step 8 builder 'Category[Leverage & Liquidity]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,073 - __main__ - INFO -    ⚠️ Category[Leverage & Liquidity] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,073 - __main__ - WARNING - Step 8 builder 'Category[Momentum]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,073 - __main__ - INFO -    ⚠️ Category[Momentum] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,073 - __main__ - WARNING - Step 8 builder 'Category[Profitability]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,074 - __main__ - INFO -    ⚠️ Category[Profitability] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,074 - __main__ - WARNING - Step 8 builder 'Category[Quality & Risk]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,074 - __main__ - INFO -    ⚠️ Category[Quality & Risk] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,074 - __main__ - WARNING - Step 8 builder 'Category[Technical Analysis]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,075 - __main__ - INFO -    ⚠️ Category[Technical Analysis] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,075 - __main__ - WARNING - Step 8 builder 'Category[Temporal Features]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,075 - __main__ - INFO -    ⚠️ Category[Temporal Features] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,075 - __main__ - WARNING - Step 8 builder 'Category[Unusual Items]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,075 - __main__ - INFO -    ⚠️ Category[Unusual Items] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:55:57,075 - __main__ - WARNING - Step 8 builder 'Category[Valuation Ratios]' failed: string indices must be integers, not 'str'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1113, in build_category_analysis_inference_data
+    posterior_means, posterior_stds = _extract_category_posterior_params(
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        analysis_results, analysed_features
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1046, in _extract_category_posterior_params
+    means = np.array([analysis_results[f]["posterior_mean"] for f in analysed_features])
+                      ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+2026-05-04 13:55:57,075 - __main__ - INFO -    ⚠️ Category[Valuation Ratios] InferenceData error: string indices must be integers, not 'str'
+2026-05-04 13:56:23,101 - __main__ - INFO -    ✓ Resampled Technical InferenceData: 0 draws
+2026-05-04 13:56:23,138 - __main__ - INFO -    ✓ EquityCoordinates: 6646 isins, 6646 sectors
+2026-05-04 13:56:23,139 - __main__ - INFO -    Building per-view feature InferenceData...
+2026-05-04 13:56:38,436 - __main__ - WARNING - Step 8 builder 'FeatureView[vw_features_analyst_sentiment]' failed: could not convert string to float: 'Q2 2026'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1910, in build_feature_view_inference_data
+    vals = np.asarray(df[col].fillna(0).values, dtype="float64")
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 864, in __array__
+    return self.to_numpy(dtype=dtype, copy=copy)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 1717, in to_numpy
+    result = result.astype(dtype, copy=False)
+ValueError: could not convert string to float: 'Q2 2026'
+2026-05-04 13:56:38,460 - __main__ - INFO -    ⚠️ FeatureView[vw_features_analyst_sentiment] InferenceData error: could not convert string to float: 'Q2 2026'
+2026-05-04 13:56:53,544 - __main__ - WARNING - Step 8 builder 'FeatureView[vw_features_balance_sheet]' failed: could not convert string to float: 'Q2 2026'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1910, in build_feature_view_inference_data
+    vals = np.asarray(df[col].fillna(0).values, dtype="float64")
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 864, in __array__
+    return self.to_numpy(dtype=dtype, copy=copy)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 1717, in to_numpy
+    result = result.astype(dtype, copy=False)
+ValueError: could not convert string to float: 'Q2 2026'
+2026-05-04 13:56:53,544 - __main__ - INFO -    ⚠️ FeatureView[vw_features_balance_sheet] InferenceData error: could not convert string to float: 'Q2 2026'
+2026-05-04 13:57:08,295 - __main__ - WARNING - Step 8 builder 'FeatureView[vw_features_cashflow]' failed: could not convert string to float: 'Q2 2026'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1910, in build_feature_view_inference_data
+    vals = np.asarray(df[col].fillna(0).values, dtype="float64")
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 864, in __array__
+    return self.to_numpy(dtype=dtype, copy=copy)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 1717, in to_numpy
+    result = result.astype(dtype, copy=False)
+ValueError: could not convert string to float: 'Q2 2026'
+2026-05-04 13:57:08,297 - __main__ - INFO -    ⚠️ FeatureView[vw_features_cashflow] InferenceData error: could not convert string to float: 'Q2 2026'
+2026-05-04 13:57:22,726 - __main__ - WARNING - Step 8 builder 'FeatureView[vw_features_composite_scores]' failed: could not convert string to float: 'Q2 2026'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1910, in build_feature_view_inference_data
+    vals = np.asarray(df[col].fillna(0).values, dtype="float64")
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 864, in __array__
+    return self.to_numpy(dtype=dtype, copy=copy)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Programs\Python\Python314\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 1717, in to_numpy
+    result = result.astype(dtype, copy=False)
+ValueError: could not convert string to float: 'Q2 2026'
+2026-05-04 13:57:22,727 - __main__ - INFO -    ⚠️ FeatureView[vw_features_composite_scores] InferenceData error: could not convert string to float: 'Q2 2026'
+2026-05-04 16:50:37,153 - __main__ - INFO - ================================================================================
+2026-05-04 16:50:37,154 - __main__ - INFO - Expected Returns Analytics Pipeline v3.7
+2026-05-04 16:50:37,154 - __main__ - INFO - ================================================================================
+2026-05-04 16:50:37,154 - __main__ - INFO - 🔧 Numba: True, Joblib: True, ArviZ: True
+2026-05-04 16:50:37,154 - __main__ - INFO -    n_jobs=-1, max_features/cat=25, caching=on (TTL=24.0h)
+2026-05-04 16:50:37,154 - probabilistic_ml_model.pipeline_runners - INFO - Cache cleanup (full purge): removed 0 files from .cache
+2026-05-04 16:50:37,155 - __main__ - INFO - 📦 Step 1: Loading feature data (v3.6: equities MV + feature views + all stock features MV)...
+2026-05-04 16:50:37,156 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:50:37,444 - probabilistic_ml_model.data_utils.feature_catalog - INFO - FeatureViewCatalog loaded: 27 categories, 17 views, 869 total features
+2026-05-04 16:50:37,444 - __main__ - INFO - ✓ FeatureViewCatalog: 27 categories, 17 views
+2026-05-04 16:50:37,445 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-05-04 16:50:42,139 - root - INFO - Loaded 6646 rows from public.mv_all_stock_features
+2026-05-04 16:50:42,192 - root - INFO - Backfill complete. Columns: 821
+2026-05-04 16:50:42,273 - __main__ - INFO - Kalman momentum filter applied to 5 columns
+2026-05-04 16:50:42,283 - __main__ - INFO - Loaded mv_all_stock_features: 6646 rows × 831 columns
+2026-05-04 16:50:42,283 - __main__ - INFO - ✓ Loaded mv_all_stock_features: 6,646 stocks × 831 features
+2026-05-04 16:50:42,287 - __main__ - INFO -   Deduplicated to 6,646 unique isins
+2026-05-04 16:50:42,322 - root - INFO - Loaded 26 feature categories from database
+2026-05-04 16:50:42,323 - __main__ - INFO - Loaded 26 feature categories (403 total features)
+2026-05-04 16:50:42,323 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-05-04 16:50:45,452 - root - INFO - Loaded 6646 rows from public.mv_equities
+2026-05-04 16:50:45,489 - root - INFO - Backfill complete. Columns: 680
+2026-05-04 16:50:45,501 - __main__ - INFO - Loaded 26 feature categories (369 total features)
+2026-05-04 16:50:45,502 - __main__ - INFO - All feature categories have ≥80%% coverage
+2026-05-04 16:50:45,502 - __main__ - INFO - Loaded expected returns data: 6646 stocks × 680 features
+2026-05-04 16:50:45,502 - __main__ - INFO - ✓ Loaded mv_equities (historical cols): 6,646 stocks × 680 features
+2026-05-04 16:50:45,535 - __main__ - INFO -   Merged 507 historical columns from mv_equities
+2026-05-04 16:50:45,620 - __main__ - INFO -   Schema metadata: 675 columns
+2026-05-04 16:50:45,620 - __main__ - INFO -   Feature registry: 74 functions
+2026-05-04 16:50:45,624 - __main__ - INFO -   mv_equities spec: 89 price, 122 financial, 9 historical cols
+2026-05-04 16:50:45,625 - __main__ - INFO - 📦 Step 1b: Pre-computing historical target drift enrichment...
+2026-05-04 16:50:45,625 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:50:45,663 - root - INFO - Loaded 675 column definitions from public.equities_schema_metadata
+2026-05-04 16:50:45,663 - root - INFO - Cached equities schema: 675 columns across 26 roles
+2026-05-04 16:50:45,663 - __main__ - INFO - Column lists derived from equities schema (46 total columns)
+2026-05-04 16:50:45,663 - __main__ - INFO - Historical price/target coverage: 40 / 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 16:50:45,717 - __main__ - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 16:50:45,745 - __main__ - INFO - ✓ Historical drift enrichment complete (12 derived columns)
+2026-05-04 16:50:45,749 - __main__ - INFO -   ⏱ Step 1 completed in 8.6s
+2026-05-04 16:50:45,749 - __main__ - INFO - 🎲 Step 2: Monte Carlo price target simulation (50,000 samples)...
+2026-05-04 16:50:45,749 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:50:45,845 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 16:50:45,852 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 16:50:58,546 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_mc for 5754 / 6646 stocks (mean=6620.26)
+2026-05-04 16:50:58,547 - probabilistic_ml_model.pipeline_runners - INFO - Monte Carlo simulation: 6646 stocks processed
+2026-05-04 16:50:58,550 - __main__ - INFO -   ⏱ Step 2 completed in 12.8s
+2026-05-04 16:50:58,550 - __main__ - INFO - 🎯 Step 3: Price target achievement model...
+2026-05-04 16:50:58,550 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:50:58,610 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 16:50:58,617 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 16:50:58,958 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-05-04 16:50:59,908 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_prob_weighted for 6646 / 6646 stocks (mean=5277.27)
+2026-05-04 16:50:59,909 - probabilistic_ml_model.pipeline_runners - INFO - Price target achievement: 6646 stocks processed
+2026-05-04 16:50:59,911 - __main__ - INFO -   ⏱ Step 3 completed in 1.4s
+2026-05-04 16:50:59,911 - __main__ - INFO - 📐 Step 4: Kalman-filtered price targets...
+2026-05-04 16:50:59,911 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:50:59,945 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-04 16:50:59,952 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-04 16:51:00,751 - probabilistic_ml_model.pipeline_runners - INFO - Kalman filter: 6646 stocks processed
+2026-05-04 16:51:00,753 - __main__ - INFO -   ⏱ Step 4 completed in 0.8s
+2026-05-04 16:51:00,754 - __main__ - INFO - 📊 Step 5: Bayesian earnings beat analysis...
+2026-05-04 16:51:00,754 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:51:09,966 - probabilistic_ml_model.pipeline_runners - INFO - Earnings beat analysis: 6646 stocks processed
+2026-05-04 16:51:09,970 - probabilistic_ml_model.pipeline_runners - INFO - EPS streak enrichment: 8 columns added
+2026-05-04 16:52:25,927 - probabilistic_ml_model.pipeline_runners - INFO - Resampled beat enrichment: 18 columns added
+2026-05-04 16:52:26,461 - __main__ - INFO -   ⏱ Step 5 completed in 85.7s
+2026-05-04 16:52:26,461 - __main__ - INFO - 🔬 Step 5b: Accounting anomaly detection & analytics...
+2026-05-04 16:52:26,461 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:52:57,582 - probabilistic_ml_model.statistical_functions.probability_models - INFO - AccountingAnomalyProbabilityModel: severity computed for 6646 stocks, 1515 multi-flag alerts, mean conditional P(anomaly)=0.046
+2026-05-04 16:53:02,832 - probabilistic_ml_model.pipeline_runners - INFO - MCMC anomaly posterior: location=46.378
+2026-05-04 16:53:02,833 - probabilistic_ml_model.pipeline_runners - INFO - Accounting anomaly analysis: 6646 stocks processed
+2026-05-04 16:53:08,254 - probabilistic_ml_model.pipeline_runners - INFO - accounting_anomaly results cached → mcmc_accounting_anomaly_f30dd077fe6b3d3f5d782d620ba7da405d6c59d6_chains8_n10000.json
+2026-05-04 16:53:08,254 - __main__ - INFO -   ⏱ Step 5b completed in 41.8s
+2026-05-04 16:53:08,254 - __main__ - INFO - 🛡️ Step 5c: Credit risk & dividend safety analysis...
+2026-05-04 16:53:08,254 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:53:08,292 - probabilistic_ml_model.statistical_functions.probability_models - INFO - CreditRiskProbabilityModel v3.9 config: student_t=True, garch=True, macro=True, df_floor=3.00, n_samples=10000, burn_in=2000
+2026-05-04 16:53:19,028 - probabilistic_ml_model.pipeline_runners - INFO - Hierarchical MCMC credit risk: 1 sectors enriched
+2026-05-04 16:53:19,395 - probabilistic_ml_model.pipeline_runners - INFO - Ruin probability enrichment: 6 columns added
+2026-05-04 16:53:19,395 - probabilistic_ml_model.pipeline_runners - INFO - Credit risk analysis: 6646 stocks processed
+2026-05-04 16:53:19,695 - probabilistic_ml_model.pipeline_runners - INFO - credit_risk results cached → mcmc_credit_risk_3642c51b91c5071acbc6c7365f58163685b29493_chains8_n10000.json
+2026-05-04 16:53:30,256 - probabilistic_ml_model.pipeline_runners - INFO - Dividend safety analysis (v3.10 per-isin): 6646 stocks processed
+2026-05-04 16:53:30,494 - probabilistic_ml_model.pipeline_runners - INFO - dividend_safety results cached → mcmc_dividend_safety_a4343265aac091afdb788ba6c209891719522cbc_chains8_n10000.json
+2026-05-04 16:53:30,494 - __main__ - INFO -   ⏱ Step 5c completed in 22.2s
+2026-05-04 16:53:30,494 - __main__ - INFO - 🔍 Step 5d: Running stock screening strategies...
+2026-05-04 16:53:30,494 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:53:30,556 - __main__ - INFO -   ✓ Productivity frontier scores added
+2026-05-04 16:53:30,557 - __main__ - INFO -    Reporting lag sentiment: corr=0.204, p=0.0000, hypothesis=marginally significant (p < 0.10)
+2026-05-04 16:53:32,575 - __main__ - INFO - Quality screen: 277 stocks
+2026-05-04 16:53:34,118 - __main__ - INFO - Earnings quality screen: 4286 stocks
+2026-05-04 16:53:35,344 - __main__ - INFO - Value screen: 1443 stocks
+2026-05-04 16:53:36,606 - __main__ - INFO - Growth screen: 3003 stocks
+2026-05-04 16:53:38,251 - __main__ - INFO - GARP screen: 1313 stocks
+2026-05-04 16:53:40,033 - __main__ - INFO - Dividend screen: 1304 stocks
+2026-05-04 16:53:41,369 - __main__ - INFO - Financial health screen: 1342 stocks
+2026-05-04 16:53:42,665 - __main__ - INFO - Valuation reversion screen: 518 stocks
+2026-05-04 16:53:44,026 - __main__ - INFO - Integrity growth screen: 1152 stocks
+2026-05-04 16:53:46,230 - __main__ - INFO - High-yield safe dividend screen: 1523 stocks
+2026-05-04 16:53:46,230 - __main__ - INFO - Sector-relative ranking: 6646 stocks
+2026-05-04 16:53:47,870 - __main__ - INFO - Low-volatility quality screen: 3178 stocks
+2026-05-04 16:53:49,442 - __main__ - INFO - FCF compounders screen: 731 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO - Total return leaders screen: 3559 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ quality: 277 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ earnings_quality: 4,286 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ value: 1,443 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ growth: 3,003 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ garp: 1,313 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ dividend: 1,304 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ healthy: 1,342 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ valuation_reversion: 518 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ integrity_growth: 1,152 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ high_yield_safe: 1,523 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ sector_relative: 6,646 stocks
+2026-05-04 16:53:50,348 - __main__ - INFO -   ✓ low_vol_quality: 3,178 stocks
+2026-05-04 16:53:50,349 - __main__ - INFO -   ✓ fcf_compounders: 731 stocks
+2026-05-04 16:53:50,349 - __main__ - INFO -   ✓ total_return_leaders: 3,559 stocks
+2026-05-04 16:53:50,349 - __main__ - INFO -   ⏱ Step 5d completed in 19.9s
+2026-05-04 16:53:50,349 - __main__ - INFO - 🧪 Step 5e: Resampled Bayesian posterior returns...
+2026-05-04 16:53:50,349 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:54:22,294 - __main__ - INFO - Resampled posterior returns: 6646 stocks, mean posterior=14.07%
+2026-05-04 16:54:22,534 - __main__ - INFO -   ⏱ Step 5e completed in 32.2s
+2026-05-04 16:54:22,535 - __main__ - INFO - 🔗 Step 6: Cross-model alignment...
+2026-05-04 16:54:22,535 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:54:22,634 - __main__ - INFO - Tri-model alignment: 6646 stocks, 2761 strong bullish
+2026-05-04 16:54:22,767 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 16:54:22,774 - __main__ - INFO - Dividend safety signal merged: 431/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 16:54:22,778 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 87.5
+2026-05-04 16:54:22,783 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=87.5)
+2026-05-04 16:54:22,787 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 489
+2026-05-04 16:54:22,807 - __main__ - INFO - Strong consensus picks: 441 stocks
+2026-05-04 16:54:22,808 - __main__ - INFO -   ⏱ Step 6 completed in 0.3s
+2026-05-04 16:54:22,808 - __main__ - INFO - 📋 Step 7: Building expected_returns_summary (multi-model merge)...
+2026-05-04 16:54:22,808 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:54:22,877 - __main__ - INFO - Enriched expected_returns_summary with 60 anomaly columns
+2026-05-04 16:54:22,884 - __main__ - INFO - Enriched expected_returns_summary with 15 credit risk columns
+2026-05-04 16:54:22,889 - __main__ - INFO - Enriched expected_returns_summary with 10 dividend safety columns
+2026-05-04 16:54:22,902 - __main__ - INFO - Enriched expected_returns_summary with 32 columns from mv_all_stock_features
+2026-05-04 16:54:22,909 - __main__ - INFO - Enriched expected_returns_summary with 8 forward consensus columns
+2026-05-04 16:54:22,913 - __main__ - INFO - Merged quad alignment scores into summary (single source of truth)
+2026-05-04 16:54:22,922 - __main__ - INFO - Expected returns summary: 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 489
+2026-05-04 16:54:22,926 - __main__ - INFO -   ✓ 6,646 stocks in expected_returns_summary
+2026-05-04 16:54:23,094 - __main__ - INFO - Quality scoring: 6646 stocks scored (mean=45.3, median=46.5)
+2026-05-04 16:54:23,095 - __main__ - INFO -   Premium: 665 stocks
+2026-05-04 16:54:23,095 - __main__ - INFO -   High: 1329 stocks
+2026-05-04 16:54:23,096 - __main__ - INFO -   Above Avg: 1329 stocks
+2026-05-04 16:54:23,096 - __main__ - INFO -   Below Avg: 1329 stocks
+2026-05-04 16:54:23,096 - __main__ - INFO -   Low: 1329 stocks
+2026-05-04 16:54:23,096 - __main__ - INFO -   Very Low: 665 stocks
+2026-05-04 16:54:23,096 - __main__ - INFO -   Financially healthy (score ≥ 45): 3665 stocks
+2026-05-04 16:54:23,170 - __main__ - INFO - Added z-scores and percentile ranks for 5 return metrics
+2026-05-04 16:54:23,202 - __main__ - INFO - 🔀 Step 7a: Parallel MCMC return analysis...
+2026-05-04 16:54:23,203 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:54:35,056 - __main__ - INFO - Parallel MCMC: R̂=1.0001, converged=True, posterior mean=7.14
+2026-05-04 16:54:35,056 - __main__ - INFO -   95% CI: [6.82, 7.45], posterior std=0.16
+2026-05-04 16:54:35,056 - __main__ - INFO -   Chain means: 7.14, 7.14, 7.13, 7.13, 7.14, 7.14, 7.13, 7.13
+2026-05-04 16:54:35,056 - __main__ - INFO -   Chain stds:  0.15, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16
+2026-05-04 16:54:44,982 - __main__ - INFO -   MCMC Student-t: μ=7.90 (±0.08), df=2.0
+2026-05-04 16:54:45,445 - probabilistic_ml_model.statistical_functions.statistical_models - INFO - Multi-level hierarchical MCMC: 9 levels, 161 total groups for 'implied_return_pt'
+2026-05-04 16:54:45,445 - __main__ - INFO -   Hierarchical MCMC: global mean=7.14, std=13.05, n=6646
+2026-05-04 16:54:45,446 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 16:54:45,446 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2070, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       Asia / Pacific: posterior=4.68 (raw=4.63), shrinkage=0.981, n=2061, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       United States and Canada: posterior=7.93 (raw=7.94), shrinkage=0.978, n=1790, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       Africa / Middle East: posterior=5.61 (raw=5.48), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       Latin America and Caribbean: posterior=9.15 (raw=9.46), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 16:54:45,446 - __main__ - INFO -       US: posterior=7.86 (raw=7.86), shrinkage=0.974, n=1522, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       CN: posterior=5.40 (raw=5.44), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       GB: posterior=13.46 (raw=13.95), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       JP: posterior=4.38 (raw=4.34), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       CA: posterior=8.39 (raw=8.45), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 16:54:45,446 - __main__ - INFO -       US: posterior=7.79 (raw=7.80), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       CN: posterior=4.90 (raw=4.78), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       JP: posterior=4.63 (raw=4.34), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       CA: posterior=8.78 (raw=9.02), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 16:54:45,446 - __main__ - INFO -       NYSE: posterior=6.21 (raw=6.13), shrinkage=0.953, n=819, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       NasdaqGS: posterior=7.64 (raw=7.63), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       SHSE: posterior=5.22 (raw=5.21), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       SZSE: posterior=4.45 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       TSE: posterior=4.34 (raw=4.34), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 16:54:45,446 - __main__ - INFO -       USD: posterior=7.79 (raw=7.81), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       CNY: posterior=4.90 (raw=4.78), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       GBP: posterior=13.75 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       JPY: posterior=4.63 (raw=4.34), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 16:54:45,446 - __main__ - INFO -       Industrials: posterior=6.47 (raw=6.48), shrinkage=0.974, n=1486, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       Information Technology: posterior=4.03 (raw=3.89), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 16:54:45,446 - __main__ - INFO -       Consumer Discretionary: posterior=8.51 (raw=8.61), shrinkage=0.958, n=922, P(>0)=100.0%
+2026-05-04 16:54:45,448 - __main__ - INFO -       Health Care: posterior=12.34 (raw=12.56), shrinkage=0.956, n=867, P(>0)=100.0%
+2026-05-04 16:54:45,448 - __main__ - INFO -       Materials: posterior=6.45 (raw=6.38), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 16:54:45,448 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 16:54:45,448 - __main__ - INFO -       Metals and Mining: posterior=8.00 (raw=8.16), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 16:54:45,448 - __main__ - INFO -       Machinery: posterior=6.62 (raw=6.64), shrinkage=0.886, n=310, P(>0)=100.0%
+2026-05-04 16:54:45,448 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.49 (raw=6.54), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 16:54:45,448 - __main__ - INFO -       Chemicals: posterior=3.96 (raw=3.62), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 16:54:45,448 - __main__ - INFO -       Biotechnology: posterior=16.82 (raw=17.48), shrinkage=0.873, n=275, P(>0)=100.0%
+2026-05-04 16:54:45,448 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 16:54:45,448 - __main__ - INFO -       Core: posterior=7.20 (raw=7.20), shrinkage=0.990, n=4003, P(>0)=100.0%
+2026-05-04 16:54:45,448 - __main__ - INFO -       Value: posterior=7.79 (raw=7.80), shrinkage=0.979, n=1862, P(>0)=100.0%
+2026-05-04 16:54:45,449 - __main__ - INFO -       Growth: posterior=5.32 (raw=5.23), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 16:54:45,449 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 16:54:45,449 - __main__ - INFO -       Small Cap: posterior=8.77 (raw=8.79), shrinkage=0.990, n=3910, P(>0)=100.0%
+2026-05-04 16:54:45,449 - __main__ - INFO -       Mid Cap: posterior=4.96 (raw=4.91), shrinkage=0.977, n=1670, P(>0)=100.0%
+2026-05-04 16:54:45,449 - __main__ - INFO -       Large Cap: posterior=4.67 (raw=4.58), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO - MCMC return analysis cached → mcmc_return_6d9f19f53a39df6d7a1ea5dcc98495bbcaafc85b_chains8_n10000.json
+2026-05-04 16:54:45,463 - __main__ - INFO -   R̂=1.0001, converged=True, posterior mean=7.14
+2026-05-04 16:54:45,463 - __main__ - INFO -   95% CI: [6.82, 7.45], posterior std=0.16
+2026-05-04 16:54:45,463 - __main__ - INFO -   MCMC Student-t: μ=7.90, df=2.0
+2026-05-04 16:54:45,463 - __main__ - INFO -   Hierarchical MCMC: global mean=7.14, std=13.05, n=6646
+2026-05-04 16:54:45,463 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-04 16:54:45,463 - __main__ - INFO -       Europe: posterior=8.99 (raw=9.02), shrinkage=0.981, n=2070, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       Asia / Pacific: posterior=4.68 (raw=4.63), shrinkage=0.981, n=2061, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       United States and Canada: posterior=7.93 (raw=7.94), shrinkage=0.978, n=1790, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       Africa / Middle East: posterior=5.61 (raw=5.48), shrinkage=0.921, n=468, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       Latin America and Caribbean: posterior=9.15 (raw=9.46), shrinkage=0.865, n=257, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-04 16:54:45,463 - __main__ - INFO -       US: posterior=7.86 (raw=7.86), shrinkage=0.974, n=1522, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       CN: posterior=5.40 (raw=5.44), shrinkage=0.960, n=961, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       GB: posterior=13.46 (raw=13.95), shrinkage=0.902, n=368, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       JP: posterior=4.38 (raw=4.34), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       CA: posterior=8.39 (raw=8.45), shrinkage=0.870, n=268, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-04 16:54:45,463 - __main__ - INFO -       US: posterior=7.79 (raw=7.80), shrinkage=0.977, n=1728, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       CN: posterior=4.90 (raw=4.78), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       GB: posterior=13.70 (raw=14.39), shrinkage=0.905, n=380, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       JP: posterior=4.63 (raw=4.34), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       CA: posterior=8.78 (raw=9.02), shrinkage=0.872, n=272, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -     Level 'exchange': 30 groups
+2026-05-04 16:54:45,463 - __main__ - INFO -       NYSE: posterior=6.21 (raw=6.13), shrinkage=0.953, n=819, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       NasdaqGS: posterior=7.64 (raw=7.63), shrinkage=0.942, n=649, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       SHSE: posterior=5.22 (raw=5.21), shrinkage=0.909, n=399, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       SZSE: posterior=4.45 (raw=4.35), shrinkage=0.907, n=389, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       TSE: posterior=4.34 (raw=4.34), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-04 16:54:45,463 - __main__ - INFO -       USD: posterior=7.79 (raw=7.81), shrinkage=0.977, n=1736, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       EUR: posterior=8.66 (raw=8.73), shrinkage=0.960, n=958, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       CNY: posterior=4.90 (raw=4.78), shrinkage=0.952, n=788, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       GBP: posterior=13.75 (raw=14.46), shrinkage=0.904, n=377, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -       JPY: posterior=4.63 (raw=4.34), shrinkage=0.897, n=348, P(>0)=100.0%
+2026-05-04 16:54:45,463 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-04 16:54:45,464 - __main__ - INFO -       Industrials: posterior=6.47 (raw=6.48), shrinkage=0.974, n=1486, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Information Technology: posterior=4.03 (raw=3.89), shrinkage=0.962, n=1019, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Consumer Discretionary: posterior=8.51 (raw=8.61), shrinkage=0.958, n=922, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Health Care: posterior=12.34 (raw=12.56), shrinkage=0.956, n=867, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Materials: posterior=6.45 (raw=6.38), shrinkage=0.952, n=802, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-04 16:54:45,464 - __main__ - INFO -       Metals and Mining: posterior=8.00 (raw=8.16), shrinkage=0.903, n=372, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Machinery: posterior=6.62 (raw=6.64), shrinkage=0.886, n=310, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=6.49 (raw=6.54), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Chemicals: posterior=3.96 (raw=3.62), shrinkage=0.878, n=287, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Biotechnology: posterior=16.82 (raw=17.48), shrinkage=0.873, n=275, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-04 16:54:45,464 - __main__ - INFO -       Core: posterior=7.20 (raw=7.20), shrinkage=0.990, n=4003, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Value: posterior=7.79 (raw=7.80), shrinkage=0.979, n=1862, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Growth: posterior=5.32 (raw=5.23), shrinkage=0.951, n=781, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-04 16:54:45,464 - __main__ - INFO -       Small Cap: posterior=8.77 (raw=8.79), shrinkage=0.990, n=3910, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Mid Cap: posterior=4.96 (raw=4.91), shrinkage=0.977, n=1670, P(>0)=100.0%
+2026-05-04 16:54:45,464 - __main__ - INFO -       Large Cap: posterior=4.67 (raw=4.58), shrinkage=0.964, n=1066, P(>0)=100.0%
+2026-05-04 16:54:45,512 - __main__ - INFO - Credit risk signal merged: 3574/6646 stocks flagged credit-safe (median fill=0.810)
+2026-05-04 16:54:45,516 - __main__ - INFO - Dividend safety signal merged: 431/6646 stocks flagged div-safe (median fill=0.600)
+2026-05-04 16:54:45,517 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 87.5
+2026-05-04 16:54:45,519 - __main__ - INFO - Anomaly signal merged: 3323/6646 stocks flagged anomaly-clean (threshold=87.5)
+2026-05-04 16:54:45,521 - __main__ - INFO - Ensemble alignment (7 models): 6646 stocks, full consensus (4/4 dir + ≥2/3 risk): 497
+2026-05-04 16:54:45,543 - __main__ - INFO -   ✓ Risk-adjusted returns computed for 6,646 stocks
+2026-05-04 16:54:45,543 - __main__ - INFO -   ⏱ Step 7a completed in 22.3s
+2026-05-04 16:54:45,543 - __main__ - INFO - 🧮 Step 7b: Per-category Bayesian probability analytics...
+2026-05-04 16:54:45,543 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 16:54:45,809 - root - WARNING - Could not load view category mapping from DB: too many values to unpack (expected 2). Using fallback.
+2026-05-04 16:54:45,809 - __main__ - INFO -   Feature categories from 17 views → 17 categories, 679 total features
+2026-05-04 16:54:45,840 - __main__ - INFO - Sampling budget: Analyst Sentiment trimmed to 25 features (from 26)
+2026-05-04 16:54:45,844 - __main__ - INFO - Sampling budget: Balance Sheet trimmed to 25 features (from 58)
+2026-05-04 16:54:45,849 - __main__ - INFO - Sampling budget: Cash Flow trimmed to 25 features (from 81)
+2026-05-04 16:54:45,852 - __main__ - INFO - Sampling budget: Composite Scores trimmed to 25 features (from 30)
+2026-05-04 16:54:45,855 - __main__ - INFO - Sampling budget: Cost Structure trimmed to 25 features (from 43)
+2026-05-04 16:54:45,861 - __main__ - INFO - Sampling budget: Earnings Quality trimmed to 25 features (from 68)
+2026-05-04 16:54:45,865 - __main__ - INFO - Sampling budget: Growth Metrics trimmed to 25 features (from 62)
+2026-05-04 16:54:45,871 - __main__ - INFO - Sampling budget: Leverage & Liquidity trimmed to 25 features (from 71)
+2026-05-04 16:54:45,877 - __main__ - INFO - Sampling budget: Profitability trimmed to 25 features (from 68)
+2026-05-04 16:54:45,880 - __main__ - INFO - Sampling budget: Quality & Risk trimmed to 25 features (from 44)
+2026-05-04 16:54:45,883 - __main__ - INFO - Sampling budget: Valuation Ratios trimmed to 25 features (from 28)
+2026-05-04 17:05:08,382 - __main__ - INFO - Category Analyst Sentiment: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Balance Sheet: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Cash Flow: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Composite Scores: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Cost Structure: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Dividend Features: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Earnings Quality: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Employment Metrics: 17 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Growth Metrics: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Leverage & Liquidity: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Momentum: 19 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Profitability: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Quality & Risk: 25 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Technical Analysis: 11 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Temporal Features: 16 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Unusual Items: 9 features analyzed
+2026-05-04 17:05:08,383 - __main__ - INFO - Category Valuation Ratios: 25 features analyzed
+2026-05-04 17:05:08,820 - __main__ - INFO - Category analytics cached → category_analytics_eaee1c939bcd44a120fdf67153f569d862b73c2b_cats17_mcmc1_n10000_b1000_max25.json
+2026-05-04 17:05:08,821 - __main__ - INFO -   ✓ Analyzed 17 categories
+2026-05-04 17:05:08,821 - __main__ - INFO -     Analyst Sentiment: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Balance Sheet: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Cash Flow: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Composite Scores: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Cost Structure: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Dividend Features: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Earnings Quality: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Employment Metrics: 17 features — 17 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Growth Metrics: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Leverage & Liquidity: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Momentum: 19 features — 19 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Profitability: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Quality & Risk: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Technical Analysis: 11 features — 11 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Temporal Features: 16 features — 13 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Unusual Items: 9 features — 9 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -     Valuation Ratios: 25 features — 25 posteriors
+2026-05-04 17:05:08,821 - __main__ - INFO -   ⏱ Step 7b completed in 623.3s
+2026-05-04 17:05:08,821 - __main__ - INFO - 🧪 Step 8: Building InferenceData (ArviZ)...
+2026-05-04 17:05:08,822 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-04 17:05:15,190 - __main__ - INFO -    ✓ MC InferenceData: 0 draws, 0 equities
+2026-05-04 17:05:27,346 - __main__ - INFO -    ✓ Credit Risk InferenceData: 0 equities
+2026-05-04 17:05:32,682 - __main__ - INFO -    ✓ Anomaly InferenceData: 0 equities
+2026-05-04 17:05:32,684 - __main__ - WARNING - Step 8 builder 'Category[Analyst Sentiment]' failed: No analysed features found for category 'Analyst Sentiment'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Analyst Sentiment'
+2026-05-04 17:05:32,743 - __main__ - INFO -    ⚠️ Category[Analyst Sentiment] InferenceData error: No analysed features found for category 'Analyst Sentiment'
+2026-05-04 17:05:32,743 - __main__ - WARNING - Step 8 builder 'Category[Balance Sheet]' failed: No analysed features found for category 'Balance Sheet'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Balance Sheet'
+2026-05-04 17:05:32,744 - __main__ - INFO -    ⚠️ Category[Balance Sheet] InferenceData error: No analysed features found for category 'Balance Sheet'
+2026-05-04 17:05:32,744 - __main__ - WARNING - Step 8 builder 'Category[Cash Flow]' failed: No analysed features found for category 'Cash Flow'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Cash Flow'
+2026-05-04 17:05:32,745 - __main__ - INFO -    ⚠️ Category[Cash Flow] InferenceData error: No analysed features found for category 'Cash Flow'
+2026-05-04 17:05:32,745 - __main__ - WARNING - Step 8 builder 'Category[Composite Scores]' failed: No analysed features found for category 'Composite Scores'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Composite Scores'
+2026-05-04 17:05:32,745 - __main__ - INFO -    ⚠️ Category[Composite Scores] InferenceData error: No analysed features found for category 'Composite Scores'
+2026-05-04 17:05:32,745 - __main__ - WARNING - Step 8 builder 'Category[Cost Structure]' failed: No analysed features found for category 'Cost Structure'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Cost Structure'
+2026-05-04 17:05:32,746 - __main__ - INFO -    ⚠️ Category[Cost Structure] InferenceData error: No analysed features found for category 'Cost Structure'
+2026-05-04 17:05:32,746 - __main__ - WARNING - Step 8 builder 'Category[Dividend Features]' failed: No analysed features found for category 'Dividend Features'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Dividend Features'
+2026-05-04 17:05:32,746 - __main__ - INFO -    ⚠️ Category[Dividend Features] InferenceData error: No analysed features found for category 'Dividend Features'
+2026-05-04 17:05:32,746 - __main__ - WARNING - Step 8 builder 'Category[Earnings Quality]' failed: No analysed features found for category 'Earnings Quality'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Earnings Quality'
+2026-05-04 17:05:32,746 - __main__ - INFO -    ⚠️ Category[Earnings Quality] InferenceData error: No analysed features found for category 'Earnings Quality'
+2026-05-04 17:05:32,746 - __main__ - WARNING - Step 8 builder 'Category[Employment Metrics]' failed: No analysed features found for category 'Employment Metrics'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Employment Metrics'
+2026-05-04 17:05:32,746 - __main__ - INFO -    ⚠️ Category[Employment Metrics] InferenceData error: No analysed features found for category 'Employment Metrics'
+2026-05-04 17:05:32,747 - __main__ - WARNING - Step 8 builder 'Category[Growth Metrics]' failed: No analysed features found for category 'Growth Metrics'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Growth Metrics'
+2026-05-04 17:05:32,747 - __main__ - INFO -    ⚠️ Category[Growth Metrics] InferenceData error: No analysed features found for category 'Growth Metrics'
+2026-05-04 17:05:32,747 - __main__ - WARNING - Step 8 builder 'Category[Leverage & Liquidity]' failed: No analysed features found for category 'Leverage & Liquidity'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Leverage & Liquidity'
+2026-05-04 17:05:32,747 - __main__ - INFO -    ⚠️ Category[Leverage & Liquidity] InferenceData error: No analysed features found for category 'Leverage & Liquidity'
+2026-05-04 17:05:32,748 - __main__ - WARNING - Step 8 builder 'Category[Momentum]' failed: No analysed features found for category 'Momentum'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Momentum'
+2026-05-04 17:05:32,748 - __main__ - INFO -    ⚠️ Category[Momentum] InferenceData error: No analysed features found for category 'Momentum'
+2026-05-04 17:05:32,748 - __main__ - WARNING - Step 8 builder 'Category[Profitability]' failed: No analysed features found for category 'Profitability'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Profitability'
+2026-05-04 17:05:32,749 - __main__ - INFO -    ⚠️ Category[Profitability] InferenceData error: No analysed features found for category 'Profitability'
+2026-05-04 17:05:32,749 - __main__ - WARNING - Step 8 builder 'Category[Quality & Risk]' failed: No analysed features found for category 'Quality & Risk'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Quality & Risk'
+2026-05-04 17:05:32,749 - __main__ - INFO -    ⚠️ Category[Quality & Risk] InferenceData error: No analysed features found for category 'Quality & Risk'
+2026-05-04 17:05:32,749 - __main__ - WARNING - Step 8 builder 'Category[Technical Analysis]' failed: No analysed features found for category 'Technical Analysis'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Technical Analysis'
+2026-05-04 17:05:32,749 - __main__ - INFO -    ⚠️ Category[Technical Analysis] InferenceData error: No analysed features found for category 'Technical Analysis'
+2026-05-04 17:05:32,749 - __main__ - WARNING - Step 8 builder 'Category[Temporal Features]' failed: No analysed features found for category 'Temporal Features'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Temporal Features'
+2026-05-04 17:05:32,750 - __main__ - INFO -    ⚠️ Category[Temporal Features] InferenceData error: No analysed features found for category 'Temporal Features'
+2026-05-04 17:05:32,750 - __main__ - WARNING - Step 8 builder 'Category[Unusual Items]' failed: No analysed features found for category 'Unusual Items'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Unusual Items'
+2026-05-04 17:05:32,750 - __main__ - INFO -    ⚠️ Category[Unusual Items] InferenceData error: No analysed features found for category 'Unusual Items'
+2026-05-04 17:05:32,750 - __main__ - WARNING - Step 8 builder 'Category[Valuation Ratios]' failed: No analysed features found for category 'Valuation Ratios'
+Traceback (most recent call last):
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PycharmProjects\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Valuation Ratios'
+2026-05-04 17:05:32,750 - __main__ - INFO -    ⚠️ Category[Valuation Ratios] InferenceData error: No analysed features found for category 'Valuation Ratios'
+2026-05-04 17:05:58,619 - __main__ - INFO -    ✓ Resampled Technical InferenceData: 0 draws
+2026-05-04 17:05:58,625 - __main__ - INFO -    ✓ EquityCoordinates: 6646 isins, 6646 sectors
+2026-05-04 17:05:58,625 - __main__ - INFO -    Building per-view feature InferenceData...

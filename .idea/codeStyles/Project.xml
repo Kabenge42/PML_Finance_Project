@@ -1,8 +1,12 @@
 <component name="ProjectCodeStyleConfiguration">
   <code_scheme name="Project" version="173">
-    <option name="AUTODETECT_INDENTS" value="true" />
+    <option name="AUTODETECT_INDENTS" value="false" />
     <option name="LINE_SEPARATOR" value="&#13;&#10;" />
     <option name="FORMATTER_TAGS_ACCEPT_REGEXP" value="true" />
+    <CsvCodeStyleSettings>
+      <option name="TABULARIZE" value="true" />
+      <option name="WHITE_SPACES_OUTSIDE_QUOTES" value="true" />
+    </CsvCodeStyleSettings>
     <DBN-PSQL>
       <case-options enabled="true">
         <option name="KEYWORD_CASE" value="lower" />
@@ -30,8 +34,40 @@
     <Python>
       <option name="OPTIMIZE_IMPORTS_SORT_NAMES_IN_FROM_IMPORTS" value="true" />
     </Python>
+    <SqlCodeStyleSettings version="7">
+      <option name="KEYWORD_CASE" value="2" />
+      <option name="IDENTIFIER_CASE" value="1" />
+      <option name="CUSTOM_TYPE_CASE" value="0" />
+      <option name="ALIAS_CASE" value="1" />
+      <option name="BUILT_IN_CASE" value="0" />
+      <option name="QUOTED_IDENTIFIER_CASE" value="1" />
+      <option name="SUBQUERY_OPENING" value="1" />
+      <option name="SUBQUERY_CLOSING" value="4" />
+      <option name="SUBQUERY_PAR_SPACE_BEFORE" value="1" />
+      <option name="INSERT_MATRIX_ALIGN" value="true" />
+      <option name="INSERT_MATRIX_INCLUDING_HEADER" value="true" />
+      <option name="WITH_ALIGN_AS" value="true" />
+      <option name="SELECT_NEW_LINE_AFTER_ALL_DISTINCT" value="true" />
+      <option name="FROM_ALIGN_JOIN_TABLES" value="true" />
+      <option name="FROM_ALIGN_ALIASES" value="true" />
+      <option name="ROUTINE_ARG_ALIGN_TYPES" value="true" />
+      <option name="ROUTINE_PG_R_QUOTE_WRAP_AFTER" value="true" />
+      <option name="IMP_IF_THEN_INDENT_THEN_ELSE" value="true" />
+      <option name="IMP_LOOP_END_INDENT" value="true" />
+    </SqlCodeStyleSettings>
     <editorconfig>
       <option name="ENABLED" value="false" />
     </editorconfig>
+    <codeStyleSettings language="SQL">
+      <option name="KEEP_LINE_BREAKS" value="false" />
+      <option name="KEEP_FIRST_COLUMN_COMMENT" value="false" />
+      <indentOptions>
+        <option name="USE_TAB_CHARACTER" value="true" />
+        <option name="SMART_TABS" value="true" />
+      </indentOptions>
+    </codeStyleSettings>
+    <codeStyleSettings language="csv">
+      <option name="WRAP_ON_TYPING" value="-1" />
+    </codeStyleSettings>
   </code_scheme>
 </component>
