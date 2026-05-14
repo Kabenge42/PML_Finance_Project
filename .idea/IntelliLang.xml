@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="LanguageInjectionConfiguration">
+    <injection language="CSS" injector-id="python">
+      <display-name>Selenium CSS (selene)</display-name>
+      <single-file value="true" />
+      <place><![CDATA[pyLiteralExpression().and(pyModuleFunctionArgument("by", 0, "bys"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyModuleFunctionArgument("by_css", 0, "bys"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyModuleFunctionArgument("css", 0, "by"))]]></place>
+    </injection>
+    <injection language="CSS" injector-id="python">
+      <display-name>Selenium CSS (selenium.webdriver)</display-name>
+      <single-file value="true" />
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_element_by_css_selector", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_elements_by_css_selector", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_element_by_css_selector", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_elements_by_css_selector", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+    </injection>
+    <injection language="selenium-class" injector-id="python">
+      <display-name>Selenium Element Class (selenium.webdriver)</display-name>
+      <single-file value="true" />
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_element_by_class_name", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_elements_by_class_name", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_element_by_class_name", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_elements_by_class_name", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+    </injection>
+    <injection language="selenium-id" injector-id="python">
+      <display-name>Selenium Element ID (selenium.webdriver)</display-name>
+      <single-file value="true" />
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_element_by_id", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_elements_by_id", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_element_by_id", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_elements_by_id", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+    </injection>
+    <injection language="selenium-name" injector-id="python">
+      <display-name>Selenium Element Name (selenium.webdriver)</display-name>
+      <single-file value="true" />
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_element_by_name", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_elements_by_name", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_element_by_name", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_elements_by_name", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+    </injection>
+    <injection language="selenium-html-tag" injector-id="python">
+      <display-name>Selenium HTML Tag (selenium.webdriver)</display-name>
+      <single-file value="true" />
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_element_by_tag_name", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_elements_by_tag_name", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_element_by_tag_name", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_elements_by_tag_name", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+    </injection>
+    <injection language="JavaScript" injector-id="python">
+      <display-name>Selenium JavaScript (selene)</display-name>
+      <single-file value="true" />
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("execute_script", 0, "selene.core.entity.Element"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyModuleFunctionArgument("execute_script", 0, "browser"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyModuleFunctionArgument("js_returned", 1, "have"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyModuleFunctionArgument("js_returned", 1, "not_"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyModuleFunctionArgument("js_returned_true", 0, "have"))]]></place>
+    </injection>
+    <injection language="JavaScript" injector-id="python">
+      <display-name>Selenium JavaScript (selenium.webdriver)</display-name>
+      <single-file value="true" />
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("execute_async_script", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("execute_script", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+    </injection>
+    <injection language="XPath" injector-id="python">
+      <display-name>Selenium XPath (selenium.webdriver)</display-name>
+      <single-file value="true" />
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_element_by_xpath", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyArgument("find_elements_by_xpath", 0))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_element_by_xpath", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+      <place><![CDATA[pyLiteralExpression().and(pyMethodArgument("find_elements_by_xpath", 0, "selenium.webdriver.remote.webdriver.WebDriver"))]]></place>
+    </injection>
+  </component>
+</project>

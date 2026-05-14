@@ -87372,3 +87372,465 @@ ValueError: No analysed features found for category 'Valuation Ratios'
 2026-05-04 17:05:58,619 - __main__ - INFO -    ✓ Resampled Technical InferenceData: 0 draws
 2026-05-04 17:05:58,625 - __main__ - INFO -    ✓ EquityCoordinates: 6646 isins, 6646 sectors
 2026-05-04 17:05:58,625 - __main__ - INFO -    Building per-view feature InferenceData...
+2026-05-09 14:36:38,116 - __main__ - INFO - ================================================================================
+2026-05-09 14:36:38,117 - __main__ - INFO - Expected Returns Analytics Pipeline v3.7
+2026-05-09 14:36:38,117 - __main__ - INFO - ================================================================================
+2026-05-09 14:36:38,117 - __main__ - INFO - 🔧 Numba: True, Joblib: True, ArviZ: True
+2026-05-09 14:36:38,117 - __main__ - INFO -    n_jobs=-1, max_features/cat=25, caching=on (TTL=24.0h)
+2026-05-09 14:36:38,120 - __main__ - INFO - 📦 Step 1: Loading feature data (v3.6: equities MV + feature views + all stock features MV)...
+2026-05-09 14:36:38,120 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:36:38,385 - probabilistic_ml_model.data_utils.feature_catalog - INFO - FeatureViewCatalog loaded: 27 categories, 17 views, 870 total features
+2026-05-09 14:36:38,385 - __main__ - INFO - ✓ FeatureViewCatalog: 27 categories, 17 views
+2026-05-09 14:36:38,385 - root - INFO - Loading feature data from localhost:5432/postgres (view: public.mv_all_stock_features, earnings_date_filter: 2026-01-01)
+2026-05-09 14:36:43,179 - root - INFO - Loaded 6618 rows from public.mv_all_stock_features
+2026-05-09 14:36:43,242 - root - INFO - Backfill complete. Columns: 822
+2026-05-09 14:36:43,319 - __main__ - INFO - Kalman momentum filter applied to 5 columns
+2026-05-09 14:36:43,327 - __main__ - INFO - Loaded mv_all_stock_features: 6618 rows × 832 columns
+2026-05-09 14:36:43,327 - __main__ - INFO - ✓ Loaded mv_all_stock_features: 6,618 stocks × 832 features
+2026-05-09 14:36:43,331 - __main__ - INFO -   Deduplicated to 6,618 unique isins
+2026-05-09 14:36:43,429 - root - INFO - Loaded 26 feature categories from database
+2026-05-09 14:36:43,429 - __main__ - INFO - Loaded 26 feature categories (403 total features)
+2026-05-09 14:36:43,430 - root - INFO - Loading equities data from localhost:5432/postgres (view: public.mv_equities)
+2026-05-09 14:36:46,594 - root - INFO - Loaded 6618 rows from public.mv_equities
+2026-05-09 14:36:46,645 - root - INFO - Backfill complete. Columns: 679
+2026-05-09 14:36:46,656 - __main__ - INFO - Loaded 26 feature categories (369 total features)
+2026-05-09 14:36:46,657 - __main__ - INFO - All feature categories have ≥80%% coverage
+2026-05-09 14:36:46,657 - __main__ - INFO - Loaded expected returns data: 6618 stocks × 679 features
+2026-05-09 14:36:46,657 - __main__ - INFO - ✓ Loaded mv_equities (historical cols): 6,618 stocks × 679 features
+2026-05-09 14:36:46,686 - __main__ - INFO -   Merged 505 historical columns from mv_equities
+2026-05-09 14:36:46,876 - __main__ - INFO -   Schema metadata: 674 columns
+2026-05-09 14:36:46,876 - __main__ - INFO -   Feature registry: 74 functions
+2026-05-09 14:36:46,881 - __main__ - INFO -   mv_equities spec: 89 price, 122 financial, 9 historical cols
+2026-05-09 14:36:46,881 - __main__ - INFO - 📦 Step 1b: Pre-computing historical target drift enrichment...
+2026-05-09 14:36:46,881 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:36:46,980 - root - INFO - Loaded 674 column definitions from public.equities_schema_metadata
+2026-05-09 14:36:46,981 - root - INFO - Cached equities schema: 674 columns across 12 roles
+2026-05-09 14:36:46,981 - __main__ - INFO - Column lists derived from equities schema (46 total columns)
+2026-05-09 14:36:46,981 - __main__ - INFO - Historical price/target coverage: 40 / 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-09 14:36:47,042 - __main__ - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-09 14:36:47,087 - __main__ - INFO - ✓ Historical drift enrichment complete (12 derived columns)
+2026-05-09 14:36:47,090 - __main__ - INFO -   ⏱ Step 1 completed in 9.0s
+2026-05-09 14:36:47,091 - __main__ - INFO - 🎲 Step 2: Monte Carlo price target simulation (50,000 samples)...
+2026-05-09 14:36:47,091 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:36:47,147 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-09 14:36:47,156 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-09 14:36:58,741 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_mc for 5656 / 6618 stocks (mean=6070.30)
+2026-05-09 14:36:58,741 - probabilistic_ml_model.pipeline_runners - INFO - Monte Carlo simulation: 6618 stocks processed
+2026-05-09 14:36:58,745 - __main__ - INFO -   ⏱ Step 2 completed in 11.7s
+2026-05-09 14:36:58,745 - __main__ - INFO - 🎯 Step 3: Price target achievement model...
+2026-05-09 14:36:58,745 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:36:58,807 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-09 14:36:58,816 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-09 14:36:59,084 - root - INFO - Loaded 32 identifier columns from public.vw_identifier_columns
+2026-05-09 14:37:00,145 - probabilistic_ml_model.pipeline_runners - INFO - Computed price_target_prob_weighted for 6618 / 6618 stocks (mean=4718.63)
+2026-05-09 14:37:00,146 - probabilistic_ml_model.pipeline_runners - INFO - Price target achievement: 6618 stocks processed
+2026-05-09 14:37:00,148 - __main__ - INFO -   ⏱ Step 3 completed in 1.4s
+2026-05-09 14:37:00,148 - __main__ - INFO - 📐 Step 4: Kalman-filtered price targets...
+2026-05-09 14:37:00,148 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:37:00,202 - probabilistic_ml_model.pipeline_runners - INFO - Historical price/target coverage: 40 columns available (historical_prices=9, historical_targets=7, historical_targets_high=8, historical_targets_low=8, historical_targets_median=8)
+2026-05-09 14:37:00,212 - probabilistic_ml_model.pipeline_runners - INFO - Historical target drift enrichment: 12 derived columns added
+2026-05-09 14:37:01,167 - probabilistic_ml_model.pipeline_runners - INFO - Kalman filter: 6618 stocks processed
+2026-05-09 14:37:01,169 - __main__ - INFO -   ⏱ Step 4 completed in 1.0s
+2026-05-09 14:37:01,169 - __main__ - INFO - 📊 Step 5: Bayesian earnings beat analysis...
+2026-05-09 14:37:01,169 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:37:12,685 - probabilistic_ml_model.pipeline_runners - INFO - Earnings beat analysis: 6618 stocks processed
+2026-05-09 14:37:12,689 - probabilistic_ml_model.pipeline_runners - INFO - EPS streak enrichment: 8 columns added
+2026-05-09 14:38:42,110 - probabilistic_ml_model.pipeline_runners - INFO - Resampled beat enrichment: 18 columns added
+2026-05-09 14:38:42,862 - __main__ - INFO -   ⏱ Step 5 completed in 101.7s
+2026-05-09 14:38:42,862 - __main__ - INFO - 🔬 Step 5b: Accounting anomaly detection & analytics...
+2026-05-09 14:38:42,862 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:39:20,570 - probabilistic_ml_model.statistical_functions.probability_models - INFO - AccountingAnomalyProbabilityModel: severity computed for 6618 stocks, 1648 multi-flag alerts, mean conditional P(anomaly)=0.040
+2026-05-09 14:39:27,908 - probabilistic_ml_model.pipeline_runners - INFO - MCMC anomaly posterior: location=42.711
+2026-05-09 14:39:27,908 - probabilistic_ml_model.pipeline_runners - INFO - Accounting anomaly analysis: 6618 stocks processed
+2026-05-09 14:39:33,504 - probabilistic_ml_model.pipeline_runners - INFO - accounting_anomaly results cached → mcmc_accounting_anomaly_7b06a632acc5cc53b98ea0a2e06abbf362457ead_chains8_n10000.json
+2026-05-09 14:39:33,504 - __main__ - INFO -   ⏱ Step 5b completed in 50.6s
+2026-05-09 14:39:33,504 - __main__ - INFO - 🛡️ Step 5c: Credit risk & dividend safety analysis...
+2026-05-09 14:39:33,504 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:39:33,556 - probabilistic_ml_model.statistical_functions.probability_models - INFO - CreditRiskProbabilityModel v3.9 config: student_t=True, garch=True, macro=True, df_floor=3.00, n_samples=10000, burn_in=2000
+2026-05-09 14:39:46,950 - probabilistic_ml_model.pipeline_runners - INFO - Hierarchical MCMC credit risk: 1 sectors enriched
+2026-05-09 14:39:47,387 - probabilistic_ml_model.pipeline_runners - INFO - Ruin probability enrichment: 6 columns added
+2026-05-09 14:39:47,387 - probabilistic_ml_model.pipeline_runners - INFO - Credit risk analysis: 6618 stocks processed
+2026-05-09 14:39:47,648 - probabilistic_ml_model.pipeline_runners - INFO - credit_risk results cached → mcmc_credit_risk_64baef1e8f1f4d2135f0da58bf4f6379689d58d8_chains8_n10000.json
+2026-05-09 14:39:59,927 - probabilistic_ml_model.pipeline_runners - INFO - Dividend safety analysis (v3.10 per-isin): 6618 stocks processed
+2026-05-09 14:40:00,127 - probabilistic_ml_model.pipeline_runners - INFO - dividend_safety results cached → mcmc_dividend_safety_005461dcff382539a66d290d784877a171a21c26_chains8_n10000.json
+2026-05-09 14:40:00,128 - __main__ - INFO -   ⏱ Step 5c completed in 26.6s
+2026-05-09 14:40:00,128 - __main__ - INFO - 🔍 Step 5d: Running stock screening strategies...
+2026-05-09 14:40:00,128 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:40:00,226 - __main__ - INFO -   ✓ Productivity frontier scores added
+2026-05-09 14:40:00,228 - __main__ - INFO -    Reporting lag sentiment: corr=0.182, p=0.0000, hypothesis=marginally significant (p < 0.10)
+2026-05-09 14:40:02,879 - __main__ - INFO - Quality screen: 363 stocks
+2026-05-09 14:40:04,589 - __main__ - INFO - Earnings quality screen: 4097 stocks
+2026-05-09 14:40:06,059 - __main__ - INFO - Value screen: 1426 stocks
+2026-05-09 14:40:07,731 - __main__ - INFO - Growth screen: 2947 stocks
+2026-05-09 14:40:09,615 - __main__ - INFO - GARP screen: 1281 stocks
+2026-05-09 14:40:11,699 - __main__ - INFO - Dividend screen: 1287 stocks
+2026-05-09 14:40:13,393 - __main__ - INFO - Financial health screen: 1385 stocks
+2026-05-09 14:40:15,001 - __main__ - INFO - Valuation reversion screen: 533 stocks
+2026-05-09 14:40:16,617 - __main__ - INFO - Integrity growth screen: 1457 stocks
+2026-05-09 14:40:18,972 - __main__ - INFO - High-yield safe dividend screen: 1521 stocks
+2026-05-09 14:40:18,973 - __main__ - INFO - Sector-relative ranking: 6618 stocks
+2026-05-09 14:40:20,897 - __main__ - INFO - Low-volatility quality screen: 3266 stocks
+2026-05-09 14:40:22,852 - __main__ - INFO - FCF compounders screen: 673 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO - Total return leaders screen: 3528 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ quality: 363 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ earnings_quality: 4,097 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ value: 1,426 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ growth: 2,947 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ garp: 1,281 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ dividend: 1,287 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ healthy: 1,385 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ valuation_reversion: 533 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ integrity_growth: 1,457 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ high_yield_safe: 1,521 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ sector_relative: 6,618 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ low_vol_quality: 3,266 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ fcf_compounders: 673 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ✓ total_return_leaders: 3,528 stocks
+2026-05-09 14:40:24,002 - __main__ - INFO -   ⏱ Step 5d completed in 23.9s
+2026-05-09 14:40:24,002 - __main__ - INFO - 🧪 Step 5e: Resampled Bayesian posterior returns...
+2026-05-09 14:40:24,002 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:40:55,696 - __main__ - INFO - Resampled posterior returns: 6618 stocks, mean posterior=-0.19%
+2026-05-09 14:40:55,936 - __main__ - INFO -   ⏱ Step 5e completed in 31.9s
+2026-05-09 14:40:55,937 - __main__ - INFO - 🔗 Step 6: Cross-model alignment...
+2026-05-09 14:40:55,937 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:40:56,000 - __main__ - INFO - Tri-model alignment: 6618 stocks, 3075 strong bullish
+2026-05-09 14:40:56,122 - __main__ - INFO - Credit risk signal merged: 3314/6618 stocks flagged credit-safe (median fill=0.890)
+2026-05-09 14:40:56,126 - __main__ - INFO - Dividend safety signal merged: 372/6618 stocks flagged div-safe (median fill=0.610)
+2026-05-09 14:40:56,128 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 85.7
+2026-05-09 14:40:56,131 - __main__ - INFO - Anomaly signal merged: 3309/6618 stocks flagged anomaly-clean (threshold=85.7)
+2026-05-09 14:40:56,133 - __main__ - INFO - Ensemble alignment (7 models): 6618 stocks, full consensus (4/4 dir + ≥2/3 risk): 515
+2026-05-09 14:40:56,151 - __main__ - INFO - Strong consensus picks: 1500 stocks
+2026-05-09 14:40:56,151 - __main__ - INFO -   ⏱ Step 6 completed in 0.2s
+2026-05-09 14:40:56,151 - __main__ - INFO - 📋 Step 7: Building expected_returns_summary (multi-model merge)...
+2026-05-09 14:40:56,151 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:40:56,256 - __main__ - INFO - Enriched expected_returns_summary with 60 anomaly columns
+2026-05-09 14:40:56,264 - __main__ - INFO - Enriched expected_returns_summary with 15 credit risk columns
+2026-05-09 14:40:56,270 - __main__ - INFO - Enriched expected_returns_summary with 10 dividend safety columns
+2026-05-09 14:40:56,282 - __main__ - INFO - Enriched expected_returns_summary with 32 columns from mv_all_stock_features
+2026-05-09 14:40:56,287 - __main__ - INFO - Enriched expected_returns_summary with 8 forward consensus columns
+2026-05-09 14:40:56,293 - __main__ - INFO - Merged quad alignment scores into summary (single source of truth)
+2026-05-09 14:40:56,302 - __main__ - INFO - Expected returns summary: 6618 stocks, full consensus (4/4 dir + ≥2/3 risk): 515
+2026-05-09 14:40:56,307 - __main__ - INFO -   ✓ 6,618 stocks in expected_returns_summary
+2026-05-09 14:40:56,493 - __main__ - INFO - Quality scoring: 6618 stocks scored (mean=48.3, median=49.2)
+2026-05-09 14:40:56,494 - __main__ - INFO -   Premium: 662 stocks
+2026-05-09 14:40:56,494 - __main__ - INFO -   High: 1324 stocks
+2026-05-09 14:40:56,494 - __main__ - INFO -   Above Avg: 1323 stocks
+2026-05-09 14:40:56,494 - __main__ - INFO -   Below Avg: 1323 stocks
+2026-05-09 14:40:56,494 - __main__ - INFO -   Low: 1324 stocks
+2026-05-09 14:40:56,494 - __main__ - INFO -   Very Low: 662 stocks
+2026-05-09 14:40:56,495 - __main__ - INFO -   Financially healthy (score ≥ 45): 4256 stocks
+2026-05-09 14:40:56,581 - __main__ - INFO - Added z-scores and percentile ranks for 5 return metrics
+2026-05-09 14:40:56,610 - __main__ - INFO - 🔀 Step 7a: Parallel MCMC return analysis...
+2026-05-09 14:40:56,611 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:41:06,079 - __main__ - INFO - Parallel MCMC: R̂=1.0010, converged=False, posterior mean=0.20
+2026-05-09 14:41:06,079 - __main__ - INFO -   95% CI: [0.20, 0.21], posterior std=0.00
+2026-05-09 14:41:06,079 - __main__ - INFO -   Chain means: 0.20, 0.21, 0.20, 0.20, 0.20, 0.21, 0.20, 0.20
+2026-05-09 14:41:06,079 - __main__ - INFO -   Chain stds:  0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00
+2026-05-09 14:41:18,576 - __main__ - INFO -   MCMC Student-t: μ=0.13 (±0.00), df=2.0
+2026-05-09 14:41:19,244 - probabilistic_ml_model.statistical_functions.statistical_models - INFO - Multi-level hierarchical MCMC: 9 levels, 162 total groups for 'implied_return_pt'
+2026-05-09 14:41:19,244 - __main__ - INFO -   Hierarchical MCMC: global mean=0.20, std=0.37, n=6618
+2026-05-09 14:41:19,244 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-09 14:41:19,244 - __main__ - INFO -       Europe: posterior=0.23 (raw=0.24), shrinkage=0.981, n=2080, P(>0)=100.0%
+2026-05-09 14:41:19,244 - __main__ - INFO -       Asia / Pacific: posterior=0.10 (raw=0.10), shrinkage=0.981, n=2069, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       United States and Canada: posterior=0.30 (raw=0.30), shrinkage=0.978, n=1768, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       Africa / Middle East: posterior=0.15 (raw=0.14), shrinkage=0.919, n=455, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       Latin America and Caribbean: posterior=0.22 (raw=0.22), shrinkage=0.860, n=246, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-09 14:41:19,245 - __main__ - INFO -       US: posterior=0.30 (raw=0.30), shrinkage=0.973, n=1453, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       CN: posterior=0.12 (raw=0.12), shrinkage=0.961, n=990, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       GB: posterior=0.38 (raw=0.39), shrinkage=0.904, n=376, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       JP: posterior=0.07 (raw=0.07), shrinkage=0.896, n=346, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       CA: posterior=0.31 (raw=0.31), shrinkage=0.887, n=315, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-09 14:41:19,245 - __main__ - INFO -       US: posterior=0.30 (raw=0.31), shrinkage=0.977, n=1686, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       CN: posterior=0.10 (raw=0.09), shrinkage=0.953, n=810, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       GB: posterior=0.37 (raw=0.39), shrinkage=0.905, n=382, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       JP: posterior=0.08 (raw=0.07), shrinkage=0.896, n=345, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       CA: posterior=0.30 (raw=0.31), shrinkage=0.887, n=314, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -     Level 'exchange': 31 groups
+2026-05-09 14:41:19,245 - __main__ - INFO -       NYSE: posterior=0.17 (raw=0.17), shrinkage=0.947, n=720, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       NasdaqGS: posterior=0.27 (raw=0.27), shrinkage=0.938, n=607, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       SHSE: posterior=0.10 (raw=0.10), shrinkage=0.913, n=419, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       SZSE: posterior=0.08 (raw=0.08), shrinkage=0.907, n=391, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       TSE: posterior=0.07 (raw=0.07), shrinkage=0.896, n=345, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-09 14:41:19,245 - __main__ - INFO -       USD: posterior=0.30 (raw=0.30), shrinkage=0.977, n=1694, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       EUR: posterior=0.21 (raw=0.21), shrinkage=0.960, n=959, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       CNY: posterior=0.10 (raw=0.09), shrinkage=0.953, n=810, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       GBP: posterior=0.37 (raw=0.39), shrinkage=0.905, n=379, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       JPY: posterior=0.08 (raw=0.07), shrinkage=0.896, n=345, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-09 14:41:19,245 - __main__ - INFO -       Industrials: posterior=0.15 (raw=0.15), shrinkage=0.973, n=1456, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       Information Technology: posterior=0.15 (raw=0.14), shrinkage=0.963, n=1036, P(>0)=100.0%
+2026-05-09 14:41:19,245 - __main__ - INFO -       Consumer Discretionary: posterior=0.20 (raw=0.20), shrinkage=0.958, n=922, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Health Care: posterior=0.45 (raw=0.46), shrinkage=0.956, n=879, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Materials: posterior=0.20 (raw=0.20), shrinkage=0.953, n=810, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-09 14:41:19,249 - __main__ - INFO -       Metals and Mining: posterior=0.28 (raw=0.29), shrinkage=0.908, n=393, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Biotechnology: posterior=0.71 (raw=0.74), shrinkage=0.885, n=309, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Machinery: posterior=0.13 (raw=0.13), shrinkage=0.885, n=308, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=0.18 (raw=0.18), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Chemicals: posterior=0.11 (raw=0.10), shrinkage=0.873, n=276, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-09 14:41:19,249 - __main__ - INFO -       Core: posterior=0.22 (raw=0.22), shrinkage=0.990, n=4005, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Value: posterior=0.20 (raw=0.19), shrinkage=0.979, n=1880, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Growth: posterior=0.16 (raw=0.15), shrinkage=0.948, n=733, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-09 14:41:19,249 - __main__ - INFO -       Small Cap: posterior=0.27 (raw=0.27), shrinkage=0.990, n=4022, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Mid Cap: posterior=0.11 (raw=0.10), shrinkage=0.975, n=1581, P(>0)=100.0%
+2026-05-09 14:41:19,249 - __main__ - INFO -       Large Cap: posterior=0.09 (raw=0.09), shrinkage=0.962, n=1015, P(>0)=100.0%
+2026-05-09 14:41:19,261 - __main__ - INFO - MCMC return analysis cached → mcmc_return_25c282a95ea1ae93a73d6a51d2041b0ad4525462_chains8_n10000.json
+2026-05-09 14:41:19,261 - __main__ - INFO -   R̂=1.0010, converged=False, posterior mean=0.20
+2026-05-09 14:41:19,261 - __main__ - INFO -   95% CI: [0.20, 0.21], posterior std=0.00
+2026-05-09 14:41:19,261 - __main__ - INFO -   MCMC Student-t: μ=0.13, df=2.0
+2026-05-09 14:41:19,261 - __main__ - INFO -   Hierarchical MCMC: global mean=0.20, std=0.37, n=6618
+2026-05-09 14:41:19,261 - __main__ - INFO -     Level 'region': 5 groups
+2026-05-09 14:41:19,261 - __main__ - INFO -       Europe: posterior=0.23 (raw=0.24), shrinkage=0.981, n=2080, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       Asia / Pacific: posterior=0.10 (raw=0.10), shrinkage=0.981, n=2069, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       United States and Canada: posterior=0.30 (raw=0.30), shrinkage=0.978, n=1768, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       Africa / Middle East: posterior=0.15 (raw=0.14), shrinkage=0.919, n=455, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       Latin America and Caribbean: posterior=0.22 (raw=0.22), shrinkage=0.860, n=246, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -     Level 'country': 25 groups
+2026-05-09 14:41:19,262 - __main__ - INFO -       US: posterior=0.30 (raw=0.30), shrinkage=0.973, n=1453, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       CN: posterior=0.12 (raw=0.12), shrinkage=0.961, n=990, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       GB: posterior=0.38 (raw=0.39), shrinkage=0.904, n=376, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       JP: posterior=0.07 (raw=0.07), shrinkage=0.896, n=346, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       CA: posterior=0.31 (raw=0.31), shrinkage=0.887, n=315, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -     Level 'trading_country': 24 groups
+2026-05-09 14:41:19,262 - __main__ - INFO -       US: posterior=0.30 (raw=0.31), shrinkage=0.977, n=1686, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       CN: posterior=0.10 (raw=0.09), shrinkage=0.953, n=810, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       GB: posterior=0.37 (raw=0.39), shrinkage=0.905, n=382, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       JP: posterior=0.08 (raw=0.07), shrinkage=0.896, n=345, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       CA: posterior=0.30 (raw=0.31), shrinkage=0.887, n=314, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -     Level 'exchange': 31 groups
+2026-05-09 14:41:19,262 - __main__ - INFO -       NYSE: posterior=0.17 (raw=0.17), shrinkage=0.947, n=720, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       NasdaqGS: posterior=0.27 (raw=0.27), shrinkage=0.938, n=607, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       SHSE: posterior=0.10 (raw=0.10), shrinkage=0.913, n=419, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       SZSE: posterior=0.08 (raw=0.08), shrinkage=0.907, n=391, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       TSE: posterior=0.07 (raw=0.07), shrinkage=0.896, n=345, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -     Level 'unit': 19 groups
+2026-05-09 14:41:19,262 - __main__ - INFO -       USD: posterior=0.30 (raw=0.30), shrinkage=0.977, n=1694, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       EUR: posterior=0.21 (raw=0.21), shrinkage=0.960, n=959, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       CNY: posterior=0.10 (raw=0.09), shrinkage=0.953, n=810, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       GBP: posterior=0.37 (raw=0.39), shrinkage=0.905, n=379, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -       JPY: posterior=0.08 (raw=0.07), shrinkage=0.896, n=345, P(>0)=100.0%
+2026-05-09 14:41:19,262 - __main__ - INFO -     Level 'sector': 9 groups
+2026-05-09 14:41:19,262 - __main__ - INFO -       Industrials: posterior=0.15 (raw=0.15), shrinkage=0.973, n=1456, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Information Technology: posterior=0.15 (raw=0.14), shrinkage=0.963, n=1036, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Consumer Discretionary: posterior=0.20 (raw=0.20), shrinkage=0.958, n=922, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Health Care: posterior=0.45 (raw=0.46), shrinkage=0.956, n=879, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Materials: posterior=0.20 (raw=0.20), shrinkage=0.953, n=810, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -     Level 'industry': 43 groups
+2026-05-09 14:41:19,263 - __main__ - INFO -       Metals and Mining: posterior=0.28 (raw=0.29), shrinkage=0.908, n=393, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Biotechnology: posterior=0.71 (raw=0.74), shrinkage=0.885, n=309, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Machinery: posterior=0.13 (raw=0.13), shrinkage=0.885, n=308, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Oil Gas and Consumable Fuels: posterior=0.18 (raw=0.18), shrinkage=0.878, n=289, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Chemicals: posterior=0.11 (raw=0.10), shrinkage=0.873, n=276, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -     Level 'style_class': 3 groups
+2026-05-09 14:41:19,263 - __main__ - INFO -       Core: posterior=0.22 (raw=0.22), shrinkage=0.990, n=4005, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Value: posterior=0.20 (raw=0.19), shrinkage=0.979, n=1880, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Growth: posterior=0.16 (raw=0.15), shrinkage=0.948, n=733, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -     Level 'size_class': 3 groups
+2026-05-09 14:41:19,263 - __main__ - INFO -       Small Cap: posterior=0.27 (raw=0.27), shrinkage=0.990, n=4022, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Mid Cap: posterior=0.11 (raw=0.10), shrinkage=0.975, n=1581, P(>0)=100.0%
+2026-05-09 14:41:19,263 - __main__ - INFO -       Large Cap: posterior=0.09 (raw=0.09), shrinkage=0.962, n=1015, P(>0)=100.0%
+2026-05-09 14:41:19,331 - __main__ - INFO - Credit risk signal merged: 3314/6618 stocks flagged credit-safe (median fill=0.890)
+2026-05-09 14:41:19,335 - __main__ - INFO - Dividend safety signal merged: 372/6618 stocks flagged div-safe (median fill=0.610)
+2026-05-09 14:41:19,336 - __main__ - INFO - Anomaly severity threshold set adaptively to median: 85.7
+2026-05-09 14:41:19,339 - __main__ - INFO - Anomaly signal merged: 3309/6618 stocks flagged anomaly-clean (threshold=85.7)
+2026-05-09 14:41:19,342 - __main__ - INFO - Ensemble alignment (7 models): 6618 stocks, full consensus (4/4 dir + ≥2/3 risk): 524
+2026-05-09 14:41:19,361 - __main__ - INFO -   ✓ Risk-adjusted returns computed for 6,618 stocks
+2026-05-09 14:41:19,361 - __main__ - INFO -   ⏱ Step 7a completed in 22.8s
+2026-05-09 14:41:19,361 - __main__ - INFO - 🧮 Step 7b: Per-category Bayesian probability analytics...
+2026-05-09 14:41:19,361 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:41:19,482 - root - WARNING - Could not load view category mapping from DB: too many values to unpack (expected 2). Using fallback.
+2026-05-09 14:41:19,483 - __main__ - INFO -   Feature categories from 17 views → 17 categories, 679 total features
+2026-05-09 14:41:19,530 - __main__ - INFO - Sampling budget: Analyst Sentiment trimmed to 25 features (from 26)
+2026-05-09 14:41:19,540 - __main__ - INFO - Sampling budget: Balance Sheet trimmed to 25 features (from 58)
+2026-05-09 14:41:19,547 - __main__ - INFO - Sampling budget: Cash Flow trimmed to 25 features (from 81)
+2026-05-09 14:41:19,554 - __main__ - INFO - Sampling budget: Composite Scores trimmed to 25 features (from 30)
+2026-05-09 14:41:19,562 - __main__ - INFO - Sampling budget: Cost Structure trimmed to 25 features (from 43)
+2026-05-09 14:41:19,571 - __main__ - INFO - Sampling budget: Earnings Quality trimmed to 25 features (from 68)
+2026-05-09 14:41:19,581 - __main__ - INFO - Sampling budget: Growth Metrics trimmed to 25 features (from 62)
+2026-05-09 14:41:19,591 - __main__ - INFO - Sampling budget: Leverage & Liquidity trimmed to 25 features (from 71)
+2026-05-09 14:41:19,600 - __main__ - INFO - Sampling budget: Profitability trimmed to 25 features (from 68)
+2026-05-09 14:41:19,603 - __main__ - INFO - Sampling budget: Quality & Risk trimmed to 25 features (from 44)
+2026-05-09 14:41:19,607 - __main__ - INFO - Sampling budget: Valuation Ratios trimmed to 25 features (from 28)
+2026-05-09 14:52:52,181 - __main__ - INFO - Category Analyst Sentiment: 25 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Balance Sheet: 25 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Cash Flow: 25 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Composite Scores: 25 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Cost Structure: 25 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Dividend Features: 25 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Earnings Quality: 25 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Employment Metrics: 17 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Growth Metrics: 25 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Leverage & Liquidity: 25 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Momentum: 19 features analyzed
+2026-05-09 14:52:52,182 - __main__ - INFO - Category Profitability: 25 features analyzed
+2026-05-09 14:52:52,183 - __main__ - INFO - Category Quality & Risk: 25 features analyzed
+2026-05-09 14:52:52,183 - __main__ - INFO - Category Technical Analysis: 11 features analyzed
+2026-05-09 14:52:52,183 - __main__ - INFO - Category Temporal Features: 16 features analyzed
+2026-05-09 14:52:52,183 - __main__ - INFO - Category Unusual Items: 9 features analyzed
+2026-05-09 14:52:52,183 - __main__ - INFO - Category Valuation Ratios: 25 features analyzed
+2026-05-09 14:52:52,720 - __main__ - INFO - Category analytics cached → category_analytics_d794071cae2a593f68b5dfa999bf9b205f7e50a5_cats17_mcmc1_n10000_b1000_max25.json
+2026-05-09 14:52:52,720 - __main__ - INFO -   ✓ Analyzed 17 categories
+2026-05-09 14:52:52,720 - __main__ - INFO -     Analyst Sentiment: 25 features — 25 posteriors
+2026-05-09 14:52:52,720 - __main__ - INFO -     Balance Sheet: 25 features — 25 posteriors
+2026-05-09 14:52:52,720 - __main__ - INFO -     Cash Flow: 25 features — 25 posteriors
+2026-05-09 14:52:52,720 - __main__ - INFO -     Composite Scores: 25 features — 25 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Cost Structure: 25 features — 25 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Dividend Features: 25 features — 25 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Earnings Quality: 25 features — 25 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Employment Metrics: 17 features — 17 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Growth Metrics: 25 features — 25 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Leverage & Liquidity: 25 features — 25 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Momentum: 19 features — 19 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Profitability: 25 features — 25 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Quality & Risk: 25 features — 25 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Technical Analysis: 11 features — 11 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Temporal Features: 16 features — 13 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Unusual Items: 9 features — 9 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -     Valuation Ratios: 25 features — 25 posteriors
+2026-05-09 14:52:52,721 - __main__ - INFO -   ⏱ Step 7b completed in 693.4s
+2026-05-09 14:52:52,721 - __main__ - INFO - 🧪 Step 8: Building InferenceData (ArviZ)...
+2026-05-09 14:52:52,721 - __main__ - INFO - --------------------------------------------------------------------------------
+2026-05-09 14:53:01,565 - __main__ - INFO -    ✓ MC InferenceData: 0 draws, 0 equities
+2026-05-09 14:53:11,636 - __main__ - INFO -    ✓ Credit Risk InferenceData: 0 equities
+2026-05-09 14:53:16,373 - __main__ - INFO -    ✓ Anomaly InferenceData: 0 equities
+2026-05-09 14:53:16,374 - __main__ - WARNING - Step 8 builder 'Category[Analyst Sentiment]' failed: No analysed features found for category 'Analyst Sentiment'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Analyst Sentiment'
+2026-05-09 14:53:16,381 - __main__ - INFO -    ⚠️ Category[Analyst Sentiment] InferenceData error: No analysed features found for category 'Analyst Sentiment'
+2026-05-09 14:53:16,381 - __main__ - WARNING - Step 8 builder 'Category[Balance Sheet]' failed: No analysed features found for category 'Balance Sheet'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Balance Sheet'
+2026-05-09 14:53:16,381 - __main__ - INFO -    ⚠️ Category[Balance Sheet] InferenceData error: No analysed features found for category 'Balance Sheet'
+2026-05-09 14:53:16,381 - __main__ - WARNING - Step 8 builder 'Category[Cash Flow]' failed: No analysed features found for category 'Cash Flow'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Cash Flow'
+2026-05-09 14:53:16,382 - __main__ - INFO -    ⚠️ Category[Cash Flow] InferenceData error: No analysed features found for category 'Cash Flow'
+2026-05-09 14:53:16,382 - __main__ - WARNING - Step 8 builder 'Category[Composite Scores]' failed: No analysed features found for category 'Composite Scores'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Composite Scores'
+2026-05-09 14:53:16,382 - __main__ - INFO -    ⚠️ Category[Composite Scores] InferenceData error: No analysed features found for category 'Composite Scores'
+2026-05-09 14:53:16,382 - __main__ - WARNING - Step 8 builder 'Category[Cost Structure]' failed: No analysed features found for category 'Cost Structure'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Cost Structure'
+2026-05-09 14:53:16,383 - __main__ - INFO -    ⚠️ Category[Cost Structure] InferenceData error: No analysed features found for category 'Cost Structure'
+2026-05-09 14:53:16,383 - __main__ - WARNING - Step 8 builder 'Category[Dividend Features]' failed: No analysed features found for category 'Dividend Features'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Dividend Features'
+2026-05-09 14:53:16,384 - __main__ - INFO -    ⚠️ Category[Dividend Features] InferenceData error: No analysed features found for category 'Dividend Features'
+2026-05-09 14:53:16,384 - __main__ - WARNING - Step 8 builder 'Category[Earnings Quality]' failed: No analysed features found for category 'Earnings Quality'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Earnings Quality'
+2026-05-09 14:53:16,384 - __main__ - INFO -    ⚠️ Category[Earnings Quality] InferenceData error: No analysed features found for category 'Earnings Quality'
+2026-05-09 14:53:16,384 - __main__ - WARNING - Step 8 builder 'Category[Employment Metrics]' failed: No analysed features found for category 'Employment Metrics'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Employment Metrics'
+2026-05-09 14:53:16,385 - __main__ - INFO -    ⚠️ Category[Employment Metrics] InferenceData error: No analysed features found for category 'Employment Metrics'
+2026-05-09 14:53:16,385 - __main__ - WARNING - Step 8 builder 'Category[Growth Metrics]' failed: No analysed features found for category 'Growth Metrics'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Growth Metrics'
+2026-05-09 14:53:16,385 - __main__ - INFO -    ⚠️ Category[Growth Metrics] InferenceData error: No analysed features found for category 'Growth Metrics'
+2026-05-09 14:53:16,385 - __main__ - WARNING - Step 8 builder 'Category[Leverage & Liquidity]' failed: No analysed features found for category 'Leverage & Liquidity'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Leverage & Liquidity'
+2026-05-09 14:53:16,386 - __main__ - INFO -    ⚠️ Category[Leverage & Liquidity] InferenceData error: No analysed features found for category 'Leverage & Liquidity'
+2026-05-09 14:53:16,386 - __main__ - WARNING - Step 8 builder 'Category[Momentum]' failed: No analysed features found for category 'Momentum'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Momentum'
+2026-05-09 14:53:16,386 - __main__ - INFO -    ⚠️ Category[Momentum] InferenceData error: No analysed features found for category 'Momentum'
+2026-05-09 14:53:16,386 - __main__ - WARNING - Step 8 builder 'Category[Profitability]' failed: No analysed features found for category 'Profitability'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Profitability'
+2026-05-09 14:53:16,387 - __main__ - INFO -    ⚠️ Category[Profitability] InferenceData error: No analysed features found for category 'Profitability'
+2026-05-09 14:53:16,387 - __main__ - WARNING - Step 8 builder 'Category[Quality & Risk]' failed: No analysed features found for category 'Quality & Risk'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Quality & Risk'
+2026-05-09 14:53:16,387 - __main__ - INFO -    ⚠️ Category[Quality & Risk] InferenceData error: No analysed features found for category 'Quality & Risk'
+2026-05-09 14:53:16,387 - __main__ - WARNING - Step 8 builder 'Category[Technical Analysis]' failed: No analysed features found for category 'Technical Analysis'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Technical Analysis'
+2026-05-09 14:53:16,388 - __main__ - INFO -    ⚠️ Category[Technical Analysis] InferenceData error: No analysed features found for category 'Technical Analysis'
+2026-05-09 14:53:16,388 - __main__ - WARNING - Step 8 builder 'Category[Temporal Features]' failed: No analysed features found for category 'Temporal Features'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Temporal Features'
+2026-05-09 14:53:16,388 - __main__ - INFO -    ⚠️ Category[Temporal Features] InferenceData error: No analysed features found for category 'Temporal Features'
+2026-05-09 14:53:16,388 - __main__ - WARNING - Step 8 builder 'Category[Unusual Items]' failed: No analysed features found for category 'Unusual Items'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Unusual Items'
+2026-05-09 14:53:16,388 - __main__ - INFO -    ⚠️ Category[Unusual Items] InferenceData error: No analysed features found for category 'Unusual Items'
+2026-05-09 14:53:16,388 - __main__ - WARNING - Step 8 builder 'Category[Valuation Ratios]' failed: No analysed features found for category 'Valuation Ratios'
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\expected_returns_v3.py", line 6262, in _safe_build
+    result = builder(*args, **kwargs)
+  File "C:\Users\markm\PML_Finance_Project\probabilistic_ml_model\data_utils\inference_schema.py", line 1147, in build_category_analysis_inference_data
+    raise ValueError(f"No analysed features found for category '{category_name}'")
+ValueError: No analysed features found for category 'Valuation Ratios'
+2026-05-09 14:53:16,389 - __main__ - INFO -    ⚠️ Category[Valuation Ratios] InferenceData error: No analysed features found for category 'Valuation Ratios'

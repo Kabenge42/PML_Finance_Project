@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS feature_catalogue;
 create table feature_catalogue
 (
     category         varchar(64),
@@ -9,4 +10,3 @@ create table feature_catalogue
 
 alter table feature_catalogue
     owner to postgres;
-

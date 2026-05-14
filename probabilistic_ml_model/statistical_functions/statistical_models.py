@@ -31,7 +31,10 @@ try:
     import arviz as az
     import xarray as xr
 
-    ARVIZ_AVAILABLE = hasattr(az, "InferenceData")
+    # ArviZ 1.0 dropped ``InferenceData`` in favour of ``xarray.DataTree``;
+    # ``from_dict`` is the canonical 1.x constructor.  Accept either so the
+    # module works against both legacy (<1.0) and modern (>=1.0) installs.
+    ARVIZ_AVAILABLE = hasattr(az, "from_dict") or hasattr(az, "InferenceData")
 except (ImportError, OSError, PermissionError):
     az = None  # type: ignore[assignment]
     xr = None  # type: ignore[assignment]
@@ -535,16 +538,19 @@ class BayesianTechnicalResampler:
             # routes every variable into the `posterior` group (which is what
             # produced the "log_likelihood variable found in posterior group"
             # warning AND the chain-size conflict above).
+            # ArviZ 1.0 API: pass groups as a single nested-dict positional
+            # argument instead of per-group ``posterior=``/``observed_data=``
+            # kwargs (the legacy <1.0 signature).
             return az.from_dict(
-                posterior={"implied_return_pt": posterior_samples},
-                posterior_predictive={"future_return": pp_samples},
-                log_likelihood={"return_obs": log_lik},
-                observed_data={"observed_return": observed_means},
-                constant_data={
-                    "prior_mean": np.array([self.prior_return_mean]),
-                    "prior_std": np.array([self.prior_return_std]),
-                    "frequency": np.array([freq]),
-                },
+                {"posterior": {"implied_return_pt": posterior_samples},
+                 "posterior_predictive": {"future_return": pp_samples},
+                 "log_likelihood": {"return_obs": log_lik},
+                 "observed_data": {"observed_return": observed_means},
+                 "constant_data": {
+                     "prior_mean": np.array([self.prior_return_mean]),
+                     "prior_std": np.array([self.prior_return_std]),
+                     "frequency": np.array([freq]),
+                 }},
                 coords=chain_draw_equity_coords,
                 dims={
                     "implied_return_pt": ["chain", "draw", "equity"],
@@ -651,17 +657,24 @@ def bayesian_category_analysis(
         if feature not in df.columns:
             continue
 
-        data = df[feature].dropna()
+        col = df[feature]
+        # Coerce to numeric: non-numeric dtypes (e.g., string/object/Arrow string)
+        # cannot be reduced via mean/var. Convert with errors='coerce' so any
+        # non-parseable values become NaN and are dropped below.
+        if not pd.api.types.is_numeric_dtype(col):
+            col = pd.to_numeric(col, errors="coerce")
+
+        data = col.dropna()
         if len(data) < 50:
             continue
 
         n = len(data)
-        sample_mean = data.mean()
-        sample_var = data.var()
+        sample_mean = float(data.mean())
+        sample_var = float(data.var())
 
         # Skip features with near-zero variance (constant / degenerate data)
         # to avoid division-by-zero in scipy when posterior_std ≈ 0
-        if not np.isfinite(sample_var).all() or (sample_var < 1e-12).any():
+        if not np.isfinite(sample_var) or sample_var < 1e-12:
             continue
 
         # Posterior parameters (Normal-Normal conjugate)
@@ -700,8 +713,9 @@ def bayesian_category_analysis(
         }
 
         if ARVIZ_AVAILABLE and az is not None:
+            # ArviZ 1.0 API: nested-dict positional argument.
             feature_result["inference_data"] = az.from_dict(
-                posterior={"mu": samples.reshape(1, -1)},
+                {"posterior": {"mu": samples.reshape(1, -1)}},
             )
 
         results[feature] = feature_result

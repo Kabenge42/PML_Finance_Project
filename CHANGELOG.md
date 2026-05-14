@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.2] - 2026-05-09
+
+### Changed — Dependency alignment across `Pipfile`, `pyproject.toml`, `requirements.txt`
+
+Audit-driven cleanup that resolves the cross-file version drift identified
+in the v0.9.9.1 dependency review and refreshes Python 3.14.4 compatibility
+gating against PyPI / upstream release notes (May 2026).
+
+- **Hard conflict fixed in `Pipfile`** — `pytensor` was pinned at
+  `>=2.38.0,<5.0.0`, which is incompatible with the cross-file
+  `pymc>=5.28,<5.29` pin (PyMC 5.28 requires `pytensor<2.34`). Bumped
+  down to `pytensor>=2.31,<3` to match `pyproject.toml` and
+  `requirements.txt`.
+- **Aligned upper bounds across all three files**:
+    - `numpy`: Pipfile `<4.0.0` → `<3.0.0`
+    - `pymc`: Pipfile `>=5.0.0,<8.0.0` → `>=5.28,<5.29`
+    - `xarray`: Pipfile `>=2025.0.0,<2027.0.0` → `>=2024.7.0,<2027.0.0`
+    - `streamlit`: requirements.txt `<4.0.0` → `<6.0.0`
+    - `dash`: requirements.txt `<5.0.0` → `<7.0.0`
+- **Unified Python-version markers** to the canonical
+  `python_version < '3.14'` form across all three files. The previous
+  `python_version <= '3.14'` form in `requirements.txt` and the
+  `tensorflow` / `streamlit` / `numba` entries in
+  `pyproject.toml` silently broke on Python 3.14.x because no wheels
+  exist for that interpreter — using the strict-less-than form makes
+  pip skip those packages on 3.14 instead of failing the install.
+- **Ungated `shap` and `numba` for Python 3.14**:
+    - `shap>=0.50.0,<1.0.0` — SHAP 0.50.0 (Nov 2025) added Python 3.14
+      test coverage; the marker is now removed from all three files.
+    - `numba>=0.63.0,<1.0.0` — Numba 0.63.0 (Dec 2025) is the first
+      release with official Python 3.14 + free-threaded support;
+      minimum version bumped from `0.60.0` to `0.63.0`.
+- **Still gated to `python_version < '3.14'`** (no 3.14 wheels yet on
+  PyPI as of May 2026): `catboost`, `streamlit`, `tensorflow`,
+  `scikeras`.
+- **Missing core deps added to `Pipfile`** to bring it in line with
+  `pyproject.toml` / `requirements.txt`:
+  `cython>=3.0.0`, `pyyaml>=6.0.0,<7.0.0`, `bambi>=0.15.0,<1.0.0`,
+  `nutpie>=0.13.0,<1.0.0`, `jax>=0.4.30,<1.0.0`,
+  `jaxlib>=0.4.30,<1.0.0`.
+- **Refreshed `requirements.txt` header** date to `2026-05-09` and the
+  `Aligned with pyproject.toml` line to `v0.9.9.2`.
+
+### Changed — Documentation
+
+- **`pyproject.toml` `version`** bumped from `0.9.5` to `0.9.9.2` so it
+  matches the README badge and CHANGELOG entries (the previous
+  mismatch between `pyproject.toml` v0.9.5 and the README v0.9.8.5
+  badge is resolved).
+- **`README.md`** — updated the version badge to `0.9.9.2`, refreshed
+  the "Python-Version-Gated Dependencies" section to reflect the
+  current gate set (`catboost`, `streamlit`, `tensorflow`, `scikeras`)
+  and explicitly note that `shap` and `numba` are no longer gated, and
+  bumped the `pyproject.toml` configuration-files row to v0.9.9.2.
+
+### Notes
+
+- No source code changes were required — the dependency-marker
+  cleanup is purely a packaging / install-time concern. Existing
+  `import shap` / `import numba` call sites continue to work unchanged
+  on Python 3.12 / 3.13 / 3.14.
+- Follow-up: re-run `pipenv lock` and refresh
+  `requirements.txt` from `pip-compile` once the new `Pipfile` lands
+  in CI to regenerate `Pipfile.lock` against the aligned version
+  windows.
+
+[0.9.9.2]: https://github.com/Kabenge42/PML_Finance_Project/compare/v0.9.9.1...v0.9.9.2
+
 ## [0.9.9.1] - 2026-05-02
 
 ### Added — Centralised OOS leaf-index resolution helpers in `_hierarchy.py`

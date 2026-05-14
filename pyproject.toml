@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "finance-ml-analytics-platform"
-version = "0.9.5"
+version = "0.9.9.2"
 description = "PML Finance Project - Machine Learning for Financial Analysis"
 readme = "README.md"
 license = { text = "MIT" }
@@ -39,8 +39,8 @@ dependencies = [
     "xgboost>=2.1.0,<4.0.0",
     "lightgbm>=4.5.0,<5.0.0",
     "catboost>=1.2.5,<4.0.0; python_version < '3.14'",
-    # --- Model Interpretability ---
-    "shap>=0.50.0,<1.0.0; python_version < '3.14'",
+    # --- Model Interpretability (shap 0.50.0+ supports Python 3.14) ---
+    "shap>=0.50.0,<1.0.0",
     # --- Data Visualization ---
     "matplotlib>=3.9.0,<4.0.0",
     "seaborn>=0.13.0,<1.0.0",
@@ -51,19 +51,27 @@ dependencies = [
     "xlsxwriter>=3.2.0,<4.0.0",
     "psutil>=6.0.0,<8.0.0",
     "PyYAML>=6.0.0,<7.0.0",
-    # --- Bayesian / Probabilistic stack (aligned, known-compatible window) ---
-    # PyMC 5.22+ requires PyTensor >=2.30,<2.34 and ArviZ >=0.20.
-    # Bambi 0.15+ depends on PyMC >=5.16. nutpie 0.13+ pairs with PyMC 5.22+.
-    # ArviZ 1.0 (and the split arviz-base/arviz-stats/arviz-plots) is still
-    # pre-release and not API-compatible with PyMC 5.x; stay on classic arviz.
-    "pymc>=5.22.0,<6.0.0",
-    "pytensor>=2.30.0,<2.34.0",
-    "arviz>=0.20.0,<1.0.0",
-    "bambi>=0.15.0,<1.0.0",
-    "nutpie>=0.13.0,<1.0.0",
+    # --- Bayesian / Probabilistic stack (PyMC 6.0 ecosystem) ---
+    # See https://www.pymc.io/blog/pymc_v6_ecosystem_updates.html for the
+    # full migration notes. PyMC 6.0 requires PyTensor >=3.0,<4.0 and
+    # ArviZ >=1.0 (the new modular arviz-base / arviz-stats / arviz-plots
+    # split, exposed through the top-level ``arviz`` 1.x meta-package).
+    # Bambi 0.16+ depends on PyMC >=6.0. nutpie 0.14+ pairs with PyMC 6.0
+    # and is now PyMC's default sampler when numba (the new default
+    # PyTensor backend) is available.
+    "pymc>=6.0.0,<7.0.0",
+    "pytensor>=3.0.0,<4.0.0",
+    "arviz>=1.0.0,<2.0.0",
+    "arviz-base>=1.0.0,<2.0.0",
+    "arviz-stats>=1.0.0,<2.0.0",
+    "arviz-plots>=1.0.0,<2.0.0",
+    "bambi>=0.16.0,<1.0.0",
+    "nutpie>=0.14.0,<1.0.0",
     "xarray>=2024.7.0,<2027.0.0",
     "jax>=0.4.30,<1.0.0",
     "jaxlib>=0.4.30,<1.0.0",
+    "numpyro>=0.16.0,<1.0.0",
+    "blackjax>=1.2.0,<2.0.0",
     # --- Hyperparameter Optimization ---
     "optuna>=4.1.0,<5.0.0",
     # --- Networking ---
@@ -101,9 +109,9 @@ tensorflow = [
     "scikeras>=0.13.0,<1.0.0; python_version < '3.14'",
 ]
 
-# Performance optimizations (Python <3.14 only)
+# Performance optimizations (numba 0.63.0+ supports Python 3.14)
 performance = [
-    "numba>=0.60.0,<1.0.0; python_version < '3.14'",
+    "numba>=0.63.0,<1.0.0",
 ]
 
 # Jupyter notebook support

@@ -3,7 +3,7 @@
 A comprehensive platform for probabilistic equity screening, feature engineering, and machine learning modeling across global financial markets.
 
 [![Python Version](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue)](https://www.python.org/)
-[![Package Version](https://img.shields.io/badge/version-0.9.8.5-green)](pyproject.toml)
+[![Package Version](https://img.shields.io/badge/version-0.9.9.2-green)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
@@ -135,8 +135,10 @@ Managed via a unified `PipelineRunner` in `probabilistic_ml_model/pipeline_runne
 
 ### Python-Version-Gated Dependencies
 
-Some packages are restricted to `python_version < '3.14'`:
-`catboost`, `shap`, `streamlit`, `tensorflow`, `scikeras`, `numba`.
+Some packages are restricted to `python_version < '3.14'` because they do not yet ship Python 3.14 wheels:
+`catboost`, `streamlit`, `tensorflow`, `scikeras`.
+
+`shap` (>=0.50.0) and `numba` (>=0.63.0) are now Python 3.14-compatible and are no longer gated.
 
 ## Setup
 
@@ -178,15 +180,15 @@ pip install -e ".[dev,dashboards,database,performance,tensorflow,notebooks,extra
 
 ### Key Configuration Files
 
-| File                        | Purpose                                               |
-|:----------------------------|:------------------------------------------------------|
-| `pyproject.toml`            | Build system, project metadata, tool configs (v0.9.5) |
-| `CHANGELOG.md`              | Release notes (Keep a Changelog / SemVer)             |
-| `requirements.txt`          | Full dependency list (core + optional)                |
-| `Pipfile`                   | Pipenv dependency management                          |
-| `environment_variables.txt` | Reference for all environment variables               |
-| `set_env.ps1`               | PowerShell script to set env vars for a session       |
-| `.gitignore`                | Git ignore rules                                      |
+| File                        | Purpose                                                 |
+|:----------------------------|:--------------------------------------------------------|
+| `pyproject.toml`            | Build system, project metadata, tool configs (v0.9.9.2) |
+| `CHANGELOG.md`              | Release notes (Keep a Changelog / SemVer)               |
+| `requirements.txt`          | Full dependency list (core + optional)                  |
+| `Pipfile`                   | Pipenv dependency management                            |
+| `environment_variables.txt` | Reference for all environment variables                 |
+| `set_env.ps1`               | PowerShell script to set env vars for a session         |
+| `.gitignore`                | Git ignore rules                                        |
 
 ## Execution & Entry Points
 

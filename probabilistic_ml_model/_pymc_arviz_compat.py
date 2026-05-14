@@ -235,12 +235,33 @@ def _ensure_module(fqn: str, parent_attr: str | None = None, parent=None) -> typ
 
 
 def patch() -> None:
-    """Monkey-patch ``arviz`` so that PyMC 5.x can import successfully."""
+    """Monkey-patch ``arviz`` so that PyMC 5.x can import successfully.
+
+    Under the PyMC 6.0 / ArviZ 1.0 ecosystem (now the project's pinned
+    runtime) the top-level ``arviz`` package already re-exports
+    ``InferenceData``, ``concat``, and the modular
+    ``arviz-base``/``arviz-stats``/``arviz-plots`` API, so this shim is
+    effectively a no-op: it detects the modern stack and returns
+    immediately. The legacy patching path below is retained only for
+    environments that still pin ``pymc<6`` against ``arviz>=1`` — once
+    PyMC 5.x is fully removed this whole function can be deleted along
+    with its call site in ``probabilistic_ml_model/__init__.py``.
+    """
     global _PATCHED
     if _PATCHED:
         return
 
     import arviz
+
+    # PyMC 6 + ArviZ 1.x: top-level ``arviz`` already exposes
+    # ``InferenceData`` and ``concat`` via the meta-package, so no patching
+    # is required. Mark as patched and exit.
+    if hasattr(arviz, "InferenceData") and hasattr(arviz, "concat"):
+        _PATCHED = True
+        logger.debug(
+            "arviz>=1.0 detected; _pymc_arviz_compat.patch() is a no-op."
+        )
+        return
 
     # ── Top-level symbols ────────────────────────────────────────────────
     if not hasattr(arviz, "InferenceData"):

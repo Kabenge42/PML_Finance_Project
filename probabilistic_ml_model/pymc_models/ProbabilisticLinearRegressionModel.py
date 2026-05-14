@@ -39,13 +39,16 @@ from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_com
 
 import numpy as np
 
+# PyMC 6.0 + ArviZ 1.0 ecosystem: the top-level ``arviz`` meta-package
+# re-exports the modular ``arviz-base`` / ``arviz-stats`` / ``arviz-plots``
+# API, so a single ``import arviz`` is sufficient. The previous
+# ``arviz_base`` fallback was a PyMC 5.x transition artefact and is no
+# longer needed; we keep a defensive ``ImportError`` guard so optional-
+# dependency stubs still work when arviz is absent from the environment.
 try:
     import arviz as az
 except ImportError:
-    try:
-        import arviz_base as az
-    except ImportError:
-        az = None  # type: ignore[assignment]
+    az = None  # type: ignore[assignment]
 
 try:
     import pymc as pm

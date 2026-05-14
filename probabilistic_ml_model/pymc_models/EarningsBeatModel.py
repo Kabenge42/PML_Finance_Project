@@ -14,13 +14,14 @@ import logging
 from functools import lru_cache
 from typing import Any, Literal, Optional, TYPE_CHECKING
 
+# PyMC 6.0 + ArviZ 1.0: top-level ``arviz`` re-exports the modular API,
+# so the legacy ``arviz_base`` fallback (PyMC 5.x transition artefact) is
+# no longer needed. The ``ImportError`` guard is kept defensively for
+# environments where arviz is absent.
 try:
     import arviz as az
 except ImportError:
-    try:
-        import arviz_base as az
-    except ImportError:
-        az = None  # type: ignore[assignment]
+    az = None  # type: ignore[assignment]
 import numpy as np
 import pandas as pd
 
@@ -47,7 +48,6 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
 )
 from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
 from probabilistic_ml_model.pymc_models._hierarchy import (
-    HIERARCHICAL_CATEGORY_COLS,
     build_hierarchy_indices,
     build_nested_logit_normal_rates,
     coerce_categories,

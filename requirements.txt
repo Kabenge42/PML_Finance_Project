@@ -3,8 +3,10 @@
 # ============================================================================
 # Install with: pip install -r requirements.txt
 # Python version: >=3.12,<3.15
-# Last updated: 2026-01-30
-# Aligned with pyproject.toml v0.9.5
+# Last updated: 2026-05-14
+# Aligned with pyproject.toml v0.9.9.2
+# Upgraded to the PyMC 6.0 / PyTensor 3.0 / ArviZ 1.0 ecosystem
+# (https://www.pymc.io/blog/pymc_v6_ecosystem_updates.html).
 # ============================================================================
 
 # --- Numerical Computing & Data Structures ---
@@ -23,8 +25,8 @@ xgboost>= 2.1.0, <4.0.0
 lightgbm>= 4.5.0, <5.0.0
 catboost>= 1.2.5, <4.0.0; python_version < '3.14'
 
-# --- Model Interpretability ---
-shap>= 0.50.0, <1.0.0; python_version < '3.14'
+# --- Model Interpretability (shap 0.50.0+ supports Python 3.14) ---
+shap>= 0.50.0, <1.0.0
 
 # --- Data Visualization ---
 matplotlib>= 3.9.0, <4.0.0
@@ -37,30 +39,34 @@ joblib>= 1.4.0, <4.0.0
 xlsxwriter>= 3.2.0, <4.0.0
 psutil>= 6.0.0, <8.0.0
 
-# --- Bayesian / Probabilistic (aligned, known-compatible window) ---
+# --- Bayesian / Probabilistic (PyMC 6.0 ecosystem) ---
 # Keep this block in sync with pyproject.toml [project.dependencies].
-# PyMC 5.22+ <-> PyTensor 2.30-2.33 <-> ArviZ 0.20+ (classic) AND arviz-base 1.x.
-# Bambi 0.15+ requires PyMC >=5.16; nutpie 0.13+ pairs with PyMC 5.22+.
+# PyMC 6.0 <-> PyTensor 3.0 <-> ArviZ 1.0 (modular base/stats/plots split).
+# Bambi 0.16+ requires PyMC >=6.0; nutpie 0.14+ pairs with PyMC 6.0
+# (numba is now the default PyTensor backend, which nutpie consumes natively).
 #
 # ArviZ migration (https://python.arviz.org/en/latest/user_guide/migration_guide.html):
-# arviz-base 1.x replaces ``arviz.InferenceData`` with ``xarray.DataTree``.
-# We install BOTH the classic ``arviz`` package (still required by PyMC 5.x
-# at runtime — pm.sample() returns arviz.InferenceData) AND the new
-# ``arviz-base``/``arviz-stats``/``arviz-plots`` 1.x split, with the
-# compatibility shim at ``probabilistic_ml_model/_pymc_arviz_compat.py``
-# bridging the two. Downstream code uses the ``InferenceLike`` typing alias
-# (Union[arviz.InferenceData, xarray.DataTree]) exposed by that shim.
-pymc>=5.22.0,<6.0.0
-pytensor>=2.30.0,<2.40.0.0
-arviz>=0.20.0,<1.0.0
+# arviz 1.x replaces ``arviz.InferenceData`` with ``xarray.DataTree``
+# and ships as three packages: ``arviz-base`` (core data containers),
+# ``arviz-stats`` (diagnostics), and ``arviz-plots`` (visualization).
+# The classic top-level ``arviz`` 1.x meta-package re-exports the new
+# API for backward-compatible imports. The compatibility shim at
+# ``probabilistic_ml_model/_pymc_arviz_compat.py`` exposes the
+# ``InferenceLike`` typing alias (Union[arviz.InferenceData,
+# xarray.DataTree]) used across downstream type annotations.
+pymc>=6.0.0,<7.0.0
+pytensor>=3.0.0,<4.0.0
+arviz>=1.0.0,<2.0.0
 arviz-base>=1.0.0,<2.0.0
 arviz-stats>=1.0.0,<2.0.0
 arviz-plots>=1.0.0,<2.0.0
-bambi>=0.15.0,<1.0.0
-nutpie>=0.13.0,<1.0.0
+bambi>=0.16.0,<1.0.0
+nutpie>=0.14.0,<1.0.0
 xarray>=2024.7.0,<2027.0.0
 jax>=0.4.30,<1.0.0
 jaxlib>=0.4.30,<1.0.0
+numpyro>=0.16.0,<1.0.0
+blackjax>=1.2.0,<2.0.0
 
 # --- Hyperparameter Optimization ---
 optuna>= 4.1.0, <5.0.0
@@ -80,8 +86,8 @@ boruta>= 0.3.0, <1.0.0
 # ============================================================================
 # Optional: Interactive Dashboards
 # ============================================================================
-streamlit>= 1.40.0, <4.0.0; python_version < '3.14'
-dash>= 2.18.0, <5.0.0
+streamlit>= 1.40.0, <6.0.0; python_version < '3.14'
+dash>= 2.18.0, <7.0.0
 
 # ============================================================================
 # Optional: Jupyter Notebook Support
@@ -102,17 +108,17 @@ ipykernel>= 6.29.0, <8.0.0
 # pip-tools>=7.4.0,<8.0.0
 
 # ============================================================================
-# Optional: Deep Learning (TensorFlow) - Python <3.14 only
+# Optional: Deep Learning (TensorFlow) - Python <=3.14 only
 # ============================================================================
-# tensorflow>=2.15.0,<3.0.0; python_version < '3.14'
-# scikeras>=0.13.0,<1.0.0; python_version < '3.14'
+tensorflow>=2.15.0,<3.0.0; python_version < '3.14'
+scikeras>=0.13.0,<1.0.0; python_version < '3.14'
 
 # ============================================================================
 # Project-Specific Extras (not in pyproject.toml core)
 # ============================================================================
 networkx>= 3.3.0, <4.0.0
 Pillow>= 10.4.0, <15.0.0
-numba>= 0.60.0, <1.0.0; python_version < '3.14'
+numba>= 0.63.0, <1.0.0
 forex-python>= 1.8, <4.0.0
 requests>=2.32.0
 urllib3>=2.6.0

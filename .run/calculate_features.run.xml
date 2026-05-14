@@ -5,7 +5,6 @@
     <script-file value="$PROJECT_DIR$/mv_dcf.sql" />
     <script-mode>FILE</script-mode>
     <data-source id="4a5713c4-e52c-4ad4-8e82-d218d447191c" namespace="database/&quot;postgres&quot;/schema/&quot;public&quot;" />
-    <data-source id="4a5713c4-e52c-4ad4-8e82-d218d447191c" namespace="database/&quot;postgres&quot;/schema/&quot;information_schema&quot;" />
     <method v="2" />
   </configuration>
 </component>

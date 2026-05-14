@@ -446,8 +446,10 @@ def _build_arviz_or_xarray(
                 if inferred:
                     dims[var_name] = inferred
 
+        # ArviZ 1.0 API: groups are passed as a single nested-dict positional
+        # argument, not as individual ``posterior=``/``observed_data=`` kwargs.
         return az.from_dict(
-            **groups,
+            groups,
             coords=coords,
             dims=dims,
         )

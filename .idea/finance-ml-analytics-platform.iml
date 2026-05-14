@@ -15,7 +15,7 @@
       <excludeFolder url="file://$MODULE_DIR$/analytics/.venv/Scripts" />
       <excludeFolder url="file://$MODULE_DIR$/analytics" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.14 (PML_Finance_Project)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.14 (PML_Finance_Project) (3)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="library" exported="" scope="PROVIDED" name="Python 3.14 interpreter library" level="application" />
     <orderEntry type="library" name="KotlinJavaRuntime" level="project" />
