@@ -22,6 +22,18 @@ feature engineering, and reliable model evaluation, followed by a **Portfolio Op
 - **7-Phase Portfolio Optimization**: Stock selection, return prediction, risk-adjusted optimization (Efficient Frontier), backtesting, and interactive dashboards.
 - **Interactive Dashboards**: Integrated Streamlit, Dash, and Plotly applications for market monitoring, earnings analytics, and portfolio visualization.
 
+### Quick Start
+
+```powershell
+python -m venv venv
+.\venv\Scripts\activate
+pip install -r requirements.txt
+. .\set_env.ps1
+python expected_returns_v3.py
+```
+
+See [Setup](#setup), [Execution & Entry Points](#execution--entry-points), and [Testing](#testing) for details.
+
 ### PyMC Models Notebook (`pymc_expected_returns_model.ipynb`)
 
 End-to-end PyMC + ArviZ workflow that fits the seven Bayesian models from
@@ -230,35 +242,78 @@ The package provides command-line entry points (defined in `pyproject.toml`):
 |:-------------------------|:---------------------------------------------------|
 | `expected_returns_v3.py` | Automated expected-returns pipeline v3.1           |
 | `expected_returns_v4.py` | Next-generation expected-returns pipeline          |
+| `pml_pipeline_v1.py`     | Standalone PML pipeline driver (v1)                |
+| `main.py`                | Top-level entry point / smoke runner               |
+| `eda_visualizations.py`  | Ad-hoc EDA visualization helpers                   |
 | `set_env.ps1`            | Set environment variables for a PowerShell session |
 
 ### Feature Factory (`feature_factory/`)
 
 Standalone feature calculation utilities (Beta/CAPM, DCF, Monte Carlo, Efficient Frontier, etc.).
 
-### SQL Scripts (`sql_scripts/`)
+### SQL Scripts (`sql_scripts/` and repo root)
 
 Database setup and migration scripts for PostgreSQL (schema creation, materialized views, feature registry, data
-import).
+import). Key root-level SQL files:
+
+| File                                                   | Purpose                                      |
+|:-------------------------------------------------------|:---------------------------------------------|
+| `create_equities_schema.sql`                           | Equities table / schema creation             |
+| `equities_schema_metadata_setup.sql`                   | Populates `public.equities_schema_metadata`  |
+| `mv_equities.sql`                                      | Materialized view `mv_equities`              |
+| `mv_expected_returns.sql` / `mv_exp_returns.sql`       | Expected-returns materialized views          |
+| `mv_dcf.sql`                                           | DCF materialized view                        |
+| `feature_registry.sql`                                 | `calculated_features_registry` setup         |
+| `pml_df_metadata.sql` / `pml_df_metadata_populate.sql` | `pml.pml_df_metadata` DDL + population       |
+| `pml_feature_catalogue.sql`                            | PML feature catalogue (PyMC alignment layer) |
+| `pml_cohorts.sql`                                      | Cohort definitions for the PML pipeline      |
+| `import_equities_data.sql` / `import_pml_data.sql`     | Bulk import scripts                          |
+| `currency_import.sql`                                  | Currency reference data import               |
+| `create_helper_functions.sql`                          | Shared PL/pgSQL helper functions             |
+
+### Jupyter Notebooks
+
+Exploratory and reproducible analysis notebooks live at the repository root. Install the `notebooks` extra to run them:
+`pip install -e ".[notebooks]"`.
+
+| Notebook                                      | Purpose                                                    |
+|:----------------------------------------------|:-----------------------------------------------------------|
+| `pymc_expected_returns_model.ipynb`           | End-to-end PyMC + ArviZ workflow for the 7 Bayesian models |
+| `pymc_expected_returns_v2.ipynb`              | v2 PyMC expected-returns experiments                       |
+| `pymc_pml_model.ipynb`                        | PyMC PML model exploration                                 |
+| `expected_returns_v3.ipynb`                   | v3 expected-returns pipeline notebook companion            |
+| `exp_returns_v3_analytics.ipynb`              | v3 analytics exploration                                   |
+| `pml_workflow_v4.ipynb`                       | v4 PML workflow walkthrough                                |
+| `pml_finance_model.ipynb`                     | PML finance model exploration                              |
+| `pml_model_analysis.ipynb`                    | PML model analysis & diagnostics                           |
+| `pml_df_new.ipynb`                            | PML DataFrame engineering experiments                      |
+| `pml_bonds.ipynb`                             | PML bonds exploration                                      |
+| `ExpectedReturnsAnalytics.ipynb`              | Expected-returns analytics                                 |
+| `financial_market_statistical_analysis.ipynb` | Financial market statistical analysis                      |
 
 ## Environment Variables
 
 Set via `set_env.ps1` (dot-source to persist in session: `. .\set_env.ps1`). Reference values are listed in
 `environment_variables.txt`.
 
-| Variable                   | Default / Example                                            | Description                        |
-|:---------------------------|:-------------------------------------------------------------|:-----------------------------------|
-| `LOG_LEVEL`                | `INFO`                                                       | Python logging level               |
-| `DATA_DIR`                 | `data`                                                       | Local data storage                 |
-| `MODEL_DIR`                | `regression`                                                 | Saved model artifacts              |
-| `CACHE_DIR`                | `.cache`                                                     | Cache directory                    |
-| `OUTPUT_DIR`               | `outputs`                                                    | Generated reports / visualizations |
-| `DB_URL`                   | `postgresql+psycopg2://postgres:...@localhost:5432/postgres` | SQLAlchemy DB connection URL       |
-| `MODEL_VERSION`            | `v9_10`                                                      | Active model version tag           |
-| `RANDOM_SEED`              | `42`                                                         | Reproducibility seed               |
-| `N_JOBS`                   | `4`                                                          | Parallel job count                 |
-| `GEIB_DASHBOARD`           | `true`                                                       | Enable equities dashboard          |
-| `ENABLE_INTERACTIVE_PLOTS` | `true`                                                       | Toggle interactive visualizations  |
+| Variable                   | Default / Example                                            | Description                                                      |
+|:---------------------------|:-------------------------------------------------------------|:-----------------------------------------------------------------|
+| `LOG_LEVEL`                | `INFO`                                                       | Python logging level                                             |
+| `TF_CPP_MIN_LOG_LEVEL`     | `2`                                                          | TensorFlow log level (0=DEBUG, 1=INFO, 2=WARNING, 3=ERROR)       |
+| `DATA_DIR`                 | `data`                                                       | Local data storage                                               |
+| `MODEL_DIR`                | `models`                                                     | Saved model artifacts                                            |
+| `CACHE_DIR`                | `.cache`                                                     | Cache directory                                                  |
+| `OUTPUT_DIR`               | `outputs`                                                    | Generated reports / visualizations                               |
+| `DB_URL`                   | `postgresql+psycopg2://postgres:...@localhost:5432/postgres` | SQLAlchemy DB connection URL                                     |
+| `DB_EQUITIES_SCHEMA`       | `public`                                                     | PostgreSQL schema for equities tables                            |
+| `DB_TABLE`                 | `equities`                                                   | Source equities table name                                       |
+| `DB_ANALYTICS_SCHEMA`      | `analytics`                                                  | PostgreSQL schema for analytics outputs                          |
+| `MODEL_VERSION`            | `v9_11`                                                      | Active model version tag                                         |
+| `RANDOM_SEED`              | `42` (commented out)                                         | Reproducibility seed (set explicitly to override stochastic ops) |
+| `N_JOBS`                   | `-1`                                                         | Parallel job count (`-1` = all cores)                            |
+| `PYTENSOR_FLAGS`           | `device=cpu,floatX=float64,cxx=`                             | PyTensor configuration (C backend disabled on Win/Python 3.14)   |
+| `GEIB_DASHBOARD`           | `true`                                                       | Enable GEIB equities dashboard                                   |
+| `ENABLE_INTERACTIVE_PLOTS` | `true`                                                       | Toggle interactive visualizations                                |
 
 ## Testing
 
@@ -359,12 +414,18 @@ PML_Finance_Project/
 ├── dashboards/                     # Standalone dashboards
 │   └── geib_dash_app.py            # GEIB equities dashboard (live)
 ├── feature_factory/                # Feature calculation utilities (Beta/CAPM, DCF, Monte Carlo)
+├── analytics/                      # Legacy analytics helpers (screening, statistics, viz)
 ├── sql_scripts/                    # SQL setup and migration scripts
 │   ├── analytics/                  # Analytics schema SQL
 │   ├── information_schema/         # Information schema queries
 │   └── public/                     # Public schema SQL
 ├── expected_returns_v3.py          # Automated expected-returns pipeline v3.1
 ├── expected_returns_v4.py          # Next-generation expected-returns pipeline
+├── pml_pipeline_v1.py              # Standalone PML pipeline driver (v1)
+├── main.py                         # Top-level entry point / smoke runner
+├── eda_visualizations.py           # Ad-hoc EDA visualization helpers
+├── *.sql                           # Root-level schema / materialized-view / metadata SQL
+├── *.ipynb                         # Exploratory / reproducible analysis notebooks
 ├── tests/                          # Unit and integration tests (483 tests)
 ├── data/                           # Local data storage
 ├── outputs/                        # Reports and visualizations
@@ -461,7 +522,9 @@ Enforced by the following tools (configured in `pyproject.toml`):
 
 ## License
 
-This project is licensed under the **MIT License** (declared in `pyproject.toml`).
+This project is licensed under the **MIT License**, declared in `pyproject.toml` (`license = { text = "MIT" }`).
 
-<!-- TODO: Add a top-level LICENSE file with the full MIT license text. -->
-<!-- TODO: Implement cli.py module for CLI entry points (finance-ml, finance-ml-analyze, finance-ml-validate). -->
+> **TODO**: Add a top-level `LICENSE` file with the full MIT license text.
+> **TODO**: Implement the `cli.py` module backing the `finance-ml`, `finance-ml-analyze`, and `finance-ml-validate`
+> entry points declared in `pyproject.toml`.
+> **TODO**: Confirm and document copyright holder / authors (currently `Finance ML Team` in `pyproject.toml`).

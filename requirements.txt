@@ -3,8 +3,8 @@
 # ============================================================================
 # Install with: pip install -r requirements.txt
 # Python version: >=3.12,<3.15
-# Last updated: 2026-05-14
-# Aligned with pyproject.toml v0.9.9.2
+# Last updated: 2026-05-21
+# Aligned with pyproject.toml v0.9.9.3
 # Upgraded to the PyMC 6.0 / PyTensor 3.0 / ArviZ 1.0 ecosystem
 # (https://www.pymc.io/blog/pymc_v6_ecosystem_updates.html).
 # ============================================================================
@@ -23,7 +23,11 @@ imbalanced-learn>= 0.12.0, <1.0.0
 # --- Machine Learning: Gradient Boosting ---
 xgboost>= 2.1.0, <4.0.0
 lightgbm>= 4.5.0, <5.0.0
-catboost>= 1.2.5, <4.0.0; python_version < '3.14'
+# catboost 1.2.10+ (Feb 2026) ships cp314 wheels for Windows, manylinux x86_64
+# and manylinux aarch64 — the Python-version marker is no longer required.
+# See https://github.com/catboost/catboost/issues/2943 and
+# https://pypi.org/project/catboost/#files (catboost-1.2.10-cp314-* wheels).
+catboost>= 1.2.10, <4.0.0
 
 # --- Model Interpretability (shap 0.50.0+ supports Python 3.14) ---
 shap>= 0.50.0, <1.0.0

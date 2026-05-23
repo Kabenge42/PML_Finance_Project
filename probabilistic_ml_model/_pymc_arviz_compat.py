@@ -407,6 +407,32 @@ else:
         InferenceLike = Any  # type: ignore[misc]
 
 
+def extend_datatree(target: Any, other: Any) -> Any:
+    """Merge groups from ``other`` into ``target`` (DataTree-compatible replacement
+    for the legacy ``arviz.InferenceData.extend``).
+
+    Both arguments may be ``xarray.DataTree`` or legacy ``arviz.InferenceData``.
+    Returns ``target`` after in-place augmentation when possible, otherwise a new
+    tree. Groups present in ``other`` overwrite same-named groups in ``target``.
+    """
+    target = to_datatree(target)
+    other = to_datatree(other)
+    try:
+        import xarray as xr
+    except Exception:
+        return target
+    DataTree = getattr(xr, "DataTree", None)
+    if DataTree is None or not isinstance(target, DataTree) or not isinstance(other, DataTree):
+        # Fall back to legacy InferenceData.extend if available
+        extend = getattr(target, "extend", None)
+        if callable(extend):
+            extend(other)
+        return target
+    for name, child in other.children.items():
+        target[name] = child.ds
+    return target
+
+
 def to_datatree(idata: Any) -> Any:
     """Best-effort conversion of an ``arviz.InferenceData`` to ``xarray.DataTree``.
 

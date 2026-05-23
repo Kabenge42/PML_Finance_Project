@@ -1,0 +1,12 @@
+venv/
+.venv/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+logs/
+outputs/
+pml_model_analysis_files/
+.coverage

@@ -1,0 +1,42 @@
+CREATE MATERIALIZED VIEW mv_pymc_price_target AS
+SELECT isin,
+       ticker,
+       region,
+       country,
+       trading_country,
+       exchange,
+       unit,
+       style_class,
+       size_class,
+       sector,
+       industry,
+       target_pct_avg                                                                                 AS observed_target_pct,
+       target_pct_med                                                                                 AS observed_target_pct_med,
+       last_price,
+       price_target_num                                                                               AS n_analysts,
+       num_strong_buys_ratings + num_buys_ratings - num_sell_ratings -
+       num_strong_sell_ratings                                                                        AS feat_net_buy_sentiment,
+       safe_divide((num_strong_buys_ratings + num_strong_sell_ratings)::numeric, NULLIF(
+		       num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_sell_ratings +
+		       num_strong_sell_ratings,
+		       0)::numeric)                                                                           AS feat_conviction_ratio,
+       num_hold_ratings                                                                               AS feat_holds,
+       num_no_opinion_ratings                                                                         AS feat_no_opinion,
+       calc_change_ratio(price_target::numeric, last_price::numeric)                                  AS feat_implied_upside,
+       calc_change_ratio(target_pct_high::numeric, target_pct_low::numeric)                           AS feat_target_range_width,
+       calc_change_ratio(price_target::numeric,
+                         price_target_3m_ago::numeric)                                                AS feat_pt_momentum_3m,
+       calc_change_ratio(price_target_num::numeric,
+                         price_target_num_3m_ago::numeric)                                            AS feat_coverage_change_3m,
+       coef_var(price_target::numeric, price_target_stddev::numeric)                                  AS feat_target_dispersion_cv,
+       safe_divide(last_price - w_52low_adj,
+                   NULLIF(w_52high_adj - w_52low_adj, 0::double precision))                           AS feat_52w_range_position,
+       p_e_ntm                                                                                        AS feat_pe_ntm,
+       ev_ebitda_ntm                                                                                  AS feat_ev_ebitda_ntm,
+       volatility_3m                                                                                  AS feat_vol_3m,
+       analyst_rating                                                                                 AS feat_analyst_rating
+FROM pml_df;
+
+ALTER MATERIALIZED VIEW mv_pymc_price_target OWNER TO postgres;
+
+CREATE UNIQUE INDEX idx_mv_pymc_price_target_isin ON mv_pymc_price_target (isin);

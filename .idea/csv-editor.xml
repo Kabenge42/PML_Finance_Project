@@ -17,6 +17,34 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\data\playground\pml_apac_transformed.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\data\playground\pml_eu_transformed.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\data\playground\pml_rotw_transformed.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\data\playground\pml_us_transformed.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\data\playground\rotw_data.csv">
           <value>
             <Attribute>

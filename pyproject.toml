@@ -38,7 +38,10 @@ dependencies = [
     # --- Machine Learning: Gradient Boosting ---
     "xgboost>=2.1.0,<4.0.0",
     "lightgbm>=4.5.0,<5.0.0",
-    "catboost>=1.2.5,<4.0.0; python_version < '3.14'",
+    # catboost 1.2.10+ (Feb 2026) ships cp314 wheels (Windows / manylinux
+    # x86_64 / manylinux aarch64), so the Python-version gate is no longer
+    # required. See https://github.com/catboost/catboost/issues/2943.
+    "catboost>=1.2.10,<4.0.0",
     # --- Model Interpretability (shap 0.50.0+ supports Python 3.14) ---
     "shap>=0.50.0,<1.0.0",
     # --- Data Visualization ---

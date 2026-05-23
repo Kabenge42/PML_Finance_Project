@@ -213,6 +213,23 @@ class EarningsBeatBayesian:
         if (n_beats_arr > n_total_arr).any():
             raise ValueError("n_beats cannot exceed n_total for any ISIN.")
 
+        # --- Deduplicate ISINs (keep first occurrence) -------------------------
+        # Duplicate ISINs in the coord break xarray alignment downstream
+        # (e.g. when computing posterior beat_prob from alpha + n_b).
+        _, _first_idx = np.unique(isins_arr, return_index=True)
+        if len(_first_idx) != len(isins_arr):
+            _first_idx.sort()
+            logger.warning(
+                "EarningsBeatBayesian.fit: dropping %d duplicate ISIN rows "
+                "(kept first occurrence of each).",
+                len(isins_arr) - len(_first_idx),
+            )
+            isins_arr = isins_arr[_first_idx]
+            n_beats_arr = n_beats_arr[_first_idx]
+            n_total_arr = n_total_arr[_first_idx]
+            if sectors is not None:
+                sectors = np.asarray(sectors)[_first_idx]
+
         # --- DB-aligned coords --------------------------------------------------
         # `isin` mirrors public.vw_identifier_columns.isin (role='id').  When
         # ``categories_df`` (or the legacy ``sectors=``) is supplied, every

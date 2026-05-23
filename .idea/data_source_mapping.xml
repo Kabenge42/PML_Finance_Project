@@ -10,7 +10,10 @@
     <file url="file://$PROJECT_DIR$/mv_equities.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/mv_exp_returns.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/mv_expected_returns.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
-    <file url="file://$PROJECT_DIR$/pml_features.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/pml_df_metadata.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/pml_df_metadata_populate.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/pml_feature_catalogue.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/sql_scripts/pml/mv_pymc_price_target.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/sql_scripts/pml/pml_df.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/sql_scripts/public/equities.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/sql_scripts/public/feature_catalogue.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />

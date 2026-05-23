@@ -647,7 +647,7 @@ def bayesian_category_analysis(
 
     Examples
     --------
-    >>> results = bayesian_category_analysis(df, 'Profitability', ['roe', 'roa'])
+    >>> results = bayesian_category_analysis(df, category_name, ['roe', 'roa'])
     >>> print(results['roe']['posterior_mean'])
     """
     results = {}

@@ -5,6 +5,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.3] - 2026-05-15
+
+### Added
+
+- **`pml_df_new.ipynb`** — new comprehensive analysis notebook for
+  probabilistic PyMC models across the multi-feature PML dataset, used as
+  the working surface for the §13 actionable-recommendation walkthroughs
+  introduced in 0.9.8.5
+  ([`3e39257`](https://github.com/Kabenge42/PML_Finance_Project/commit/3e39257)).
+- **`pymc_expected_returns_v2.ipynb`** — v2 PyMC expected-returns
+  experiments notebook split out from the main
+  `pymc_expected_returns_model.ipynb` to keep the canonical end-to-end
+  workflow lean while iterating on alternative model variants
+  ([`3e39257`](https://github.com/Kabenge42/PML_Finance_Project/commit/3e39257)).
+- **`pml_feature_catalogue.sql`** — consolidated PML feature SQL surface
+  (registry-aligned column definitions and helper views) added under the
+  repo root to support the new notebook workflow
+  ([`3e39257`](https://github.com/Kabenge42/PML_Finance_Project/commit/3e39257)).
+
+### Changed
+
+- **`pymc_expected_returns_model.ipynb`** — large refactor that trims
+  the notebook to the canonical end-to-end PyMC + ArviZ workflow and
+  realigns the §1–§13 cells with the shared
+  `MODEL_FEATURE_CONTAINERS` registry and `_hierarchy.py` /
+  `_feature_alignment.py` helpers
+  ([`3e39257`](https://github.com/Kabenge42/PML_Finance_Project/commit/3e39257)).
+- **`probabilistic_ml_model/pymc_models/*`** — minor touch-ups across
+  all seven PyMC model modules (`EarningsBeatModel`, `PriceTargetModel`,
+  `DCF_PriceTargetModel`, `DividendSafetyModel`, `CreditRiskModel`,
+  `KalmanFilterModel`, `AccountingAnomalyModel`,
+  `MonteCarloSimulation`, `ProbabilisticLinearRegressionModel`) plus
+  `statistical_functions/statistical_models.py`, keeping the
+  hierarchical-shrinkage and feature-alignment contracts in sync with
+  the refreshed notebook surface
+  ([`3e39257`](https://github.com/Kabenge42/PML_Finance_Project/commit/3e39257)).
+- **`probabilistic_ml_model/_pymc_arviz_compat.py`** and
+  **`probabilistic_ml_model/data_utils/inference_schema.py`** — small
+  compatibility-shim updates to match the latest ArviZ 1.0 /
+  `xarray.DataTree` API surface used by the new notebooks
+  ([`3e39257`](https://github.com/Kabenge42/PML_Finance_Project/commit/3e39257)).
+- **SQL artefacts** (`feature_registry.sql`, `import_pml_data.sql`,
+  `equities_schema_metadata_setup.sql`, `mv_equities.sql`,
+  `sql_scripts/pml/pml_df.sql`,
+  `sql_scripts/public/feature_catalogue.sql`) regenerated to match the
+  updated PML feature surface
+  ([`3e39257`](https://github.com/Kabenge42/PML_Finance_Project/commit/3e39257)).
+- **Data snapshots** — refreshed regional PML / screening CSVs
+  (`data/pml/pml_{us,eu,apac,rotw}.csv`,
+  `data/screening_{us,eu,apac,rotw}.csv`) to reflect the latest
+  upstream import run
+  ([`3e39257`](https://github.com/Kabenge42/PML_Finance_Project/commit/3e39257)).
+- **Tooling / IDE config** — added `.idea/IntelliLang.xml` (Selenium
+  injection patterns) and `.idea/python-terminal.xml`
+  (`virtualEnvActivate = false`); refreshed
+  `.idea/data_source_mapping.xml`, `.idea/sqldialects.xml`,
+  `.idea/finance-ml-analytics-platform.iml` and removed stale
+  `.idea/csv-editor.xml` / `.idea/externalDependencies.xml` entries
+  ([`3e39257`](https://github.com/Kabenge42/PML_Finance_Project/commit/3e39257)).
+
+### Notes
+
+- Patch-level bump (`0.9.9.2 → 0.9.9.3`) — no public-API or
+  dependency-pin changes; the release packages a notebook split,
+  data-snapshot refresh, and IDE-config tidy-up alongside non-behavioural
+  touch-ups in the PyMC model modules.
+- Follow-up: bump `pyproject.toml` `version` and the README badge to
+  `0.9.9.3` in the next packaging pass (left untouched here to keep this
+  CHANGELOG refresh purely a documentation change).
+
+[0.9.9.3]: https://github.com/Kabenge42/PML_Finance_Project/compare/v0.9.9.2...v0.9.9.3
+
 ## [0.9.9.2] - 2026-05-09
 
 ### Changed — Dependency alignment across `Pipfile`, `pyproject.toml`, `requirements.txt`

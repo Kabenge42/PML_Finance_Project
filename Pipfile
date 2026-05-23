@@ -66,8 +66,10 @@ flask = ">=3.0.0,<4.0.0"
 # --- Now Python 3.14-compatible (ungated) ---
 shap = ">=0.50.0,<1.0.0"
 numba = ">=0.63.0,<1.0.0"
+# catboost 1.2.10 (Feb 2026) added cp314 wheels — no longer gated.
+# See https://github.com/catboost/catboost/issues/2943.
+catboost = ">=1.2.10,<4.0.0"
 # --- Python <3.14 only packages (no 3.14 wheels yet) ---
-catboost = { version = ">=1.2.5,<4.0.0", markers = "python_version < '3.14'" }
 streamlit = { version = ">=1.40.0,<6.0.0", markers = "python_version < '3.14'" }
 tensorflow = { version = ">=2.15.0,<3.0.0", markers = "python_version < '3.14'" }
 scikeras = { version = ">=0.13.0,<1.0.0", markers = "python_version < '3.14'" }
