@@ -1,4 +1,4 @@
-CREATE VIEW vw_pymc_feature_catalogue
+CREATE VIEW pml.vw_pymc_feature_catalogue
 			(model_target, pymc_role, column_name, category, feature_role, feature_alias, data_type, description) AS
 SELECT m.model_name                                                 AS model_target,
        md.pymc_role,
@@ -14,5 +14,5 @@ FROM pml_df_metadata                                 md
 	                ON fa.column_name = md.column_name AND fa.model_target = m.model_name
 WHERE md.pymc_role <> 'excluded'::text;
 
-ALTER TABLE vw_pymc_feature_catalogue
+ALTER TABLE pml.vw_pymc_feature_catalogue
 	OWNER TO postgres;

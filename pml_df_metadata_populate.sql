@@ -1216,14 +1216,55 @@ WHERE column_name IN ('days_to_earnings',
                       'eps_norm_est_avg_fq1e');
 
 -- 7h.2 PriceTargetAchievement: range-position (52w high/low), 3m PT-momentum
---      and 3m coverage-change anchors, plus volatility_3m proxy.
+--      and 3m coverage-change anchors, plus volatility_3m proxy. Also wires
+--      the fiscal-calendar date columns + their pre-computed day-count
+--      horizons into the price_target model so the notebook can drive the
+--      MvGaussianRandomWalk time axis directly from mv_pymc_price_target.
 UPDATE pml.pml_df_metadata
 SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['price_target'])))
 WHERE column_name IN ('w_52high_adj',
                       'w_52low_adj',
                       'price_target_3m_ago',
                       'price_target_num_3m_ago',
-                      'volatility_3m');
+                      'volatility_3m',
+	-- MvGRW time-axis anchors
+                      'income_statement_report_date',
+                      'next_earnings',
+                      'fy_end_date',
+                      'next_income_statement_report_date',
+                      'next_fy_end_date',
+                      'expected_report_date',
+	-- Derived day-count horizons (numeric, ready for pm.Data)
+                      'days_to_next_earnings',
+                      'days_since_last_report',
+                      'days_to_next_fy_end',
+                      'days_to_next_report',
+                      'days_to_expected_report',
+                      'days_to_fy_end');
+
+-- Day-count horizons are ready-to-use numeric predictors -> mutable_predictor.
+UPDATE pml.pml_df_metadata
+SET pymc_role    = 'mutable_predictor',
+    category     = 'fiscal_calendar',
+    feature_role = 'predictor'
+WHERE column_name IN ('days_to_next_earnings',
+                      'days_since_last_report',
+                      'days_to_next_fy_end',
+                      'days_to_next_report',
+                      'days_to_expected_report',
+                      'days_to_fy_end');
+
+-- Raw DATE columns: promote pymc_role from 'excluded' to 'coord' so the
+-- notebook can register them as the `time` dimension for the MvGRW panel
+-- (one slice per fiscal-period anchor).
+UPDATE pml.pml_df_metadata
+SET pymc_role = 'coord'
+WHERE column_name IN ('income_statement_report_date',
+                      'next_earnings',
+                      'fy_end_date',
+                      'next_income_statement_report_date',
+                      'next_fy_end_date',
+                      'expected_report_date');
 
 -- 7h.3 KalmanFilterPriceTarget: full stddev-trail snapshots and analyst-range
 --      bounds used in feat_pt_noise_drift / feat_pt_range_norm.
@@ -1364,6 +1405,24 @@ WHERE column_name IN ('isin', 'ticker',
 -- =============================================================================
 -- PER-MODEL feature_alias OVERRIDES (mirror mv_pymc_* column aliases)
 -- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- FK-safety seed: ensure every column_name referenced by the per-model alias
+-- INSERT below exists as a parent row in pml.pml_df_metadata. Some columns
+-- (notably the derived day-count horizons feat_days_to_*) are computed at
+-- import time and are NOT present in pml.pml_df, so the initial
+-- information_schema-driven seed would not create rows for them. Without
+-- this step the alias INSERT fails with:
+--   ERROR:  insert or update on table "pml_df_feature_alias" violates
+--           foreign key constraint "pml_df_feature_alias_column_name_fkey"
+-- Inserting them here (ON CONFLICT DO NOTHING) is idempotent and harmless
+-- for columns that already exist.
+-- ---------------------------------------------------------------------------
+INSERT INTO pml.pml_df_metadata (column_name, category, feature_role, pymc_role)
+SELECT col, 'fiscal_calendar', 'predictor', 'mutable_predictor'
+FROM unnest(ARRAY [ 'days_to_next_earnings', 'days_since_last_report', 'days_to_next_fy_end', 'days_to_next_report', 'days_to_expected_report', 'days_to_fy_end' ]) AS col
+ON CONFLICT (column_name) DO NOTHING;
+
 TRUNCATE pml.pml_df_feature_alias;
 
 INSERT INTO pml.pml_df_feature_alias (column_name,                        model_target,         feature_alias                    )
@@ -1403,6 +1462,20 @@ VALUES
 	                                 ('price_target_num_3m_ago',          'price_target',       'feat_coverage_change_3m'        ),
 	                                 ('target_pct_high',                  'price_target',       'feat_target_range_width_high'   ),
 	                                 ('target_pct_low',                   'price_target',       'feat_target_range_width_low'    ),
+	-- ---- price_target MvGRW time-axis anchors (raw DATE coords) ----
+	('income_statement_report_date',      'price_target', 'income_statement_report_date'     ),
+	('next_earnings',                     'price_target', 'next_earnings'                    ),
+	('fy_end_date',                       'price_target', 'fy_end_date'                      ),
+	('next_income_statement_report_date', 'price_target', 'next_income_statement_report_date'),
+	('next_fy_end_date',                  'price_target', 'next_fy_end_date'                 ),
+	('expected_report_date',              'price_target', 'expected_report_date'             ),
+	-- ---- price_target derived day-count horizons (mutable_predictor) ----
+	('days_to_next_earnings',             'price_target', 'feat_days_to_next_earnings'       ),
+	('days_since_last_report',            'price_target', 'feat_days_since_last_report'      ),
+	('days_to_next_fy_end',               'price_target', 'feat_days_to_next_fy_end'         ),
+	('days_to_next_report',               'price_target', 'feat_days_to_next_report'         ),
+	('days_to_expected_report',           'price_target', 'feat_days_to_expected_report'     ),
+	('days_to_fy_end',                    'price_target', 'feat_days_to_fy_end'              ),
 
 	-- ---- kalman_pt aliases (from mv_pymc_kalman_pt) ----
 	                                 ('price_target',                     'kalman_pt',          'observed_pt'                    ),

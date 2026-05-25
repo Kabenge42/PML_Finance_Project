@@ -31,10 +31,46 @@ $env:GEIB_DASHBOARD = 'true'
 $env:N_JOBS = "-1"
 
 # PyTensor / PyMC Configuration
-# Disable C backend to avoid MinGW/MSVC ABI mismatch and libgcc 15 linking issues.
-# PyTensor will use its pure-Python VM (functionally identical, ~2-3x slower for large MCMC).
-# Setting cxx= (empty) disables C compilation entirely.
-$env:PYTENSOR_FLAGS = "device=cpu,floatX=float64,cxx="
+# -----------------------------------------------------------------------------
+# Enable the C backend via the MSYS2 MinGW g++ toolchain. This is required for
+# the nutpie Rust NUTS sampler and for any C-backed PyTensor graph compilation.
+# Probe UCRT64 first (matches the `MinGW` system variable and the MSVC-built
+# UCRT C runtime used by modern Python wheels), then fall back to mingw64.
+# If neither is found, fall back to the pure-Python VM (cxx="") so the rest
+# of the pipeline still works.
+$CandidateBinDirs = @(
+    "C:\msys64\ucrt64\bin",
+    "C:\msys64\mingw64\bin"
+)
+$GxxPath = $null
+$MingwBin = $null
+foreach ($Dir in $CandidateBinDirs)
+{
+    $Candidate = Join-Path $Dir "g++.exe"
+    if (Test-Path $Candidate)
+    {
+        $GxxPath = $Candidate
+        $MingwBin = $Dir
+        break
+    }
+}
+
+if ($GxxPath)
+{
+    # Prepend the toolchain bin dir so libstdc++-6.dll / libgcc_s_seh-1.dll
+    # resolve at link time (idempotent — won't duplicate on repeat sourcing).
+    if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $MingwBin }))
+    {
+        $env:Path = "$MingwBin;$env:Path"
+    }
+    $env:PYTENSOR_FLAGS = "device=cpu,floatX=float64,cxx=$GxxPath"
+    Write-Host "PyTensor C backend ENABLED via $GxxPath" -ForegroundColor Green
+}
+else
+{
+    Write-Warning "g++.exe not found in C:\msys64\ucrt64\bin or C:\msys64\mingw64\bin -- falling back to pure-Python PyTensor VM (nutpie will be unavailable)."
+    $env:PYTENSOR_FLAGS = "device=cpu,floatX=float64,cxx="
+}
 
 # Logging configuration
 $env:LOG_LEVEL = "INFO"
@@ -58,5 +94,3 @@ Write-Host "TF_CPP_MIN_LOG_LEVEL: $env:TF_CPP_MIN_LOG_LEVEL"
 Write-Host "MODEL_VERSION: $env:MODEL_VERSION"
 Write-Host "CACHE_DIR: $env:CACHE_DIR"
 Write-Host "PYTENSOR_FLAGS: $env:PYTENSOR_FLAGS"
-
-

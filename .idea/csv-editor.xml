@@ -73,6 +73,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\data\playground\screening_etf_transformed.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\data\playground\us_data.csv">
           <value>
             <Attribute>

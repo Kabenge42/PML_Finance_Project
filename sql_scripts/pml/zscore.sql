@@ -1,17 +1,19 @@
-CREATE FUNCTION zscore(val numeric, mu numeric, sigma numeric) RETURNS numeric
+-- Cyclic dependencies found
+
+CREATE FUNCTION pml.zscore(val double precision, mu double precision, sigma double precision) RETURNS double precision
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql AS
 $$
 SELECT (val - mu) / NULLIF(sigma, 0);
 $$;
 
-ALTER FUNCTION zscore(numeric, numeric, numeric) OWNER TO postgres;
+ALTER FUNCTION pml.zscore(unknown, unknown, unknown) OWNER TO postgres;
 
-CREATE FUNCTION zscore(val double precision, mu double precision, sigma double precision) RETURNS double precision
+CREATE FUNCTION pml.zscore(val numeric, mu numeric, sigma numeric) RETURNS numeric
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql AS
 $$
 SELECT (val - mu) / NULLIF(sigma, 0);
 $$;
 
-ALTER FUNCTION zscore(double precision, double precision, double precision) OWNER TO postgres;
+ALTER FUNCTION pml.zscore(unknown, unknown, unknown) OWNER TO postgres;

@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW mv_pymc_kalman_pt AS
+CREATE MATERIALIZED VIEW pml.mv_pymc_kalman_pt AS
 SELECT isin,
        ticker,
        region,
@@ -28,6 +28,6 @@ SELECT isin,
        total_return_ytd                                                                                                                                                                                                                            AS feat_total_return_ytd
 FROM pml_df;
 
-ALTER MATERIALIZED VIEW mv_pymc_kalman_pt OWNER TO postgres;
+ALTER MATERIALIZED VIEW pml.mv_pymc_kalman_pt OWNER TO postgres;
 
-CREATE UNIQUE INDEX idx_mv_pymc_kalman_pt_isin ON mv_pymc_kalman_pt (isin);
+CREATE UNIQUE INDEX idx_mv_pymc_kalman_pt_isin ON pml.mv_pymc_kalman_pt (isin);

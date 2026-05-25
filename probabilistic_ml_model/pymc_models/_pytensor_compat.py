@@ -15,21 +15,16 @@ def get_pytensor_compile_kwargs() -> dict:
 
     Pass the returned dict as ``compile_kwargs=...`` to ``pm.sample()``
     and ``pm.sample_posterior_predictive()`` to avoid all C/g++ compilation.
+
+    NOTE: This helper is OPT-IN — callers must explicitly pass the returned
+    dict. It no longer mutates ``pytensor.config.cxx`` at import time, so the
+    PYTENSOR_FLAGS env var (e.g. ``cxx=C:\\msys64\\mingw64\\bin\\g++.exe``)
+    remains authoritative and the nutpie Rust NUTS sampler keeps working.
     """
     try:
-        import pytensor
         from pytensor.compile.mode import Mode
 
-        # Globally disable the C backend so any graph compiled outside of the
-        # returned `mode` (e.g. during model construction / logp caching) also
-        # skips g++.  This is required on MSVC-built CPython 3.14 where the
-        # bundled MinGW g++ cannot link against ``python314.dll``.
-        try:
-            pytensor.config.cxx = ""
-        except Exception:
-            pass
-
-        # Pure-Python linker — no C/g++ compilation at sample time either.
+        # Pure-Python linker — no C/g++ compilation at sample time.
         return {"mode": Mode(linker="py")}
     except Exception:
         return {}

@@ -14,7 +14,50 @@
 --         (earnings_beat, price_target, kalman_pt, dcf_pt,
 --          dividend_safety, credit_risk, accounting_anomaly).
 -- =============================================================================
+-- =============================================================================
+-- PML SCHEMA METADATA TABLE FIXED
+-- =============================================================================
 DROP TABLE IF EXISTS pml.pml_df_metadata CASCADE;
+
+-- Re-create the metadata table with appropriate options
+CREATE TABLE IF NOT EXISTS pml.pml_df_metadata
+(
+	column_name      TEXT PRIMARY KEY,
+	category         TEXT   NOT NULL DEFAULT 'n/a',
+	feature_role     TEXT   NOT NULL,
+	feature_alias    TEXT, -- canonical alias used inside mv_pymc_* materialized views
+	ordinal_position INTEGER,
+	description      TEXT,
+	data_type        TEXT,
+	pymc_role        TEXT,
+	model_targets    TEXT[] NOT NULL DEFAULT ARRAY []::TEXT[],
+	updated_at       TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
+);
+
+-- References fix to avoid foreign key violation
+CREATE TABLE IF NOT EXISTS pml.pml_df_feature_alias
+(
+	column_name   TEXT NOT NULL,
+	model_target  TEXT NOT NULL,
+	feature_alias TEXT NOT NULL,
+	PRIMARY KEY (column_name, model_target),
+	CONSTRAINT fk_column_name FOREIGN KEY (column_name) REFERENCES pml.pml_df_metadata (column_name) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pml_df_feature_alias_model ON pml.pml_df_feature_alias (model_target);
+
+-- Recreate GIN index with metadata defaults
+CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_feature_role ON pml.pml_df_metadata (feature_role);
+
+CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_category ON pml.pml_df_metadata (category);
+
+CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_pymc_role ON pml.pml_df_metadata (pymc_role);
+
+CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_feature_alias ON pml.pml_df_metadata (feature_alias);
+
+CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_model_targets ON pml.pml_df_metadata USING gin (model_targets);
+
+COMMENT ON TABLE pml.pml_df_metadata IS 'Metadata for pml.pml_df. (category, feature_role) drive domain/data-centric SQL filters; (pymc_role, model_targets) drive PyMC pm.Data container assignment and per-model feature selection. pymc_role vocabulary: coord | index | observed | mutable_predictor | constant_data | derived_input | excluded. model_targets is a TEXT[] keyed by MODEL_FEATURE_CONTAINERS (earnings_beat, price_target, kalman_pt, dcf_pt, dividend_safety, credit_risk, accounting_anomaly).';;
 -- Create a metadata table documenting available pml_df schema columns
 CREATE TABLE IF NOT EXISTS pml.pml_df_metadata
 (

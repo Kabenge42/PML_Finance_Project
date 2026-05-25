@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW mv_pymc_credit_risk AS
+CREATE MATERIALIZED VIEW pml.mv_pymc_credit_risk AS
 SELECT isin,
        ticker,
        region,
@@ -27,6 +27,6 @@ SELECT isin,
        volatility_1y                                                                                                 AS feat_vol_1y
 FROM pml_df;
 
-ALTER MATERIALIZED VIEW mv_pymc_credit_risk OWNER TO postgres;
+ALTER MATERIALIZED VIEW pml.mv_pymc_credit_risk OWNER TO postgres;
 
-CREATE UNIQUE INDEX idx_mv_pymc_credit_risk_isin ON mv_pymc_credit_risk (isin);
+CREATE UNIQUE INDEX idx_mv_pymc_credit_risk_isin ON pml.mv_pymc_credit_risk (isin);

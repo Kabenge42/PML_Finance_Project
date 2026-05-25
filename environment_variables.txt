@@ -48,10 +48,19 @@ MODEL_VERSION=v9_11
 # -----------------------------------------------------------------------------
 # PyTensor / PyMC Configuration
 # -----------------------------------------------------------------------------
-# C backend disabled: MinGW g++ 15.x cannot link against MSVC-built Python 3.14
-# (ABI mismatch and libgcc 15 DLL issue: https://github.com/pymc-devs/pytensor/issues/1398)
-# PyTensor uses pure-Python VM instead (functionally identical, slightly slower).
-PYTENSOR_FLAGS=device=cpu,floatX=float64,cxx=
+# Enable the C backend via MSYS2 MinGW g++ so the nutpie Rust NUTS sampler and
+# C-backed PyTensor graph compilation work on Windows + Python 3.14.
+# Requires: MSYS2 installed at C:\msys64 with the mingw64 toolchain
+# (pacman -S mingw-w64-x86_64-gcc) and C:\msys64\mingw64\bin on PATH so the
+# libstdc++ / libgcc runtime DLLs resolve.
+# Active toolchain: UCRT64 (modern UCRT C runtime, matches MSVC-built Python).
+#   Install:  pacman -S mingw-w64-ucrt-x86_64-gcc
+#   Path:     C:\msys64\ucrt64\bin\g++.exe
+# Alternate (classic msvcrt-based):
+#   Install:  pacman -S mingw-w64-x86_64-gcc
+#   Path:     C:\msys64\mingw64\bin\g++.exe
+# Fallback (pure-Python VM, no nutpie): cxx=
+PYTENSOR_FLAGS=device=cpu,floatX=float64,cxx=C:\msys64\ucrt64\bin\g++.exe
 
 # -----------------------------------------------------------------------------
 # Performance Settings

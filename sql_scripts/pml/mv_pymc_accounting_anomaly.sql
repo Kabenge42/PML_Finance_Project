@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW mv_pymc_accounting_anomaly AS
+CREATE MATERIALIZED VIEW pml.mv_pymc_accounting_anomaly AS
 SELECT isin,
        ticker,
        region,
@@ -29,6 +29,6 @@ SELECT isin,
        peg_ntm                                                                                      AS feat_peg_ntm
 FROM pml_df;
 
-ALTER MATERIALIZED VIEW mv_pymc_accounting_anomaly OWNER TO postgres;
+ALTER MATERIALIZED VIEW pml.mv_pymc_accounting_anomaly OWNER TO postgres;
 
-CREATE UNIQUE INDEX idx_mv_pymc_accounting_anomaly_isin ON mv_pymc_accounting_anomaly (isin);
+CREATE UNIQUE INDEX idx_mv_pymc_accounting_anomaly_isin ON pml.mv_pymc_accounting_anomaly (isin);
