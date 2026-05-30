@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW pml.mv_pymc_dcf_pt AS
+CREATE MATERIALIZED VIEW mv_pymc_dcf_pt AS
 SELECT isin,
        ticker,
        region,
@@ -36,6 +36,6 @@ SELECT isin,
        beta_5y                                                                 AS feat_beta_5y
 FROM pml_df;
 
-ALTER MATERIALIZED VIEW pml.mv_pymc_dcf_pt OWNER TO postgres;
+ALTER MATERIALIZED VIEW mv_pymc_dcf_pt OWNER TO postgres;
 
-CREATE UNIQUE INDEX idx_mv_pymc_dcf_pt_isin ON pml.mv_pymc_dcf_pt (isin);
+CREATE UNIQUE INDEX idx_mv_pymc_dcf_pt_isin ON mv_pymc_dcf_pt (isin);

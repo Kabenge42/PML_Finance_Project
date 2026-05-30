@@ -1,6 +1,4 @@
--- Cyclic dependencies found
-
-CREATE FUNCTION pml.beat_counts(surprises double precision[])
+CREATE FUNCTION beat_counts(surprises numeric[])
 	RETURNS TABLE
 	        (
 		        n_total integer,
@@ -15,9 +13,9 @@ SELECT SUM(CASE WHEN s IS NOT NULL THEN 1 ELSE 0 END)::INT           AS n_total,
 FROM UNNEST(surprises) AS s;
 $$;
 
-ALTER FUNCTION pml.beat_counts(unknown) OWNER TO postgres;
+ALTER FUNCTION beat_counts(numeric[]) OWNER TO postgres;
 
-CREATE FUNCTION pml.beat_counts(surprises numeric[])
+CREATE FUNCTION beat_counts(surprises double precision[])
 	RETURNS TABLE
 	        (
 		        n_total integer,
@@ -32,4 +30,4 @@ SELECT SUM(CASE WHEN s IS NOT NULL THEN 1 ELSE 0 END)::INT           AS n_total,
 FROM UNNEST(surprises) AS s;
 $$;
 
-ALTER FUNCTION pml.beat_counts(unknown) OWNER TO postgres;
+ALTER FUNCTION beat_counts(double precision[]) OWNER TO postgres;

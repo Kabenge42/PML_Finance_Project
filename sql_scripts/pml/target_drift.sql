@@ -1,6 +1,4 @@
--- Cyclic dependencies found
-
-CREATE FUNCTION pml.target_drift(arr double precision[]) RETURNS double precision
+CREATE FUNCTION target_drift(arr numeric[]) RETURNS numeric
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql AS
 $$
@@ -9,9 +7,9 @@ FROM generate_subscripts(arr, 1) AS i
 WHERE i < array_length(arr, 1);
 $$;
 
-ALTER FUNCTION pml.target_drift(unknown) OWNER TO postgres;
+ALTER FUNCTION target_drift(numeric[]) OWNER TO postgres;
 
-CREATE FUNCTION pml.target_drift(arr numeric[]) RETURNS numeric
+CREATE FUNCTION target_drift(arr double precision[]) RETURNS double precision
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql AS
 $$
@@ -20,4 +18,4 @@ FROM generate_subscripts(arr, 1) AS i
 WHERE i < array_length(arr, 1);
 $$;
 
-ALTER FUNCTION pml.target_drift(unknown) OWNER TO postgres;
+ALTER FUNCTION target_drift(double precision[]) OWNER TO postgres;

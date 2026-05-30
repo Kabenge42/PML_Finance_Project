@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW pml.mv_pymc_earnings_beat AS
+CREATE MATERIALIZED VIEW mv_pymc_earnings_beat AS
 WITH beats AS (SELECT pml_df.isin,
                       pml_df.ticker,
                       pml_df.region,
@@ -66,6 +66,6 @@ FROM beats                                             b,
      LATERAL beat_counts(b.eps_surprises_q::numeric[]) bc_q(n_total, n_beats),
      LATERAL beat_counts(b.eps_surprises_y::numeric[]) bc_y(n_total, n_beats);
 
-ALTER MATERIALIZED VIEW pml.mv_pymc_earnings_beat OWNER TO postgres;
+ALTER MATERIALIZED VIEW mv_pymc_earnings_beat OWNER TO postgres;
 
-CREATE UNIQUE INDEX idx_mv_pymc_earnings_beat_isin ON pml.mv_pymc_earnings_beat (isin);
+CREATE UNIQUE INDEX idx_mv_pymc_earnings_beat_isin ON mv_pymc_earnings_beat (isin);

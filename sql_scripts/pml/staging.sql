@@ -1,4 +1,4 @@
-CREATE TABLE pml.staging
+CREATE TABLE staging
 (
 	ticker                                 text,
 	isin                                   text,
@@ -572,5 +572,5 @@ CREATE TABLE pml.staging
 	"Gross Profit Margin % (5YAVGFQ)"      text
 );
 
-ALTER TABLE pml.staging
+ALTER TABLE staging
 	OWNER TO postgres;

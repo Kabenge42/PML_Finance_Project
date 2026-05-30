@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW pml.mv_pymc_dividend_safety AS
+CREATE MATERIALIZED VIEW mv_pymc_dividend_safety AS
 SELECT isin,
        ticker,
        region,
@@ -27,6 +27,6 @@ SELECT isin,
        div_yield_ltm - div_yield_5yavgltm                                                     AS feat_yield_spread_vs_5y
 FROM pml_df;
 
-ALTER MATERIALIZED VIEW pml.mv_pymc_dividend_safety OWNER TO postgres;
+ALTER MATERIALIZED VIEW mv_pymc_dividend_safety OWNER TO postgres;
 
-CREATE UNIQUE INDEX idx_mv_pymc_dividend_safety_isin ON pml.mv_pymc_dividend_safety (isin);
+CREATE UNIQUE INDEX idx_mv_pymc_dividend_safety_isin ON mv_pymc_dividend_safety (isin);

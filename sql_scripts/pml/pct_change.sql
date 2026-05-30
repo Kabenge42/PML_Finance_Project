@@ -1,19 +1,17 @@
--- Cyclic dependencies found
-
-CREATE FUNCTION pml.pct_change(current_val double precision, previous_val double precision) RETURNS double precision
+CREATE FUNCTION pct_change(current_val numeric, previous_val numeric) RETURNS numeric
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql AS
 $$
 SELECT (current_val - previous_val) / NULLIF(previous_val, 0) * 100 AS result;
 $$;
 
-ALTER FUNCTION pml.pct_change(unknown, unknown) OWNER TO postgres;
+ALTER FUNCTION pct_change(numeric, numeric) OWNER TO postgres;
 
-CREATE FUNCTION pml.pct_change(current_val numeric, previous_val numeric) RETURNS numeric
+CREATE FUNCTION pct_change(current_val double precision, previous_val double precision) RETURNS double precision
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql AS
 $$
-SELECT (current_val - previous_val) / NULLIF(previous_val, 0) * 100 AS result;
+SELECT (current_val - previous_val) / NULLIF(previous_val, 0) * 100;
 $$;
 
-ALTER FUNCTION pml.pct_change(unknown, unknown) OWNER TO postgres;
+ALTER FUNCTION pct_change(double precision, double precision) OWNER TO postgres;

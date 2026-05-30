@@ -1,4 +1,4 @@
-CREATE TABLE pml.pml_df
+CREATE TABLE pml_df
 (
 	ticker                            text,
 	isin                              text,
@@ -578,5 +578,5 @@ CREATE TABLE pml.pml_df
 	gross_profit_margin_pct_5yavgfq  double precision
 );
 
-ALTER TABLE pml.pml_df
+ALTER TABLE pml_df
 	OWNER TO postgres;

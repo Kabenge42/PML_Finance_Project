@@ -109,7 +109,7 @@ idata, _ = model.fit(
 )
 ```
 
-### Core Models (`probabilistic_ml_model/pml_models/`)
+### Core Models (`probabilistic_ml_model/pymc_models/`)
 
 Managed via a unified `PipelineRunner` in `probabilistic_ml_model/pipeline_runners.py`:
 
@@ -281,12 +281,16 @@ Exploratory and reproducible analysis notebooks live at the repository root. Ins
 | `pymc_expected_returns_model.ipynb`           | End-to-end PyMC + ArviZ workflow for the 7 Bayesian models |
 | `pymc_expected_returns_v2.ipynb`              | v2 PyMC expected-returns experiments                       |
 | `pymc_pml_model.ipynb`                        | PyMC PML model exploration                                 |
+| `pymc_dcf.ipynb`                              | PyMC DCF price-target model walkthrough                    |
+| `pymc_earnings_beat.ipynb`                    | PyMC earnings-beat model walkthrough                       |
+| `pymc_price_target.ipynb`                     | PyMC price-target model walkthrough                        |
 | `expected_returns_v3.ipynb`                   | v3 expected-returns pipeline notebook companion            |
 | `exp_returns_v3_analytics.ipynb`              | v3 analytics exploration                                   |
+| `expected_returns_analytics.ipynb`            | Expected-returns analytics exploration                     |
+| `expected_returns_ds.ipynb`                   | Expected-returns data-science scratchpad                   |
 | `pml_workflow_v4.ipynb`                       | v4 PML workflow walkthrough                                |
 | `pml_finance_model.ipynb`                     | PML finance model exploration                              |
 | `pml_model_analysis.ipynb`                    | PML model analysis & diagnostics                           |
-| `pml_df_new.ipynb`                            | PML DataFrame engineering experiments                      |
 | `pml_bonds.ipynb`                             | PML bonds exploration                                      |
 | `ExpectedReturnsAnalytics.ipynb`              | Expected-returns analytics                                 |
 | `financial_market_statistical_analysis.ipynb` | Financial market statistical analysis                      |
@@ -296,24 +300,25 @@ Exploratory and reproducible analysis notebooks live at the repository root. Ins
 Set via `set_env.ps1` (dot-source to persist in session: `. .\set_env.ps1`). Reference values are listed in
 `environment_variables.txt`.
 
-| Variable                   | Default / Example                                            | Description                                                      |
-|:---------------------------|:-------------------------------------------------------------|:-----------------------------------------------------------------|
-| `LOG_LEVEL`                | `INFO`                                                       | Python logging level                                             |
-| `TF_CPP_MIN_LOG_LEVEL`     | `2`                                                          | TensorFlow log level (0=DEBUG, 1=INFO, 2=WARNING, 3=ERROR)       |
-| `DATA_DIR`                 | `data`                                                       | Local data storage                                               |
-| `MODEL_DIR`                | `models`                                                     | Saved model artifacts                                            |
-| `CACHE_DIR`                | `.cache`                                                     | Cache directory                                                  |
-| `OUTPUT_DIR`               | `outputs`                                                    | Generated reports / visualizations                               |
-| `DB_URL`                   | `postgresql+psycopg2://postgres:...@localhost:5432/postgres` | SQLAlchemy DB connection URL                                     |
-| `DB_EQUITIES_SCHEMA`       | `public`                                                     | PostgreSQL schema for equities tables                            |
-| `DB_TABLE`                 | `equities`                                                   | Source equities table name                                       |
-| `DB_ANALYTICS_SCHEMA`      | `analytics`                                                  | PostgreSQL schema for analytics outputs                          |
-| `MODEL_VERSION`            | `v9_11`                                                      | Active model version tag                                         |
-| `RANDOM_SEED`              | `42` (commented out)                                         | Reproducibility seed (set explicitly to override stochastic ops) |
-| `N_JOBS`                   | `-1`                                                         | Parallel job count (`-1` = all cores)                            |
-| `PYTENSOR_FLAGS`           | `device=cpu,floatX=float64,cxx=`                             | PyTensor configuration (C backend disabled on Win/Python 3.14)   |
-| `GEIB_DASHBOARD`           | `true`                                                       | Enable GEIB equities dashboard                                   |
-| `ENABLE_INTERACTIVE_PLOTS` | `true`                                                       | Toggle interactive visualizations                                |
+| Variable                   | Default / Example                                            | Description                                                       |
+|:---------------------------|:-------------------------------------------------------------|:------------------------------------------------------------------|
+| `LOG_LEVEL`                | `INFO`                                                       | Python logging level                                              |
+| `TF_CPP_MIN_LOG_LEVEL`     | `2`                                                          | TensorFlow log level (0=DEBUG, 1=INFO, 2=WARNING, 3=ERROR)        |
+| `NO_COLOR`                 | `1`                                                          | Disable ANSI-colored console output (set by `set_env.ps1`)        |
+| `DATA_DIR`                 | `data`                                                       | Local data storage                                                |
+| `MODEL_DIR`                | `models`                                                     | Saved model artifacts (`set_env.ps1` currently sets `regression`) |
+| `CACHE_DIR`                | `.cache`                                                     | Cache directory                                                   |
+| `OUTPUT_DIR`               | `outputs`                                                    | Generated reports / visualizations                                |
+| `DB_URL`                   | `postgresql+psycopg2://postgres:...@localhost:5432/postgres` | SQLAlchemy DB connection URL                                      |
+| `DB_EQUITIES_SCHEMA`       | `public`                                                     | PostgreSQL schema for equities tables                             |
+| `DB_TABLE`                 | `equities`                                                   | Source equities table name                                        |
+| `DB_ANALYTICS_SCHEMA`      | `analytics`                                                  | PostgreSQL schema for analytics outputs                           |
+| `MODEL_VERSION`            | `v9_11`                                                      | Active model version tag                                          |
+| `RANDOM_SEED`              | `42` (commented out)                                         | Reproducibility seed (set explicitly to override stochastic ops)  |
+| `N_JOBS`                   | `-1`                                                         | Parallel job count (`-1` = all cores)                             |
+| `PYTENSOR_FLAGS`           | `device=cpu,floatX=float64,cxx=`                             | PyTensor configuration (C backend disabled on Win/Python 3.14)    |
+| `GEIB_DASHBOARD`           | `true`                                                       | Enable GEIB equities dashboard                                    |
+| `ENABLE_INTERACTIVE_PLOTS` | `true`                                                       | Toggle interactive visualizations                                 |
 
 ## Testing
 
@@ -349,15 +354,18 @@ pytest --cov=probabilistic_ml_model --cov-report=term-missing
 | `test_v35_earnings_beat.py`               | 22      | v3.5 earnings beat model tests               |
 | `test_ensemble_risk_adj_return.py`        | 21      | Ensemble risk-adjusted return scoring        |
 | `test_arviz_migration.py`                 | 18      | ArviZ 1.0 API migration                      |
+| `test_price_target_mc.py`                 | 18      | Price-target Monte Carlo helpers             |
 | `test_arviz_improvements.py`              | 17      | ArviZ diagnostic improvements                |
 | `test_pipeline_statistical_fixes.py`      | 17      | Pipeline statistical fix validations         |
+| `test_dcf_pt_nb_integration.py`           | 15      | DCF price-target notebook integration        |
 | `test_hierarchical_mcmc_refactor.py`      | 11      | Hierarchical MCMC refactoring                |
+| `test_hierarchical_pymc_models.py`        | 11      | Hierarchical PyMC model shrinkage            |
 | `test_new_columns.py`                     | 9       | New column definitions & schema              |
 | `test_idata_shim_smoke.py`                | 9       | InferenceData shim smoke tests               |
 | `test_v35_anomaly_enhancements.py`        | 7       | v3.5 accounting anomaly enhancements         |
 | `test_distribution_fitting.py`            | 6       | Distribution fitting models                  |
 | `test_plr_idata_kwargs.py`                | 3       | ProbabilisticLinearRegression idata args     |
-| **Total**                                 | **483** | All modules covered                          |
+| **Total**                                 | **527** | All 23 test modules covered                  |
 
 ### Adding New Tests
 
@@ -377,7 +385,7 @@ PML_Finance_Project/
 │   ├── logging_config.py           # Logging setup
 │   ├── optimized_ops.py            # Performance optimizations
 │   ├── _pymc_arviz_compat.py       # PyMC / ArviZ compatibility shim
-│   ├── pml_models/                 # Model implementations
+│   ├── pymc_models/                # PyMC model implementations
 │   │   ├── BaselineProbabilityModel.py
 │   │   ├── ProbabilisticLinearRegressionModel.py
 │   │   ├── KalmanFilterModel.py
@@ -388,6 +396,9 @@ PML_Finance_Project/
 │   │   ├── AccountingAnomalyModel.py
 │   │   ├── CreditRiskModel.py
 │   │   ├── MonteCarloSimulation.py
+│   │   ├── _hierarchy.py           # Canonical category hierarchy (shrinkage)
+│   │   ├── _feature_alignment.py   # Typed feature coercion & provenance helpers
+│   │   ├── _price_target_mc.py     # Price-target Monte Carlo helpers
 │   │   └── _pytensor_compat.py     # PyTensor compatibility shim
 │   ├── data_utils/                 # Data loading & inference schema
 │   │   ├── data_utils.py           # DB loading, preprocessing, export
@@ -426,7 +437,7 @@ PML_Finance_Project/
 ├── eda_visualizations.py           # Ad-hoc EDA visualization helpers
 ├── *.sql                           # Root-level schema / materialized-view / metadata SQL
 ├── *.ipynb                         # Exploratory / reproducible analysis notebooks
-├── tests/                          # Unit and integration tests (483 tests)
+├── tests/                          # Unit and integration tests (527 tests, 23 modules)
 ├── data/                           # Local data storage
 ├── outputs/                        # Reports and visualizations
 ├── logs/                           # Pipeline execution logs
@@ -451,7 +462,7 @@ PML_Finance_Project/
 5. Apply column backfill and Kalman momentum smoothing
 6. Pre-compute historical target drift enrichment (consensus drift, spread evolution, price anchor)
 
-### Phase 2 — Core PML Model Execution (`pml_models/`)
+### Phase 2 — Core PML Model Execution (`pymc_models/`)
 
 7. Run `MonteCarloSimulation` — triangular distribution sampling with historical target drift priors
 8. Run `PriceTargetModel` — probability-weighted expected returns with analyst sentiment & risk adjustment
@@ -461,7 +472,7 @@ PML_Finance_Project/
 12. Run `CreditRiskModel` — Bayesian distress estimation with debt trajectory & balance sheet strength
 13. Run `DividendSafetyModel` — dividend cut probability with FCF coverage & leverage signals
 
-### Phase 3 — Probabilistic Linear Market Model (`pml_models/`)
+### Phase 3 — Probabilistic Linear Market Model (`pymc_models/`)
 
 14. Run `ProbabilisticLinearRegressionModel` — Bayesian linear regression with posterior inference
 15. Run `DCF_PriceTargetModel` — discounted cash flow regression with probabilistic fair value bands
