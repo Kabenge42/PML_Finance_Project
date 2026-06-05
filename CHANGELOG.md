@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.4] - 2026-05-30
+
+### Added
+
+- **`probabilistic_ml_model/pymc_models/_price_target_mc.py`** — new shared
+  price-target Monte-Carlo helper module backing the refactored
+  PyMC price-target / DCF workflow
+  ([`bf35a96`](https://github.com/Kabenge42/PML_Finance_Project/commit/bf35a96)).
+- **Test coverage for the price-target stack** — added
+  `tests/test_price_target_mc.py` and `tests/test_dcf_pt_nb_integration.py`
+  exercising the new helper and the DCF price-target notebook integration
+  ([`bf35a96`](https://github.com/Kabenge42/PML_Finance_Project/commit/bf35a96)).
+- **`CLAUDE.md`** — project guidance for Claude Code, plus the `pt_model`
+  reference artefact and the `pymc_price_target_v2.ipynb` experiments
+  notebook
+  ([`53ca0cd`](https://github.com/Kabenge42/PML_Finance_Project/commit/53ca0cd)).
+- **`pml`-schema SQL surface** — added the namespaced `sql_scripts/pml/*`
+  function/view library, `pml_df_metadata.sql`,
+  `pml_df_metadata_populate.sql`, `pml_cohorts.sql`,
+  `pml_feature_catalogue.sql`, `pml_features.md`, `pml_mpc.md` and
+  `docs/pml_sql_queries_updates.md`
+  ([`331e2f6`](https://github.com/Kabenge42/PML_Finance_Project/commit/331e2f6)).
+
+### Changed
+
+- **SQL functions namespaced under the `pml` schema** — every
+  `sql_scripts/pml/*` helper and materialized-view definition (and
+  `import_pml_data.sql`) was migrated to the `pml` schema, and unnecessary
+  metadata / cell outputs were stripped from the PyMC notebooks
+  (`pymc_earnings_beat.ipynb`, `pymc_price_target.ipynb`)
+  ([`99c7547`](https://github.com/Kabenge42/PML_Finance_Project/commit/99c7547)).
+- **`DCF_PriceTargetModel.py`** refactored to route through the new
+  `_price_target_mc.py` helper, alongside refreshed
+  `pymc_dcf.ipynb` / `pymc_price_target.ipynb` notebooks and `README.md`
+  ([`bf35a96`](https://github.com/Kabenge42/PML_Finance_Project/commit/bf35a96)).
+- **`probabilistic_ml_model/_pymc_arviz_compat.py`**,
+  **`_pytensor_compat.py`** and **`EarningsBeatModel.py`** received
+  compatibility / behaviour touch-ups in step with the `pml`-schema
+  migration
+  ([`331e2f6`](https://github.com/Kabenge42/PML_Finance_Project/commit/331e2f6),
+  [`99c7547`](https://github.com/Kabenge42/PML_Finance_Project/commit/99c7547)).
+- **Environment / project config** — refreshed `set_env.ps1`,
+  `environment_variables.txt`, `Pipfile`, `pyproject.toml`,
+  `requirements.txt`, `README.md` and `.idea/*` settings to match the
+  new schema and notebook layout
+  ([`331e2f6`](https://github.com/Kabenge42/PML_Finance_Project/commit/331e2f6),
+  [`99c7547`](https://github.com/Kabenge42/PML_Finance_Project/commit/99c7547)).
+- **Data snapshots** — regenerated the regional PML / screening CSVs
+  (`data/pml/pml_{us,eu,apac,rotw}.csv`,
+  `data/screening_{us,eu,apac,rotw}.csv`) against the updated `pml`
+  feature surface
+  ([`331e2f6`](https://github.com/Kabenge42/PML_Finance_Project/commit/331e2f6),
+  [`bf35a96`](https://github.com/Kabenge42/PML_Finance_Project/commit/bf35a96)).
+
+### Removed
+
+- **`pml_features.sql`** — the monolithic legacy feature script was
+  removed in favour of the modular `sql_scripts/pml/*` library and
+  `pml_feature_catalogue.sql`
+  ([`331e2f6`](https://github.com/Kabenge42/PML_Finance_Project/commit/331e2f6)).
+- **`pml_df_new.ipynb`** and the bloated `pymc_expected_returns_v2.ipynb`
+  cell outputs were dropped during the notebook/schema cleanup
+  ([`331e2f6`](https://github.com/Kabenge42/PML_Finance_Project/commit/331e2f6)).
+
+### Notes
+
+- Patch-level bump (`0.9.9.3 → 0.9.9.4`) — the release packages a `pml`
+  SQL-schema migration, data-snapshot refresh, new price-target
+  Monte-Carlo helper with tests, and project-guidance docs; no breaking
+  public-API changes.
+- Follow-up: bump `pyproject.toml` `version` and the README badge to
+  `0.9.9.4` in the next packaging pass (left untouched here to keep this
+  CHANGELOG refresh purely a documentation change).
+
+[0.9.9.4]: https://github.com/Kabenge42/PML_Finance_Project/compare/v0.9.9.3...v0.9.9.4
+
 ## [0.9.9.3] - 2026-05-15
 
 ### Added

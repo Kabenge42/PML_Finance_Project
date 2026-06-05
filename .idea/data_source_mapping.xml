@@ -1,15 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="DataSourcePerFileMappings">
+    <file url="file://$PROJECT_DIR$/create_helper_functions.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/feature_registry.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/import_pml_data.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/mv_dcf.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/pml_df_metadata.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/pml_df_metadata_populate.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/pml_feature_catalogue.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
-    <file url="file://$PROJECT_DIR$/sql_scripts/pml/mv_pymc_dcf_pt.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/sql_scripts/pml/mv_pymc_price_target.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
-    <file url="file://$PROJECT_DIR$/sql_scripts/pml/refresh_pymc_materialized_views.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
-    <file url="file://$PROJECT_DIR$/sql_scripts/pml/vw_pymc_feature_catalogue.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
-    <file url="file://$PROJECT_DIR$/sql_scripts/pml/vw_pymc_feature_coverage.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
-    <file url="file://$PROJECT_DIR$/sql_scripts/pml/winsorise.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/sql_scripts/public/calc_sentiment_features.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
   </component>
 </project>

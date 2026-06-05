@@ -42,7 +42,8 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # Default per-data_type clipping / dtype rules. Aligned with the canonical
-# values used in ``public.feature_catalogue.data_type``.
+# values used in ``pml.vw_pymc_feature_catalogue.data_type``
+# (sourced from ``pml.pml_df_metadata.data_type``).
 _DTYPE_RULES: dict[str, dict[str, Any]] = {
     "pct": {"dtype": "float64", "clip": (-1.0, 1.0), "fill": 0.0},
     "ratio": {"dtype": "float64", "clip": (-1e6, 1e6), "fill": 0.0},
@@ -61,9 +62,14 @@ _DTYPE_RULES: dict[str, dict[str, Any]] = {
 def load_feature_metadata_from_db(
     connection_string: Optional[str] = None,
 ) -> dict[str, dict[str, Optional[str]]]:
-    """Load full ``(category, calculation_type, data_type, source_function)``
-    metadata per ``feature_alias`` from ``public.calculated_features_registry``
-    / ``public.feature_catalogue``.
+    """Load ``(category, calculation_type, data_type, source_function)``
+    metadata per ``feature_alias`` from the pml single-source-of-truth
+    ``pml.vw_pymc_feature_catalogue`` (backed by ``pml.pml_df_metadata``).
+
+    The pml schema does not carry ``calculation_type`` / ``source_function``
+    columns, so those keys are returned as ``None`` to preserve the dict
+    contract consumed by :func:`coerce_by_data_type` (which only needs
+    ``data_type``) and :func:`stamp_feature_provenance`.
 
     Returns an empty dict on any failure so callers can fall back gracefully
     to untyped behaviour.
@@ -78,13 +84,13 @@ def load_feature_metadata_from_db(
         return {}
 
     query = text("""
-        SELECT feature_alias,
+        SELECT DISTINCT feature_alias,
                category,
-               calculation_type,
+               NULL::text                     AS calculation_type,
                COALESCE(data_type, 'numeric') AS data_type,
-               source_function
-        FROM public.calculated_features_registry
-        WHERE calculation_type <> 'direct'
+               NULL::text                     AS source_function
+        FROM pml.vw_pymc_feature_catalogue
+        WHERE feature_alias IS NOT NULL
         """)
     try:
         engine = create_engine(connection_string)

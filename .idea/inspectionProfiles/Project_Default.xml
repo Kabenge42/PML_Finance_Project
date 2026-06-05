@@ -51,6 +51,13 @@
     <inspection_tool class="PyUnhashableInspection" enabled="false" level="ERROR" enabled_by_default="false" />
     <inspection_tool class="PyUnnecessaryBackslashInspection" enabled="false" level="WARNING" enabled_by_default="false" />
     <inspection_tool class="PyUnnecessaryCastInspection" enabled="false" level="WEAK WARNING" enabled_by_default="false" />
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="pymc.distributions.continuous.HalfNormal.*" />
+        </list>
+      </option>
+    </inspection_tool>
     <inspection_tool class="PyVarianceInspection" enabled="false" level="WARNING" enabled_by_default="false" />
     <inspection_tool class="PyVulnerableApiCodeInspection" enabled="false" level="WARNING" enabled_by_default="false" />
     <inspection_tool class="SpellCheckingInspection" enabled="false" level="TYPO" enabled_by_default="false">

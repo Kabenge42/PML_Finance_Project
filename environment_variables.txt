@@ -31,6 +31,7 @@ DB_URL=postgresql+psycopg2://postgres:bItcfiTg142!@localhost:5432/postgres
 # Optional: Database schema and table to read from
 DB_EQUITIES_SCHEMA=public
 DB_TABLE=equities
+DB_PML_SCHEMA=pml
 DB_ANALYTICS_SCHEMA=analytics
 
 # -----------------------------------------------------------------------------
