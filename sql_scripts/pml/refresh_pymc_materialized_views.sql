@@ -1,4 +1,4 @@
-CREATE PROCEDURE refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT TRUE)
+CREATE PROCEDURE refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT true)
 	LANGUAGE plpgsql AS
 $$
 DECLARE

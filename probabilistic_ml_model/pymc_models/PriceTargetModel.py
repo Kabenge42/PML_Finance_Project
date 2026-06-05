@@ -40,6 +40,10 @@ if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
     import pymc as pm_typing  # noqa: F401
 
+    from probabilistic_ml_model.pymc_models._price_target_mc import (
+        PriceTargetPanelInputs,  # noqa: F401
+    )
+
 from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 from probabilistic_ml_model.pymc_models._feature_alignment import (
@@ -183,6 +187,14 @@ class PriceTargetAchievement:
         latent ``expected_return`` has a prior centred at 0 with a
         dispersion-aware sigma to avoid the previous degenerate likelihood
         where the same series acted as both prior mean and observation.
+
+        ``analyst_conviction`` is expected on a **[0, 1] fraction** scale: it
+        feeds both the ``expected_return`` sigma (``max(conviction, 1e-3)``) and
+        the ``exp(-risk_penalty * conviction)`` risk adjustment, which assume a
+        ~unit-scale input. The MV-native ``feat_analyst_conviction`` column is a
+        0-100 percentage, so pass it through
+        :func:`probabilistic_ml_model.pymc_models._price_target_mc.prepare_price_target_inputs`
+        (which rescales by 1/100) rather than feeding the raw MV value here.
         """
         if pm is None:
             raise ImportError(
@@ -326,3 +338,192 @@ class PriceTargetAchievement:
         self.model_ = model
         self.idata_ = idata
         return idata, model
+
+
+# Group-effect coords (highest-signal, lowest-cardinality) that receive a
+# hierarchical non-centred Normal intercept in the fused MvGRW baseline.
+_FUSED_GROUP_EFFECTS: tuple[str, ...] = (
+    "industry",
+    "region",
+    "sector",
+    "size_class",
+    "style_class",
+)
+
+
+def build_fused_price_target_model(
+    panel: "PriceTargetPanelInputs",
+    *,
+    group_effects: Optional[tuple[str, ...]] = None,
+    risk_penalty: float = 0.1,
+) -> "pm_typing.Model":
+    """Build the fused 3-D MvGRW + robust/heteroscedastic price-target model.
+
+    Fuses two notebook models into a single reusable ``pm.Model`` builder:
+
+    * **Model B spine** — a diagonal (NUTS-safe) Multivariate Gaussian Random
+      Walk over the ``(isin, time, y_series)`` response tensor with a
+      cross-sectional baseline ``mu_isin``.
+    * **Model A refinement** — the conviction-aware ``expected_return`` →
+      ``risk_adj_return`` latent (with a non-centred logit-normal
+      ``achieve_prob``) becomes the GRW baseline ``mu_isin``, and the richer
+      heteroscedastic scale ``sigma_isin = sigma_base * (1 + cv) / sqrt(n)``
+      replaces Model B's cv-free form.
+
+    NUTS-inplace-safety constraints (preserved from the notebook):
+
+    * ``sqrt(n_analysts)`` is precomputed in NumPy and passed as ``pm.Data``
+      (never ``pt.sqrt`` on an integer container).
+    * ``sigma_base`` uses :class:`pm.Exponential` (not ``HalfNormal``) so no
+      ``Abs→Sqrt`` rewrite fuses into an inplace ``Composite`` op.
+    * The GRW uses an explicit diagonal innovation parameterisation instead of
+      :class:`pm.LKJCholeskyCov` (whose onion-method Beta→Normal chain triggers
+      an inplace rewrite NUTS rejects).
+
+    Parameters
+    ----------
+    panel : PriceTargetPanelInputs
+        Output of
+        :func:`probabilistic_ml_model.pymc_models._price_target_mc.prepare_price_target_panel_inputs`.
+    group_effects : tuple[str, ...], optional
+        Coord names receiving a hierarchical intercept. Defaults to the
+        intersection of :data:`_FUSED_GROUP_EFFECTS` with the panel coords.
+    risk_penalty : float
+        Exponential risk-penalty factor applied to ``expected_return``.
+
+    Returns
+    -------
+    pm.Model
+        The unfitted fused model. ``risk_adj_return``, ``sigma_isin`` and
+        ``nu`` keep ``dims='isin'`` so the downstream Monte-Carlo helper
+        consumes per-isin mu/sigma draws + scalar nu unchanged.
+    """
+    if pm is None or pt is None:
+        raise ImportError(
+            "PyMC is not available. Install pymc + pytensor to build the "
+            "fused price-target model."
+        )
+
+    n_isin, T, D = panel.Y.shape
+    coords: dict[str, Any] = {
+        "isin": np.asarray(panel.isins),
+        "time": np.arange(T),
+        "y_series": np.asarray(panel.response_names),
+        "pt_feature": list(panel.predictor_names),
+    }
+    for col, uniques in panel.coord_uniques.items():
+        coords[col] = uniques
+
+    avail_groups = (
+        tuple(group_effects)
+        if group_effects is not None
+        else tuple(c for c in _FUSED_GROUP_EFFECTS if c in panel.coord_idx)
+    )
+    avail_groups = tuple(c for c in avail_groups if c in panel.coord_idx)
+
+    with pm.Model(coords=coords) as model:
+        # ---- pm.Data containers (names mirror MV aliases) ----
+        Y_obs = pm.Data("Y_obs", panel.Y, dims=("isin", "time", "y_series"))
+        t_obs = pm.Data("t_scaled", panel.t_scaled, dims=("isin", "time"))
+        X_data = pm.Data("pt_features", panel.X_std, dims=("isin", "pt_feature"))
+        # panel.conviction_ratio is on a [0, 1] fraction scale (the MV-native
+        # feat_analyst_conviction percentage is rescaled by 1/100 in
+        # prepare_price_target_inputs), matching the unit-scale assumptions of the
+        # sigma_isin prior and the exp(-risk_penalty * conviction) adjustment below.
+        conviction = pm.Data(
+            "feat_analyst_conviction", panel.conviction_ratio, dims="isin"
+        )
+        cv_data = pm.Data(
+            "feat_target_dispersion_cv", panel.dispersion_cv, dims="isin"
+        )
+        pm.Data("n_analysts", panel.n_analysts, dims="isin")
+        sqrt_n_data = pm.Data(
+            "sqrt_n_analysts", panel.sqrt_n_analysts, dims="isin"
+        )
+        idx_data_vars = {
+            col: pm.Data(f"{col}_idx", panel.coord_idx[col], dims="isin")
+            for col in panel.coord_idx
+        }
+
+        # ---- Model A: non-centred logit-normal achievement probability ----
+        mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
+        sigma_logit = pm.HalfNormal("sigma_logit", 1.0)
+        z_isin = pm.Normal("z_isin", 0.0, 1.0, dims="isin")
+        pm.Deterministic(
+            "achieve_prob",
+            pm.math.sigmoid(mu_logit + sigma_logit * z_isin),
+            dims="isin",
+        )
+
+        # ---- Cross-sectional regression baseline ----
+        mu_global = pm.Normal("mu_global", mu=0.0, sigma=10.0)
+        beta = pm.Normal("beta", mu=0.0, sigma=5.0, dims="pt_feature")
+
+        eta = mu_global + pt.dot(X_data, beta)
+        for col in avail_groups:
+            sigma_g = pm.HalfNormal(f"sigma_{col}", sigma=10.0)
+            z_g = pm.Normal(f"z_{col}", mu=0.0, sigma=1.0, dims=col)
+            group_effect = pm.Deterministic(f"{col}_effect", sigma_g * z_g, dims=col)
+            eta = eta + group_effect[idx_data_vars[col]]
+        mu_reg = pm.Deterministic("mu_reg", eta, dims="isin")
+
+        # ---- Model A: conviction-aware expected / risk-adjusted return ----
+        expected_return = pm.Normal(
+            "expected_return",
+            mu=mu_reg,
+            sigma=pt.maximum(conviction, 1e-3),
+            dims="isin",
+        )
+        risk_adj_return = pm.Deterministic(
+            "risk_adj_return",
+            expected_return * pt.exp(-risk_penalty * conviction),
+            dims="isin",
+        )
+        # The conviction-aware risk-adjusted return is the GRW baseline.
+        mu_isin = pm.Deterministic("mu_isin", risk_adj_return, dims="isin")
+
+        # ---- Model B: diagonal (NUTS-safe) Gaussian Random Walk ----
+        sigma_alpha_innov = pm.HalfNormal(
+            "sigma_alpha_innov", sigma=1.0, dims="y_series"
+        )
+        sigma_beta_innov = pm.HalfNormal(
+            "sigma_beta_innov", sigma=1.0, dims="y_series"
+        )
+        z_alpha = pm.Normal("z_alpha", 0.0, 1.0, dims=("time", "y_series"))
+        z_beta = pm.Normal("z_beta", 0.0, 1.0, dims=("time", "y_series"))
+        alpha = pm.Deterministic(
+            "alpha",
+            pt.cumsum(z_alpha * sigma_alpha_innov[None, :], axis=0),
+            dims=("time", "y_series"),
+        )
+        beta_t = pm.Deterministic(
+            "beta_t",
+            pt.cumsum(z_beta * sigma_beta_innov[None, :], axis=0),
+            dims=("time", "y_series"),
+        )
+
+        regression = (
+            alpha[None, :, :]
+            + beta_t[None, :, :] * t_obs[:, :, None]
+            + mu_isin[:, None, None]
+        )
+
+        # ---- Model A: richer heteroscedastic σ (cv term, Exponential base) ----
+        sigma_base = pm.Exponential("sigma_base", 1.0)
+        sigma_isin = pm.Deterministic(
+            "sigma_isin",
+            sigma_base * (1.0 + cv_data) / sqrt_n_data,
+            dims="isin",
+        )
+        nu = pm.Gamma("nu", alpha=2.0, beta=0.1)
+
+        pm.StudentT(
+            "target_pct_obs",
+            nu=nu,
+            mu=regression,
+            sigma=sigma_isin[:, None, None],
+            observed=Y_obs,
+            dims=("isin", "time", "y_series"),
+        )
+
+    return model

@@ -1,9 +1,5 @@
 CREATE FUNCTION beat_counts(surprises numeric[])
-	RETURNS TABLE
-	        (
-		        n_total integer,
-		        n_beats integer
-	        )
+	RETURNS TABLE(n_total integer, n_beats integer)
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql
 AS
@@ -16,11 +12,7 @@ $$;
 ALTER FUNCTION beat_counts(numeric[]) OWNER TO postgres;
 
 CREATE FUNCTION beat_counts(surprises double precision[])
-	RETURNS TABLE
-	        (
-		        n_total integer,
-		        n_beats integer
-	        )
+	RETURNS TABLE(n_total integer, n_beats integer)
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql
 AS

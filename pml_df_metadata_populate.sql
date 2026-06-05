@@ -1266,12 +1266,33 @@ WHERE column_name IN ('income_statement_report_date',
                       'next_fy_end_date',
                       'expected_report_date');
 
+-- 7h.2a PriceTargetAchievement: realised-vs-target accuracy block. The 1Y-ago
+--       target snapshots (level / low / high / median), the current median, and
+--       the trailing analyst-count snapshots drive feat_pt_achievement_1y /
+--       feat_pt_accuracy_1y / feat_pt_optimism_bias / feat_pt_range_hit_rate /
+--       feat_pt_median_vs_mean_spread / feat_pt_high_low_convergence_1y /
+--       feat_analyst_count_stability in mv_pymc_price_target.
+UPDATE pml.pml_df_metadata
+SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['price_target'])))
+WHERE column_name IN ('price_target_1y_ago',
+                      'price_target_low_1y_ago',
+                      'price_target_high_1y_ago',
+                      'price_target_median_1y_ago',
+                      'price_target_median',
+                      'price_target'
+                      );
+
 -- 7h.3 KalmanFilterPriceTarget: full stddev-trail snapshots and analyst-range
---      bounds used in feat_pt_noise_drift / feat_pt_range_norm.
+--      bounds used in feat_pt_noise_drift / feat_pt_range_norm. The high / low /
+--      median / num *_ago target trails that now feed feat_pt_high_drift /
+--      feat_pt_low_drift / feat_pt_median_drift / feat_coverage_drift are
+--      already wired to kalman_pt via the 'price_target_%_ago' / 'price_%_ago'
+--      LIKE patterns in section 7c above.
 UPDATE pml.pml_df_metadata
 SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
 WHERE column_name IN ('price_target_high',
                       'price_target_low',
+                      'price_target_median',
                       'price_target_num',
                       'price_target_stddev_1w_ago',
                       'price_target_stddev_1m_ago',
@@ -1279,6 +1300,29 @@ WHERE column_name IN ('price_target_high',
                       'price_target_stddev_6m_ago',
                       'price_target_stddev_1y_ago',
                       'total_return_ytd');
+
+-- 7h.3a KalmanFilterPriceTarget: fiscal-calendar anchors + derived day-count
+--       horizons (mirrors the price_target wiring in 7h.2). These give the
+--       marginalized GaussianRandomWalk a real, irregular time axis so the
+--       process variance can be scaled by actual elapsed time between the
+--       *_ago observations (KalmanFilterModel._resolve_time_deltas). The raw
+--       DATE columns are already pymc_role='coord' and the day-count columns
+--       pymc_role='mutable_predictor' (set in 7h.2); here we only extend their
+--       model_targets so they surface in vw_pymc_feature_catalogue for kalman_pt.
+UPDATE pml.pml_df_metadata
+SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
+WHERE column_name IN ('income_statement_report_date',
+                      'next_earnings',
+                      'fy_end_date',
+                      'next_income_statement_report_date',
+                      'next_fy_end_date',
+                      'expected_report_date',
+                      'days_to_next_earnings',
+                      'days_since_last_report',
+                      'days_to_next_fy_end',
+                      'days_to_next_report',
+                      'days_to_expected_report',
+                      'days_to_fy_end');
 
 -- 7h.4 DCFPriceTarget: terminal FCF estimates, historical CAGRs, PEG / EV-sales
 --      / ROA / beta anchors used in feat_fcf_terminal_growth / feat_tr_cagr_* /
@@ -1423,156 +1467,220 @@ SELECT col, 'fiscal_calendar', 'predictor', 'mutable_predictor'
 FROM unnest(ARRAY [ 'days_to_next_earnings', 'days_since_last_report', 'days_to_next_fy_end', 'days_to_next_report', 'days_to_expected_report', 'days_to_fy_end' ]) AS col
 ON CONFLICT (column_name) DO NOTHING;
 
+-- The derived day-count horizons are created by the FK-safety seed above, which
+-- cannot set model_targets. The earlier 7h.2 (price_target) / 7h.3a (kalman_pt)
+-- UPDATEs run *before* these rows exist, so they never matched. (Re)assert the
+-- model_targets here, after the seed, so the columns surface in
+-- vw_pymc_feature_catalogue for BOTH consuming models.
+UPDATE pml.pml_df_metadata
+SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(
+		model_targets || ARRAY ['price_target', 'kalman_pt'])))
+WHERE column_name IN ('days_to_next_earnings',
+                      'days_since_last_report',
+                      'days_to_next_fy_end',
+                      'days_to_next_report',
+                      'days_to_expected_report',
+                      'days_to_fy_end');
+
 TRUNCATE pml.pml_df_feature_alias;
 
-INSERT INTO pml.pml_df_feature_alias (column_name,                        model_target,         feature_alias                    )
+INSERT INTO pml.pml_df_feature_alias (column_name,                         model_target,         feature_alias                      )
 VALUES
 	-- ---- earnings_beat aliases (from mv_pymc_earnings_beat) ----
-	                                 ('eps_norm_est_avg_fy1e',            'earnings_beat',      'feat_eps_fy1e'                  ),
-	                                 ('eps_norm_est_avg_fq1e',            'earnings_beat',      'feat_eps_fq1e'                  ),
-	                                 ('eps_norm_est_num_fy1e',            'earnings_beat',      'n_eps_estimates'                ),
-	                                 ('eps_est_avg_rev_pct_fy1e_1w',      'earnings_beat',      'feat_rev_1w'                    ),
-	                                 ('eps_est_avg_rev_pct_fy1e_1m',      'earnings_beat',      'feat_rev_1m'                    ),
-	                                 ('eps_est_avg_rev_pct_fy1e_3m',      'earnings_beat',      'feat_rev_3m'                    ),
-	                                 ('eps_est_avg_rev_pct_fy1e_6m',      'earnings_beat',      'feat_rev_6m'                    ),
-	                                 ('eps_est_avg_rev_pct_fy1e_1y',      'earnings_beat',      'feat_rev_1y'                    ),
-	                                 ('eps_gaap_est_avg_rev_pct_fy1e_3m', 'earnings_beat',      'feat_rev_gaap_gap_3m'           ),
-	                                 ('eps_neg0fqsurprise_pct',           'earnings_beat',      'feat_last_q_surprise'           ),
-	                                 ('eps_neg0fysurprise_pct',           'earnings_beat',      'feat_last_y_surprise'           ),
-	                                 ('days_to_earnings',                 'earnings_beat',      'feat_days_to_earnings'          ),
-	                                 ('earnings_report_recency',          'earnings_beat',      'feat_report_recency'            ),
-	                                 ('next_earnings_status',             'earnings_beat',      'feat_next_earnings_status'      ),
+	                                 ('eps_norm_est_avg_fy1e',             'earnings_beat',      'feat_eps_fy1e'                    ),
+	                                 ('eps_norm_est_avg_fq1e',             'earnings_beat',      'feat_eps_fq1e'                    ),
+	                                 ('eps_norm_est_num_fy1e',             'earnings_beat',      'n_eps_estimates'                  ),
+	                                 ('eps_est_avg_rev_pct_fy1e_1w',       'earnings_beat',      'feat_rev_1w'                      ),
+	                                 ('eps_est_avg_rev_pct_fy1e_1m',       'earnings_beat',      'feat_rev_1m'                      ),
+	                                 ('eps_est_avg_rev_pct_fy1e_3m',       'earnings_beat',      'feat_rev_3m'                      ),
+	                                 ('eps_est_avg_rev_pct_fy1e_6m',       'earnings_beat',      'feat_rev_6m'                      ),
+	                                 ('eps_est_avg_rev_pct_fy1e_1y',       'earnings_beat',      'feat_rev_1y'                      ),
+	                                 ('eps_gaap_est_avg_rev_pct_fy1e_3m',  'earnings_beat',      'feat_rev_gaap_gap_3m'             ),
+	                                 ('eps_neg0fqsurprise_pct',            'earnings_beat',      'feat_last_q_surprise'             ),
+	                                 ('eps_neg0fysurprise_pct',            'earnings_beat',      'feat_last_y_surprise'             ),
+	                                 ('days_to_earnings',                  'earnings_beat',      'feat_days_to_earnings'            ),
+	                                 ('earnings_report_recency',           'earnings_beat',      'feat_report_recency'              ),
+	                                 ('next_earnings_status',              'earnings_beat',      'feat_next_earnings_status'        ),
 
 	-- ---- price_target aliases (from mv_pymc_price_target) ----
-	                                 ('target_pct_avg',                   'price_target',       'observed_target_pct'            ),
-	                                 ('target_pct_med',                   'price_target',       'observed_target_pct_med'        ),
-	                                 ('last_price',                       'price_target',       'last_price'                     ),
-	                                 ('price_target_num',                 'price_target',       'n_analysts'                     ),
-	                                 ('num_hold_ratings',                 'price_target',       'feat_holds'                     ),
-	                                 ('num_no_opinion_ratings',           'price_target',       'feat_no_opinion'                ),
-	                                 ('price_target',                     'price_target',       'feat_implied_upside'            ),
-	                                 ('price_target_stddev',              'price_target',       'feat_target_dispersion_cv'      ),
-	                                 ('p_e_ntm',                          'price_target',       'feat_pe_ntm'                    ),
-	                                 ('ev_ebitda_ntm',                    'price_target',       'feat_ev_ebitda_ntm'             ),
-	                                 ('volatility_3m',                    'price_target',       'feat_vol_3m'                    ),
-	                                 ('analyst_rating',                   'price_target',       'feat_analyst_rating'            ),
-	                                 ('w_52high_adj',                     'price_target',       'feat_52w_range_position_high'   ),
-	                                 ('w_52low_adj',                      'price_target',       'feat_52w_range_position_low'    ),
-	                                 ('price_target_3m_ago',              'price_target',       'feat_pt_momentum_3m'            ),
-	                                 ('price_target_num_3m_ago',          'price_target',       'feat_coverage_change_3m'        ),
-	                                 ('target_pct_high',                  'price_target',       'feat_target_range_width_high'   ),
-	                                 ('target_pct_low',                   'price_target',       'feat_target_range_width_low'    ),
+	                                 ('target_pct_avg',                    'price_target',       'observed_target_pct'              ),
+	                                 ('target_pct_med',                    'price_target',       'observed_target_pct_med'          ),
+	                                 ('last_price',                        'price_target',       'last_price'                       ),
+	                                 ('price_target_num',                  'price_target',       'n_analysts'                       ),
+	                                 ('num_hold_ratings',                  'price_target',       'feat_holds'                       ),
+	                                 ('num_no_opinion_ratings',            'price_target',       'feat_no_opinion'                  ),
+	-- ---- price_target normalized analyst-sentiment %s (multi-source carriers) ----
+	-- feat_analyst_bullish_pct / bearish_pct / neutral_pct / conviction in
+	-- mv_pymc_price_target are each computed from ALL six num_*_ratings columns.
+	-- The alias table is keyed PRIMARY KEY (column_name, model_target), so
+	-- provenance is recorded on one representative (otherwise-unaliased) rating
+	-- column per feature. num_hold_ratings / num_no_opinion_ratings are already
+	-- mapped above (feat_holds / feat_no_opinion), leaving these four unaliased
+	-- columns as carriers -- no PK collision. (Same multi-column limitation as
+	-- feat_net_buy_sentiment / feat_conviction_ratio, which stay un-aliased and
+	-- surface via the notebook KNOWN_FEATURES fallback.)
+	                                 ('num_strong_buys_ratings',           'price_target',       'feat_analyst_bullish_pct'         ),
+	                                 ('num_strong_sell_ratings',           'price_target',       'feat_analyst_bearish_pct'         ),
+	                                 ('num_buys_ratings',                  'price_target',       'feat_analyst_neutral_pct'         ),
+	                                 ('num_sell_ratings',                  'price_target',       'feat_analyst_conviction'          ),
+	                                 ('price_target',                      'price_target',       'feat_price_target'                ),
+	                                 ('price_target_stddev',               'price_target',       'feat_target_dispersion_cv'        ),
+	                                 ('p_e_ntm',                           'price_target',       'feat_pe_ntm'                      ),
+	                                 ('ev_ebitda_ntm',                     'price_target',       'feat_ev_ebitda_ntm'               ),
+	                                 ('volatility_3m',                     'price_target',       'feat_vol_3m'                      ),
+	                                 ('analyst_rating',                    'price_target',       'feat_analyst_rating'              ),
+	                                 ('w_52high_adj',                      'price_target',       'feat_52w_range_position_high'     ),
+	                                 ('w_52low_adj',                       'price_target',       'feat_52w_range_position_low'      ),
+	                                 ('price_target_3m_ago',               'price_target',       'feat_pt_momentum_3m'              ),
+	                                 ('price_target_num_3m_ago',           'price_target',       'feat_coverage_change_3m'          ),
+	                                 ('target_pct_high',                   'price_target',       'feat_target_range_width_high'     ),
+	                                 ('target_pct_low',                    'price_target',       'feat_target_range_width_low'      ),
 	-- ---- price_target MvGRW time-axis anchors (raw DATE coords) ----
-	('income_statement_report_date',      'price_target', 'income_statement_report_date'     ),
-	('next_earnings',                     'price_target', 'next_earnings'                    ),
-	('fy_end_date',                       'price_target', 'fy_end_date'                      ),
-	('next_income_statement_report_date', 'price_target', 'next_income_statement_report_date'),
-	('next_fy_end_date',                  'price_target', 'next_fy_end_date'                 ),
-	('expected_report_date',              'price_target', 'expected_report_date'             ),
+	                                 ('income_statement_report_date',      'price_target',       'income_statement_report_date'     ),
+	                                 ('next_earnings',                     'price_target',       'next_earnings'                    ),
+	                                 ('fy_end_date',                       'price_target',       'fy_end_date'                      ),
+	                                 ('next_income_statement_report_date', 'price_target',       'next_income_statement_report_date'),
+	                                 ('next_fy_end_date',                  'price_target',       'next_fy_end_date'                 ),
+	                                 ('expected_report_date',              'price_target',       'expected_report_date'             ),
 	-- ---- price_target derived day-count horizons (mutable_predictor) ----
-	('days_to_next_earnings',             'price_target', 'feat_days_to_next_earnings'       ),
-	('days_since_last_report',            'price_target', 'feat_days_since_last_report'      ),
-	('days_to_next_fy_end',               'price_target', 'feat_days_to_next_fy_end'         ),
-	('days_to_next_report',               'price_target', 'feat_days_to_next_report'         ),
-	('days_to_expected_report',           'price_target', 'feat_days_to_expected_report'     ),
-	('days_to_fy_end',                    'price_target', 'feat_days_to_fy_end'              ),
+	                                 ('days_to_next_earnings',             'price_target',       'feat_days_to_next_earnings'       ),
+	                                 ('days_since_last_report',            'price_target',       'feat_days_since_last_report'      ),
+	                                 ('days_to_next_fy_end',               'price_target',       'feat_days_to_next_fy_end'         ),
+	                                 ('days_to_next_report',               'price_target',       'feat_days_to_next_report'         ),
+	                                 ('days_to_expected_report',           'price_target',       'feat_days_to_expected_report'     ),
+	                                 ('days_to_fy_end',                    'price_target',       'feat_days_to_fy_end'              ),
+	-- ---- price_target achievement / accuracy (realised vs 1Y-ago targets) ----
+	                                 ('price_target_1y_ago',               'price_target',       'feat_pt_achievement_1y'           ),
+	                                 ('price_target_low_1y_ago',           'price_target',       'feat_pt_range_hit_rate_low'       ),
+	                                 ('price_target_high_1y_ago',          'price_target',       'feat_pt_range_hit_rate_high'      ),
+	                                 ('price_target_median_1y_ago',        'price_target',       'feat_pt_high_low_convergence_1y_lag'),
+	                                 ('price_target_median',               'price_target',       'feat_pt_median_vs_mean_spread'    ),
+	                                 ('price_target_num_1y_ago',           'price_target',       'feat_analyst_count_stability_1y'  ),
+	                                 ('price_target_num_6m_ago',           'price_target',       'feat_analyst_count_stability_6m'  ),
 
 	-- ---- kalman_pt aliases (from mv_pymc_kalman_pt) ----
-	                                 ('price_target',                     'kalman_pt',          'observed_pt'                    ),
-	                                 ('last_price',                       'kalman_pt',          'last_price'                     ),
-	                                 ('price_target_high',                'kalman_pt',          'price_target_high'              ),
-	                                 ('price_target_low',                 'kalman_pt',          'price_target_low'               ),
-	                                 ('price_target_num',                 'kalman_pt',          'n_analysts'                     ),
-	                                 ('price_target_stddev',              'kalman_pt',          'feat_pt_noise_sigma'            ),
-	                                 ('volatility_1m',                    'kalman_pt',          'feat_vol_1m'                    ),
-	                                 ('volatility_3m',                    'kalman_pt',          'feat_vol_3m'                    ),
-	                                 ('volatility_6m',                    'kalman_pt',          'feat_vol_6m'                    ),
-	                                 ('volatility_1y',                    'kalman_pt',          'feat_vol_1y'                    ),
-	                                 ('total_return_ytd',                 'kalman_pt',          'feat_total_return_ytd'          ),
+	                                 ('price_target',                      'kalman_pt',          'observed_pt'                      ),
+	                                 ('last_price',                        'kalman_pt',          'last_price'                       ),
+	                                 ('price_target_high',                 'kalman_pt',          'price_target_high'                ),
+	                                 ('price_target_low',                  'kalman_pt',          'price_target_low'                 ),
+	                                 ('price_target_median',               'kalman_pt',          'price_target_median'              ),
+	                                 ('price_target_num',                  'kalman_pt',          'n_analysts'                       ),
+	                                 ('price_target_stddev',               'kalman_pt',          'feat_pt_noise_sigma'              ),
+	                                 ('volatility_1m',                     'kalman_pt',          'feat_vol_1m'                      ),
+	                                 ('volatility_3m',                     'kalman_pt',          'feat_vol_3m'                      ),
+	                                 ('volatility_6m',                     'kalman_pt',          'feat_vol_6m'                      ),
+	                                 ('volatility_1y',                     'kalman_pt',          'feat_vol_1y'                      ),
+	                                 ('total_return_ytd',                  'kalman_pt',          'feat_total_return_ytd'            ),
+	-- NOTE: mv_pymc_kalman_pt also emits `feat_implied_upside`
+	--       (= calc_change_ratio(price_target, last_price)). It is intentionally
+	--       NOT aliased here: the feature derives from BOTH `price_target` and
+	--       `last_price`, and the alias table is keyed PRIMARY KEY
+	--       (column_name, model_target) -- both source columns are already mapped
+	--       above (observed_pt / last_price), so a third row would violate the PK.
+	--       This mirrors how mv_pymc_price_target's own `feat_implied_upside`
+	--       (and other multi-column engineered feats) are left un-aliased. The
+	--       column is surfaced to the notebook via the `KNOWN_FEATURES` fallback
+	--       in pymc_kalman_filter_pt.ipynb (Section 2) rather than the catalogue.
+	-- ---- kalman_pt fiscal-calendar time-axis anchors (raw DATE coords) ----
+	-- Alias == raw MV column name (the MV emits these un-prefixed), so the
+	-- notebook's `feature_alias IN kalman_df.columns` present-check resolves.
+	                                 ('income_statement_report_date',      'kalman_pt',          'income_statement_report_date'     ),
+	                                 ('next_earnings',                     'kalman_pt',          'next_earnings'                    ),
+	                                 ('fy_end_date',                       'kalman_pt',          'fy_end_date'                      ),
+	                                 ('next_income_statement_report_date', 'kalman_pt',          'next_income_statement_report_date'),
+	                                 ('next_fy_end_date',                  'kalman_pt',          'next_fy_end_date'                 ),
+	                                 ('expected_report_date',              'kalman_pt',          'expected_report_date'             ),
+	-- ---- kalman_pt derived day-count horizons (mutable_predictor) ----
+	                                 ('days_to_next_earnings',             'kalman_pt',          'days_to_next_earnings'            ),
+	                                 ('days_since_last_report',            'kalman_pt',          'days_since_last_report'           ),
+	                                 ('days_to_next_fy_end',               'kalman_pt',          'days_to_next_fy_end'              ),
+	                                 ('days_to_next_report',               'kalman_pt',          'days_to_next_report'              ),
+	                                 ('days_to_expected_report',           'kalman_pt',          'days_to_expected_report'          ),
+	                                 ('days_to_fy_end',                    'kalman_pt',          'days_to_fy_end'                   ),
 
 	-- ---- dcf_pt aliases (from mv_pymc_dcf_pt) ----
-	                                 ('price_target',                     'dcf_pt',             'observed_pt'                    ),
-	                                 ('market_cap',                       'dcf_pt',             'market_cap'                     ),
-	                                 ('enterprise_value',                 'dcf_pt',             'enterprise_value'               ),
-	                                 ('shrs_out',                         'dcf_pt',             'shrs_out'                       ),
-	                                 ('fcf_ltm',                          'dcf_pt',             'feat_fcf_ltm'                   ),
-	                                 ('fcf_est_avg_fy1e',                 'dcf_pt',             'feat_fcf_fy1e'                  ),
-	                                 ('fcf_est_avg_fy2e',                 'dcf_pt',             'feat_fcf_fy2e'                  ),
-	                                 ('fcf_est_avg_fy3e',                 'dcf_pt',             'feat_fcf_fy3e'                  ),
-	                                 ('fcf_est_avg_fy4e',                 'dcf_pt',             'feat_fcf_fy4e'                  ),
-	                                 ('fcf_est_avg_fy5e',                 'dcf_pt',             'feat_fcf_fy5e'                  ),
-	                                 ('cfo_ltm',                          'dcf_pt',             'feat_cfo_ltm'                   ),
-	                                 ('capital_expenditure_ltm',          'dcf_pt',             'feat_capex_to_fcf'              ),
-	                                 ('tot_return_pct_cagr_3y',           'dcf_pt',             'feat_tr_cagr_3y'                ),
-	                                 ('tot_return_pct_cagr_10y',          'dcf_pt',             'feat_tr_cagr_10y'               ),
-	                                 ('peg_ntm',                          'dcf_pt',             'feat_peg_ntm'                   ),
-	                                 ('ev_sales_ltm',                     'dcf_pt',             'feat_ev_sales_ltm'              ),
-	                                 ('ev_ebitda_ntm',                    'dcf_pt',             'feat_ev_ebitda_ntm'             ),
-	                                 ('return_on_assets_roa_pct_ltm',     'dcf_pt',             'feat_roa_ltm'                   ),
-	                                 ('gross_profit_margin_pct_ltm',      'dcf_pt',             'feat_gpm_ltm'                   ),
-	                                 ('beta_5y',                          'dcf_pt',             'feat_beta_5y'                   ),
+	                                 ('price_target',                      'dcf_pt',             'observed_pt'                      ),
+	                                 ('market_cap',                        'dcf_pt',             'market_cap'                       ),
+	                                 ('enterprise_value',                  'dcf_pt',             'enterprise_value'                 ),
+	                                 ('shrs_out',                          'dcf_pt',             'shrs_out'                         ),
+	                                 ('fcf_ltm',                           'dcf_pt',             'feat_fcf_ltm'                     ),
+	                                 ('fcf_est_avg_fy1e',                  'dcf_pt',             'feat_fcf_fy1e'                    ),
+	                                 ('fcf_est_avg_fy2e',                  'dcf_pt',             'feat_fcf_fy2e'                    ),
+	                                 ('fcf_est_avg_fy3e',                  'dcf_pt',             'feat_fcf_fy3e'                    ),
+	                                 ('fcf_est_avg_fy4e',                  'dcf_pt',             'feat_fcf_fy4e'                    ),
+	                                 ('fcf_est_avg_fy5e',                  'dcf_pt',             'feat_fcf_fy5e'                    ),
+	                                 ('cfo_ltm',                           'dcf_pt',             'feat_cfo_ltm'                     ),
+	                                 ('capital_expenditure_ltm',           'dcf_pt',             'feat_capex_to_fcf'                ),
+	                                 ('tot_return_pct_cagr_3y',            'dcf_pt',             'feat_tr_cagr_3y'                  ),
+	                                 ('tot_return_pct_cagr_10y',           'dcf_pt',             'feat_tr_cagr_10y'                 ),
+	                                 ('peg_ntm',                           'dcf_pt',             'feat_peg_ntm'                     ),
+	                                 ('ev_sales_ltm',                      'dcf_pt',             'feat_ev_sales_ltm'                ),
+	                                 ('ev_ebitda_ntm',                     'dcf_pt',             'feat_ev_ebitda_ntm'               ),
+	                                 ('return_on_assets_roa_pct_ltm',      'dcf_pt',             'feat_roa_ltm'                     ),
+	                                 ('gross_profit_margin_pct_ltm',       'dcf_pt',             'feat_gpm_ltm'                     ),
+	                                 ('beta_5y',                           'dcf_pt',             'feat_beta_5y'                     ),
 
 	-- ---- dividend_safety aliases (from mv_pymc_dividend_safety) ----
-	                                 ('div_yield_ltm',                    'dividend_safety',    'observed_div_yield'             ),
-	                                 ('dividend_streak',                  'dividend_safety',    'n_streak'                       ),
-	                                 ('dividend_record_frequency',        'dividend_safety',    'feat_div_frequency'             ),
-	                                 ('fcf_ltm',                          'dividend_safety',    'feat_fcf_coverage'              ),
-	                                 ('cfo_ltm',                          'dividend_safety',    'feat_cfo_coverage'              ),
-	                                 ('common_dividends_paid_ltm',        'dividend_safety',    'feat_fcf_coverage_denom'        ),
-	                                 ('dividend_per_share_ltm',           'dividend_safety',    'feat_eps_payout_ratio'          ),
-	                                 ('net_eps_basic_ltm',                'dividend_safety',    'feat_eps_payout_ratio_denom'    ),
-	                                 ('dividend_per_share_neg1fy',        'dividend_safety',    'feat_dps_growth_1y'             ),
-	                                 ('dividend_per_share_neg3fy',        'dividend_safety',    'feat_dps_growth_3y'             ),
-	                                 ('dividend_per_share_neg5fy',        'dividend_safety',    'feat_dps_growth_5y'             ),
-	                                 ('buyback_yield_ltm',                'dividend_safety',    'feat_buyback_yield'             ),
-	                                 ('repurchase_common_stock_ltm',      'dividend_safety',    'feat_repurchases_ltm'           ),
-	                                 ('altman_z_score_ltm',               'dividend_safety',    'feat_altman_z'                  ),
-	                                 ('return_on_assets_roa_pct_ltm',     'dividend_safety',    'feat_roa_ltm'                   ),
-	                                 ('div_yield_5yavgltm',               'dividend_safety',    'feat_yield_spread_vs_5y'        ),
+	                                 ('div_yield_ltm',                     'dividend_safety',    'observed_div_yield'               ),
+	                                 ('dividend_streak',                   'dividend_safety',    'n_streak'                         ),
+	                                 ('dividend_record_frequency',         'dividend_safety',    'feat_div_frequency'               ),
+	                                 ('fcf_ltm',                           'dividend_safety',    'feat_fcf_coverage'                ),
+	                                 ('cfo_ltm',                           'dividend_safety',    'feat_cfo_coverage'                ),
+	                                 ('common_dividends_paid_ltm',         'dividend_safety',    'feat_fcf_coverage_denom'          ),
+	                                 ('dividend_per_share_ltm',            'dividend_safety',    'feat_eps_payout_ratio'            ),
+	                                 ('net_eps_basic_ltm',                 'dividend_safety',    'feat_eps_payout_ratio_denom'      ),
+	                                 ('dividend_per_share_neg1fy',         'dividend_safety',    'feat_dps_growth_1y'               ),
+	                                 ('dividend_per_share_neg3fy',         'dividend_safety',    'feat_dps_growth_3y'               ),
+	                                 ('dividend_per_share_neg5fy',         'dividend_safety',    'feat_dps_growth_5y'               ),
+	                                 ('buyback_yield_ltm',                 'dividend_safety',    'feat_buyback_yield'               ),
+	                                 ('repurchase_common_stock_ltm',       'dividend_safety',    'feat_repurchases_ltm'             ),
+	                                 ('altman_z_score_ltm',                'dividend_safety',    'feat_altman_z'                    ),
+	                                 ('return_on_assets_roa_pct_ltm',      'dividend_safety',    'feat_roa_ltm'                     ),
+	                                 ('div_yield_5yavgltm',                'dividend_safety',    'feat_yield_spread_vs_5y'          ),
 
 	-- ---- credit_risk aliases (from mv_pymc_credit_risk) ----
-	                                 ('altman_z_score_ltm',               'credit_risk',        'observed_altman_z'              ),
-	                                 ('altman_z_score_neg1fy',            'credit_risk',        'feat_z_trend_1y'                ),
-	                                 ('altman_z_score_neg3fy',            'credit_risk',        'feat_z_trend_3y'                ),
-	                                 ('cfo_ltm',                          'credit_risk',        'feat_cfo_capex_cov'             ),
-	                                 ('capital_expenditure_ltm',          'credit_risk',        'feat_cfo_capex_cov_denom'       ),
-	                                 ('fcf_ltm',                          'credit_risk',        'feat_fcf_yield'                 ),
-	                                 ('enterprise_value',                 'credit_risk',        'feat_fcf_yield_denom'           ),
-	                                 ('cff_ltm',                          'credit_risk',        'feat_cff_to_ev'                 ),
-	                                 ('issuance_common_stock_ltm',        'credit_risk',        'feat_net_equity_issuance'       ),
-	                                 ('repurchase_common_stock_ltm',      'credit_risk',        'feat_net_equity_issuance_offset'),
-	                                 ('market_cap',                       'credit_risk',        'feat_net_equity_issuance_denom' ),
-	                                 ('full_time_employees_fy',           'credit_risk',        'feat_employee_growth_1y'        ),
-	                                 ('full_time_employees_neg1fy',       'credit_risk',        'feat_employee_growth_1y_lag'    ),
-	                                 ('p_b_ltm',                          'credit_risk',        'feat_pb_ltm'                    ),
-	                                 ('beta_2y',                          'credit_risk',        'feat_beta_2y'                   ),
-	                                 ('volatility_6m',                    'credit_risk',        'feat_vol_6m'                    ),
-	                                 ('volatility_1y',                    'credit_risk',        'feat_vol_1y'                    ),
+	                                 ('altman_z_score_ltm',                'credit_risk',        'observed_altman_z'                ),
+	                                 ('altman_z_score_neg1fy',             'credit_risk',        'feat_z_trend_1y'                  ),
+	                                 ('altman_z_score_neg3fy',             'credit_risk',        'feat_z_trend_3y'                  ),
+	                                 ('cfo_ltm',                           'credit_risk',        'feat_cfo_capex_cov'               ),
+	                                 ('capital_expenditure_ltm',           'credit_risk',        'feat_cfo_capex_cov_denom'         ),
+	                                 ('fcf_ltm',                           'credit_risk',        'feat_fcf_yield'                   ),
+	                                 ('enterprise_value',                  'credit_risk',        'feat_fcf_yield_denom'             ),
+	                                 ('cff_ltm',                           'credit_risk',        'feat_cff_to_ev'                   ),
+	                                 ('issuance_common_stock_ltm',         'credit_risk',        'feat_net_equity_issuance'         ),
+	                                 ('repurchase_common_stock_ltm',       'credit_risk',        'feat_net_equity_issuance_offset'  ),
+	                                 ('market_cap',                        'credit_risk',        'feat_net_equity_issuance_denom'   ),
+	                                 ('full_time_employees_fy',            'credit_risk',        'feat_employee_growth_1y'          ),
+	                                 ('full_time_employees_neg1fy',        'credit_risk',        'feat_employee_growth_1y_lag'      ),
+	                                 ('p_b_ltm',                           'credit_risk',        'feat_pb_ltm'                      ),
+	                                 ('beta_2y',                           'credit_risk',        'feat_beta_2y'                     ),
+	                                 ('volatility_6m',                     'credit_risk',        'feat_vol_6m'                      ),
+	                                 ('volatility_1y',                     'credit_risk',        'feat_vol_1y'                      ),
 
 	-- ---- accounting_anomaly aliases (from mv_pymc_accounting_anomaly) ----
-	                                 ('eps_adj_ltm',                      'accounting_anomaly', 'observed_eps_adj'               ),
-	                                 ('net_eps_basic_ltm',                'accounting_anomaly', 'feat_accruals_ratio_ni'         ),
-	                                 ('cfo_ltm',                          'accounting_anomaly', 'feat_accruals_ratio_cfo'        ),
-	                                 ('enterprise_value',                 'accounting_anomaly', 'feat_accruals_ratio_scale'      ),
-	                                 ('gross_profit_margin_pct_ltm',      'accounting_anomaly', 'feat_gpm_change_1y'             ),
-	                                 ('gross_profit_margin_pct_neg1fy',   'accounting_anomaly', 'feat_gpm_change_1y_lag'         ),
-	                                 ('sales_neg0fyactual',               'accounting_anomaly', 'feat_sales_growth_1y'           ),
-	                                 ('sales_neg1fyactual',               'accounting_anomaly', 'feat_sales_growth_1y_lag'       ),
-	                                 ('ebit_neg0fyactual',                'accounting_anomaly', 'feat_ebit_growth_1y'            ),
-	                                 ('ebit_neg1fyactual',                'accounting_anomaly', 'feat_ebit_growth_1y_lag'        ),
-	                                 ('ebitda_neg0fyactual',              'accounting_anomaly', 'feat_ebitda_growth_1y'          ),
-	                                 ('ebitda_neg1fyactual',              'accounting_anomaly', 'feat_ebitda_growth_1y_lag'      ),
-	                                 ('capital_expenditure_ltm',          'accounting_anomaly', 'feat_capex_intensity'           ),
-	                                 ('cfi_ltm',                          'accounting_anomaly', 'feat_cfi_to_cfo'                ),
-	                                 ('cff_ltm',                          'accounting_anomaly', 'feat_cff_to_cfo'                ),
-	                                 ('shrs_out',                         'accounting_anomaly', 'feat_share_inflation_1y'        ),
-	                                 ('shrs_out_neg1fy',                  'accounting_anomaly', 'feat_share_inflation_1y_lag'    ),
-	                                 ('issuance_common_stock_ltm',        'accounting_anomaly', 'feat_issuance_intensity'        ),
-	                                 ('market_cap',                       'accounting_anomaly', 'feat_issuance_intensity_denom'  ),
-	                                 ('full_time_employees_fy',           'accounting_anomaly', 'feat_employee_growth_1y'        ),
-	                                 ('full_time_employees_neg1fy',       'accounting_anomaly', 'feat_employee_growth_1y_lag'    ),
-	                                 ('fcf_per_share_ltm',                'accounting_anomaly', 'feat_fcfps_vs_eps_gap'          ),
-	                                 ('peg_ntm',                          'accounting_anomaly', 'feat_peg_ntm'                   )
+	                                 ('eps_adj_ltm',                       'accounting_anomaly', 'observed_eps_adj'                 ),
+	                                 ('net_eps_basic_ltm',                 'accounting_anomaly', 'feat_accruals_ratio_ni'           ),
+	                                 ('cfo_ltm',                           'accounting_anomaly', 'feat_accruals_ratio_cfo'          ),
+	                                 ('enterprise_value',                  'accounting_anomaly', 'feat_accruals_ratio_scale'        ),
+	                                 ('gross_profit_margin_pct_ltm',       'accounting_anomaly', 'feat_gpm_change_1y'               ),
+	                                 ('gross_profit_margin_pct_neg1fy',    'accounting_anomaly', 'feat_gpm_change_1y_lag'           ),
+	                                 ('sales_neg0fyactual',                'accounting_anomaly', 'feat_sales_growth_1y'             ),
+	                                 ('sales_neg1fyactual',                'accounting_anomaly', 'feat_sales_growth_1y_lag'         ),
+	                                 ('ebit_neg0fyactual',                 'accounting_anomaly', 'feat_ebit_growth_1y'              ),
+	                                 ('ebit_neg1fyactual',                 'accounting_anomaly', 'feat_ebit_growth_1y_lag'          ),
+	                                 ('ebitda_neg0fyactual',               'accounting_anomaly', 'feat_ebitda_growth_1y'            ),
+	                                 ('ebitda_neg1fyactual',               'accounting_anomaly', 'feat_ebitda_growth_1y_lag'        ),
+	                                 ('capital_expenditure_ltm',           'accounting_anomaly', 'feat_capex_intensity'             ),
+	                                 ('cfi_ltm',                           'accounting_anomaly', 'feat_cfi_to_cfo'                  ),
+	                                 ('cff_ltm',                           'accounting_anomaly', 'feat_cff_to_cfo'                  ),
+	                                 ('shrs_out',                          'accounting_anomaly', 'feat_share_inflation_1y'          ),
+	                                 ('shrs_out_neg1fy',                   'accounting_anomaly', 'feat_share_inflation_1y_lag'      ),
+	                                 ('issuance_common_stock_ltm',         'accounting_anomaly', 'feat_issuance_intensity'          ),
+	                                 ('market_cap',                        'accounting_anomaly', 'feat_issuance_intensity_denom'    ),
+	                                 ('full_time_employees_fy',            'accounting_anomaly', 'feat_employee_growth_1y'          ),
+	                                 ('full_time_employees_neg1fy',        'accounting_anomaly', 'feat_employee_growth_1y_lag'      ),
+	                                 ('fcf_per_share_ltm',                 'accounting_anomaly', 'feat_fcfps_vs_eps_gap'            ),
+	                                 ('peg_ntm',                           'accounting_anomaly', 'feat_peg_ntm'                     )
 ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias;
 
 -- Classification coords share the source column name as alias across every

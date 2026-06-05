@@ -12,6 +12,7 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
     "EarningsBeatBayesian": (".EarningsBeatModel", "EarningsBeatBayesian"),
     "DividendSafetyBayesian": (".DividendSafetyModel", "DividendSafetyBayesian"),
     "PriceTargetAchievement": (".PriceTargetModel", "PriceTargetAchievement"),
+    "build_fused_price_target_model": (".PriceTargetModel", "build_fused_price_target_model"),
     "AccountingAnomalyBayesian": (".AccountingAnomalyModel", "AccountingAnomalyBayesian"),
     "CreditRiskBayesian": (".CreditRiskModel", "CreditRiskBayesian"),
     "MonteCarloReturnSimulation": (".MonteCarloSimulation", "MonteCarloReturnSimulation"),

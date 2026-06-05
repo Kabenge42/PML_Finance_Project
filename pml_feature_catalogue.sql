@@ -401,49 +401,113 @@ SELECT isin,
        expected_report_date,
        -- Pre-computed numeric horizons (days). Safe to feed to pm.Data as
        -- the time-step deltas used by MvGaussianRandomWalk innovations.
-       (next_earnings - CURRENT_DATE)::INT                     AS days_to_next_earnings,
-       (CURRENT_DATE - income_statement_report_date)::INT      AS days_since_last_report,
-       (next_fy_end_date - CURRENT_DATE)::INT                  AS days_to_next_fy_end,
-       (next_income_statement_report_date - CURRENT_DATE)::INT AS days_to_next_report,
-       (expected_report_date - CURRENT_DATE)::INT              AS days_to_expected_report,
-       (fy_end_date - CURRENT_DATE)::INT                       AS days_to_fy_end,
-       target_pct_avg                                                                          AS observed_target_pct,
-       target_pct_med                                                                          AS observed_target_pct_med,
+       (next_earnings - CURRENT_DATE)::INT                                                                     AS days_to_next_earnings,
+       (CURRENT_DATE - income_statement_report_date)::INT                                                      AS days_since_last_report,
+       (next_fy_end_date - CURRENT_DATE)::INT                                                                  AS days_to_next_fy_end,
+       (next_income_statement_report_date - CURRENT_DATE)::INT                                                 AS days_to_next_report,
+       (expected_report_date - CURRENT_DATE)::INT                                                              AS days_to_expected_report,
+       (fy_end_date - CURRENT_DATE)::INT                                                                       AS days_to_fy_end,
+       target_pct_avg                                                                                          AS observed_target_pct,
+       target_pct_med                                                                                          AS observed_target_pct_med,
        price_target,
        price_target_median,
        price_target_low,
        price_target_high,
        price_target_stddev,
        last_price,
-       price_target_num                                                                        AS n_analysts,
+       total_return_ytd,
+       price_target_num                                                                                        AS n_analysts,
        num_strong_buys_ratings + num_buys_ratings - num_sell_ratings -
-       num_strong_sell_ratings                                                                 AS feat_net_buy_sentiment,
+       num_strong_sell_ratings                                                                                 AS feat_net_buy_sentiment,
        -- Conviction = strong opinions / total opinions; complements net sentiment
        pml.safe_divide((num_strong_buys_ratings + num_strong_sell_ratings)::NUMERIC, NULLIF(
 		       num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_sell_ratings +
-		       num_strong_sell_ratings, 0)::NUMERIC)                                           AS feat_conviction_ratio,
-       num_hold_ratings                                                                        AS feat_holds,
-       num_no_opinion_ratings                                                                  AS feat_no_opinion,
-       pml.calc_change_ratio(price_target::NUMERIC, last_price::NUMERIC)                       AS feat_implied_upside,
+		       num_strong_sell_ratings + num_no_opinion_ratings,
+		       0)::NUMERIC)                                                                                    AS feat_conviction_ratio,
+       num_hold_ratings                                                                                        AS feat_holds,
+       num_strong_buys_ratings + num_buys_ratings                                                              AS feat_buys,
+       num_strong_sell_ratings + num_sell_ratings                                                              AS feat_sells,
+       num_no_opinion_ratings                                                                                  AS feat_no_opinion,
+       -- ---- Normalised analyst-sentiment shares (coverage-invariant %s) ----
+       -- All four normalise by the SAME total-opinions denominator (every
+       -- num_*_ratings bucket, incl. no-opinion) so bullish + bearish + neutral
+       -- sum to ~100 when no-opinion = 0. pml.safe_divide NULLIFs the
+       -- denominator, so zero-coverage rows yield NULL rather than a divide-by-0.
+       -- Bullish sentiment: strong-buy + buy share of all opinions (%)
+       pml.safe_divide((num_strong_buys_ratings + num_buys_ratings)::NUMERIC,
+                       (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings +
+                        num_no_opinion_ratings + num_sell_ratings + num_strong_sell_ratings)::NUMERIC)                                                                                                      AS feat_analyst_bullish_pct,
+       -- Bearish sentiment: sell + strong-sell share of all opinions (%)
+       pml.safe_divide((num_sell_ratings + num_strong_sell_ratings)::NUMERIC,
+                       (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings +
+                        num_no_opinion_ratings + num_sell_ratings + num_strong_sell_ratings)::NUMERIC)                                                                                                      AS feat_analyst_bearish_pct,
+       -- Neutral sentiment: hold share of all opinions (%)
+       pml.safe_divide(num_hold_ratings::NUMERIC,
+                       (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings +
+                        num_no_opinion_ratings + num_sell_ratings + num_strong_sell_ratings)::NUMERIC)                                                                                                      AS feat_analyst_neutral_pct,
+       -- Conviction: absolute net directional-consensus magnitude (%)
+       ABS(pml.safe_divide(((num_strong_buys_ratings + num_buys_ratings) -
+                            (num_sell_ratings + num_strong_sell_ratings))::NUMERIC,
+                           (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings +
+                            num_no_opinion_ratings + num_sell_ratings + num_strong_sell_ratings)::NUMERIC))                                                                                                AS feat_analyst_conviction,
+       pml.calc_change_ratio(price_target::NUMERIC, last_price::NUMERIC)                                       AS feat_implied_upside,
        -- Asymmetry of the target distribution (skew of analyst optimism)
        pml.calc_change_ratio(target_pct_high::NUMERIC,
-                             target_pct_low::NUMERIC)                                          AS feat_target_range_width,
-       pml.calc_change_ratio(price_target::NUMERIC, price_target_3m_ago::NUMERIC)              AS feat_pt_momentum_3m,
+                             target_pct_low::NUMERIC)                                                          AS feat_target_range_width,
+       pml.calc_change_ratio(price_target::NUMERIC,
+                             price_target_3m_ago::NUMERIC)                                                     AS feat_pt_momentum_3m,
        pml.calc_change_ratio(price_target_num::NUMERIC,
-                             price_target_num_3m_ago::NUMERIC)                                 AS feat_coverage_change_3m,
-       pml.coef_var(price_target::NUMERIC, price_target_stddev::NUMERIC)                       AS feat_target_dispersion_cv,
+                             price_target_num_3m_ago::NUMERIC)                                                 AS feat_coverage_change_3m,
+       pml.coef_var(price_target::NUMERIC, price_target_stddev::NUMERIC)                                       AS feat_target_dispersion_cv,
        -- Position within 52-week range (0..1) – Bayesian prior on mean-reversion
        pml.safe_divide(last_price - w_52low_adj,
-                       NULLIF(w_52high_adj - w_52low_adj, 0))                                  AS feat_52w_range_position,
-       p_e_ntm                                                                                 AS feat_pe_ntm,
-       ev_ebitda_ntm                                                                           AS feat_ev_ebitda_ntm,
-       volatility_3m                                                                           AS feat_vol_3m,
-       analyst_rating                                          AS feat_analyst_rating
+                       NULLIF(w_52high_adj - w_52low_adj, 0))                                                  AS feat_52w_range_position,
+       p_e_ntm                                                                                                 AS feat_pe_ntm,
+       ev_ebitda_ntm                                                                                           AS feat_ev_ebitda_ntm,
+       volatility_3m                                                                                           AS feat_vol_3m,
+       analyst_rating                                                                                          AS feat_analyst_rating,
+       -- ---- Price-target achievement / accuracy (realised vs 1Y-ago targets) ----
+       -- Capped achievement: 1.0 once price meets/exceeds the 1Y-ago target,
+       -- else the fraction of that target the price has reached.
+       CASE
+	       WHEN price_target_1y_ago > 0 AND last_price >= price_target_1y_ago THEN 1.0
+	       WHEN price_target_1y_ago > 0
+		       THEN pml.safe_divide(last_price, price_target_1y_ago) END                                       AS feat_pt_achievement_1y,
+       -- Absolute relative error of the 1Y-ago target vs realised price.
+       pml.safe_divide(ABS(last_price - price_target_1y_ago),
+                       ABS(price_target_1y_ago))                                                               AS feat_pt_accuracy_1y,
+       -- Signed optimism bias: positive => 1Y-ago target overshot realised price.
+       pml.safe_divide(price_target_1y_ago - last_price,
+                       ABS(price_target_1y_ago))                                                               AS feat_pt_optimism_bias,
+       -- Did the realised price land inside the 1Y-ago low/high band?
+       CASE
+	       WHEN last_price BETWEEN price_target_low_1y_ago AND price_target_high_1y_ago THEN 1.0
+	       ELSE 0.0 END                                                                                        AS feat_pt_range_hit_rate,
+       -- Mean-vs-median target spread (skew of the current target distribution).
+       pml.safe_divide(price_target - price_target_median,
+                       price_target_median)                                                                    AS feat_pt_median_vs_mean_spread,
+       -- Change in normalised high-low range vs 1Y ago (>0 = analysts diverging,
+       -- <0 = converging / firming conviction).
+       pml.safe_divide(price_target_high - price_target_low, price_target_median) -
+       pml.safe_divide(price_target_high_1y_ago - price_target_low_1y_ago,
+                       price_target_median_1y_ago)                                                             AS feat_pt_high_low_convergence_1y,
+       -- Current coverage vs its trailing 3m/6m/1y average (>1 = coverage rising).
+       pml.safe_divide(price_target_num, (price_target_num_1y_ago + price_target_num_6m_ago + price_target_num_3m_ago) /
+                                         3.0)                                                                  AS feat_analyst_count_stability
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_price_target_isin ON pml.mv_pymc_price_target (isin);
 
 -- ---- 3. KalmanFilterPriceTarget ----------------------------------------------
+-- The single-security GaussianRandomWalk filter reconstructs its time axis from
+-- the embedded *_ago cohort. The fiscal-calendar date anchors + day-count
+-- horizons below mirror mv_pymc_price_target so the notebook can derive the
+-- *real* (irregular) elapsed-time spacing that the marginalized GRW uses to
+-- scale its process-variance covariance kernel (min(tau_s, tau_t)) — see
+-- KalmanFilterModel._build_marginalized_likelihood / _resolve_time_deltas.
+-- target_drift is now computed for every price_* / price_target_* trail (mean,
+-- high, low, median, raw price, analyst-count and dispersion) so the per-ISIN
+-- snapshot exposes the full drift/state-transition signal set.
 CREATE MATERIALIZED VIEW IF NOT EXISTS pml.mv_pymc_kalman_pt AS
 SELECT isin,
        ticker,
@@ -456,13 +520,37 @@ SELECT isin,
        size_class,
        sector,
        industry,
+       -- ---- Fiscal-calendar anchors (raw DATE coords for the GRW time axis) ----
+       income_statement_report_date,
+       next_earnings,
+       fy_end_date,
+       next_income_statement_report_date,
+       next_fy_end_date,
+       expected_report_date,
+       -- Pre-computed numeric horizons (days). Feed pm.Data as the time-step
+       -- deltas the marginalized GaussianRandomWalk scales innovations by.
+       (next_earnings - CURRENT_DATE)::INT                                                                                                                                                                                                             AS days_to_next_earnings,
+       (CURRENT_DATE - income_statement_report_date)::INT                                                                                                                                                                                              AS days_since_last_report,
+       (next_fy_end_date - CURRENT_DATE)::INT                                                                                                                                                                                                          AS days_to_next_fy_end,
+       (next_income_statement_report_date - CURRENT_DATE)::INT                                                                                                                                                                                         AS days_to_next_report,
+       (expected_report_date - CURRENT_DATE)::INT                                                                                                                                                                                                      AS days_to_expected_report,
+       (fy_end_date - CURRENT_DATE)::INT                                                                                                                                                                                                               AS days_to_fy_end,
        price_target                                                                                                                                                                                                                                    AS observed_pt,
        last_price,
+       price_target_median,
        price_target_high,
        price_target_low,
        price_target_num                                                                                                                                                                                                                                AS n_analysts,
+       calc_change_ratio(price_target::numeric, last_price::numeric)                                                                                                                                                                                   AS feat_implied_upside,
+       -- ---- Per-step drift (mean log-uplift) across every price / target trail ----
        pml.target_drift(ARRAY [price_target::NUMERIC, price_target_1w_ago::NUMERIC, price_target_1m_ago::NUMERIC, price_target_3m_ago::NUMERIC, price_target_6m_ago::NUMERIC, price_target_1y_ago::NUMERIC])                                           AS feat_pt_drift,
        pml.target_drift(ARRAY [last_price::NUMERIC, price_1w_ago::NUMERIC, price_1m_ago::NUMERIC, price_3m_ago::NUMERIC, price_6m_ago::NUMERIC, price_1y_ago::NUMERIC])                                                                                AS feat_price_drift,
+       -- High / low / median analyst-target trails — capture skew in target drift
+       pml.target_drift(ARRAY [price_target_high::NUMERIC, price_target_high_1w_ago::NUMERIC, price_target_high_1m_ago::NUMERIC, price_target_high_3m_ago::NUMERIC, price_target_high_6m_ago::NUMERIC, price_target_high_1y_ago::NUMERIC])             AS feat_pt_high_drift,
+       pml.target_drift(ARRAY [price_target_low::NUMERIC, price_target_low_1w_ago::NUMERIC, price_target_low_1m_ago::NUMERIC, price_target_low_3m_ago::NUMERIC, price_target_low_6m_ago::NUMERIC, price_target_low_1y_ago::NUMERIC])                   AS feat_pt_low_drift,
+       pml.target_drift(ARRAY [price_target_median::NUMERIC, price_target_median_1w_ago::NUMERIC, price_target_median_1m_ago::NUMERIC, price_target_median_3m_ago::NUMERIC, price_target_median_6m_ago::NUMERIC, price_target_median_1y_ago::NUMERIC]) AS feat_pt_median_drift,
+       -- Analyst-coverage drift: rising / falling participation is a state signal
+       pml.target_drift(ARRAY [price_target_num::NUMERIC, price_target_num_1w_ago::NUMERIC, price_target_num_1m_ago::NUMERIC, price_target_num_3m_ago::NUMERIC, price_target_num_6m_ago::NUMERIC, price_target_num_1y_ago::NUMERIC])                   AS feat_coverage_drift,
        -- Drift in analyst-stddev tells how noise itself is evolving (state-space Q)
        pml.target_drift(ARRAY [price_target_stddev::NUMERIC, price_target_stddev_1w_ago::NUMERIC, price_target_stddev_1m_ago::NUMERIC, price_target_stddev_3m_ago::NUMERIC, price_target_stddev_6m_ago::NUMERIC, price_target_stddev_1y_ago::NUMERIC]) AS feat_pt_noise_drift,
        price_target_stddev                                                                                                                                                                                                                             AS feat_pt_noise_sigma,
@@ -492,7 +580,7 @@ SELECT isin,
        sector,
        industry,
        price_target                                                                AS observed_pt,
-       last_price AS observed_price,
+       last_price                                                                  AS observed_price,
        market_cap,
        enterprise_value,
        shrs_out,

@@ -247,30 +247,30 @@ CREATE OR REPLACE FUNCTION calc_momentum_features(p_isin TEXT DEFAULT NULL)
 	STABLE PARALLEL SAFE
 AS
 $$
-SELECT "ISIN"                                                                                                                     AS isin,
-       public.pct_change("Last Price"::NUMERIC, "Price (1M Ago)"::NUMERIC)                                                        AS price_momentum_1m,
-       public.pct_change("Last Price"::NUMERIC, "Price (3M Ago)"::NUMERIC)                                                        AS price_momentum_3m,
-       public.pct_change("Last Price"::NUMERIC, "Price (6M Ago)"::NUMERIC)                                                        AS price_momentum_6m,
-       public.pct_change("Last Price"::NUMERIC, "Price (1Y Ago)"::NUMERIC)                                                        AS price_momentum_1y,
-       public.pct_change("Last Price"::NUMERIC, "Price (5D Ago)"::NUMERIC)                                                        AS price_momentum_5d,
+SELECT "ISIN"                                                                                               AS isin,
+       public.pct_change("Last Price"::NUMERIC, "Price (1M Ago)"::NUMERIC)                                  AS price_momentum_1m,
+       public.pct_change("Last Price"::NUMERIC, "Price (3M Ago)"::NUMERIC)                                  AS price_momentum_3m,
+       public.pct_change("Last Price"::NUMERIC, "Price (6M Ago)"::NUMERIC)                                  AS price_momentum_6m,
+       public.pct_change("Last Price"::NUMERIC, "Price (1Y Ago)"::NUMERIC)                                  AS price_momentum_1y,
+       public.pct_change("Last Price"::NUMERIC, "Price (5D Ago)"::NUMERIC)                                  AS price_momentum_5d,
        public.ema_crossover_signal("EMA (20D)"::NUMERIC,
-                                   "EMA (50D)"::NUMERIC)                                                                          AS ema_crossover_20_50,
+                                   "EMA (50D)"::NUMERIC)                                                    AS ema_crossover_20_50,
        public.ema_crossover_signal("EMA (50D)"::NUMERIC,
-                                   "EMA (250D)"::NUMERIC)                                                                         AS ema_crossover_50_250,
+                                   "EMA (250D)"::NUMERIC)                                                   AS ema_crossover_50_250,
        public.calc_change_ratio("Last Price"::NUMERIC,
-                                "EMA (20D)"::NUMERIC)                                                                             AS price_vs_ema_20d,
+                                "EMA (20D)"::NUMERIC)                                                       AS price_vs_ema_20d,
        public.calc_change_ratio("Last Price"::NUMERIC,
-                                "EMA (250D)"::NUMERIC)                                                                            AS price_vs_ema_250d,
+                                "EMA (250D)"::NUMERIC)                                                      AS price_vs_ema_250d,
        public.calc_change_ratio(("52W High/Adj"::NUMERIC - "Last Price"::NUMERIC),
-                                "52W High/Adj"::NUMERIC)                                                                          AS pct_off_52w_high,
+                                "52W High/Adj"::NUMERIC)                                                    AS pct_off_52w_high,
        public.calc_change_ratio(("Last Price"::NUMERIC - "52W Low/Adj"::NUMERIC),
-                                "52W Low/Adj"::NUMERIC)                                                                           AS pct_above_52w_low,
+                                "52W Low/Adj"::NUMERIC)                                                     AS pct_above_52w_low,
        public.clamp_score(public.safe_divide(("Last Price"::NUMERIC - "52W Low/Adj"::NUMERIC),
                                              ("52W High/Adj"::NUMERIC - "52W Low/Adj"::NUMERIC)), 0,
-                          1)                                                                                                      AS range_52w_position,
-       "Beta (1Y)"::NUMERIC - "Beta (5Y)"::NUMERIC                                                                                AS beta_momentum,
+                          1)                                                                                AS range_52w_position,
+       "Beta (1Y)"::NUMERIC - "Beta (5Y)"::NUMERIC                                                          AS beta_momentum,
        public.safe_divide("Volatility (1M)"::NUMERIC,
-                          "Volatility (1Y)"::NUMERIC)                                                                             AS volatility_regime
+                          "Volatility (1Y)"::NUMERIC)                                                       AS volatility_regime
 FROM postgres.public.equities
 WHERE p_isin IS NULL
    OR "ISIN" = p_isin;
@@ -2434,19 +2434,20 @@ SELECT "ISIN"                                                                   
        (CASE WHEN "Working Capital (FQ)" > 0 THEN 1 ELSE 0 END +
         CASE WHEN "Working Capital (-1FQ)" > 0 THEN 1 ELSE 0 END +
         CASE WHEN "Working Capital (-2FQ)" > 0 THEN 1 ELSE 0 END +
-        CASE WHEN "Working Capital (-3FQ)" > 0 THEN 1 ELSE 0 END +
-        CASE WHEN "Working Capital (-4FQ)" > 0 THEN 1 ELSE 0 END)::INTEGER          AS wc_positive_quarters,
+        CASE WHEN "Working Capital (-3FQ)" > 0 THEN 1 ELSE 0 END + CASE
+	                                                                   WHEN "Working Capital (-4FQ)" > 0 THEN 1
+	                                                                   ELSE 0 END)::INTEGER      AS wc_positive_quarters,
        CASE
 	       WHEN "Working Capital (FQ)" > "Working Capital (-1FQ)" AND
 	            "Working Capital (-1FQ)" > "Working Capital (-2FQ)" THEN 1
-	       ELSE 0 END                                                               AS wc_improving_flag,
+	       ELSE 0 END                                                                            AS wc_improving_flag,
        -- Volatility: coefficient of variation across quarters
        (ABS("Working Capital (FQ)" - "Working Capital (-1FQ)") +
         ABS("Working Capital (-1FQ)" - "Working Capital (-2FQ)") +
         ABS("Working Capital (-2FQ)" - "Working Capital (-3FQ)") +
         ABS("Working Capital (-3FQ)" - "Working Capital (-4FQ)")) / NULLIF(
 		       ABS(("Working Capital (FQ)" + "Working Capital (-1FQ)" + "Working Capital (-2FQ)" +
-		            "Working Capital (-3FQ)" + "Working Capital (-4FQ)") / 5.0), 0) AS wc_volatility
+		            "Working Capital (-3FQ)" + "Working Capital (-4FQ)") / 5.0), 0)              AS wc_volatility
 FROM postgres.public.equities
 WHERE p_isin IS NULL
    OR "ISIN" = p_isin;
@@ -2504,10 +2505,10 @@ SELECT "ISIN"                                                                   
        CASE
 	       WHEN "Total Debt (-3FY)" > 0 THEN
 		       (POWER(public.safe_divide("Total Debt (FY)"::NUMERIC, "Total Debt (-3FY)"::NUMERIC), 1.0 / 3.0) - 1) *
-		       100 END AS debt_3y_cagr,
+		       100 END                                                                AS debt_3y_cagr,
        CASE
 	       WHEN "Total Debt (FQ)" < "Total Debt (-1FQ)" AND "Total Debt (-1FQ)" < "Total Debt (-2FQ)" THEN 1
-	       ELSE 0 END  AS debt_deleveraging,
+	       ELSE 0 END                                                                 AS debt_deleveraging,
        public.safe_divide("Total Debt (FY)"::NUMERIC, "Total Equity (FY)"::NUMERIC) -
        public.safe_divide("Total Debt (-1FY)"::NUMERIC, "Total Equity (FY)"::NUMERIC) AS debt_to_equity_trend
 FROM postgres.public.equities
@@ -2561,7 +2562,7 @@ SELECT "ISIN"                                                                   
        CASE
 	       WHEN "Total Assets (-3FY)" > 0 THEN
 		       (POWER(public.safe_divide("Total Assets (FY)"::NUMERIC, "Total Assets (-3FY)"::NUMERIC), 1.0 / 3.0) -
-		        1) * 100 END AS assets_3y_cagr,
+		        1) * 100 END                                                             AS assets_3y_cagr,
        -- Growth acceleration: recent growth vs historical
        public.pct_change("Total Assets (FY)"::NUMERIC, "Total Assets (-1FY)"::NUMERIC) -
        public.pct_change("Total Assets (-1FY)"::NUMERIC, "Total Assets (-2FY)"::NUMERIC) AS asset_growth_accel,
@@ -2569,7 +2570,7 @@ SELECT "ISIN"                                                                   
        CASE
 	       WHEN "Total Assets (FY)" >= "Total Assets (-1FY)" AND "Total Assets (-1FY)" >= "Total Assets (-2FY)" AND
 	            "Total Assets (-2FY)" >= "Total Assets (-3FY)" THEN 1
-	       ELSE 0 END        AS asset_base_stable
+	       ELSE 0 END                                                                    AS asset_base_stable
 FROM postgres.public.equities
 WHERE p_isin IS NULL
    OR "ISIN" = p_isin;
@@ -2605,35 +2606,35 @@ CREATE OR REPLACE FUNCTION calc_gross_profit_temporal(p_isin TEXT DEFAULT NULL)
 	STABLE PARALLEL SAFE
 AS
 $$
-SELECT "ISIN"                                                                                                   AS isin,
-       "Gross Profit (FQ)"                                                                                      AS gp_fq,
-       "Gross Profit (FY)"                                                                                      AS gp_fy,
-       "Gross Profit (LTM)"                                                                                     AS gp_ltm,
-       "Gross Profit (-1FQFQ)"                                                                                  AS gp_1fqfq,
-       "Gross Profit (-2FQFQ)"                                                                                  AS gp_2fqfq,
-       "Gross Profit (-3FQFQ)"                                                                                  AS gp_3fqfq,
-       "Gross Profit (-4FQFQ)"                                                                                  AS gp_4fqfq,
-       "Gross Profit (-1FY)"                                                                                    AS gp_1fy,
-       "Gross Profit (-2FY)"                                                                                    AS gp_2fy,
-       "Gross Profit (-3FY)"                                                                                    AS gp_3fy,
-       "Gross Profit (-4FY)"                                                                                    AS gp_4fy,
+SELECT "ISIN"                                                                                            AS isin,
+       "Gross Profit (FQ)"                                                                               AS gp_fq,
+       "Gross Profit (FY)"                                                                               AS gp_fy,
+       "Gross Profit (LTM)"                                                                              AS gp_ltm,
+       "Gross Profit (-1FQFQ)"                                                                           AS gp_1fqfq,
+       "Gross Profit (-2FQFQ)"                                                                           AS gp_2fqfq,
+       "Gross Profit (-3FQFQ)"                                                                           AS gp_3fqfq,
+       "Gross Profit (-4FQFQ)"                                                                           AS gp_4fqfq,
+       "Gross Profit (-1FY)"                                                                             AS gp_1fy,
+       "Gross Profit (-2FY)"                                                                             AS gp_2fy,
+       "Gross Profit (-3FY)"                                                                             AS gp_3fy,
+       "Gross Profit (-4FY)"                                                                             AS gp_4fy,
        public.pct_change("Gross Profit (FQ)"::NUMERIC,
-                         "Gross Profit (-1FQFQ)"::NUMERIC)                                                      AS gp_qoq_growth,
+                         "Gross Profit (-1FQFQ)"::NUMERIC)                                               AS gp_qoq_growth,
        public.pct_change("Gross Profit (FY)"::NUMERIC,
-                         "Gross Profit (-1FY)"::NUMERIC)                                                        AS gp_yoy_growth,
+                         "Gross Profit (-1FY)"::NUMERIC)                                                 AS gp_yoy_growth,
        public.safe_divide("Gross Profit (FQ)"::NUMERIC, "Total Revenues (FQ)"::NUMERIC) *
-       100                                                                                                      AS gp_margin_fq,
+       100                                                                                               AS gp_margin_fq,
        (public.safe_divide("Gross Profit (FQ)"::NUMERIC, "Total Revenues (FQ)"::NUMERIC) -
         public.safe_divide("Gross Profit (-4FQFQ)"::NUMERIC, "Total Revenues (5YAVGFQ)"::NUMERIC)) *
-       100                                                                                                      AS gp_margin_trend,
+       100                                                                                               AS gp_margin_trend,
        (CASE WHEN "Gross Profit (FQ)" > 0 THEN 1 ELSE 0 END + CASE WHEN "Gross Profit (-1FQFQ)" > 0 THEN 1 ELSE 0 END +
         CASE WHEN "Gross Profit (-2FQFQ)" > 0 THEN 1 ELSE 0 END +
         CASE WHEN "Gross Profit (-3FQFQ)" > 0 THEN 1 ELSE 0 END + CASE
 	                                                                  WHEN "Gross Profit (-4FQFQ)" > 0 THEN 1
-	                                                                  ELSE 0 END)::INTEGER                      AS gp_positive_quarters,
+	                                                                  ELSE 0 END)::INTEGER               AS gp_positive_quarters,
        CASE
 	       WHEN "Gross Profit Margin % (LTM)" > "Gross Profit Margin % (FY)" THEN 1
-	       ELSE 0 END                                                                                           AS gp_margin_expansion
+	       ELSE 0 END                                                                                    AS gp_margin_expansion
 FROM postgres.public.equities
 WHERE p_isin IS NULL
    OR "ISIN" = p_isin;
@@ -3206,7 +3207,8 @@ SELECT "ISIN"                                                                   
        "Revenues - Est Med (NTM)"                                                                  AS revenue_est_med_ntm,
        -- Difference between avg and median as proxy for estimate dispersion
        public.safe_divide("Revenues - Est Avg (FY1E)"::NUMERIC - "Revenues - Est Med (FY1E)",
-                          "Revenues - Est Med (FY1E)"::NUMERIC) * 100                       AS revenue_avg_med_diff_pct,
+                          "Revenues - Est Med (FY1E)"::NUMERIC) *
+       100                                                                                         AS revenue_avg_med_diff_pct,
        -- Consensus strength: closer avg to median = stronger consensus
        public.clamp_score(100 -
                           ABS(public.safe_divide("Revenues - Est Avg (FY1E)"::NUMERIC - "Revenues - Est Med (FY1E)",
@@ -3406,10 +3408,10 @@ SELECT "ISIN"                                                                   
        "P/TBV (LTM)"                                                                          AS price_to_tangible_book,
        -- Tangible equity ratio using native TBV
        "TBV (LTM)" / NULLIF("Total Assets (LTM)", 0) * 100                                    AS tangible_equity_ratio,
-       COALESCE("Gross Intangible Assets (LTM)", 0) / NULLIF("Total Equity (LTM)", 0) * 100 AS intangibles_to_equity,
+       COALESCE("Gross Intangible Assets (LTM)", 0) / NULLIF("Total Equity (LTM)", 0) * 100   AS intangibles_to_equity,
        COALESCE("Goodwill (LTM)", 0) / NULLIF("Total Equity (LTM)", 0) * 100                  AS goodwill_to_equity,
        GREATEST(0, LEAST(100, 100 - (COALESCE("Goodwill (LTM)", 0) + COALESCE("Gross Intangible Assets (LTM)", 0)) /
-                                    NULLIF("Total Assets (LTM)", 0) * 100))                 AS tangible_asset_quality,
+                                    NULLIF("Total Assets (LTM)", 0) * 100))                   AS tangible_asset_quality,
        -- NEW: TBV growth (FY to LTM)
        public.pct_change("TBV (LTM)"::NUMERIC, "TBV (FY)"::NUMERIC)                           AS tbv_yoy_growth,
        -- Validation: compare native TBV to calculated (should be ~1.0)
@@ -3932,12 +3934,12 @@ SELECT "ISIN",
        CASE
 	       WHEN "Price Target (1Y Ago)" > 0 AND "Last Price" >= "Price Target (1Y Ago)" THEN 1.0
 	       WHEN "Price Target (1Y Ago)" > 0
-		       THEN public.safe_divide("Last Price", "Price Target (1Y Ago)") END AS pt_achievement_1y,
+		       THEN public.safe_divide("Last Price", "Price Target (1Y Ago)") END            AS pt_achievement_1y,
        ABS("Last Price" - "Price Target (1Y Ago)") / NULLIF(ABS("Price Target (1Y Ago)"), 0) AS pt_accuracy_1y,
        ("Price Target (1Y Ago)" - "Last Price") / NULLIF(ABS("Price Target (1Y Ago)"), 0)    AS pt_optimism_bias,
        CASE
 	       WHEN "Last Price" BETWEEN "Price Target - Low (1Y Ago)" AND "Price Target - High (1Y Ago)" THEN 1.0
-	       ELSE 0.0 END                                                           AS pt_range_hit_rate,
+	       ELSE 0.0 END                                                                      AS pt_range_hit_rate,
        ("Price Target" - "Price Target - Median") /
        NULLIF("Price Target - Median", 0)                                                    AS pt_median_vs_mean_spread,
        (("Price Target - High" - "Price Target - Low") / NULLIF("Price Target - Median", 0)) -
@@ -4174,21 +4176,21 @@ SELECT "ISIN",
        "Total Operating Expenses (LTM)",
        "Total Operating Expenses (FY)",
        public.calc_change_ratio("Total Operating Expenses (FQ)",
-                                "Total Operating Expenses (-1FQFQ)")                                                   AS opex_qoq_growth,
+                                "Total Operating Expenses (-1FQFQ)")                                                  AS opex_qoq_growth,
        public.calc_change_ratio("Total Operating Expenses (FY)",
-                                "Total Operating Expenses (-1FY)")                                                     AS opex_yoy_growth,
+                                "Total Operating Expenses (-1FY)")                                                    AS opex_yoy_growth,
        -- Change in opex/revenue ratio (FY vs -1FY)
        (public.safe_divide("Total Operating Expenses (FY)"::NUMERIC, "Total Revenues (FY)"::NUMERIC) -
         public.safe_divide("Total Operating Expenses (-1FY)"::NUMERIC, "Total Revenues (-1FY)"::NUMERIC)) *
-       100                                                                                                             AS opex_vs_revenue_trend,
+       100                                                                                                            AS opex_vs_revenue_trend,
        public.calc_change_ratio("Selling General & Admin Expenses/Total (FQ)",
-                                "Selling General & Admin Expenses/Total (-1FY)")                                       AS sga_qoq_growth,
+                                "Selling General & Admin Expenses/Total (-1FY)")                                      AS sga_qoq_growth,
        public.calc_change_ratio("Selling General & Admin Expenses/Total (FY)",
-                                "Selling General & Admin Expenses/Total (-1FY)")                                       AS sga_yoy_growth,
+                                "Selling General & Admin Expenses/Total (-1FY)")                                      AS sga_yoy_growth,
        -- Operating leverage: revenue growth minus opex growth
        public.calc_change_ratio("Total Revenues (FY)"::NUMERIC, "Total Revenues (-1FY)"::NUMERIC) -
        public.calc_change_ratio("Total Operating Expenses (FY)"::NUMERIC,
-                                "Total Operating Expenses (-1FY)"::NUMERIC)                                            AS operating_leverage_score
+                                "Total Operating Expenses (-1FY)"::NUMERIC)                                           AS operating_leverage_score
 FROM postgres.public.equities
 WHERE p_isin IS NULL
    OR "ISIN" = p_isin;
@@ -4223,7 +4225,7 @@ SELECT "ISIN",
        CASE
 	       WHEN "FCF - Est Avg (FY1E)" > 0 AND "FCF - Est Avg (FY5E)" > 0 THEN
 		       (POWER(public.safe_divide("FCF - Est Avg (FY5E)", "FCF - Est Avg (FY1E)"), 0.25) - 1) *
-		       100 END AS fcf_est_cagr_5y,
+		       100 END                                                          AS fcf_est_cagr_5y,
        -- Linear trend: (FY5E - FY1E) / FY1E
        public.calc_change_ratio("FCF - Est Avg (FY5E)", "FCF - Est Avg (FY1E)") AS fcf_est_trend
 FROM postgres.public.equities
@@ -4314,7 +4316,7 @@ SELECT "ISIN"            AS isin,
         FROM information_schema.routines
         WHERE routine_name LIKE 'calc_%'
 	      AND routine_schema = 'public'
-       ) AS feature_count,
+       )                 AS feature_count,
        CURRENT_TIMESTAMP AS reference_date
 FROM postgres.public.equities
 WHERE p_isin IS NULL

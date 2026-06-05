@@ -11,9 +11,14 @@ Reference: run_kalman_filter() in expected_returns_v3.py (line 1519);
 from __future__ import annotations
 
 import logging
+import re
+import warnings
 from functools import lru_cache
-from typing import Any, Literal, Optional, TYPE_CHECKING
+from typing import Any, Hashable, Literal, Optional, TYPE_CHECKING, Union
 
+from pandas import Timestamp
+from pandas._libs import NaTType
+from pandas.tseries.offsets import DateOffset, MonthBegin, QuarterBegin, YearBegin
 from pymc.backends.base import MultiTrace
 
 # PyMC 6.0 + ArviZ 1.0: top-level ``arviz`` re-exports the modular API,
@@ -29,8 +34,10 @@ import pandas as pd
 
 try:
     import pymc as pm
+    import pytensor.tensor as pt
 except ImportError:
     pm = None  # type: ignore[assignment]
+    pt = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
@@ -50,7 +57,12 @@ from probabilistic_ml_model.data_utils.data_utils import load_feature_categories
 
 logger = logging.getLogger(__name__)
 
-Parameterization = Literal["centered", "non_centered", "marginalized"]
+Parameterization = Literal["centered", "non_centered", "marginalized", "auto"]
+
+# Below this many observations the latent random-walk funnel becomes hard to
+# sample; ``parameterization="auto"`` collapses to the funnel-free
+# ``marginalized`` form for such short ``*_ago`` cohorts.
+_SHORT_SERIES_THRESHOLD = 25
 
 # ---------------------------------------------------------------------------
 # Historical "*_ago" cohort -> per-ISIN time-series helpers.
@@ -78,8 +90,6 @@ _AGO_HISTORY_RE = (
 
 
 def _build_ago_offset_map() -> dict[str, Any]:
-    from pandas.tseries.offsets import DateOffset, MonthBegin, QuarterBegin, YearBegin
-
     return {
         "1w": DateOffset(weeks=1),
         "1m": DateOffset(months=1),
@@ -189,7 +199,7 @@ class KalmanFilterPriceTarget:
     def _resolve_reference_now(
         df: pd.DataFrame,
         timestamp_col: str = "feature_calculated_at",
-    ) -> pd.Timestamp:
+    ) -> Union[Timestamp, NaTType]:
         """Return a deterministic "now" anchor for ``*_ago`` offsetting.
 
         Uses the snapshot's ``feature_calculated_at`` column when present
@@ -252,12 +262,10 @@ class KalmanFilterPriceTarget:
         date_col : str
             ``"asof_date"`` when the unpivot succeeded; otherwise ``None``.
         """
-        import re
-
         offset_map = _build_ago_offset_map()
         ref_now = cls._resolve_reference_now(df, timestamp_col=timestamp_col)
 
-        def _ago_to_date(suffix: str) -> pd.Timestamp:
+        def _ago_to_date(suffix: str) -> Any:
             off = offset_map.get(suffix.lower())
             if off is None:
                 return pd.NaT
@@ -316,7 +324,7 @@ class KalmanFilterPriceTarget:
     def select_target_isin(
         eligible: pd.Series,
         cohort: Optional[Any] = None,
-    ) -> Optional[str]:
+    ) -> Optional[Hashable]:
         """Pick the ISIN with the most history, optionally filtered by ``cohort``.
 
         ``cohort`` is any iterable of ISIN strings (e.g. the index of the
@@ -332,11 +340,419 @@ class KalmanFilterPriceTarget:
                 return candidates.idxmax()
         return eligible.idxmax()
 
+    @staticmethod
+    def _prepare_log_targets(
+        price_targets: np.ndarray,
+        dates: Optional[pd.DatetimeIndex],
+    ) -> tuple[np.ndarray, np.ndarray, float, Optional[pd.DatetimeIndex]]:
+        """Validate, clean, and log-transform the observed price targets.
+
+        Drops non-finite observations (and the aligned ``dates`` entries),
+        verifies strict positivity, and derives a clamped log-space scale
+        for the noise priors.
+
+        Parameters
+        ----------
+        price_targets : numpy.ndarray
+            Raw observed price target series (length >= 2).
+        dates : pandas.DatetimeIndex, optional
+            Time index aligned to ``price_targets``; filtered alongside it.
+
+        Returns
+        -------
+        tuple
+            ``(pt_arr, log_pt, scale, dates)`` — the cleaned positive series,
+            its log transform, the clamped prior scale, and the (possibly
+            filtered) ``dates``.
+
+        Raises
+        ------
+        ValueError
+            If fewer than 2 (finite) observations remain, or any value is
+            non-positive.
+        """
+        pt_arr = np.asarray(price_targets, dtype="float64")
+        if pt_arr.size < 2:
+            raise ValueError("price_target must have length ≥ 2.")
+
+        # Drop non-finite observations to avoid propagating NaN/Inf into the
+        # GaussianRandomWalk likelihood (a common overflow trigger).
+        finite_mask = np.isfinite(pt_arr)
+        if finite_mask.sum() < 2:
+            raise ValueError(
+                "price_target must contain at least 2 finite observations."
+            )
+        if not finite_mask.all():
+            logger.warning(
+                "KalmanFilterPriceTarget: dropping %d non-finite price target obs",
+                int((~finite_mask).sum()),
+            )
+            pt_arr = pt_arr[finite_mask]
+            if dates is not None:
+                dates = pd.DatetimeIndex(np.asarray(dates)[finite_mask])
+
+        # Price targets are strictly positive ⇒ model on log-scale.  This keeps
+        # the latent state and noise priors dimensionless and bounded,
+        # preventing the float64 overflow observed when raw price levels (often
+        # 10²–10³) are combined with a HalfNormal(σ=std(price)) prior on a
+        # GaussianRandomWalk: cumulative variance ≈ T·σ² overflows the
+        # likelihood for moderate T.  Working in log-space, σ represents
+        # log-returns and is naturally O(0.1).
+        if np.any(pt_arr <= 0):
+            raise ValueError(
+                "price_target must be strictly positive for log-space Kalman filter."
+            )
+        log_pt = np.log(pt_arr)
+
+        # Clamp scale to a sane band so degenerate inputs (constant series, or
+        # a single outlier driving std to ∞) cannot blow up the priors.
+        raw_scale = float(np.nanstd(log_pt))
+        scale = float(np.clip(raw_scale if np.isfinite(raw_scale) else 0.0, 1e-3, 1.0))
+        return pt_arr, log_pt, scale, dates
+
+    @staticmethod
+    def implied_upside_from_state(
+        state: np.ndarray,
+        last_price: float,
+    ) -> np.ndarray:
+        """Return the implied upside of a (smoothed) price state vs spot.
+
+        Mirrors the SQL ``pml.calc_change_ratio(price_target, last_price)``
+        feature ``feat_implied_upside`` and the cross-sectional notebook's
+        ``expected_upside`` so the single-ISIN time-series model reports the
+        same, directly-comparable quantity:
+
+        .. math:: \\text{implied\\_upside} = \\frac{\\text{state}}{\\text{last\\_price}} - 1.
+
+        Parameters
+        ----------
+        state : numpy.ndarray
+            Price-space latent state (e.g. posterior-mean ``state``).
+        last_price : float
+            Reference spot price; must be strictly positive.
+
+        Returns
+        -------
+        numpy.ndarray
+            Implied-upside ratio aligned to ``state``. Returns an all-NaN array
+            when ``last_price`` is non-finite or non-positive.
+        """
+        arr = np.asarray(state, dtype="float64")
+        if not np.isfinite(last_price) or last_price <= 0:
+            return np.full_like(arr, np.nan)
+        return arr / float(last_price) - 1.0
+
+    @staticmethod
+    def _resolve_coords(
+        pt_arr: np.ndarray,
+        dates: Optional[pd.DatetimeIndex],
+        isin: Optional[str],
+        sectors: Optional[np.ndarray],
+        categories_df: Optional[pd.DataFrame],
+        hierarchy_levels: Optional[list[str]],
+    ) -> tuple[dict[str, Any], np.ndarray]:
+        """Assemble PyMC model coords and the singleton ``isin`` index.
+
+        Registers a ``time`` coord (from ``dates`` or a positional range), an
+        ``isin`` coord (mirroring ``public.vw_identifier_columns.isin``), and
+        any optional category-hierarchy coords via :func:`coerce_categories`.
+
+        Returns
+        -------
+        tuple
+            ``(coords, isins_arr)``.
+        """
+        T = len(pt_arr)
+        time_coords = dates if dates is not None else np.arange(T, dtype=np.int64)
+        coords: dict[str, Any] = {"time": time_coords}
+
+        # `isin` mirrors public.vw_identifier_columns.isin (role='id'). When
+        # ``isin`` is not supplied we fall back to a singleton positional index
+        # so the optional category-hierarchy coords can still be wired in.
+        if isin is not None:
+            isins_arr = np.asarray([isin])
+        else:
+            isins_arr = np.arange(1, dtype="int64")
+        coords["isin"] = isins_arr
+
+        # Optional category hierarchy registers coords for downstream pivots.
+        cats_df, levels = coerce_categories(
+            isins_arr,
+            sectors=sectors,
+            categories_df=categories_df,
+            hierarchy_levels=hierarchy_levels
+            or (["sector", "industry"] if categories_df is not None else None),
+        )
+        if cats_df is not None and levels:
+            hierarchy_meta = build_hierarchy_indices(cats_df, isins_arr, levels=levels)
+            for lv, meta in hierarchy_meta.items():
+                coords[lv] = meta["labels"]
+        return coords, isins_arr
+
+    @staticmethod
+    def _resolve_time_deltas(
+        dates: Optional[pd.DatetimeIndex],
+        n_obs: int,
+    ) -> np.ndarray:
+        """Return a non-decreasing elapsed-time vector (years) anchored at zero.
+
+        The marginalized formulation scales the random-walk innovation variance
+        by *real* spacing between observations (the ``*_ago`` cohort is highly
+        irregular — 1w, 1m, 3m, 6m, 1y). This converts ``dates`` into cumulative
+        elapsed years :math:`\\tau` with :math:`\\tau_0 = 0`, used to build the
+        Wiener-process covariance kernel :math:`\\min(\\tau_s, \\tau_t)`.
+
+        Falls back to unit steps (``0, 1, …, n-1``) when ``dates`` are absent,
+        contain NaT, or are degenerate (all identical) so the kernel is still
+        well defined.
+
+        Parameters
+        ----------
+        dates : pandas.DatetimeIndex, optional
+            Observation timestamps aligned to the cleaned price series.
+        n_obs : int
+            Number of (finite, positive) observations.
+
+        Returns
+        -------
+        numpy.ndarray
+            Float64 elapsed-time vector of length ``n_obs``.
+        """
+        if dates is not None and len(dates) == n_obs and n_obs > 1:
+            idx = pd.DatetimeIndex(dates)
+            if not idx.hasnans:
+                # Subtract in datetime space (exact) then convert the small
+                # deltas to float days — converting the raw nanosecond epoch to
+                # float64 first would lose day-level precision (~1e18 ns).
+                days = ((idx - idx[0]) / pd.Timedelta(days=1)).to_numpy(dtype="float64")
+                tau = np.maximum.accumulate(days) / 365.25
+                if np.isfinite(tau).all() and tau[-1] > 0:
+                    return tau
+        return np.arange(n_obs, dtype="float64")
+
+    @staticmethod
+    def _build_log_state(
+        parameterization: Parameterization,
+        log_pt: np.ndarray,
+        sigma_state: Any,
+        scale: float,
+        init_mu: Optional[float] = None,
+    ) -> Any:
+        """Build the explicit latent log-price state (non-marginalized forms).
+
+        Must be called inside an active ``pm.Model`` context. The
+        ``marginalized`` parameterization does *not* go through this helper —
+        it integrates the latent path out analytically in
+        :meth:`_build_marginalized_likelihood`.
+
+        - ``centered`` — an explicit :class:`pymc.GaussianRandomWalk`.
+        - ``non_centered`` (default) — ``init + cumsum(sigma_state * z)``.
+
+        Parameters
+        ----------
+        parameterization : Parameterization
+            ``"centered"`` or ``"non_centered"``.
+        log_pt : numpy.ndarray
+            Cleaned log-price-target series (its first element seeds the
+            initial-level prior when ``init_mu`` is not supplied).
+        sigma_state : pytensor tensor
+            Random-walk (process) noise scale.
+        scale : float
+            Clamped log-scale for the diffuse initial-level prior.
+        init_mu : float, optional
+            Initial latent log-level anchor. Defaults to ``log_pt[0]``; pass
+            ``log(last_price)`` to anchor the smoother to the current spot
+            price instead of the first observed target.
+        """
+        anchor = float(log_pt[0]) if init_mu is None else float(init_mu)
+        if parameterization == "centered":
+            return pm.GaussianRandomWalk(
+                "log_state",
+                sigma=sigma_state,
+                init_dist=pm.Normal.dist(mu=anchor, sigma=scale),
+                dims="time",
+            )
+        # Non-centred GRW: state = init + cumsum(sigma_state * z).
+        z_innov = pm.Normal("z_innov", 0.0, 1.0, dims="time")
+        return pm.Deterministic(
+            "log_state",
+            anchor + pt.cumsum(sigma_state * z_innov),
+            dims="time",
+        )
+
+    @staticmethod
+    def _build_marginalized_likelihood(
+        log_obs_data: Any,
+        log_pt: np.ndarray,
+        sigma_state: Any,
+        sigma_obs: Any,
+        scale: float,
+        tau: np.ndarray,
+        init_mu: Optional[float] = None,
+    ) -> Any:
+        """Integrate the latent random walk out into the likelihood covariance.
+
+        Must be called inside an active ``pm.Model`` context. Implements a true
+        *marginalized* local-level (integrated Wiener) state-space filter: the
+        latent log-price path :math:`x_{1:T}` is collapsed analytically, leaving
+        a single multivariate-normal likelihood for the observed log-targets
+        whose covariance carries **both** the random-walk (process) variance and
+        the observation (measurement) variance.
+
+        For a local-level model with continuous-time process noise,
+
+        .. math::
+
+            x_t = x_1 + W(\\tau_t), \\qquad y_t = x_t + \\varepsilon_t,
+
+        marginalizing :math:`x` yields :math:`y \\sim \\mathcal{N}(\\mu_0\\mathbf{1},\\;\\Sigma)`
+        with
+
+        .. math::
+
+            \\Sigma_{st} = P_0 + \\sigma_{\\text{state}}^2 \\min(\\tau_s, \\tau_t)
+                          + \\sigma_{\\text{obs}}^2 \\, \\delta_{st}.
+
+        Unlike the previous implementation, ``log_pt`` is used **only** as the
+        observed series (never as the mean), so the random-walk and observation
+        variances are genuinely identified by the data.
+
+        Parameters
+        ----------
+        log_obs_data : pytensor tensor
+            The :class:`pymc.Data` container holding the observed log-targets.
+        log_pt : numpy.ndarray
+            Cleaned log-price-target series (used only for static shape / seed).
+        sigma_state, sigma_obs : pytensor tensor
+            Random-walk (process) and observation (measurement) noise scales.
+        scale : float
+            Clamped log-scale used for the diffuse initial-level variance/prior.
+        tau : numpy.ndarray
+            Elapsed-time vector (years) from :meth:`_resolve_time_deltas`.
+        init_mu : float, optional
+            Initial latent log-level prior mean. Defaults to ``log_pt[0]``; pass
+            ``log(last_price)`` to anchor the smoother to the current spot price.
+
+        Returns
+        -------
+        pytensor tensor
+            The analytic smoother mean :math:`\\mathbb{E}[x \\mid y]`, registered
+            as the ``log_state`` Deterministic so downstream consumers (the
+            ``state`` Deterministic and path plots) continue to resolve.
+        """
+        from pytensor.tensor import linalg as pt_linalg
+
+        n = int(len(log_pt))
+        tau_t = pt.as_tensor_variable(np.asarray(tau, dtype="float64"))
+        # Wiener-process kernel: Cov(x_s, x_t) = P0 + sigma_state^2 * min(tau_s, tau_t).
+        min_tau = pt.minimum(tau_t[:, None], tau_t[None, :])
+        eye = pt.eye(n)
+        p0 = float(scale) ** 2  # diffuse initial-level variance
+        anchor = float(log_pt[0]) if init_mu is None else float(init_mu)
+        mu0 = pm.Normal("log_state_init", mu=anchor, sigma=float(scale))
+        state_cov = p0 + pt.sqr(sigma_state) * min_tau
+        # Marginal observation covariance = signal covariance + measurement noise
+        # on the diagonal (+ tiny jitter for numerical positive-definiteness).
+        obs_cov = state_cov + (pt.sqr(sigma_obs) + 1e-6) * eye
+        mu_vec = mu0 * pt.ones(n)
+        pm.MvNormal("obs", mu=mu_vec, cov=obs_cov, observed=log_obs_data, dims="time")
+
+        # Analytic Kalman/RTS smoother mean E[x | y] = mu + K Sigma^{-1} (y - mu),
+        # where K (signal covariance) = Cov(x, y) since the measurement noise is
+        # independent of the state. Exposed as `log_state` for downstream plots.
+        resid = log_obs_data - mu_vec
+        smoothed = mu_vec + pt.dot(
+            state_cov, pt_linalg.solve(obs_cov, resid, assume_a="pos", b_ndim=1)
+        )
+        return pm.Deterministic("log_state", smoothed, dims="time")
+
+    @staticmethod
+    def _build_sample_kwargs(
+        *,
+        samples: int,
+        tune: int,
+        chains: int,
+        target_accept: float,
+        random_seed: int,
+        nuts_sampler: Optional[str],
+        sample_kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Assemble the keyword arguments for :func:`pymc.sample`.
+
+        Applies the project defaults (compile kwargs, no log-likelihood),
+        layers in ``nuts_sampler`` and caller overrides, then strips
+        ``idata_kwargs`` for nutpie (which ignores it and warns).
+        """
+        scall: dict[str, Any] = dict(
+            draws=samples,
+            tune=tune,
+            chains=chains,
+            target_accept=target_accept,
+            random_seed=random_seed,
+            progressbar=True,
+            compile_kwargs=get_pytensor_compile_kwargs(),
+        )
+        if nuts_sampler is not None:
+            scall["nuts_sampler"] = nuts_sampler
+        scall.setdefault("idata_kwargs", {"log_likelihood": False})
+        scall.update(sample_kwargs)
+
+        # nutpie ignores idata_kwargs and emits a UserWarning; strip it
+        # to keep logs clean while preserving behaviour for other samplers.
+        if scall.get("nuts_sampler") == "nutpie":
+            scall.pop("idata_kwargs", None)
+        return scall
+
+    @staticmethod
+    def _log_sample_diagnostics(idata: Any, isin: Optional[str]) -> None:
+        """Log divergences and minimum ESS so quality is self-reported.
+
+        Inspects ``idata.sample_stats["diverging"]`` and, when available,
+        the bulk effective sample size, emitting warnings rather than
+        relying on console scraping of the sampler output.
+
+        Parameters
+        ----------
+        idata : Any
+            The object returned by :func:`pymc.sample` (ArviZ ``InferenceData``
+            / ``xarray.DataTree`` or a ``MultiTrace``).
+        isin : str, optional
+            ISIN tag used to label the log messages.
+        """
+        tag = isin if isin is not None else "?"
+        sample_stats = getattr(idata, "sample_stats", None)
+        if sample_stats is None or "diverging" not in getattr(sample_stats, "data_vars", {}):
+            return
+        try:
+            n_div = int(sample_stats["diverging"].sum())
+        except Exception:  # pragma: no cover - defensive
+            return
+        if n_div:
+            logger.warning(
+                "KalmanFilterPriceTarget[%s]: %d divergences after tuning; "
+                "consider parameterization='marginalized' or a higher target_accept.",
+                tag,
+                n_div,
+            )
+        if az is not None and hasattr(az, "ess"):
+            try:
+                min_ess = float(az.ess(idata).to_array().min())
+            except Exception:  # pragma: no cover - defensive
+                min_ess = float("nan")
+            if np.isfinite(min_ess) and min_ess < 100:
+                logger.warning(
+                    "KalmanFilterPriceTarget[%s]: minimum ESS %.0f < 100; "
+                    "increase tune/draws for reliable r-hat / ESS.",
+                    tag,
+                    min_ess,
+                )
+
     def fit(
         self,
         price_targets: np.ndarray,
         isin: Optional[str] = None,
         dates: Optional[pd.DatetimeIndex] = None,
+        last_price: Optional[float] = None,
         sectors: Optional[np.ndarray] = None,
         categories_df: Optional[pd.DataFrame] = None,
         hierarchy_levels: Optional[list[str]] = None,
@@ -345,10 +761,10 @@ class KalmanFilterPriceTarget:
         chains: int = 4,
         target_accept: float = 0.9,
         random_seed: int = 42,
-        parameterization: Parameterization = "non_centered",
+        parameterization: Parameterization = "auto",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
-    ) -> tuple[InferenceLike | MultiTrace, Any]:
+    ) -> tuple[Union[InferenceLike, MultiTrace], Any]:
         """
         Fit a state-space model to the provided price targets using a Kalman filter
         approach in log-space. The function handles inference via PyMC and returns
@@ -367,6 +783,14 @@ class KalmanFilterPriceTarget:
             Time index corresponding to `price_targets`. If provided, it will be used
             for naming and plotting axes. Non-finite dates will be dropped alongside
             corresponding price targets.
+        last_price : float, optional
+            Current spot (last) price. When supplied and strictly positive it
+            (a) anchors the latent log-level prior at ``log(last_price)`` instead
+            of the first observed target — so the smoother is filtered relative to
+            spot — and (b) exposes an ``implied_upside`` Deterministic
+            (``state / last_price - 1``) over the ``time`` dim, mirroring the SQL
+            ``feat_implied_upside`` feature and the cross-sectional model's
+            ``expected_upside``. When ``None`` the model is unchanged.
         sectors : numpy.ndarray, optional
             Optional 1-D array of sector labels aligned to the (singleton) ``isin``
             coord. Forwarded to :func:`coerce_categories` so the model registers a
@@ -395,7 +819,20 @@ class KalmanFilterPriceTarget:
             Seed for random number generation to ensure reproducibility. Default is 42.
         parameterization : Parameterization
             Model parameterization approach used for the latent state. Options are:
-            "non_centered", "centered", or "marginalized". Default is "non_centered".
+            "auto", "non_centered", "centered", or "marginalized". Default is "auto",
+            which selects the funnel-free "marginalized" form for short series
+            (fewer than ``_SHORT_SERIES_THRESHOLD`` observations) and
+            "non_centered" otherwise.
+
+            - "centered" / "non_centered" sample an explicit latent
+              :class:`pymc.GaussianRandomWalk` path with a diagonal-Normal
+              observation likelihood.
+            - "marginalized" integrates the latent path out analytically into an
+              :class:`pymc.MvNormal` likelihood whose covariance carries both the
+              random-walk (process) and observation (measurement) variances,
+              scaled by the real elapsed time between observations. The smoothed
+              latent path is recovered as the analytic Kalman-smoother mean. This
+              is funnel-free and exact for short, irregular ``*_ago`` cohorts.
         nuts_sampler : str, optional
             Specific NUTS sampler to use. If None, the default sampler provided by PyMC
             is used.
@@ -435,69 +872,39 @@ class KalmanFilterPriceTarget:
                 "PyMC is not available. Install pymc + arviz to use KalmanFilterPriceTarget."
             )
 
-        pt_arr = np.asarray(price_targets, dtype="float64")
-        if pt_arr.size < 2:
-            raise ValueError("price_target must have length ≥ 2.")
+        pt_arr, log_pt, scale, dates = self._prepare_log_targets(price_targets, dates)
 
-        # Drop non-finite observations to avoid propagating NaN/Inf into the
-        # GaussianRandomWalk likelihood (a common overflow trigger).
-        finite_mask = np.isfinite(pt_arr)
-        if finite_mask.sum() < 2:
-            raise ValueError(
-                "price_target must contain at least 2 finite observations."
+        # Optional spot-price anchor: when a strictly-positive ``last_price`` is
+        # supplied the latent log-level prior is centred at ``log(last_price)``
+        # (so the smoother is filtered relative to spot rather than the first
+        # observed target), and an ``implied_upside`` Deterministic is exposed.
+        has_last_price = last_price is not None and np.isfinite(last_price) and last_price > 0
+        init_mu = float(np.log(last_price)) if has_last_price else None
+
+        # Resolve ``"auto"`` to the funnel-free ``marginalized`` parameterization
+        # for short ``*_ago`` cohorts (where the explicit latent random walk is
+        # poorly identified and funnels) and to ``non_centered`` otherwise. The
+        # ``marginalized`` form is now a genuine integrated-out GRW (see
+        # :meth:`_build_marginalized_likelihood`) — it analytically collapses the
+        # latent path into an MvNormal likelihood, so selecting it for short
+        # series is statistically correct rather than the prior no-op.
+        if parameterization == "auto":
+            parameterization = (
+                "marginalized" if len(pt_arr) < _SHORT_SERIES_THRESHOLD else "non_centered"
             )
-        if not finite_mask.all():
-            logger.warning(
-                "KalmanFilterPriceTarget: dropping %d non-finite price target obs",
-                int((~finite_mask).sum()),
+            logger.info(
+                "KalmanFilterPriceTarget: auto-selected %r parameterization for %d obs.",
+                parameterization,
+                len(pt_arr),
             )
-            pt_arr = pt_arr[finite_mask]
-            if dates is not None:
-                dates = pd.DatetimeIndex(np.asarray(dates)[finite_mask])
 
-        # Price targets are strictly positive ⇒ model on log-scale.  This keeps
-        # the latent state and noise priors dimensionless and bounded,
-        # preventing the float64 overflow observed when raw price levels (often
-        # 10²–10³) are combined with a HalfNormal(σ=std(price)) prior on a
-        # GaussianRandomWalk: cumulative variance ≈ T·σ² overflows the
-        # likelihood for moderate T.  Working in log-space, σ represents
-        # log-returns and is naturally O(0.1).
-        if np.any(pt_arr <= 0):
-            raise ValueError(
-                "price_target must be strictly positive for log-space Kalman filter."
-            )
-        log_pt = np.log(pt_arr)
+        # Elapsed-time vector for the (optionally marginalized) GRW covariance —
+        # scales process variance by real spacing across the irregular cohort.
+        tau = self._resolve_time_deltas(dates, len(pt_arr))
 
-        T = len(pt_arr)
-        # Clamp scale to a sane band so degenerate inputs (constant series, or
-        # a single outlier driving std to ∞) cannot blow up the priors.
-        raw_scale = float(np.nanstd(log_pt))
-        scale = float(np.clip(raw_scale if np.isfinite(raw_scale) else 0.0, 1e-3, 1.0))
-        time_coords = dates if dates is not None else np.arange(T, dtype=np.int64)
-        coords: dict[str, Any] = {"time": time_coords}
-
-        # --- DB-aligned coords --------------------------------------------------
-        # `isin` mirrors public.vw_identifier_columns.isin (role='id'). When
-        # ``isin`` is not supplied we fall back to a singleton positional index
-        # so the optional category-hierarchy coords can still be wired in.
-        if isin is not None:
-            isins_arr = np.asarray([isin])
-        else:
-            isins_arr = np.arange(1, dtype="int64")
-        coords["isin"] = isins_arr
-
-        # Optional category hierarchy registers coords for downstream pivots.
-        cats_df, levels = coerce_categories(
-            isins_arr,
-            sectors=sectors,
-            categories_df=categories_df,
-            hierarchy_levels=hierarchy_levels
-            or (["sector", "industry"] if categories_df is not None else None),
+        coords, _ = self._resolve_coords(
+            pt_arr, dates, isin, sectors, categories_df, hierarchy_levels
         )
-        if cats_df is not None and levels:
-            hierarchy_meta = build_hierarchy_indices(cats_df, isins_arr, levels=levels)
-            for lv, meta in hierarchy_meta.items():
-                coords[lv] = meta["labels"]
 
         with pm.Model(coords=coords) as model:
             # Store the raw price target series for downstream consumers /
@@ -505,70 +912,61 @@ class KalmanFilterPriceTarget:
             pm.Data("price_target", pt_arr, dims="time")
             log_obs_data = pm.Data("log_price_target", log_pt, dims="time")
 
-            sigma_state = pm.HalfNormal("sigma_state", sigma=scale)
-            sigma_obs = pm.HalfNormal("sigma_obs", sigma=scale)
+            # Mode-anchored, weakly-informative priors keep both variances away
+            # from 0 and break the sigma_state/sigma_obs ridge that produces the
+            # funnel (divergences, inflated r-hat, tiny ESS) under sparse data.
+            # log-returns are naturally O(0.05-0.2), so anchor sigma_state there;
+            # sigma_obs is anchored to the observed log-scale scatter.
+            sigma_state = pm.Gamma("sigma_state", mu=0.10, sigma=0.05)
+            sigma_obs = pm.Gamma("sigma_obs", mu=scale, sigma=scale)
 
-            if parameterization == "centered":
-                log_state = pm.GaussianRandomWalk(
-                    "log_state",
-                    sigma=sigma_state,
-                    init_dist=pm.Normal.dist(mu=float(log_pt[0]), sigma=scale),
-                    dims="time",
-                )
-            elif parameterization == "marginalized":
-                # Collapse latent state: pin to the observed log-price series.
-                # Removes the per-time random-walk latent (no posterior on
-                # the smoothed state) but preserves the obs likelihood.
-                import pytensor.tensor as _pt
-
-                log_state = pm.Deterministic(
-                    "log_state",
-                    _pt.as_tensor_variable(log_pt),
-                    dims="time",
+            if parameterization == "marginalized":
+                # Integrate the latent path out: the GRW (process) and
+                # observation (measurement) variances both enter the MvNormal
+                # likelihood covariance. ``log_state`` is the analytic smoother
+                # mean, so the per-time latent series is recovered without an
+                # explicit (funnel-prone) random walk.
+                log_state = self._build_marginalized_likelihood(
+                    log_obs_data, log_pt, sigma_state, sigma_obs, scale, tau,
+                    init_mu=init_mu,
                 )
             else:
-                # Non-centred GRW: state = init + cumsum(sigma_state * z).
-                import pytensor.tensor as _pt
-
-                z_innov = pm.Normal("z_innov", 0.0, 1.0, dims="time")
-                log_state = pm.Deterministic(
-                    "log_state",
-                    float(log_pt[0]) + _pt.cumsum(sigma_state * z_innov),
+                log_state = self._build_log_state(
+                    parameterization, log_pt, sigma_state, scale, init_mu=init_mu
+                )
+                pm.Normal(
+                    "obs",
+                    mu=log_state,
+                    sigma=sigma_obs,
+                    observed=log_obs_data,
                     dims="time",
                 )
+
             # Expose the latent state in the original price space as a
             # Deterministic so downstream code that referenced ``state``
             # continues to work without overflow risk.
-            state = pm.Deterministic("state", pm.math.exp(log_state), dims="time")  # noqa: F841
+            state = pm.Deterministic("state", pm.math.exp(log_state), dims="time")
 
-            pm.Normal(
-                "obs",
-                mu=log_state,
-                sigma=sigma_obs,
-                observed=log_obs_data,
-                dims="time",
+            # Implied upside vs spot: state / last_price - 1. Mirrors the SQL
+            # ``feat_implied_upside`` feature and the cross-sectional model's
+            # ``expected_upside`` so both Kalman variants report the same metric.
+            if has_last_price:
+                pm.Data("last_price", float(last_price))
+                pm.Deterministic(
+                    "implied_upside", state / float(last_price) - 1.0, dims="time"
+                )
+
+            idata = pm.sample(
+                **self._build_sample_kwargs(
+                    samples=samples,
+                    tune=tune,
+                    chains=chains,
+                    target_accept=target_accept,
+                    random_seed=random_seed,
+                    nuts_sampler=nuts_sampler,
+                    sample_kwargs=sample_kwargs,
+                )
             )
-
-            scall: dict[str, Any] = dict(
-                draws=samples,
-                tune=tune,
-                chains=chains,
-                target_accept=target_accept,
-                random_seed=random_seed,
-                progressbar=True,
-                compile_kwargs=get_pytensor_compile_kwargs(),
-            )
-            if nuts_sampler is not None:
-                scall["nuts_sampler"] = nuts_sampler
-            scall.setdefault("idata_kwargs", {"log_likelihood": False})
-            scall.update(sample_kwargs)
-
-            # nutpie ignores idata_kwargs and emits a UserWarning; strip it
-            # to keep logs clean while preserving behaviour for other samplers.
-            if scall.get("nuts_sampler") == "nutpie":
-                scall.pop("idata_kwargs", None)
-
-            idata = pm.sample(**scall)
 
         # Store model metadata for downstream consumers
         if isin is not None:
@@ -576,6 +974,10 @@ class KalmanFilterPriceTarget:
                 model.name = f"KalmanFilter[{isin}]"
             except Exception:
                 pass
+
+        # Surface sampler-quality diagnostics so the model self-reports funnel
+        # problems (divergences / low ESS) instead of relying on console scraping.
+        self._log_sample_diagnostics(idata, isin)
 
         self.model_ = model
         # Detect ArviZ InferenceData (or arviz-base xarray.DataTree per migration
@@ -596,7 +998,7 @@ class KalmanFilterPriceTarget:
         timestamp_col: str = "feature_calculated_at",
         now_cols: tuple[str, ...] = ("price_target", "last_price"),
         **fit_kwargs: Any,
-    ) -> tuple[Optional[InferenceLike | MultiTrace], Any]:
+    ) -> tuple[Optional[Union[InferenceLike, MultiTrace]], Any]:
         """Build a per-ISIN history from a snapshot frame and fit the model.
 
         Convenience wrapper around :meth:`build_price_target_history`,
@@ -638,8 +1040,6 @@ class KalmanFilterPriceTarget:
             timestamp_col=timestamp_col,
         )
         if date_col is None or eligible.empty:
-            import warnings
-
             warnings.warn(
                 "No ISIN has >= %d non-null price_target observations across "
                 "the *_ago cohort. Skipping Kalman fit (point-in-time snapshot)."
@@ -659,6 +1059,17 @@ class KalmanFilterPriceTarget:
             .reset_index(drop=True)
         )
         dates = pd.DatetimeIndex(ts["asof_date"])
+
+        # Pull the chosen ISIN's spot price from the snapshot so the smoother can
+        # anchor to it and emit ``implied_upside`` (unless the caller already
+        # supplied ``last_price`` explicitly).
+        if "last_price" not in fit_kwargs and "last_price" in df.columns:
+            lp = pd.to_numeric(
+                df.loc[df[id_col] == chosen, "last_price"], errors="coerce"
+            ).dropna()
+            if not lp.empty:
+                fit_kwargs["last_price"] = float(lp.iloc[0])
+
         return self.fit(
             price_targets=ts["price_target"].to_numpy(),
             isin=chosen,
