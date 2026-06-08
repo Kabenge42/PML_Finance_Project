@@ -10,7 +10,6 @@ create table bonds
     coupon             double precision,
     "Coupon frequency" text,
     "YTM (Ask)"        double precision,
-    bid                text,
     ask                double precision,
     "Minimum size"     double precision,
     "Country of issue" text,
@@ -25,4 +24,3 @@ create table bonds
 
 alter table bonds
     owner to postgres;
-

@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.5] - 2026-06-08
+
+### Added
+
+- **Fused price-target panel model** — new `build_fused_price_target_model`
+  builder in `probabilistic_ml_model/pymc_models/PriceTargetModel.py`
+  (exported lazily from `pymc_models/__init__.py`), backed by a
+  `prepare_price_target_panel_inputs` helper that assembles the 3-D
+  `(isin, time, y_series)` response tensor, fiscal-anchor time matrix,
+  `sqrt(n_analysts)` weights and standardised predictor matrix column-aligned
+  with the materialized-view DDL
+  ([`6897b91`](https://github.com/Kabenge42/PML_Finance_Project/commit/6897b91)).
+- **Kalman `feat_implied_upside` surface** — `KalmanFilterPriceTarget` gained
+  the pure-NumPy `implied_upside_from_state` helper and a `last_price`-anchored
+  `implied_upside` Deterministic on `fit(...)`, mirroring the SQL
+  `calc_change_ratio(price_target, last_price)` feature
+  ([`6897b91`](https://github.com/Kabenge42/PML_Finance_Project/commit/6897b91)).
+- **Test coverage** — added `tests/test_kalman_filter_pt.py` and
+  `tests/test_price_target_panel.py` exercising the deterministic helpers and
+  PyMC graph construction for the refactored Kalman / price-target stack
+  ([`6897b91`](https://github.com/Kabenge42/PML_Finance_Project/commit/6897b91)).
+- **Notebooks & rendered docs** — added `pymc_kalman_filter_pt.ipynb`,
+  `pymc_price_target_v3.ipynb`, the rendered `pymc_kalman_filter_pt.md` and
+  reference MyST docs (`Forecasting_with_structural_timeseries.myst.md`,
+  `MvGaussianRandomWalk_demo.myst.md`, `bayesian_var_model.myst.md`,
+  `stochastic_volatility.myst.md`)
+  ([`6897b91`](https://github.com/Kabenge42/PML_Finance_Project/commit/6897b91)).
+
+### Changed
+
+- **`KalmanFilterModel.py` refactor** — reworked the PyMC helpers with
+  schema-aligned data-preparation functions for the
+  `pymc_kalman_filter_pt.ipynb` notebook, plus touch-ups to
+  `_price_target_mc.py` and `_feature_alignment.py`
+  ([`6897b91`](https://github.com/Kabenge42/PML_Finance_Project/commit/6897b91)).
+- **`sql_scripts/pml/mv_pymc_kalman_pt.sql`** and
+  `mv_pymc_price_target.sql` extended with fiscal-anchor date columns,
+  `feat_implied_upside` and additional drift features
+  (`feat_pt_high_drift`, `feat_pt_low_drift`, `feat_pt_median_drift`,
+  `feat_coverage_drift`); refreshed companion `sql_scripts/pml/*` helpers,
+  `pml_df.sql`, `pml_feature_catalogue.sql`, `pml_df_metadata_populate.sql`
+  and `feature_registry.sql`
+  ([`6897b91`](https://github.com/Kabenge42/PML_Finance_Project/commit/6897b91)).
+- **Notebook / data / config refresh** — re-ran the PyMC notebooks
+  (`pymc_dcf.ipynb`, `pymc_earnings_beat.ipynb`, `pymc_price_target.ipynb`),
+  regenerated the regional PML CSV snapshots (`data/pml/pml_{us,eu,apac,rotw}.csv`),
+  and refreshed `CLAUDE.md`, `environment_variables.txt` and `.idea/*` settings
+  ([`6897b91`](https://github.com/Kabenge42/PML_Finance_Project/commit/6897b91)).
+
+### Notes
+
+- Patch-level bump (`0.9.9.4 → 0.9.9.5`) — the release packages a
+  Kalman / price-target PyMC refactor, new fused-panel model builder, SQL
+  feature-surface additions, notebooks and tests; no breaking public-API
+  changes (existing `fit(...)` signatures remain backwards compatible).
+- Follow-up: bump `pyproject.toml` `version` and the README badge to
+  `0.9.9.5` in the next packaging pass (left untouched here to keep this
+  CHANGELOG refresh purely a documentation change).
+
+[0.9.9.5]: https://github.com/Kabenge42/PML_Finance_Project/compare/v0.9.9.4...v0.9.9.5
+
 ## [0.9.9.4] - 2026-05-30
 
 ### Added

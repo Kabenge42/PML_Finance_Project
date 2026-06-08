@@ -46,7 +46,6 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
     load_feature_metadata_from_db,
     stamp_feature_provenance,
 )
-from probabilistic_ml_model.data_utils.data_utils import load_feature_categories_from_db
 from probabilistic_ml_model.pymc_models._hierarchy import (
     build_hierarchy_indices,
     build_nested_logit_normal_rates,
@@ -54,11 +53,6 @@ from probabilistic_ml_model.pymc_models._hierarchy import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Canonical category names in public.calculated_features_registry
-# whose feature_aliases drive the auxiliary "earnings_feature" dim.
-# Aligned with categories backing public.vw_features_earnings.
-_EARNINGS_CATEGORY_KEYS: tuple[str, ...] = ("Earnings Quality", "EPS Trajectory", "Profitability","Efficiency Ratios","Growth Metrics","Revenue Forecasting","Valuation Ratios","Temporal Patterns")
 
 Parameterization = Literal["centered", "non_centered", "marginalized"]
 
@@ -89,28 +83,56 @@ class EarningsBeatBayesian:
     def _resolve_earnings_feature_aliases(
         connection_string: Optional[str] = None,
     ) -> tuple[str, ...]:
-        """Resolve the 'Earnings' feature aliases from calculated_features_registry.
+        """Resolve the earnings-beat mutable_predictor aliases from the PyMC catalogue.
 
-        These serve as labelled coordinates along the ``earnings_feature`` dim
-        for the auxiliary ``pm.Data`` container of observed earnings-feature
-        values (e.g. eps_positive_streak, eps_surprise_pct).
+        Source of truth::
+
+            SELECT feature_alias
+            FROM pml.vw_pymc_feature_catalogue
+            WHERE model_target = 'earnings_beat' AND pymc_role = 'mutable_predictor'
+
+        These label the ``earnings_feature`` dim of the auxiliary ``pm.Data``
+        container of observed earnings-feature values (EPS / EBIT / EBITDA /
+        Sales surprises, estimate revisions, and the calendar-derived signals
+        emitted by ``pml.mv_pymc_earnings_beat``). Because the aliases are read
+        live from the catalogue, newly added MV predictors (e.g. the EBIT /
+        EBITDA / Sales ``feat_*_last_q_surprise`` / ``feat_*_last_y_surprise``
+        columns) flow through automatically with no code change here.
 
         Returns a tuple so the result is hashable / cache-friendly; callers
         should convert to ``list`` if mutation is needed.
         """
         try:
-            categories = load_feature_categories_from_db(connection_string)
+            import os
+
+            import pandas as _pd
+
+            from probabilistic_ml_model.data_utils.data_utils import (
+                get_analytics_engine,
+            )
+
+            try:
+                from sqlalchemy import create_engine
+            except ImportError:  # pragma: no cover - defensive
+                create_engine = None  # type: ignore[assignment]
+
+            sql = (
+                "SELECT DISTINCT feature_alias "
+                "FROM pml.vw_pymc_feature_catalogue "
+                "WHERE model_target = 'earnings_beat' "
+                "AND pymc_role = 'mutable_predictor' "
+                "ORDER BY feature_alias"
+            )
+            url = connection_string or os.environ.get("DB_URL")
+            if create_engine is not None and url:
+                engine = create_engine(url)
+            else:
+                engine = get_analytics_engine()
+            df = _pd.read_sql(sql, engine)
+            return tuple(df["feature_alias"].dropna().astype(str).tolist())
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("Could not load feature categories: %s", exc)
+            logger.warning("Could not load earnings_beat feature catalogue: %s", exc)
             return tuple()
-        aliases: list[str] = []
-        seen: set[str] = set()
-        for key in _EARNINGS_CATEGORY_KEYS:
-            for alias in categories.get(key, []):
-                if alias not in seen:
-                    seen.add(alias)
-                    aliases.append(alias)
-        return tuple(aliases)
 
     @staticmethod
     def _align_earnings_features(
@@ -174,12 +196,12 @@ class EarningsBeatBayesian:
             Sector labels — enables hierarchical sector-rate structure.
         earnings_features_df : pd.DataFrame, optional
             Optional (isin × earnings_feature) matrix of observed feature values
-            from ``public.vw_features_earnings``.  Stored as a ``pm.Data``
+            from ``pml.mv_pymc_earnings_beat``.  Stored as a ``pm.Data``
             container so it can be swapped for out-of-sample prediction.
         connection_string : str, optional
-            DB URL used when resolving the 'Earnings' feature aliases from
-            ``public.calculated_features_registry`` via
-            :func:`load_feature_categories_from_db`.
+            DB URL used when resolving the earnings-beat ``mutable_predictor``
+            feature aliases from ``pml.vw_pymc_feature_catalogue`` via
+            :meth:`_resolve_earnings_feature_aliases`.
         samples, tune, chains, target_accept, random_seed
             MCMC sampling parameters.
         parameterization : {"centered", "non_centered", "marginalized"}
@@ -250,7 +272,7 @@ class EarningsBeatBayesian:
             for lv, meta in hierarchy_meta.items():
                 coords[lv] = meta["labels"]
 
-        # `earnings_feature` is resolved from calculated_features_registry so the
+        # `earnings_feature` is resolved from pml.vw_pymc_feature_catalogue so the
         # auxiliary pm.Data container carries human-readable feature_alias labels.
         earnings_feature_aliases = list(self._resolve_earnings_feature_aliases(connection_string))
         coords["earnings_feature"] = list(earnings_feature_aliases)

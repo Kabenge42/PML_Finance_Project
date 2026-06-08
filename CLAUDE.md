@@ -25,7 +25,7 @@ PyMC 6.0), statistical analysis, and portfolio optimization.
 - scikit-learn, XGBoost, LightGBM, CatBoost — classical ML
 - Plotly, Matplotlib, Seaborn — visualization
 - Streamlit (Python < 3.14 only), Dash — interactive dashboards
-- pytest — 483 test cases across 23 test modules
+- pytest — 545 test cases across 25 test modules
 
 ## Development Setup
 
@@ -43,12 +43,20 @@ pip install -r requirements.txt
 . .\set_env.ps1
 ```
 
-Key environment variables (see `environment_variables.txt`):
+Key environment variables (full list in `environment_variables.txt`):
 
-- `DB_URL` — PostgreSQL connection
-- `PYTENSOR_FLAGS` — PyTensor backend (Windows: set C++ compiler path)
-- `LOG_LEVEL` — Python logging level
-- `OUTPUT_DIR` — analytics artifact directory
+| Variable                                                | Purpose                                                          |
+|---------------------------------------------------------|------------------------------------------------------------------|
+| `DB_URL`                                                | SQLAlchemy PostgreSQL connection URL                             |
+| `DB_EQUITIES_SCHEMA` / `DB_PML_SCHEMA` / `DB_ANALYTICS_SCHEMA` | Source / feature / output schema names (`public` / `pml` / `analytics`) |
+| `DB_TABLE`                                              | Source equities table                                            |
+| `PYTENSOR_FLAGS`                                        | PyTensor backend; on Windows points `cxx` at the MSYS2 g++       |
+| `JAX_PLATFORM_NAME`                                     | `cpu` / `gpu` for blackjax / numpyro samplers                    |
+| `LOG_LEVEL` / `TF_CPP_MIN_LOG_LEVEL`                    | Python / TensorFlow logging verbosity                            |
+| `DATA_DIR` / `MODEL_DIR` / `CACHE_DIR` / `OUTPUT_DIR`   | Artifact directories                                             |
+| `MODEL_VERSION` / `RANDOM_SEED`                         | Model run identifier / RNG seed                                  |
+| `N_JOBS`                                                | Parallel job count (`-1` = all cores)                            |
+| `PML_STRICT_STREAK_MERGE`                               | Fail-fast on missing EPS streak-merge columns (CI/regression)    |
 
 ### Code Quality & Testing
 
@@ -73,6 +81,35 @@ pytest tests/test_pml_workflow_v4.py -v
 pytest --cov=probabilistic_ml_model --cov-report=term-missing tests/
 ```
 
+## Project Structure
+
+```
+PML_Finance_Project/
+├── probabilistic_ml_model/      # Core package (lazy-loaded PyMC/ArviZ)
+│   ├── pymc_models/             # 7 Bayesian models + _hierarchy / _feature_alignment / compat shims
+│   ├── statistical_functions/   # Hierarchical MCMC, probability & ensemble models
+│   ├── data_utils/              # DB loading, feature_catalog, inference_schema, export
+│   ├── visualizations/          # Per-model plot modules + ArviZ diagnostics
+│   ├── pipeline_runners.py      # 8-phase orchestration via PipelineConfig
+│   └── _pymc_arviz_compat.py    # InferenceLike type alias (arviz.InferenceData | xarray.DataTree)
+├── tests/                       # 545 pytest cases across 25 modules
+├── sql_scripts/
+│   ├── pml/                     # Authoritative DDL: pml_df, metadata, MVs, helper fns (SSOT)
+│   └── public/                  # Legacy public-schema views
+├── dashboards/                  # geib_dash_app.py (Dash, :8050)
+├── feature_factory/             # Ad-hoc feature/cohort SQL + plotting
+├── docs/                        # Architecture guides (PyMC, ArviZ 1.0, SQL)
+├── data/                        # Regional PML / screening CSV snapshots
+├── reference material/          # MyST / notebook reference material
+├── *.ipynb                      # PyMC model + analytics notebooks (see Key Notebooks)
+├── expected_returns_v3.py       # Main v3 pipeline entry point
+├── expected_returns_v4.py       # v4 baseline pipeline (finance-ml-v4)
+├── pyproject.toml / Pipfile / requirements.txt   # Dependency definitions (keep in sync)
+├── set_env.ps1 / environment_variables.txt       # Environment configuration
+├── CHANGELOG.md                 # Release notes (authoritative version source)
+└── CLAUDE.md                    # This file
+```
+
 ## Architecture & Core Abstractions
 
 ### 1. Feature Catalog (data_utils/feature_catalog.py)
@@ -91,9 +128,9 @@ features = catalog.get_features_for_model("EarningsBeatBayesian")
 
 Key data sources:
 
-- `public.mv_equities` — core equity metadata
-- `public.vw_features_*` (17 views) — categorical feature groups
-- `public.calculated_features_registry` — feature → category mappings
+- `pml.pml_df` — core equities source table
+- `pml.vw_pymc_feature_catalogue` pymc model feature catalogue
+- `pml.pml_df_metadata` — feature → category → pymc_model mappings
 
 ### 2. Hierarchical Shrinkage (pymc_models/_hierarchy.py)
 
@@ -206,14 +243,22 @@ from probabilistic_ml_model.visualizations import (
 ### Main Pipeline
 
 ```powershell
+# v3 pipeline (8 phases: data load → models → ensemble → MCMC → viz → export)
 python expected_returns_v3.py
+
+# v4 baseline pipeline (entry point: expected_returns_v4:main)
+python expected_returns_v4.py
 ```
 
-8 phases: data load → models → ensemble → MCMC → viz → export
+Console-script entry points declared in `pyproject.toml` `[project.scripts]`:
+`finance-ml`, `finance-ml-analyze`, `finance-ml-validate` (→ `cli:*`) and
+`finance-ml-v4` (→ `expected_returns_v4:main`).
 
 ### Key Notebooks
 
 - `pymc_expected_returns_model.ipynb` — End-to-end PyMC + ArviZ
+- `pymc_earnings_beat.ipynb` / `pymc_price_target_v3.ipynb` / `pymc_dcf.ipynb` — per-model PyMC workflows
+- `pymc_kalman_filter_pt.ipynb` — Kalman price-target panel model
 - `pml_workflow_v4.ipynb` — v4 pipeline
 - `pml_model_analysis.ipynb` — Diagnostics
 
@@ -409,7 +454,7 @@ pml.ema_crossover_signal(fast_ema, slow_ema) → INT  -- 1 / -1 / 0
 - Features: `feature_catalog.py` synced with SQL registry
 - Hierarchy: `_hierarchy.py` shared by all models
 - Identifiers: `DEFAULT_IDENTIFIER_COLUMNS` in feature_catalog.py
-- Schema: `public.equities_schema_metadata`
+- Schema: `pml.pml_df_metadata`
 
 ### 2. Lazy Loading
 
@@ -683,6 +728,14 @@ pytest tests/test_pml_workflow_v4.py::TestClass::test_method -v
 pytest --cov=probabilistic_ml_model --cov-report=term-missing tests/
 ```
 
+### Cutting a Release
+
+1. Add a new dated section at the top of `CHANGELOG.md` (Keep a Changelog + SemVer format).
+2. Bump `version` in `pyproject.toml` and the README badge to match (these have historically lagged the CHANGELOG — see
+   the recurring follow-up note in each release entry).
+3. Sync dependency pins across `pyproject.toml`, `Pipfile`, and `requirements.txt` if they changed.
+4. Re-run `pipenv lock` / `pip-compile` to regenerate lockfiles against the aligned version windows.
+
 ## Debugging & Troubleshooting
 
 ### PyTensor Compilation (Windows)
@@ -735,5 +788,6 @@ catalog = get_feature_catalog(force_reload=True)
 
 ---
 
-**Version:** 0.9.9.3 | **Python:** 3.12–3.14 | **PyMC:** >=6.0,<7 | **PyTensor:** >=3.0,<4 | **ArviZ:** >=1.0,<2 (
-arviz-base + arviz-stats + arviz-plots) | **JAX:** >=0.4.30 | **DB:** PostgreSQL
+**Version:** 0.9.9.5 (CHANGELOG; `pyproject.toml` lags at 0.9.9.2 pending the next packaging bump) | **Python:**
+3.12–3.14 | **PyMC:** >=6.0,<7 | **PyTensor:** >=3.0,<4 | **ArviZ:** >=1.0,<2 (arviz-base + arviz-stats + arviz-plots) |
+**JAX:** >=0.4.30 | **License:** MIT | **DB:** PostgreSQL

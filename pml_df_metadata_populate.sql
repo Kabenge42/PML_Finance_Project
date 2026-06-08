@@ -319,7 +319,7 @@ WHERE column_name LIKE 'eps_adj_neg%'
 
 -- EPS revisions (signed % change in estimates) -> revision
 UPDATE pml.pml_df_metadata
-SET category     = 'eps_revisions',
+SET category     = 'eps',
     feature_role = 'revision'
 WHERE column_name LIKE 'eps_est_avg_rev_pct_fy1e_%'
    OR column_name LIKE 'eps_gaap_est_avg_rev_pct_fy1e_%';
@@ -330,12 +330,12 @@ WHERE column_name LIKE 'eps_est_avg_rev_pct_fy1e_%'
 -- =========================================================================
 -- EPS actuals/estimates (historical fundamentals) -> historical
 UPDATE pml.pml_df_metadata
-SET category     = 'earnings_surprises',
+SET category     = 'eps',
     feature_role = 'historical'
 WHERE column_name SIMILAR TO 'eps_neg[0-9]+f[qy](estimate|actual)';
 
 UPDATE pml.pml_df_metadata
-SET category     = 'earnings_surprises',
+SET category     = 'eps',
     feature_role = 'surprise'
 WHERE column_name SIMILAR TO 'eps_neg[0-9]+f[qy]surprise_pct';
 
@@ -1138,7 +1138,7 @@ WHERE feature_role = 'historical';
 -- 7a. EarningsBeatBayesian: surprises + revisions + EPS estimates + sector.
 UPDATE pml.pml_df_metadata
 SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['earnings_beat'])))
-WHERE category IN ('earnings_surprises', 'eps_revisions', 'sales', 'ebit', 'ebitda')
+WHERE category IN ('eps', 'eps', 'sales', 'ebit', 'ebitda')
    OR column_name IN ('sector', 'industry', 'eps_norm_est_avg_fy1e',
                       'eps_norm_est_avg_ntm', 'eps_norm_est_num_fy1e',
                       'days_to_earnings', 'earnings_report_recency');
@@ -1498,6 +1498,19 @@ VALUES
 	                                 ('eps_gaap_est_avg_rev_pct_fy1e_3m',  'earnings_beat',      'feat_rev_gaap_gap_3m'             ),
 	                                 ('eps_neg0fqsurprise_pct',            'earnings_beat',      'feat_last_q_surprise'             ),
 	                                 ('eps_neg0fysurprise_pct',            'earnings_beat',      'feat_last_y_surprise'             ),
+		-- Most-recent single-period EBIT / EBITDA / Sales surprises. The full
+		-- quarterly / annual surprise trails feed pml.beat_counts -> n_*_total /
+		-- n_*_beats / feat_*_logit_beat_rate in mv_pymc_earnings_beat; those are
+		-- array-derived (multi-column) so, like the EPS n_total / n_beats /
+		-- feat_logit_beat_rate columns, they are intentionally NOT aliased here
+		-- (the alias table is keyed PRIMARY KEY (column_name, model_target)).
+		-- Only the neg0-period carriers below get an alias.
+		                                 ('ebit_neg0fqsurprise_pct',           'earnings_beat',      'feat_ebit_last_q_surprise'        ),
+		                                 ('ebit_neg0fysurprise_pct',           'earnings_beat',      'feat_ebit_last_y_surprise'        ),
+		                                 ('ebitda_neg0fqsurprise_pct',         'earnings_beat',      'feat_ebitda_last_q_surprise'      ),
+		                                 ('ebitda_neg0fysurprise_pct',         'earnings_beat',      'feat_ebitda_last_y_surprise'      ),
+		                                 ('sales_neg0fqsurprise_pct',          'earnings_beat',      'feat_sales_last_q_surprise'       ),
+		                                 ('sales_neg0fysurprise_pct',          'earnings_beat',      'feat_sales_last_y_surprise'       ),
 	                                 ('days_to_earnings',                  'earnings_beat',      'feat_days_to_earnings'            ),
 	                                 ('earnings_report_recency',           'earnings_beat',      'feat_report_recency'              ),
 	                                 ('next_earnings_status',              'earnings_beat',      'feat_next_earnings_status'        ),
