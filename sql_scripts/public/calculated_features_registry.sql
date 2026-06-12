@@ -1,30 +1,24 @@
-create table calculated_features_registry
+CREATE TABLE public.calculated_features_registry
 (
-    feature_key        varchar(128) not null,
-    feature_alias      varchar(128) not null,
-    category           varchar(64)  not null,
-    source_function    varchar(128),
-    description        text,
-    source_columns     text[],
-    primary_source_col text
-        references equities_schema_metadata,
-    calculation_type   varchar(32),
-    data_type          varchar(32),
-    updated_at         timestamp default CURRENT_TIMESTAMP
+	feature_key        varchar(128) NOT NULL PRIMARY KEY,
+	feature_alias      varchar(128) NOT NULL,
+	category           varchar(64)  NOT NULL,
+	source_function    varchar(128),
+	description        text,
+	source_columns     text[],
+	primary_source_col text,
+	calculation_type   varchar(32),
+	data_type          varchar(32),
+	updated_at         timestamp DEFAULT CURRENT_TIMESTAMP
 );
 
-alter table calculated_features_registry
-    owner to postgres;
+ALTER TABLE public.calculated_features_registry
+	OWNER TO postgres;
 
-create index idx_calc_features_category
-    on calculated_features_registry (category);
+CREATE INDEX idx_calc_features_category ON public.calculated_features_registry (category);
 
-create index idx_calc_features_source_fn
-    on calculated_features_registry (source_function);
+CREATE INDEX idx_calc_features_source_fn ON public.calculated_features_registry (source_function);
 
-create index idx_calc_features_primary_col
-    on calculated_features_registry (primary_source_col);
+CREATE INDEX idx_calc_features_primary_col ON public.calculated_features_registry (primary_source_col);
 
-create unique index idx_uq_calc_features_feature_key
-    on calculated_features_registry (feature_key);
-
+CREATE UNIQUE INDEX idx_uq_calc_features_feature_key ON public.calculated_features_registry (feature_key);

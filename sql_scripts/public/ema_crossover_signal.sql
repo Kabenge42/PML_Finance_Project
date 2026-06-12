@@ -1,15 +1,19 @@
-create function ema_crossover_signal(fast_ema numeric, slow_ema numeric) returns integer
-    immutable
-    parallel safe
-    language sql
-as
-$$
-SELECT CASE
-           WHEN fast_ema > slow_ema THEN 1
-           WHEN fast_ema < slow_ema THEN -1
-           ELSE 0
-           END AS result;
+CREATE FUNCTION public.ema_crossover_signal(fast_ema numeric, slow_ema numeric) RETURNS integer
+	IMMUTABLE PARALLEL SAFE
+	LANGUAGE sql AS
+$$ BEGIN
+	-- missing source code
+END;
 $$;
 
-alter function ema_crossover_signal(numeric, numeric) owner to postgres;
+ALTER FUNCTION public.ema_crossover_signal(numeric, numeric) OWNER TO postgres;
 
+CREATE FUNCTION public.ema_crossover_signal(fast_ema double precision, slow_ema double precision) RETURNS integer
+	IMMUTABLE PARALLEL SAFE
+	LANGUAGE sql AS
+$$ BEGIN
+	-- missing source code
+END;
+$$;
+
+ALTER FUNCTION public.ema_crossover_signal(double precision, double precision) OWNER TO postgres;

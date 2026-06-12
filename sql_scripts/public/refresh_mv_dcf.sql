@@ -1,15 +1,12 @@
-create function refresh_mv_dcf() returns void
-    language plpgsql
-as
+CREATE FUNCTION public.refresh_mv_dcf() RETURNS void
+	LANGUAGE plpgsql AS
 $$
 BEGIN
-    REFRESH MATERIALIZED VIEW CONCURRENTLY mv_dcf;
-    RAISE NOTICE 'mv_dcf refreshed at %', NOW();
+	-- missing source code
 END;
 $$;
 
-comment on function refresh_mv_dcf() is 'Refreshes the mv_dcf materialized view concurrently (non-blocking).
+COMMENT ON FUNCTION public.refresh_mv_dcf() IS 'Refreshes the mv_dcf materialized view concurrently (non-blocking).
     Call periodically after equities table updates.';
 
-alter function refresh_mv_dcf() owner to postgres;
-
+ALTER FUNCTION public.refresh_mv_dcf() OWNER TO postgres;

@@ -1482,6 +1482,103 @@ WHERE column_name IN ('days_to_next_earnings',
                       'days_to_expected_report',
                       'days_to_fy_end');
 
+-- ---------------------------------------------------------------------------
+-- TASK 5 / FINDING 4: trim the mutable_predictor surface to what each MV emits.
+-- The category-based model_targets wiring (sections 7a / 7d / 7g) is far broader
+-- than each MV's curated output, so unaliased raw columns fall back to
+-- feature_alias = column_name and are reindexed to all-zero by the catalogue-
+-- driven models. We narrow the surface here.
+-- ---------------------------------------------------------------------------
+
+-- 5a. EarningsBeat: the neg1..neg5 surprise trails are consumed into the
+--     pml.beat_counts() arrays inside mv_pymc_earnings_beat (only the neg0
+--     carriers are emitted as feat_*). Demote them from mutable_predictor to
+--     derived_input so they leave the predictor surface (~30+ phantom columns).
+UPDATE pml.pml_df_metadata
+SET pymc_role = 'derived_input'
+WHERE feature_role = 'surprise'
+  AND column_name SIMILAR TO '%neg[1-9]f[qy]surprise_pct';
+
+-- 5b. EarningsBeat: drop unused eps/ebit/ebitda/sales PREDICTOR levels that the
+--     MV never emits (it only consumes the FY1E/FQ1E normalized estimates and
+--     the revision %s, which keep their earnings_beat wiring). Revision and
+--     neg0-surprise columns are untouched.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_remove(model_targets, 'earnings_beat')
+WHERE 'earnings_beat' = ANY (model_targets)
+  AND category IN ('eps', 'ebit', 'ebitda', 'sales')
+  AND feature_role = 'predictor'
+  AND column_name NOT IN ('eps_norm_est_avg_fy1e', 'eps_norm_est_avg_fq1e');
+
+-- 5c. DCFPriceTarget: keep only the cash_flow / profitability raw columns the
+--     MV actually reads; remove dcf_pt from the rest of those two categories.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_remove(model_targets, 'dcf_pt')
+WHERE 'dcf_pt' = ANY (model_targets)
+  AND category IN ('cash_flow', 'profitability')
+  AND column_name NOT IN ('fcf_ltm', 'fcf_est_avg_fy1e', 'fcf_est_avg_fy2e', 'fcf_est_avg_fy3e',
+                          'fcf_est_avg_fy4e', 'fcf_est_avg_fy5e', 'cfo_ltm', 'capital_expenditure_ltm',
+                          'return_on_assets_roa_pct_ltm', 'gross_profit_margin_pct_ltm');
+
+-- ---------------------------------------------------------------------------
+-- TASK 4: Register engineered (multi-source) MV feature columns directly.
+-- These feat_* columns are derived from several raw pml_df columns inside the
+-- mv_pymc_* views, so they cannot be expressed via a single per-source alias
+-- row (PK (column_name, model_target)). Without their own metadata row they
+-- never appear in vw_pymc_feature_catalogue and the catalogue-driven models
+-- silently reindex them to 0.0 (Finding 1). We register each as its own
+-- column_name = feature_alias = '<feat>' with pymc_role='mutable_predictor'
+-- and model_targets pointing at the consuming MV(s).
+-- ---------------------------------------------------------------------------
+INSERT INTO pml.pml_df_metadata (column_name,                          category,          feature_role, pymc_role,
+	                                                                                                                         feature_alias,
+	                                                                                                                                                               model_targets                      )
+VALUES
+	-- kalman_pt drift / range engineered feats (mv_pymc_kalman_pt)
+	                            ('feat_implied_upside',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_implied_upside',                ARRAY ['kalman_pt', 'price_target']),
+	                            ('feat_pt_drift',                      'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_drift',                      ARRAY ['kalman_pt']                ),
+	                            ('feat_price_drift',                   'analyst_targets', 'predictor',  'mutable_predictor', 'feat_price_drift',                   ARRAY ['kalman_pt']                ),
+	                            ('feat_pt_high_drift',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_high_drift',                 ARRAY ['kalman_pt']                ),
+	                            ('feat_pt_low_drift',                  'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_low_drift',                  ARRAY ['kalman_pt']                ),
+	                            ('feat_pt_median_drift',               'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_median_drift',               ARRAY ['kalman_pt']                ),
+	                            ('feat_coverage_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_coverage_drift',                ARRAY ['kalman_pt']                ),
+	                            ('feat_pt_noise_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_noise_drift',                ARRAY ['kalman_pt']                ),
+	                            ('feat_pt_range_norm',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_norm',                 ARRAY ['kalman_pt']                ),
+	-- earnings_beat logit-beat-rate + revision-acceleration feats (mv_pymc_earnings_beat)
+	                            ('feat_logit_beat_rate',               'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate',               ARRAY ['earnings_beat']            ),
+	                            ('feat_logit_beat_rate_annual',        'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate_annual',        ARRAY ['earnings_beat']            ),
+	                            ('feat_ebit_logit_beat_rate',          'ebit',            'predictor',  'mutable_predictor', 'feat_ebit_logit_beat_rate',          ARRAY ['earnings_beat']            ),
+	                            ('feat_ebit_logit_beat_rate_annual',   'ebit',            'predictor',  'mutable_predictor', 'feat_ebit_logit_beat_rate_annual',   ARRAY ['earnings_beat']            ),
+	                            ('feat_ebitda_logit_beat_rate',        'ebitda',          'predictor',  'mutable_predictor', 'feat_ebitda_logit_beat_rate',        ARRAY ['earnings_beat']            ),
+	                            ('feat_ebitda_logit_beat_rate_annual', 'ebitda',          'predictor',  'mutable_predictor', 'feat_ebitda_logit_beat_rate_annual', ARRAY ['earnings_beat']            ),
+	                            ('feat_sales_logit_beat_rate',         'sales',           'predictor',  'mutable_predictor', 'feat_sales_logit_beat_rate',         ARRAY ['earnings_beat']            ),
+	                            ('feat_sales_logit_beat_rate_annual',  'sales',           'predictor',  'mutable_predictor', 'feat_sales_logit_beat_rate_annual',  ARRAY ['earnings_beat']            ),
+	                            ('feat_rev_accel_1m_6m',               'eps',             'predictor',  'mutable_predictor', 'feat_rev_accel_1m_6m',               ARRAY ['earnings_beat']            ),
+	-- dcf_pt FCF-growth engineered feats (mv_pymc_dcf_pt)
+	                            ('feat_fcf_growth_1y',                 'cash_flow',       'predictor',  'mutable_predictor', 'feat_fcf_growth_1y',                 ARRAY ['dcf_pt']                   ),
+	                            ('feat_fcf_growth_2y',                 'cash_flow',       'predictor',  'mutable_predictor', 'feat_fcf_growth_2y',                 ARRAY ['dcf_pt']                   ),
+	                            ('feat_fcf_terminal_growth',           'cash_flow',       'predictor',  'mutable_predictor', 'feat_fcf_terminal_growth',           ARRAY ['dcf_pt']                   ),
+	                            ('feat_reinvest_rate',                 'cash_flow',       'predictor',  'mutable_predictor', 'feat_reinvest_rate',                 ARRAY ['dcf_pt']                   ),
+	-- price_target multi-source engineered feats (mv_pymc_price_target). Task 6:
+	-- these previously had MISNAMED aliases overloaded on raw carriers
+	-- (feat_*_high/_low/_lag/_1y/_6m). Register them as self-rows so the alias
+	-- equals the MV column name exactly, and drop the bad carrier aliases below.
+	                            ('feat_target_range_width',            'analyst_targets', 'predictor',  'mutable_predictor', 'feat_target_range_width',            ARRAY ['price_target']             ),
+	                            ('feat_52w_range_position',            'technical',       'predictor',  'mutable_predictor', 'feat_52w_range_position',            ARRAY ['price_target']             ),
+	                            ('feat_pt_range_hit_rate',             'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_hit_rate',             ARRAY ['price_target']             ),
+	                            ('feat_pt_high_low_convergence_1y',    'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_high_low_convergence_1y',    ARRAY ['price_target']             ),
+	                            ('feat_analyst_count_stability',       'analyst_targets', 'predictor',  'mutable_predictor', 'feat_analyst_count_stability',       ARRAY ['price_target']             ),
+	                            ('feat_pt_accuracy_1y',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_accuracy_1y',                ARRAY ['price_target']             ),
+	                            ('feat_pt_optimism_bias',              'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_optimism_bias',              ARRAY ['price_target']             ),
+	                            ('feat_net_buy_sentiment',             'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_net_buy_sentiment',             ARRAY ['price_target']             ),
+	                            ('feat_conviction_ratio',              'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_conviction_ratio',              ARRAY ['price_target']             )
+ON CONFLICT (column_name) DO UPDATE SET pymc_role     = excluded.pymc_role,
+                                        feature_alias = excluded.feature_alias,
+                                        model_targets = (SELECT ARRAY(SELECT DISTINCT
+                                                                             unnest(pml.pml_df_metadata.model_targets || excluded.model_targets))
+                                        ),
+                                        updated_at    = CURRENT_TIMESTAMP;
+
 TRUNCATE pml.pml_df_feature_alias;
 
 INSERT INTO pml.pml_df_feature_alias (column_name,                         model_target,         feature_alias                      )
@@ -1529,25 +1626,27 @@ VALUES
 	-- provenance is recorded on one representative (otherwise-unaliased) rating
 	-- column per feature. num_hold_ratings / num_no_opinion_ratings are already
 	-- mapped above (feat_holds / feat_no_opinion), leaving these four unaliased
-	-- columns as carriers -- no PK collision. (Same multi-column limitation as
-	-- feat_net_buy_sentiment / feat_conviction_ratio, which stay un-aliased and
-	-- surface via the notebook KNOWN_FEATURES fallback.)
+	-- columns as carriers -- no PK collision. (feat_net_buy_sentiment /
+	-- feat_conviction_ratio are multi-source and are now registered as their
+	-- own self-rows in the TASK 4 metadata INSERT above, so they reach the
+	-- catalogue directly rather than via the notebook KNOWN_FEATURES fallback.)
 	                                 ('num_strong_buys_ratings',           'price_target',       'feat_analyst_bullish_pct'         ),
 	                                 ('num_strong_sell_ratings',           'price_target',       'feat_analyst_bearish_pct'         ),
 	                                 ('num_buys_ratings',                  'price_target',       'feat_analyst_neutral_pct'         ),
 	                                 ('num_sell_ratings',                  'price_target',       'feat_analyst_conviction'          ),
-	                                 ('price_target',                      'price_target',       'feat_price_target'                ),
+	-- Task 6: removed ('price_target','price_target','feat_price_target') -- the
+	-- MV emits raw `price_target`, not a `feat_price_target` column.
 	                                 ('price_target_stddev',               'price_target',       'feat_target_dispersion_cv'        ),
 	                                 ('p_e_ntm',                           'price_target',       'feat_pe_ntm'                      ),
 	                                 ('ev_ebitda_ntm',                     'price_target',       'feat_ev_ebitda_ntm'               ),
 	                                 ('volatility_3m',                     'price_target',       'feat_vol_3m'                      ),
 	                                 ('analyst_rating',                    'price_target',       'feat_analyst_rating'              ),
-	                                 ('w_52high_adj',                      'price_target',       'feat_52w_range_position_high'     ),
-	                                 ('w_52low_adj',                       'price_target',       'feat_52w_range_position_low'      ),
+	-- Task 6: feat_52w_range_position (from w_52high_adj + w_52low_adj) and
+	-- feat_target_range_width (from target_pct_high + target_pct_low) are
+	-- multi-source; registered as self-rows above. The misnamed *_high/_low
+	-- carrier aliases the MV never emits were removed here.
 	                                 ('price_target_3m_ago',               'price_target',       'feat_pt_momentum_3m'              ),
 	                                 ('price_target_num_3m_ago',           'price_target',       'feat_coverage_change_3m'          ),
-	                                 ('target_pct_high',                   'price_target',       'feat_target_range_width_high'     ),
-	                                 ('target_pct_low',                    'price_target',       'feat_target_range_width_low'      ),
 	-- ---- price_target MvGRW time-axis anchors (raw DATE coords) ----
 	                                 ('income_statement_report_date',      'price_target',       'income_statement_report_date'     ),
 	                                 ('next_earnings',                     'price_target',       'next_earnings'                    ),
@@ -1564,12 +1663,12 @@ VALUES
 	                                 ('days_to_fy_end',                    'price_target',       'feat_days_to_fy_end'              ),
 	-- ---- price_target achievement / accuracy (realised vs 1Y-ago targets) ----
 	                                 ('price_target_1y_ago',               'price_target',       'feat_pt_achievement_1y'           ),
-	                                 ('price_target_low_1y_ago',           'price_target',       'feat_pt_range_hit_rate_low'       ),
-	                                 ('price_target_high_1y_ago',          'price_target',       'feat_pt_range_hit_rate_high'      ),
-	                                 ('price_target_median_1y_ago',        'price_target',       'feat_pt_high_low_convergence_1y_lag'),
+	-- Task 6: feat_pt_range_hit_rate (low_1y_ago + high_1y_ago),
+	-- feat_pt_high_low_convergence_1y (high/low/median + 1y_ago) and
+	-- feat_analyst_count_stability (num + 1y/6m/3m_ago) are multi-source;
+	-- registered as self-rows above. The misnamed *_low/_high/_lag/_1y/_6m
+	-- carrier aliases (which the MV never emits) were removed here.
 	                                 ('price_target_median',               'price_target',       'feat_pt_median_vs_mean_spread'    ),
-	                                 ('price_target_num_1y_ago',           'price_target',       'feat_analyst_count_stability_1y'  ),
-	                                 ('price_target_num_6m_ago',           'price_target',       'feat_analyst_count_stability_6m'  ),
 
 	-- ---- kalman_pt aliases (from mv_pymc_kalman_pt) ----
 	                                 ('price_target',                      'kalman_pt',          'observed_pt'                      ),
@@ -1585,15 +1684,13 @@ VALUES
 	                                 ('volatility_1y',                     'kalman_pt',          'feat_vol_1y'                      ),
 	                                 ('total_return_ytd',                  'kalman_pt',          'feat_total_return_ytd'            ),
 	-- NOTE: mv_pymc_kalman_pt also emits `feat_implied_upside`
-	--       (= calc_change_ratio(price_target, last_price)). It is intentionally
-	--       NOT aliased here: the feature derives from BOTH `price_target` and
-	--       `last_price`, and the alias table is keyed PRIMARY KEY
-	--       (column_name, model_target) -- both source columns are already mapped
-	--       above (observed_pt / last_price), so a third row would violate the PK.
-	--       This mirrors how mv_pymc_price_target's own `feat_implied_upside`
-	--       (and other multi-column engineered feats) are left un-aliased. The
-	--       column is surfaced to the notebook via the `KNOWN_FEATURES` fallback
-	--       in pymc_kalman_filter_pt.ipynb (Section 2) rather than the catalogue.
+	--       (= calc_change_ratio(price_target, last_price)). It derives from BOTH
+	--       `price_target` and `last_price`, so it cannot be an alias row here
+	--       (PK (column_name, model_target); both sources already map to
+	--       observed_pt / last_price). It is instead registered as its own
+	--       self-row in the TASK 4 metadata INSERT above (model_targets =
+	--       {kalman_pt, price_target}), so it now reaches vw_pymc_feature_catalogue
+	--       directly instead of relying only on the notebook KNOWN_FEATURES fallback.
 	-- ---- kalman_pt fiscal-calendar time-axis anchors (raw DATE coords) ----
 	-- Alias == raw MV column name (the MV emits these un-prefixed), so the
 	-- notebook's `feature_alias IN kalman_df.columns` present-check resolves.
@@ -1703,6 +1800,90 @@ SELECT col, m, col
 FROM unnest(ARRAY ['isin', 'ticker', 'region', 'country', 'trading_country', 'exchange', 'unit', 'style_class', 'size_class', 'sector', 'industry']) col
 	     CROSS JOIN unnest(ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])   m
 ON CONFLICT (column_name, model_target) DO NOTHING;
+
+-- =============================================================================
+-- KalmanFilterPriceTarget: lagged analyst-target TRAIL as a multi-horizon
+-- state-space observation set (mv_pymc_kalman_pt).
+-- =============================================================================
+-- Section 7c wired the price_target_%_ago / price_%_ago lags into
+-- kalman_pt.model_targets but left their GLOBAL pml_df_metadata.pymc_role at the
+-- 'derived_input' default (feature_role='historical'). The Kalman panel, however,
+-- *observes* the full analyst-target trail (level / low / high / median) as the
+-- latent price-target state sequence, and conditions on the analyst-count trail
+-- as fixed per-step scale (constant_data).
+--
+-- We register per-model alias rows and override pymc_role ON THE ALIAS ROW ONLY
+-- (vw_pymc_feature_catalogue resolves COALESCE(fa.pymc_role, md.pymc_role)). The
+-- columns' GLOBAL role stays 'derived_input', so models that read these lags as
+-- engineered predictors are unaffected (e.g. price_target consumes
+-- price_target_1y_ago as the feat_pt_achievement_1y carrier — see TASK 2 below).
+-- feature_alias == raw column name because mv_pymc_kalman_pt emits the trail
+-- un-prefixed, so the notebook's `feature_alias IN kalman_df.columns` present-
+-- check resolves. Mirrors the TASK 2 / FINDING 2 per-model override pattern.
+INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
+SELECT col, 'kalman_pt', col, 'observed'
+FROM unnest(ARRAY [ 'price_target_1w_ago', 'price_target_mtd_ago', 'price_target_1m_ago', 'price_target_qtd_ago', 'price_target_3m_ago', 'price_target_6m_ago', 'price_target_ytd_ago', 'price_target_1y_ago', 'price_target_low_1w_ago', 'price_target_low_mtd_ago', 'price_target_low_1m_ago', 'price_target_low_qtd_ago', 'price_target_low_3m_ago', 'price_target_low_6m_ago', 'price_target_low_ytd_ago', 'price_target_low_1y_ago', 'price_target_high_1w_ago', 'price_target_high_mtd_ago', 'price_target_high_1m_ago', 'price_target_high_qtd_ago', 'price_target_high_3m_ago', 'price_target_high_6m_ago', 'price_target_high_ytd_ago', 'price_target_high_1y_ago', 'price_target_median_1w_ago', 'price_target_median_mtd_ago', 'price_target_median_1m_ago', 'price_target_median_qtd_ago', 'price_target_median_3m_ago', 'price_target_median_6m_ago', 'price_target_median_ytd_ago', 'price_target_median_1y_ago' ]) AS col
+ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias,
+                                                      pymc_role     = excluded.pymc_role;
+
+-- Analyst-count trail: fixed per-step participation the panel conditions on ->
+-- constant_data. No 6m horizon: price_target_num_6m_ago feeds feat_coverage_drift
+-- only and intentionally stays 'derived_input'.
+INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
+SELECT col, 'kalman_pt', col, 'constant_data'
+FROM unnest(ARRAY [ 'price_target_num_1w_ago', 'price_target_num_mtd_ago', 'price_target_num_1m_ago', 'price_target_num_qtd_ago', 'price_target_num_3m_ago', 'price_target_num_ytd_ago', 'price_target_num_1y_ago' ]) AS col
+ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias,
+                                                      pymc_role     = excluded.pymc_role;
+
+-- =============================================================================
+-- TASK 2 / FINDING 2: PER-MODEL pymc_role OVERRIDES
+-- =============================================================================
+-- A carrier column's GLOBAL pml_df_metadata.pymc_role is model-agnostic, but
+-- several columns aliased as feat_* (i.e. used as a mutable_predictor in a
+-- specific MV) carry a global role of observed / derived_input / constant_data.
+-- vw_pymc_feature_catalogue filters mutable_predictor via
+-- COALESCE(fa.pymc_role, md.pymc_role), so without an override these aliases
+-- never reach the catalogue-driven models. We set the per-model role on the
+-- alias row WITHOUT changing the column's global role (e.g. price_target_stddev
+-- stays globally 'observed' but is a 'mutable_predictor' for kalman/price_target).
+UPDATE pml.pml_df_feature_alias fa
+SET pymc_role = 'mutable_predictor'
+FROM (VALUES
+	      -- price_target predictor carriers (global observed / derived_input / constant_data)
+	      ('price_target_stddev', 'price_target'),
+	      ('price_target_3m_ago', 'price_target'),
+	      ('price_target_num_3m_ago', 'price_target'),
+	      ('price_target_1y_ago', 'price_target'),
+	      ('price_target_median', 'price_target'),
+	      ('num_strong_buys_ratings', 'price_target'),
+	      ('num_strong_sell_ratings', 'price_target'),
+	      ('num_buys_ratings', 'price_target'),
+	      ('num_sell_ratings', 'price_target'),
+	      ('num_hold_ratings', 'price_target'),
+	      ('num_no_opinion_ratings', 'price_target'),
+	      -- kalman_pt predictor carriers (global observed)
+	      ('price_target_stddev', 'kalman_pt'),
+	      ('total_return_ytd', 'kalman_pt'),
+	      -- dcf_pt CAGR carriers (global observed)
+	      ('tot_return_pct_cagr_3y', 'dcf_pt'),
+	      ('tot_return_pct_cagr_10y', 'dcf_pt'),
+	      -- dividend_safety derived/coord carriers
+	      ('dividend_per_share_neg1fy', 'dividend_safety'),
+	      ('dividend_per_share_neg3fy', 'dividend_safety'),
+	      ('dividend_per_share_neg5fy', 'dividend_safety'),
+	      ('dividend_record_frequency', 'dividend_safety'),
+	      -- credit_risk derived/count carriers
+	      ('altman_z_score_neg1fy', 'credit_risk'),
+	      ('altman_z_score_neg3fy', 'credit_risk'),
+	      ('full_time_employees_fy', 'credit_risk'),
+	      -- accounting_anomaly derived carriers
+	      ('sales_neg0fyactual', 'accounting_anomaly'),
+	      ('ebit_neg0fyactual', 'accounting_anomaly'),
+	      ('ebitda_neg0fyactual', 'accounting_anomaly'),
+	      ('full_time_employees_fy', 'accounting_anomaly')
+     ) AS ov(column_name, model_target)
+WHERE fa.column_name = ov.column_name
+  AND fa.model_target = ov.model_target;
 
 COMMIT;
 

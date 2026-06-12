@@ -115,6 +115,11 @@ class KalmanFilterPriceTarget:
     def __init__(self) -> None:
         self.model_: Optional[pm_typing.Model] = None
         self.idata_: Optional[InferenceLike] = None
+        # Fit context retained so :meth:`forecast` can project the fitted
+        # local-level process forward to future fiscal events without refitting.
+        self._fit_idata_: Optional[InferenceLike] = None
+        self._fit_last_price_: Optional[float] = None
+        self._fit_has_trend_: bool = False
 
     @staticmethod
     @lru_cache(maxsize=4)
@@ -231,6 +236,48 @@ class KalmanFilterPriceTarget:
             pd.Timestamp(ref).tz_localize(None) if pd.Timestamp(ref).tzinfo else pd.Timestamp(ref)
         )
 
+    @staticmethod
+    def _resolve_fiscal_anchor(
+            df: pd.DataFrame,
+            id_col: str,
+            anchor_col: Optional[str],
+    ) -> Optional[pd.Series]:
+        """Return a per-ISIN fiscal-calendar anchor date for ``*_ago`` offsetting.
+
+        When ``anchor_col`` (e.g. ``income_statement_report_date``) is present,
+        each ISIN's ``*_ago`` observations are measured back from that ISIN's own
+        fiscal anchor instead of a single global "now". The most recent
+        (``max``) date per ISIN is used so the latest snapshot lands on the last
+        actual reporting date.
+
+        Parameters
+        ----------
+        df
+            Wide snapshot frame.
+        id_col
+            ISIN column name.
+        anchor_col
+            Fiscal-calendar date column to anchor on. ``None`` disables fiscal
+            anchoring (callers fall back to :meth:`_resolve_reference_now`).
+
+        Returns
+        -------
+        pandas.Series or None
+            ISIN-indexed tz-naive anchor timestamps, or ``None`` when the column
+            is absent or holds no parseable dates.
+        """
+        if not anchor_col or anchor_col not in df.columns or id_col not in df.columns:
+            return None
+        anchors = pd.to_datetime(df[anchor_col], errors="coerce")
+        tmp = pd.DataFrame({id_col: df[id_col].to_numpy(), "_anchor": anchors})
+        tmp = tmp.dropna(subset=["_anchor"])
+        if tmp.empty:
+            return None
+        s = tmp.groupby(id_col)["_anchor"].max()
+        if getattr(s.dt, "tz", None) is not None:
+            s = s.dt.tz_localize(None)
+        return s
+
     @classmethod
     def build_price_target_history(
         cls,
@@ -240,6 +287,7 @@ class KalmanFilterPriceTarget:
         now_cols: tuple[str, ...] = ("price_target", "last_price"),
         min_observations: int = 2,
         timestamp_col: str = "feature_calculated_at",
+            fiscal_anchor_col: Optional[str] = None,
     ) -> tuple[pd.DataFrame, pd.Series, str]:
         """Build a long ``(isin, asof_date, price_target)`` panel from a snapshot.
 
@@ -264,6 +312,14 @@ class KalmanFilterPriceTarget:
             to consider an ISIN eligible for Kalman fitting.
         timestamp_col : str
             Column name carrying the snapshot's calculation timestamp.
+        fiscal_anchor_col : str, optional
+            Fiscal-calendar date column (e.g. ``income_statement_report_date``)
+            to anchor the ``*_ago`` axis on. When supplied, each ISIN's
+            observations are offset from its own fiscal anchor (resolved via
+            :meth:`_resolve_fiscal_anchor`) so the time axis tracks the real
+            reporting cadence rather than a single global "now". ISINs without a
+            parseable anchor fall back to the global ``ref_now``. ``None`` (the
+            default) preserves the prior single-anchor behaviour.
 
         Returns
         -------
@@ -278,12 +334,13 @@ class KalmanFilterPriceTarget:
         """
         offset_map = _build_ago_offset_map()
         ref_now = cls._resolve_reference_now(df, timestamp_col=timestamp_col)
+        anchor_by_isin = cls._resolve_fiscal_anchor(df, id_col, fiscal_anchor_col)
 
-        def _ago_to_date(suffix: str) -> Any:
-            off = offset_map.get(suffix.lower())
-            if off is None:
-                return pd.NaT
-            return ref_now - off
+        def _anchor_series(ids: pd.Series) -> pd.Series:
+            """Per-row anchor timestamps: the ISIN's fiscal anchor, else ``ref_now``."""
+            if anchor_by_isin is None:
+                return pd.Series(ref_now, index=ids.index)
+            return ids.map(anchor_by_isin).fillna(ref_now)
 
         ago_re = re.compile(_AGO_HISTORY_RE)
         history_cols: list[tuple[str, str]] = []
@@ -292,29 +349,35 @@ class KalmanFilterPriceTarget:
             if m:
                 history_cols.append((col, m.group("suf")))
 
-        now_specs: list[tuple[str, pd.Timestamp]] = [
-            (c, ref_now) for c in now_cols if c in df.columns
-        ]
-
         frames: list[pd.DataFrame] = []
+        # Historical ``*_ago`` snapshots: offset each row from its own anchor so the
+        # axis is fiscal-calendar aligned when ``fiscal_anchor_col`` is supplied.
         for col, suf in history_cols:
-            asof = _ago_to_date(suf)
-            if pd.isna(asof):
+            off = offset_map.get(suf.lower())
+            if off is None:
                 continue
             piece = (
                 df[[id_col, col]]
                 .rename(columns={col: "price_target"})
                 .dropna(subset=["price_target"])
             )
-            piece = piece.assign(asof_date=asof, source_col=col)
+            if piece.empty:
+                continue
+            piece = piece.assign(
+                asof_date=_anchor_series(piece[id_col]) - off, source_col=col
+            )
             frames.append(piece)
-        for col, asof in now_specs:
+        # "Now" columns seeded at each ISIN's anchor (the latest reporting date when
+        # fiscal anchoring is active, else the global ``ref_now``).
+        for col in (c for c in now_cols if c in df.columns):
             piece = (
                 df[[id_col, col]]
                 .rename(columns={col: "price_target"})
                 .dropna(subset=["price_target"])
             )
-            piece = piece.assign(asof_date=asof, source_col=col)
+            if piece.empty:
+                continue
+            piece = piece.assign(asof_date=_anchor_series(piece[id_col]), source_col=col)
             frames.append(piece)
 
         if not frames:
@@ -552,7 +615,9 @@ class KalmanFilterPriceTarget:
         log_pt: np.ndarray,
         sigma_state: Any,
         scale: float,
+            tau: np.ndarray,
         init_mu: Optional[float] = None,
+            beta_trend: Any = None,
     ) -> Any:
         """Build the explicit latent log-price state (non-marginalized forms).
 
@@ -561,8 +626,15 @@ class KalmanFilterPriceTarget:
         it integrates the latent path out analytically in
         :meth:`_build_marginalized_likelihood`.
 
-        - ``centered`` — an explicit :class:`pymc.GaussianRandomWalk`.
+        - ``centered`` — an explicit :class:`pymc.GaussianRandomWalk` (registered
+          as ``log_level``).
         - ``non_centered`` (default) — ``init + cumsum(sigma_state * z)``.
+
+        When ``beta_trend`` is supplied, a deterministic linear trend
+        ``beta_trend * tau`` is added to the latent mean (the reference notebook's
+        structural-trend fix that stops the projection decaying to a flat
+        baseline). The combined latent path is always exposed as the ``log_state``
+        Deterministic so downstream consumers resolve uniformly.
 
         Parameters
         ----------
@@ -575,26 +647,32 @@ class KalmanFilterPriceTarget:
             Random-walk (process) noise scale.
         scale : float
             Clamped log-scale for the diffuse initial-level prior.
+        tau : numpy.ndarray
+            Elapsed-time vector (years) from :meth:`_resolve_time_deltas`; scales
+            the optional ``beta_trend`` term.
         init_mu : float, optional
             Initial latent log-level anchor. Defaults to ``log_pt[0]``; pass
             ``log(last_price)`` to anchor the smoother to the current spot
             price instead of the first observed target.
+        beta_trend : pytensor tensor, optional
+            Per-year log-price trend slope. ``None`` (default) omits the trend.
         """
         anchor = float(log_pt[0]) if init_mu is None else float(init_mu)
         if parameterization == "centered":
-            return pm.GaussianRandomWalk(
-                "log_state",
+            state_mean = pm.GaussianRandomWalk(
+                "log_level",
                 sigma=sigma_state,
                 init_dist=pm.Normal.dist(mu=anchor, sigma=scale),
                 dims="time",
             )
-        # Non-centred GRW: state = init + cumsum(sigma_state * z).
-        z_innov = pm.Normal("z_innov", 0.0, 1.0, dims="time")
-        return pm.Deterministic(
-            "log_state",
-            anchor + pt.cumsum(sigma_state * z_innov),
-            dims="time",
-        )
+        else:
+            # Non-centred GRW: state = init + cumsum(sigma_state * z).
+            z_innov = pm.Normal("z_innov", 0.0, 1.0, dims="time")
+            state_mean = anchor + pt.cumsum(sigma_state * z_innov)
+        if beta_trend is not None:
+            tau_t = pt.as_tensor_variable(np.asarray(tau, dtype="float64"))
+            state_mean = state_mean + beta_trend * tau_t
+        return pm.Deterministic("log_state", state_mean, dims="time")
 
     @staticmethod
     def _build_marginalized_likelihood(
@@ -605,6 +683,7 @@ class KalmanFilterPriceTarget:
         scale: float,
         tau: np.ndarray,
         init_mu: Optional[float] = None,
+            beta_trend: Any = None,
     ) -> Any:
         """Integrate the latent random walk out into the likelihood covariance.
 
@@ -670,7 +749,11 @@ class KalmanFilterPriceTarget:
         # Marginal observation covariance = signal covariance + measurement noise
         # on the diagonal (+ tiny jitter for numerical positive-definiteness).
         obs_cov = state_cov + (pt.sqr(sigma_obs) + 1e-6) * eye
+        # Local-level mean is the diffuse initial level, plus an optional linear
+        # trend in elapsed time (the structural-trend term from the reference).
         mu_vec = mu0 * pt.ones(n)
+        if beta_trend is not None:
+            mu_vec = mu_vec + beta_trend * tau_t
         pm.MvNormal("obs", mu=mu_vec, cov=obs_cov, observed=log_obs_data, dims="time")
 
         # Analytic Kalman/RTS smoother mean E[x | y] = mu + K Sigma^{-1} (y - mu),
@@ -777,6 +860,8 @@ class KalmanFilterPriceTarget:
         chains: int = 4,
         target_accept: float = 0.9,
         random_seed: int = 42,
+            trend: bool = False,
+            trend_sigma: float = 0.5,
         parameterization: Parameterization = "auto",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
@@ -833,6 +918,15 @@ class KalmanFilterPriceTarget:
             adaptation during sampling. Default is 0.9.
         random_seed : int
             Seed for random number generation to ensure reproducibility. Default is 42.
+        trend : bool
+            When ``True``, add a deterministic linear trend ``beta_trend * tau``
+            (per-year log-price slope) to the latent state mean. This is the
+            structural-trend component from the *Forecasting with Structural AR
+            Timeseries* reference that prevents :meth:`forecast` projections from
+            decaying to a flat baseline. Default ``False`` (driftless local level).
+        trend_sigma : float
+            Prior scale for the ``beta_trend ~ Normal(0, trend_sigma)`` slope (in
+            log-price units per year). Only used when ``trend=True``. Default 0.5.
         parameterization : Parameterization
             Model parameterization approach used for the latent state. Options are:
             "auto", "non_centered", "centered", or "marginalized". Default is "auto",
@@ -936,6 +1030,11 @@ class KalmanFilterPriceTarget:
             sigma_state = pm.Gamma("sigma_state", mu=0.10, sigma=0.05)
             sigma_obs = pm.Gamma("sigma_obs", mu=scale, sigma=scale)
 
+            # Optional structural trend: a per-year log-price slope shared by the
+            # likelihood mean and recovered by :meth:`forecast` so projections
+            # carry directional structure (reference: "Specifying a Trend Model").
+            beta_trend = pm.Normal("beta_trend", 0.0, float(trend_sigma)) if trend else None
+
             if parameterization == "marginalized":
                 # Integrate the latent path out: the GRW (process) and
                 # observation (measurement) variances both enter the MvNormal
@@ -944,11 +1043,12 @@ class KalmanFilterPriceTarget:
                 # explicit (funnel-prone) random walk.
                 log_state = self._build_marginalized_likelihood(
                     log_obs_data, log_pt, sigma_state, sigma_obs, scale, tau,
-                    init_mu=init_mu,
+                    init_mu=init_mu, beta_trend=beta_trend,
                 )
             else:
                 log_state = self._build_log_state(
-                    parameterization, log_pt, sigma_state, scale, init_mu=init_mu
+                    parameterization, log_pt, sigma_state, scale, tau,
+                    init_mu=init_mu, beta_trend=beta_trend,
                 )
                 pm.Normal(
                     "obs",
@@ -1001,7 +1101,175 @@ class KalmanFilterPriceTarget:
         # detection so external NUTS samplers that bypass ArviZ still work.
         _az_inference = getattr(az, "InferenceData", None) if az is not None else None
         self.idata_ = idata if (_az_inference is not None and isinstance(idata, _az_inference)) else None
+
+        # Retain fit context so :meth:`forecast` can project forward to future
+        # fiscal events. ``_fit_idata_`` keeps whatever has a ``posterior`` group
+        # (InferenceData or xarray.DataTree) regardless of the MultiTrace check above.
+        self._fit_idata_ = idata if hasattr(idata, "posterior") else None
+        self._fit_last_price_ = float(last_price) if has_last_price else None
+        self._fit_has_trend_ = bool(trend)
         return idata, model
+
+    def forecast(
+            self,
+            horizons_days: Any,
+            *,
+            fiscal_dates: Optional[Any] = None,
+            labels: Optional[list[str]] = None,
+            last_price: Optional[float] = None,
+            random_seed: int = 42,
+    ) -> Any:
+        """Project the fitted local-level process forward to future fiscal events.
+
+        This is the structural *prediction step* of the *Forecasting with
+        Structural AR Timeseries* reference, specialised to the continuous-time
+        local-level (Wiener) process fit by :meth:`fit`. It conditions on the
+        learned posterior — the terminal smoothed latent log-state
+        :math:`x_T = \\text{log\\_state}[-1]`, the process / observation scales
+        ``sigma_state`` / ``sigma_obs`` and the optional ``beta_trend`` — and
+        propagates it forward to a set of future horizons (typically the
+        ``days_to_*`` fiscal-calendar horizons emitted by ``mv_pymc_kalman_pt``).
+
+        For a horizon :math:`\\Delta\\tau` years beyond the last observation the
+        latent log-state is
+
+        .. math::
+
+            x_f \\mid x_T \\sim \\mathcal{N}\\bigl(x_T + \\beta_{\\text{trend}}\\,\\Delta\\tau,\\;
+                                                  \\sigma_{\\text{state}}^2\\,\\Delta\\tau\\bigr),
+
+        and the predictive (observed) target adds the measurement variance
+        :math:`\\sigma_{\\text{obs}}^2` on top of that state variance.
+        This is the GRW analogue of the reference's ``ar1_fut`` initialised at
+        ``DiracDelta(ar[..., -1])`` and conditioned on the learned coefficients.
+        Each horizon is independent of :math:`x_T`, so the predictive variance is
+        non-decreasing in the horizon.
+
+        Parameters
+        ----------
+        horizons_days : array-like
+            Strictly-positive, finite day-offsets **beyond the last observation**
+            (e.g. ``days_to_next_earnings`` re-based to the last observed date).
+        fiscal_dates : array-like, optional
+            Absolute future dates aligned 1:1 with ``horizons_days``; used as the
+            ``time_future`` coordinate when supplied (else the day-offsets are).
+        labels : list of str, optional
+            Optional human labels (e.g. ``["next_earnings", "expected_report"]``)
+            attached as a ``label`` coord along ``time_future``.
+        last_price : float, optional
+            Spot price for ``implied_upside_future``. Defaults to the
+            ``last_price`` supplied at :meth:`fit` time.
+        random_seed : int
+            Seed for the predictive draws. Default 42.
+
+        Returns
+        -------
+        arviz.InferenceData or xarray.Dataset
+            A ``predictions`` group (when ArviZ is available, else a raw
+            ``xarray.Dataset``) with dims ``(chain, draw, time_future)`` and
+            variables ``forecast_state`` (latent, price space), ``forecast_pt``
+            (predictive observed target, price space), ``predictive_sd_log``
+            (closed-form log-space predictive sd) and — when a positive
+            ``last_price`` is known — ``implied_upside_future``.
+
+        Raises
+        ------
+        RuntimeError
+            If :meth:`fit` has not produced a sampled posterior.
+        ValueError
+            If ``horizons_days`` is empty / non-positive / non-finite, or
+            ``fiscal_dates`` does not align with ``horizons_days``.
+        """
+        if self._fit_idata_ is None or not hasattr(self._fit_idata_, "posterior"):
+            raise RuntimeError(
+                "forecast() requires a completed fit() with a sampled posterior; "
+                "call fit(...) first (with an ArviZ-returning sampler)."
+            )
+        import xarray as xr
+
+        h = np.asarray(horizons_days, dtype="float64").ravel()
+        if h.size == 0:
+            raise ValueError("horizons_days must contain at least one horizon.")
+        if not np.isfinite(h).all() or np.any(h <= 0):
+            raise ValueError(
+                "horizons_days must be strictly positive, finite day-offsets "
+                "measured beyond the last observation."
+            )
+        delta_tau = h / 365.25  # elapsed years from the last observation
+
+        post = self._fit_idata_.posterior
+        sigma_state = np.asarray(post["sigma_state"].values, dtype="float64")
+        sigma_obs = np.asarray(post["sigma_obs"].values, dtype="float64")
+        # Terminal smoothed latent log-state x_T (per posterior draw).
+        x_term = np.asarray(post["log_state"].isel(time=-1).values, dtype="float64")
+        beta_trend = (
+            np.asarray(post["beta_trend"].values, dtype="float64")
+            if "beta_trend" in post
+            else np.zeros_like(x_term)
+        )
+
+        # Broadcast (chain, draw) x (time_future).
+        x_term_ = x_term[..., None]
+        ss_ = sigma_state[..., None]
+        so_ = sigma_obs[..., None]
+        bt_ = beta_trend[..., None]
+        dt_ = delta_tau[None, None, :]
+
+        mean_log = x_term_ + bt_ * dt_
+        proc_sd = ss_ * np.sqrt(dt_)
+        # Closed-form predictive (observation) sd in log-space: process + measure.
+        pred_sd_log = np.sqrt(ss_ ** 2 * dt_ + so_ ** 2) * np.ones_like(mean_log)
+
+        rng = np.random.default_rng(random_seed)
+        state_log = rng.normal(mean_log, proc_sd)  # latent future log-state
+        obs_log = rng.normal(state_log, so_ * np.ones_like(dt_))  # predictive log-target
+
+        lp = last_price if last_price is not None else self._fit_last_price_
+
+        if fiscal_dates is not None:
+            tf = pd.DatetimeIndex(pd.to_datetime(np.asarray(fiscal_dates)))
+            if len(tf) != h.size:
+                raise ValueError("fiscal_dates must align 1:1 with horizons_days.")
+            time_future: np.ndarray = tf.values
+        else:
+            time_future = h
+
+        dims = ("chain", "draw", "time_future")
+        data_vars: dict[str, Any] = {
+            "forecast_state": (dims, np.exp(state_log)),
+            "forecast_pt": (dims, np.exp(obs_log)),
+            "predictive_sd_log": (dims, pred_sd_log),
+        }
+        if lp is not None and np.isfinite(lp) and lp > 0:
+            data_vars["implied_upside_future"] = (dims, np.exp(state_log) / float(lp) - 1.0)
+
+        ds = xr.Dataset(
+            data_vars,
+            coords={
+                "chain": post.coords["chain"].values,
+                "draw": post.coords["draw"].values,
+                "time_future": time_future,
+            },
+        )
+        ds = ds.assign_attrs(
+            horizons_days=h,
+            trend=int(self._fit_has_trend_),
+            last_price=float(lp) if (lp is not None and np.isfinite(lp)) else float("nan"),
+        )
+        if labels is not None:
+            if len(labels) != h.size:
+                raise ValueError("labels must align 1:1 with horizons_days.")
+            ds = ds.assign_coords(label=("time_future", list(labels)))
+
+        # Expose as a ``predictions`` group, mirroring
+        # pm.sample_posterior_predictive(predictions=True). ArviZ 1.x aliases
+        # InferenceData to xarray.DataTree, so build the group as a DataTree node
+        # (accessible as ``result.predictions`` / ``result["predictions"]``).
+        # Fall back to the bare Dataset if DataTree is unavailable.
+        try:
+            return xr.DataTree.from_dict({"predictions": ds})
+        except Exception:  # pragma: no cover - older xarray without DataTree
+            return ds
 
     def fit_from_snapshot(
         self,
@@ -1013,6 +1281,7 @@ class KalmanFilterPriceTarget:
         min_observations: int = 2,
         timestamp_col: str = "feature_calculated_at",
         now_cols: tuple[str, ...] = ("price_target", "last_price"),
+            fiscal_anchor_col: Optional[str] = None,
         **fit_kwargs: Any,
     ) -> tuple[Optional[Union[InferenceLike, MultiTrace]], Any]:
         """Build a per-ISIN history from a snapshot frame and fit the model.
@@ -1038,9 +1307,13 @@ class KalmanFilterPriceTarget:
             Column carrying the snapshot anchor.
         now_cols : tuple of str
             Columns whose values seed the "now" anchor in the long panel.
+        fiscal_anchor_col : str, optional
+            Forwarded to :meth:`build_price_target_history` to anchor the
+            ``*_ago`` axis on a per-ISIN fiscal-calendar date (e.g.
+            ``income_statement_report_date``). ``None`` keeps the global anchor.
         **fit_kwargs : Any
             Forwarded verbatim to :meth:`fit` (``samples``, ``tune``,
-            ``chains``, ``parameterization``, ``nuts_sampler``, …).
+            ``chains``, ``parameterization``, ``trend``, ``nuts_sampler``, …).
 
         Returns
         -------
@@ -1054,6 +1327,7 @@ class KalmanFilterPriceTarget:
             now_cols=now_cols,
             min_observations=min_observations,
             timestamp_col=timestamp_col,
+            fiscal_anchor_col=fiscal_anchor_col,
         )
         if date_col is None or eligible.empty:
             warnings.warn(

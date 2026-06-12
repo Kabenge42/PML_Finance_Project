@@ -1,14 +1,9 @@
-create function information_schema._pg_expandarray(anyarray, OUT x anyelement, OUT n integer) returns SETOF record
-    immutable
-    strict
-    parallel safe
-    rows 100
-    language sql
-as
-$$
-SELECT *
-FROM pg_catalog.unnest($1) WITH ORDINALITY
+CREATE FUNCTION information_schema._pg_expandarray(anyarray, OUT x anyelement, OUT n integer) RETURNS setof record
+	IMMUTABLE STRICT PARALLEL SAFE ROWS 100
+	LANGUAGE sql AS
+$$ BEGIN
+	-- missing source code
+END;
 $$;
 
-alter function information_schema._pg_expandarray(unknown, out unknown, out unknown) owner to postgres;
-
+ALTER FUNCTION information_schema._pg_expandarray(anyarray, OUT anyelement, OUT integer) OWNER TO postgres;

@@ -50,8 +50,6 @@ nutpie = ">=0.14.0,<1.0.0"
 xarray = ">=2024.7.0,<2027.0.0"
 jax = ">=0.4.30,<1.0.0"
 jaxlib = ">=0.4.30,<1.0.0"
-numpyro = ">=0.16.0,<1.0.0"
-blackjax = ">=1.2.0,<2.0.0"
 # --- Hyperparameter Optimization ---
 optuna = ">=4.1.0,<5.0.0"
 # --- Networking ---
@@ -68,11 +66,9 @@ shap = ">=0.50.0,<1.0.0"
 numba = ">=0.63.0,<1.0.0"
 # catboost 1.2.10 (Feb 2026) added cp314 wheels — no longer gated.
 # See https://github.com/catboost/catboost/issues/2943.
-catboost = ">=1.2.10,<4.0.0"
-# --- Python <3.14 only packages (no 3.14 wheels yet) ---
-streamlit = { version = ">=1.40.0,<6.0.0", markers = "python_version < '3.14'" }
-tensorflow = { version = ">=2.15.0,<3.0.0", markers = "python_version < '3.14'" }
-scikeras = { version = ">=0.13.0,<1.0.0", markers = "python_version < '3.14'" }
+catboost = ">=1.2.10"
+numpyro = ">=0.16.0"
+blackjax = ">=1.2.0"
 
 [dev-packages]
 pytest = ">=8.3.0,<12.0.0"
@@ -82,6 +78,16 @@ flake8 = ">=7.1.0,<19.0.0"
 mypy = ">=1.11.0,<1.30.0"
 isort = ">=5.13.0,<11.0.0"
 pip-tools = ">=7.4.0,<30.0.0"
+
+# --- Python <3.14 only packages (streamlit, tensorflow, scikeras) ---
+# Intentionally NOT declared here. These have no cp314 wheels, and this Pipfile
+# locks against python_version = "3.14" (below). pipenv resolves the lock with a
+# single interpreter, so it cannot pin a package that has no 3.14 candidate — it
+# would skip them and write a malformed `streamlit==>=1.40.0,<6.0.0` version
+# (doubled `==>=`), which is invalid PEP 508 and crashes `pipenv lock`.
+# On Python <3.14, install them via pip's marker-aware paths instead:
+#   pip install -r requirements.txt            (markered: python_version < '3.14')
+#   pip install ".[dashboards,tensorflow]"     (markered pyproject extras)
 
 [requires]
 python_version = "3.14"

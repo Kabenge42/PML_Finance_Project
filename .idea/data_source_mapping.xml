@@ -8,7 +8,11 @@
     <file url="file://$PROJECT_DIR$/pml_df_metadata.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/pml_df_metadata_populate.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/pml_feature_catalogue.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/sql_scripts/pml/assert_pymc_catalogue_coverage.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/sql_scripts/pml/mv_pymc_price_target.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/sql_scripts/pml/pml_df.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/sql_scripts/pml/pml_df_feature_alias.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
+    <file url="file://$PROJECT_DIR$/sql_scripts/pml/vw_pymc_feature_catalogue.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/sql_scripts/public/bonds.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
     <file url="file://$PROJECT_DIR$/sql_scripts/public/calc_sentiment_features.sql" value="4a5713c4-e52c-4ad4-8e82-d218d447191c" />
   </component>

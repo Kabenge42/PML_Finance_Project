@@ -1,5 +1,3 @@
-create domain information_schema.time_stamp as timestamp(2) with time zone
-    default CURRENT_TIMESTAMP(2);
+CREATE DOMAIN information_schema.time_stamp AS timestamp(2) with time zone DEFAULT CURRENT_TIMESTAMP(2);
 
-alter domain information_schema.time_stamp owner to postgres;
-
+ALTER DOMAIN information_schema.time_stamp OWNER TO postgres;

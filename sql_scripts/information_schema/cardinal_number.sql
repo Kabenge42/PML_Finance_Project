@@ -1,5 +1,3 @@
-create domain information_schema.cardinal_number as integer
-    constraint cardinal_number_domain_check check (VALUE >= 0);
+CREATE DOMAIN information_schema.cardinal_number AS integer CONSTRAINT cardinal_number_domain_check CHECK (value >= 0);
 
-alter domain information_schema.cardinal_number owner to postgres;
-
+ALTER DOMAIN information_schema.cardinal_number OWNER TO postgres;

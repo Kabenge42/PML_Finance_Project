@@ -593,6 +593,55 @@ SELECT isin,
        price_target_high,
        price_target_low,
        price_target_num                                                                                                                                                                                                                                AS n_analysts,
+       -- ---- Lagged analyst-target trail (kalman_pt observed state sequence) -----
+       -- Full multi-horizon *_ago snapshots the Kalman panel observes as the latent
+       -- price-target state sequence (level / low / high / median). pymc_role
+       -- 'observed' for kalman_pt in pml.vw_pymc_feature_catalogue; emitted
+       -- un-prefixed so feature_alias (== column_name) resolves against
+       -- kalman_df.columns in the notebook present-check.
+       price_target_1w_ago,
+       price_target_mtd_ago,
+       price_target_1m_ago,
+       price_target_qtd_ago,
+       price_target_3m_ago,
+       price_target_6m_ago,
+       price_target_ytd_ago,
+       price_target_1y_ago,
+       price_target_low_1w_ago,
+       price_target_low_mtd_ago,
+       price_target_low_1m_ago,
+       price_target_low_qtd_ago,
+       price_target_low_3m_ago,
+       price_target_low_6m_ago,
+       price_target_low_ytd_ago,
+       price_target_low_1y_ago,
+       price_target_high_1w_ago,
+       price_target_high_mtd_ago,
+       price_target_high_1m_ago,
+       price_target_high_qtd_ago,
+       price_target_high_3m_ago,
+       price_target_high_6m_ago,
+       price_target_high_ytd_ago,
+       price_target_high_1y_ago,
+       price_target_median_1w_ago,
+       price_target_median_mtd_ago,
+       price_target_median_1m_ago,
+       price_target_median_qtd_ago,
+       price_target_median_3m_ago,
+       price_target_median_6m_ago,
+       price_target_median_ytd_ago,
+       price_target_median_1y_ago,
+       -- ---- Lagged analyst-count trail (kalman_pt constant_data scale) ----------
+       -- Coverage-count *_ago snapshots: fixed per-step analyst participation the
+       -- panel conditions on (pymc_role 'constant_data'). No 6m horizon
+       -- (price_target_num_6m_ago feeds feat_coverage_drift only, stays derived_input).
+       price_target_num_1w_ago,
+       price_target_num_mtd_ago,
+       price_target_num_1m_ago,
+       price_target_num_qtd_ago,
+       price_target_num_3m_ago,
+       price_target_num_ytd_ago,
+       price_target_num_1y_ago,
        calc_change_ratio(price_target::numeric, last_price::numeric)                                                                                                                                                                                   AS feat_implied_upside,
        -- ---- Per-step drift (mean log-uplift) across every price / target trail ----
        pml.target_drift(ARRAY [price_target::NUMERIC, price_target_1w_ago::NUMERIC, price_target_1m_ago::NUMERIC, price_target_3m_ago::NUMERIC, price_target_6m_ago::NUMERIC, price_target_1y_ago::NUMERIC])                                           AS feat_pt_drift,
@@ -780,7 +829,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_accounting_anomaly_isin ON pml.mv_
 -- gets its coords/observed/mutable_predictor/constant_data lists from SQL.
 CREATE OR REPLACE VIEW pml.vw_pymc_feature_catalogue AS
 SELECT m.model_name                                                 AS model_target,
-       md.pymc_role,
+       COALESCE(fa.pymc_role, md.pymc_role) AS pymc_role,
        md.column_name,
        md.category,
        md.feature_role,
@@ -791,16 +840,17 @@ FROM pml.pml_df_metadata                                md
 	     CROSS JOIN LATERAL UNNEST(md.model_targets) AS m(model_name)
 	     LEFT JOIN  pml.pml_df_feature_alias            fa
 	                ON fa.column_name = md.column_name AND fa.model_target = m.model_name
-WHERE md.pymc_role <> 'excluded';
+WHERE COALESCE(fa.pymc_role, md.pymc_role) <> 'excluded';
 
 -- Per-model feature alias list (used by `_resolve_<model>_feature_aliases`).
 CREATE OR REPLACE VIEW pml.vw_pymc_feature_aliases AS
 SELECT model_target,
-       ARRAY_AGG(column_name ORDER BY column_name) FILTER (WHERE pymc_role = 'mutable_predictor') AS feature_aliases,
-       ARRAY_AGG(column_name ORDER BY column_name) FILTER (WHERE pymc_role = 'observed')          AS observed_aliases,
-       ARRAY_AGG(column_name ORDER BY column_name)
+       ARRAY_AGG(feature_alias ORDER BY feature_alias)
+       FILTER (WHERE pymc_role = 'mutable_predictor')                                             AS feature_aliases,
+       ARRAY_AGG(feature_alias ORDER BY feature_alias) FILTER (WHERE pymc_role = 'observed')      AS observed_aliases,
+       ARRAY_AGG(feature_alias ORDER BY feature_alias)
        FILTER (WHERE pymc_role = 'constant_data')                                                 AS constant_data_aliases,
-       ARRAY_AGG(column_name ORDER BY column_name) FILTER (WHERE pymc_role = 'coord')             AS coord_aliases
+       ARRAY_AGG(feature_alias ORDER BY feature_alias) FILTER (WHERE pymc_role = 'coord')         AS coord_aliases
 FROM pml.vw_pymc_feature_catalogue
 GROUP BY model_target;
 
@@ -812,9 +862,96 @@ GROUP BY model_target, pymc_role
 ORDER BY model_target, pymc_role;
 
 -- =============================================================================
+-- COVERAGE REGRESSION CHECK  (Findings 1/3/4 fail loudly on refresh)
+-- =============================================================================
+-- Contract: every feat_* / observed_* / n_* column emitted by each mv_pymc_*
+-- must map to exactly ONE pml.vw_pymc_feature_catalogue row whose feature_alias
+-- equals that MV column name, for the MV's model_target. Anything else means a
+-- model would silently reindex the column to 0.0 (Finding 1) or list an alias
+-- the MV never emits (Findings 3/4).
+--
+-- This view reconciles the live MV output columns (information_schema) against
+-- the catalogue, in BOTH directions:
+--   * MISSING_FROM_CATALOGUE  : MV emits the column but the catalogue has no
+--                               matching feature_alias for that model.
+--   * DUPLICATE_CATALOGUE_ALIAS: more than one catalogue row claims the alias.
+--   * PHANTOM_CATALOGUE_ALIAS  : catalogue lists a feat_*/observed_*/n_* alias
+--                               the MV never emits (over-registration).
+CREATE OR REPLACE VIEW pml.vw_pymc_catalogue_coverage_check AS
+WITH mv_map(mv_name, model_target) AS (VALUES ('mv_pymc_earnings_beat', 'earnings_beat'),
+                                              ('mv_pymc_price_target', 'price_target'),
+                                              ('mv_pymc_kalman_pt', 'kalman_pt'),
+                                              ('mv_pymc_dcf_pt', 'dcf_pt'),
+                                              ('mv_pymc_dividend_safety', 'dividend_safety'),
+                                              ('mv_pymc_credit_risk', 'credit_risk'),
+                                              ('mv_pymc_accounting_anomaly', 'accounting_anomaly')
+                                      ),
+     mv_cols                       AS (SELECT mm.model_target, c.column_name AS feat_name
+                                       FROM mv_map                              mm
+	                                            JOIN information_schema.columns c
+	                                                 ON c.table_schema = 'pml' AND c.table_name = mm.mv_name
+                                       WHERE c.column_name LIKE 'feat\_%'
+	                                      OR c.column_name LIKE 'observed\_%'
+	                                      OR c.column_name LIKE 'n\_%'
+                                      ),
+     cat                           AS (SELECT model_target, feature_alias, COUNT(*) AS n_rows
+                                       FROM pml.vw_pymc_feature_catalogue
+                                       WHERE feature_alias LIKE 'feat\_%'
+	                                      OR feature_alias LIKE 'observed\_%'
+	                                      OR feature_alias LIKE 'n\_%'
+                                       GROUP BY model_target, feature_alias
+                                      )
+-- MV side: every emitted feat_/observed_/n_ column must resolve to one alias.
+SELECT mc.model_target,
+       mc.feat_name            AS feat_name,
+       COALESCE(cat.n_rows, 0) AS catalogue_rows,
+       CASE
+	       WHEN cat.n_rows IS NULL THEN 'MISSING_FROM_CATALOGUE'
+	       WHEN cat.n_rows > 1 THEN 'DUPLICATE_CATALOGUE_ALIAS'
+	       ELSE 'OK' END       AS status
+FROM mv_cols mc
+	     LEFT JOIN cat ON cat.model_target = mc.model_target AND cat.feature_alias = mc.feat_name
+UNION ALL
+-- Catalogue side: feat_/observed_/n_ aliases the MV never emits (phantoms).
+SELECT c.model_target, c.feature_alias AS feat_name, 0 AS catalogue_rows, 'PHANTOM_CATALOGUE_ALIAS' AS status
+FROM cat                   c
+	     LEFT JOIN mv_cols mc ON mc.model_target = c.model_target AND mc.feat_name = c.feature_alias
+WHERE mc.feat_name IS NULL;
+
+-- Fail-fast assertion (mirrors the PML_STRICT_STREAK_MERGE convention). Raises
+-- if any MV column is unregistered / duplicated / phantom in the catalogue.
+CREATE OR REPLACE FUNCTION pml.assert_pymc_catalogue_coverage() RETURNS VOID
+	LANGUAGE plpgsql AS
+$$
+DECLARE
+	v_count      INT;
+	v_violations TEXT;
+BEGIN
+	SELECT COUNT(*),
+	       string_agg(format('%s.%s [%s]', model_target, feat_name, status), ', ' ORDER BY model_target, feat_name)
+	INTO v_count, v_violations
+	FROM pml.vw_pymc_catalogue_coverage_check
+	WHERE status <> 'OK';
+
+	IF v_count > 0 THEN
+		RAISE EXCEPTION 'PyMC catalogue coverage check failed for % column(s): %', v_count, v_violations USING HINT =
+				'Every feat_/observed_/n_ column emitted by each mv_pymc_* must have exactly one pml.vw_pymc_feature_catalogue row with a matching feature_alias for its model_target (see pml.vw_pymc_catalogue_coverage_check).';
+	END IF;
+END;
+$$;
+
+-- =============================================================================
 -- REFRESH HELPER  (refresh all per-model MVs in one call)
 -- =============================================================================
-CREATE OR REPLACE PROCEDURE pml.refresh_pymc_materialized_views(use_concurrently BOOLEAN DEFAULT TRUE)
+-- Drop the previous single-arg signature so adding `assert_coverage` does not
+-- create an ambiguous overload for `CALL pml.refresh_pymc_materialized_views();`.
+-- `assert_coverage` is opt-in (default FALSE) mirroring the env-gated
+-- PML_STRICT_STREAK_MERGE fail-fast convention: pass TRUE (e.g. in CI /
+-- regression) to make Findings 1/3/4 raise on refresh. Call
+-- pml.assert_pymc_catalogue_coverage() directly for an ad-hoc gate.
+DROP PROCEDURE IF EXISTS pml.refresh_pymc_materialized_views(BOOLEAN);
+CREATE OR REPLACE PROCEDURE pml.refresh_pymc_materialized_views(use_concurrently BOOLEAN DEFAULT TRUE,
+                                                                assert_coverage  BOOLEAN DEFAULT FALSE)
 	LANGUAGE plpgsql AS
 $$
 DECLARE
@@ -835,6 +972,9 @@ BEGIN
 					EXECUTE format('REFRESH MATERIALIZED VIEW %I.%I', schema_part, table_part);
 			END IF;
 			END LOOP;
+
+	-- Fail loudly if the MV feature surface and the catalogue have diverged.
+	IF assert_coverage THEN PERFORM pml.assert_pymc_catalogue_coverage(); END IF;
 END;
 $$;
 

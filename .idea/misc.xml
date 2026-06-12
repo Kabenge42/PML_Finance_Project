@@ -6,7 +6,7 @@
   <component name="CMakePythonSetting">
     <option name="pythonIntegrationState" value="YES" />
   </component>
-  <component name="ProjectRootManager" version="2" languageLevel="JDK_25" project-jdk-name="Python 3.14 (2)" project-jdk-type="Python SDK">
+  <component name="ProjectRootManager" version="2" languageLevel="JDK_25" project-jdk-name="Python 3.14 (PML_Finance_Project) (3)" project-jdk-type="Python SDK">
     <output url="file://$PROJECT_DIR$/sdk_ouputs" />
   </component>
   <component name="PyCharmDSProjectLayout">

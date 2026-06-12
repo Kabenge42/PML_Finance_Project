@@ -90,7 +90,10 @@ boruta>= 0.3.0, <1.0.0
 # ============================================================================
 # Optional: Interactive Dashboards
 # ============================================================================
-streamlit>= 1.40.0, <6.0.0; python_version < '3.14'
+# streamlit has no cp314 wheels yet — gate it to Python <3.14 to match the
+# Pipfile [py313] category and the pyproject.toml [dashboards] extra. Without
+# this marker, `pip install -r requirements.txt` fails on Python 3.14.
+streamlit>=1.40.0,<6.0.0; python_version < '3.14'
 dash>= 2.18.0, <7.0.0
 
 # ============================================================================

@@ -1,91 +1,22 @@
-create view vw_features_analyst_sentiment
-            (isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
-             dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
-             next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
-             dividend_record_announce_date, dividend_record_ex_date, dividend_record_payable_date,
-             dividend_record_record_date, fy_end_date, income_statement_report_date, last_updated, next_earnings,
-             next_fy_end_date, next_income_statement_report_date, reference_date, analyst_bullish_pct,
-             analyst_bearish_pct, analyst_neutral_pct, analyst_conviction, upside_potential, price_target_spread_pct,
-             price_target_revision_1m, price_target_revision_3m, eps_revision_momentum, analyst_rating_normalized,
-             analyst_coverage_quality, pt_momentum_1w, pt_momentum_1m, pt_momentum_3m, pt_momentum_6m, pt_momentum_1y,
-             pt_median_momentum_1m, pt_median_momentum_3m, pt_acceleration_short, pt_acceleration_long,
-             pt_consensus_convergence, analyst_coverage_change_1m, analyst_coverage_change_3m,
-             analyst_coverage_change_1y, pt_vs_price_momentum, analyst_coverage_trend)
-as
-SELECT id.isin,
-       id.ticker,
-       id.name,
-       id.description,
-       id.region,
-       id.country,
-       id.trading_country,
-       id.exchange,
-       id.sector,
-       id.industry,
-       id.dividend_record_frequency,
-       id.earnings_report_frequency,
-       id.fy_end,
-       id.next_earnings_report,
-       id.next_earnings_status,
-       id.next_earnings_when,
-       id.next_fiscal_quarter,
-       id.reporting_interval,
-       id.size_class,
-       id.style_class,
-       id.unit,
-       id.dividend_record_announce_date,
-       id.dividend_record_ex_date,
-       id.dividend_record_payable_date,
-       id.dividend_record_record_date,
-       id.fy_end_date,
-       id.income_statement_report_date,
-       id.last_updated,
-       id.next_earnings,
-       id.next_fy_end_date,
-       id.next_income_statement_report_date,
-       id.reference_date,
-       sf.analyst_bullish_pct,
-       sf.analyst_bearish_pct,
-       sf.analyst_neutral_pct,
-       sf.analyst_conviction,
-       sf.upside_potential,
-       sf.price_target_spread_pct,
-       sf.price_target_revision_1m,
-       sf.price_target_revision_3m,
-       sf.eps_revision_momentum,
-       sf.analyst_rating_normalized,
-       sf.analyst_coverage_quality,
-       ptd.pt_momentum_1w,
-       ptd.pt_momentum_1m,
-       ptd.pt_momentum_3m,
-       ptd.pt_momentum_6m,
-       ptd.pt_momentum_1y,
-       ptd.pt_median_momentum_1m,
-       ptd.pt_median_momentum_3m,
-       ptd.pt_acceleration_short,
-       ptd.pt_acceleration_long,
-       ptd.pt_consensus_convergence,
-       ptd.analyst_coverage_change_1m,
-       ptd.analyst_coverage_change_3m,
-       ptd.analyst_coverage_change_1y,
-       ptd.pt_vs_price_momentum,
-       ptd.analyst_coverage_trend
-FROM vw_identifier_columns id
-         LEFT JOIN calc_sentiment_features() sf(isin, analyst_bullish_pct, analyst_bearish_pct, analyst_neutral_pct,
-                                                analyst_conviction, upside_potential, price_target_spread_pct,
-                                                price_target_revision_1m, price_target_revision_3m,
-                                                eps_revision_momentum, analyst_rating_normalized,
-                                                analyst_coverage_quality) USING (isin)
-         LEFT JOIN calc_price_target_dynamics() ptd(isin, pt_momentum_1w, pt_momentum_1m, pt_momentum_3m,
-                                                    pt_momentum_6m, pt_momentum_1y, pt_median_momentum_1m,
-                                                    pt_median_momentum_3m, pt_acceleration_short, pt_acceleration_long,
-                                                    pt_consensus_convergence, analyst_coverage_change_1m,
-                                                    analyst_coverage_change_3m, analyst_coverage_change_1y,
-                                                    pt_vs_price_momentum, analyst_coverage_trend) USING (isin);
+CREATE VIEW public.vw_features_analyst_sentiment
+			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
+			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
+			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
+			 dividend_record_announce_date, dividend_record_ex_date, dividend_record_payable_date,
+			 dividend_record_record_date, fy_end_date, income_statement_report_date, last_updated, next_earnings,
+			 next_fy_end_date, next_income_statement_report_date, reference_date, analyst_bullish_pct,
+			 analyst_bearish_pct, analyst_neutral_pct, analyst_conviction, upside_potential, price_target_spread_pct,
+			 price_target_revision_1m, price_target_revision_3m, eps_revision_momentum, analyst_rating_normalized,
+			 analyst_coverage_quality, pt_momentum_1w, pt_momentum_1m, pt_momentum_3m, pt_momentum_6m, pt_momentum_1y,
+			 pt_median_momentum_1m, pt_median_momentum_3m, pt_acceleration_short, pt_acceleration_long,
+			 pt_consensus_convergence, analyst_coverage_change_1m, analyst_coverage_change_3m,
+			 analyst_coverage_change_1y, pt_vs_price_momentum, analyst_coverage_trend)
+AS
+-- missing source code
+;
 
-comment on view vw_features_analyst_sentiment is 'Analyst sentiment metrics including ratings distribution and price target dynamics.
+COMMENT ON VIEW public.vw_features_analyst_sentiment IS 'Analyst sentiment metrics including ratings distribution and price target dynamics.
     Source functions: calc_sentiment_features, calc_price_target_dynamics';
 
-alter table vw_features_analyst_sentiment
-    owner to postgres;
-
+ALTER TABLE public.vw_features_analyst_sentiment
+	OWNER TO postgres;

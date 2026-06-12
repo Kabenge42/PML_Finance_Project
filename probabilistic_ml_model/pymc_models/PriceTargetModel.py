@@ -113,6 +113,25 @@ class PriceTargetAchievement:
 
         Returns a tuple so the result is hashable / cache-friendly; callers
         should convert to ``list`` if mutation is needed.
+
+        Notes
+        -----
+        Source-of-truth decision (resolves Finding 5 of the pml catalogue
+        refactor): this auxiliary ``pt_feature`` container deliberately sources
+        its aliases from ``public.calculated_features_registry`` (the curated
+        "Price Target Dynamics" / "Analyst Sentiment" / "Technical Analysis" /
+        "Composite Scores" categories in :data:`_PT_CATEGORY_KEYS`), NOT from
+        ``pml.vw_pymc_feature_catalogue``. It is intentionally a *different*,
+        observed pt-feature set than the ``price_target`` ``mutable_predictor``
+        surface in the pml catalogue.
+
+        The pml ``price_target`` catalogue rows are therefore NOT dead: they
+        drive the SQL / notebook path (``pymc_price_target_v3.ipynb`` queries
+        ``pml.vw_pymc_feature_catalogue WHERE model_target = 'price_target'``
+        directly), and the Task 4/6 fixes keep those aliases matching the
+        ``mv_pymc_price_target`` column names. The two paths are kept distinct
+        on purpose; if a single SSOT is later desired, switch this resolver to
+        the pml catalogue rather than dropping the catalogue rows.
         """
         try:
             categories = load_feature_categories_from_db(connection_string)

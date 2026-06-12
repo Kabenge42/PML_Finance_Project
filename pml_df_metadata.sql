@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_feature_alias
 	column_name   TEXT NOT NULL,
 	model_target  TEXT NOT NULL,
 	feature_alias TEXT NOT NULL,
+	-- Per-model pymc_role override. The same source column can play a
+	-- different PyMC role in different models (e.g. price_target_stddev is
+	-- globally 'observed' but is a 'mutable_predictor' for kalman/price_target).
+	-- vw_pymc_feature_catalogue resolves the effective role via
+	-- COALESCE(fa.pymc_role, md.pymc_role). NULL = inherit the global role.
+	pymc_role TEXT,
 	PRIMARY KEY (column_name, model_target),
 	CONSTRAINT fk_column_name FOREIGN KEY (column_name) REFERENCES pml.pml_df_metadata (column_name) ON DELETE CASCADE
 );
@@ -85,6 +91,9 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_feature_alias
 	column_name   TEXT NOT NULL REFERENCES pml.pml_df_metadata (column_name) ON DELETE CASCADE,
 	model_target  TEXT NOT NULL,
 	feature_alias TEXT NOT NULL,
+	-- Per-model pymc_role override (NULL = inherit pml_df_metadata.pymc_role).
+	-- Resolved in vw_pymc_feature_catalogue via COALESCE(fa.pymc_role, md.pymc_role).
+	pymc_role TEXT,
 	PRIMARY KEY (column_name, model_target)
 );
 
@@ -111,5 +120,7 @@ COMMENT ON COLUMN pml.pml_df_metadata.pymc_role IS 'PyMC pm.Data container kind 
 COMMENT ON COLUMN pml.pml_df_metadata.model_targets IS 'Array of PyMC model names from probabilistic_ml_model.pymc_models that consume this column. Mirrors MODEL_FEATURE_CONTAINERS keys in pymc_expected_returns_model.ipynb.';
 
 COMMENT ON COLUMN pml.pml_df_metadata.feature_alias IS 'Default (model-agnostic) alias used inside pml.mv_pymc_* materialized views. For model-specific overrides see pml.pml_df_feature_alias.';
+
+COMMENT ON COLUMN pml.pml_df_feature_alias.pymc_role IS 'Per-model pymc_role override. NULL inherits pml_df_metadata.pymc_role. vw_pymc_feature_catalogue resolves the effective role via COALESCE(fa.pymc_role, md.pymc_role), so a column can be globally observed/derived_input yet act as a mutable_predictor for a specific model.';
 
 COMMENT ON TABLE pml.pml_df_feature_alias IS 'Per-model alias overrides for source columns in pml.pml_df_metadata. Surfaces through pml.vw_pymc_feature_catalogue.feature_alias and the notebook''s MODEL_FEATURE_CONTAINERS registry. Multi-source engineered features (e.g. the normalized analyst-sentiment feat_analyst_bullish_pct / feat_analyst_bearish_pct / feat_analyst_neutral_pct / feat_analyst_conviction columns in pml.mv_pymc_price_target, each derived from all six num_*_ratings buckets) record provenance against a single representative source column per (column_name, model_target) key.';
