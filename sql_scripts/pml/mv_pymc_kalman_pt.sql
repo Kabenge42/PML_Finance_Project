@@ -1,6 +1,7 @@
 CREATE MATERIALIZED VIEW mv_pymc_kalman_pt AS
 SELECT isin,
        ticker,
+       name,
        region,
        country,
        trading_country,

@@ -1835,6 +1835,21 @@ FROM unnest(ARRAY [ 'price_target_num_1w_ago', 'price_target_num_mtd_ago', 'pric
 ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias,
                                                       pymc_role     = excluded.pymc_role;
 
+-- Realized-volatility term-structure: the stochastic-volatility anchor.
+-- mv_pymc_kalman_pt emits volatility_{1m,3m,6m,1y} AS feat_vol_{1m,3m,6m,1y}, so
+-- without a per-model alias the catalogue's feature_alias falls back to the raw
+-- column name ('volatility_1m') and the notebook's `feature_alias IN
+-- kalman_df.columns` present-check misses the MV column ('feat_vol_1m'). We map
+-- the alias to the MV name and keep the global 'mutable_predictor' role: these
+-- columns inform the per-time prior mean (shape) of the log-volatility random walk
+-- in KalmanFilterPriceTarget.fit(stochastic_volatility=True) — see
+-- _build_stochastic_volatility(). Mirrors the alias-row pattern above.
+INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
+SELECT col, 'kalman_pt', 'feat_vol_' || split_part(col, '_', 2), 'mutable_predictor'
+FROM unnest(ARRAY [ 'volatility_1m', 'volatility_3m', 'volatility_6m', 'volatility_1y' ]) AS col
+ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias,
+                                                      pymc_role     = excluded.pymc_role;
+
 -- =============================================================================
 -- TASK 2 / FINDING 2: PER-MODEL pymc_role OVERRIDES
 -- =============================================================================

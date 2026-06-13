@@ -120,6 +120,7 @@ class KalmanFilterPriceTarget:
         self._fit_idata_: Optional[InferenceLike] = None
         self._fit_last_price_: Optional[float] = None
         self._fit_has_trend_: bool = False
+        self._fit_stochastic_volatility_: bool = False
 
     @staticmethod
     @lru_cache(maxsize=4)
@@ -421,7 +422,10 @@ class KalmanFilterPriceTarget:
     def _prepare_log_targets(
         price_targets: np.ndarray,
         dates: Optional[pd.DatetimeIndex],
-    ) -> tuple[np.ndarray, np.ndarray, float, Optional[pd.DatetimeIndex]]:
+            realized_vol: Optional[np.ndarray] = None,
+    ) -> tuple[
+        np.ndarray, np.ndarray, float, Optional[pd.DatetimeIndex], Optional[np.ndarray]
+    ]:
         """Validate, clean, and log-transform the observed price targets.
 
         Drops non-finite observations (and the aligned ``dates`` entries),
@@ -434,21 +438,35 @@ class KalmanFilterPriceTarget:
             Raw observed price target series (length >= 2).
         dates : pandas.DatetimeIndex, optional
             Time index aligned to ``price_targets``; filtered alongside it.
+        realized_vol : numpy.ndarray, optional
+            Realized-volatility anchor aligned 1:1 with ``price_targets`` (used
+            only by the stochastic-volatility path). Co-filtered with the same
+            finite mask so it stays aligned to the cleaned series by
+            construction. Must be strictly positive and finite after filtering.
 
         Returns
         -------
         tuple
-            ``(pt_arr, log_pt, scale, dates)`` — the cleaned positive series,
-            its log transform, the clamped prior scale, and the (possibly
-            filtered) ``dates``.
+            ``(pt_arr, log_pt, scale, dates, rv)`` — the cleaned positive
+            series, its log transform, the clamped prior scale, the (possibly
+            filtered) ``dates``, and the co-filtered ``realized_vol`` (or
+            ``None`` when not supplied).
 
         Raises
         ------
         ValueError
-            If fewer than 2 (finite) observations remain, or any value is
-            non-positive.
+            If fewer than 2 (finite) observations remain, any value is
+            non-positive, or ``realized_vol`` is misaligned / non-positive.
         """
         pt_arr = np.asarray(price_targets, dtype="float64")
+        rv: Optional[np.ndarray] = None
+        if realized_vol is not None:
+            rv = np.asarray(realized_vol, dtype="float64")
+            if rv.size != pt_arr.size:
+                raise ValueError(
+                    "realized_vol must align 1:1 with price_targets "
+                    f"(got {rv.size} vs {pt_arr.size})."
+                )
         if pt_arr.size < 2:
             raise ValueError("price_target must have length ≥ 2.")
 
@@ -467,6 +485,8 @@ class KalmanFilterPriceTarget:
             pt_arr = pt_arr[finite_mask]
             if dates is not None:
                 dates = pd.DatetimeIndex(np.asarray(dates)[finite_mask])
+            if rv is not None:
+                rv = rv[finite_mask]
 
         # Price targets are strictly positive ⇒ model on log-scale.  This keeps
         # the latent state and noise priors dimensionless and bounded,
@@ -485,7 +505,16 @@ class KalmanFilterPriceTarget:
         # a single outlier driving std to ∞) cannot blow up the priors.
         raw_scale = float(np.nanstd(log_pt))
         scale = float(np.clip(raw_scale if np.isfinite(raw_scale) else 0.0, 1e-3, 1.0))
-        return pt_arr, log_pt, scale, dates
+
+        # The stochastic-volatility anchor enters the log-volatility prior mean
+        # via ``log(realized_vol)``, so it must be strictly positive and finite
+        # after co-filtering.
+        if rv is not None and (not np.isfinite(rv).all() or np.any(rv <= 0)):
+            raise ValueError(
+                "realized_vol must be strictly positive and finite after "
+                "aligning with the cleaned price target series."
+            )
+        return pt_arr, log_pt, scale, dates, rv
 
     @staticmethod
     def implied_upside_from_state(
@@ -675,6 +704,110 @@ class KalmanFilterPriceTarget:
         return pm.Deterministic("log_state", state_mean, dims="time")
 
     @staticmethod
+    def _build_stochastic_volatility(
+            log_state: Any,
+            log_obs_data: Any,
+            scale: float,
+            realized_vol_anchor: Optional[np.ndarray] = None,
+    ) -> Any:
+        """Build a time-varying (stochastic-volatility) observation likelihood.
+
+        Replaces the scalar ``sigma_obs`` with a latent log-volatility random
+        walk over ``time`` and a robust Student-t observation model, following
+        the canonical PyMC stochastic-volatility example (a
+        :class:`pymc.GaussianRandomWalk` in log-volatility, ``Exponential``
+        step-size and degrees-of-freedom priors, ``StudentT`` observations with
+        ``sigma = exp(log_vol)``). Must be called inside an active ``pm.Model``
+        context, *after* ``log_state`` has been built by
+        :meth:`_build_log_state`.
+
+        This is fundamentally **incompatible** with the ``marginalized``
+        closed-form likelihood (:meth:`_build_marginalized_likelihood`), which
+        integrates the latent path out into an :class:`pymc.MvNormal` whose
+        covariance diagonal needs a *scalar* observation variance. The caller
+        (:meth:`fit`) therefore forces an explicit-state parameterization
+        whenever stochastic volatility is requested.
+
+        The latent log-volatility walk is **non-centred**
+        (``cumsum(step_size * z_vol)`` with ``z_vol ~ Normal(0, 1)``) to avoid
+        the funnel, mirroring the non-centred level walk in
+        :meth:`_build_log_state`.
+
+        Parameters
+        ----------
+        log_state : pytensor tensor
+            Latent log-price level (the observation mean), dims ``time``.
+        log_obs_data : pytensor tensor
+            The :class:`pymc.Data` container holding the observed log-targets,
+            dims ``time``.
+        scale : float
+            Clamped log-scale (from :meth:`_prepare_log_targets`). Sets the
+            constant fallback log-volatility anchor ``log(scale)`` when no
+            realized-volatility anchor is supplied.
+        realized_vol_anchor : numpy.ndarray, optional
+            Strictly-positive per-time realized-volatility anchor, already
+            aligned to ``time`` (co-filtered with the price series in
+            :meth:`_prepare_log_targets`). When supplied, only its **shape**
+            (the deviations of ``log(realized_vol)`` from its own mean) informs
+            the per-time prior *mean* of the log-volatility walk; the absolute
+            *level* is a learned ``vol_anchor_offset ~ Normal(log(scale), 1)``.
+            This deliberately makes the anchor **scale-invariant** — realized
+            volatility may arrive in percent (e.g. ``feat_vol_*`` ≈ 40) while
+            the observation noise lives on the log-price-target scatter scale
+            (≈ 0.05–0.2), so equating absolute levels would be nonsensical; the
+            term-structure still carries the relative time variation. When
+            ``None``, the walk is anchored at the constant ``log(scale)``.
+
+        Returns
+        -------
+        pytensor tensor
+            The ``StudentT`` observed variable ``obs``. Side effects register
+            the ``vol_step_size``, ``z_vol``, ``nu_obs`` (and, when anchored,
+            ``vol_anchor_offset`` — the learned absolute log-volatility level)
+            priors and the ``log_vol`` / ``sigma_obs`` Deterministics (both
+            over ``time``).
+
+        Notes
+        -----
+        ``sigma_obs`` is deliberately reused as the Deterministic name (now
+        carrying a ``time`` dim rather than being scalar) so existing
+        diagnostics and :meth:`forecast` resolve it uniformly; ``forecast``
+        sniffs the ``time`` dim and holds the terminal volatility flat.
+        """
+        # Non-centred latent log-volatility random walk (funnel-free; mirrors
+        # the non-centred level walk in _build_log_state).
+        step_size = pm.Exponential("vol_step_size", 10.0)
+        z_vol = pm.Normal("z_vol", 0.0, 1.0, dims="time")
+        log_vol_innov = pt.cumsum(step_size * z_vol)
+
+        # Per-time prior-mean anchor for log-volatility.
+        if realized_vol_anchor is not None:
+            log_rv = np.log(np.asarray(realized_vol_anchor, dtype="float64"))
+            # Use only the *shape* (deviations from the mean) so the anchor is
+            # scale-invariant — realized vol may be in percent while the noise
+            # lives on the log-price-target scatter scale. The absolute level is
+            # learned and anchored at log(scale) (the non-SV scalar level).
+            log_rv_shape = pt.as_tensor_variable(log_rv - float(np.mean(log_rv)))
+            vol_anchor_offset = pm.Normal("vol_anchor_offset", float(np.log(scale)), 1.0)
+            log_vol_mean: Any = vol_anchor_offset + log_rv_shape
+        else:
+            log_vol_mean = float(np.log(scale))
+
+        log_vol = pm.Deterministic("log_vol", log_vol_mean + log_vol_innov, dims="time")
+        sigma_obs_t = pm.Deterministic("sigma_obs", pm.math.exp(log_vol), dims="time")
+
+        # Robust heavy-tailed observation with time-varying scale.
+        nu = pm.Exponential("nu_obs", 0.1)
+        return pm.StudentT(
+            "obs",
+            nu=nu,
+            mu=log_state,
+            sigma=sigma_obs_t,
+            observed=log_obs_data,
+            dims="time",
+        )
+
+    @staticmethod
     def _build_marginalized_likelihood(
         log_obs_data: Any,
         log_pt: np.ndarray,
@@ -862,6 +995,8 @@ class KalmanFilterPriceTarget:
         random_seed: int = 42,
             trend: bool = False,
             trend_sigma: float = 0.5,
+            stochastic_volatility: bool = False,
+            realized_vol: Optional[np.ndarray] = None,
         parameterization: Parameterization = "auto",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
@@ -927,6 +1062,27 @@ class KalmanFilterPriceTarget:
         trend_sigma : float
             Prior scale for the ``beta_trend ~ Normal(0, trend_sigma)`` slope (in
             log-price units per year). Only used when ``trend=True``. Default 0.5.
+        stochastic_volatility : bool
+            When ``True``, replace the single scalar observation-noise prior with
+            a latent log-volatility random walk over ``time`` and a robust
+            Student-t observation model (see
+            :meth:`_build_stochastic_volatility`), following the canonical PyMC
+            stochastic-volatility example. Opt-in and default ``False`` — the
+            scalar-noise behaviour is otherwise byte-for-byte unchanged. SV is
+            incompatible with the ``marginalized`` closed-form, so a resolved
+            ``marginalized`` parameterization (including via ``"auto"`` on short
+            series) is overridden to ``"non_centered"`` with a warning, and
+            ``target_accept`` is bumped to ``0.95`` when left at its ``0.9``
+            default (the augmented latent geometry samples harder). ``"auto"``
+            never selects SV on its own.
+        realized_vol : numpy.ndarray, optional
+            Strictly-positive realized-volatility anchor aligned 1:1 with
+            ``price_targets``. Only consulted when ``stochastic_volatility=True``.
+            It is co-filtered with the same finite mask applied to
+            ``price_targets`` and its log sets the per-time prior *mean* of the
+            log-volatility walk (with a single learned ``vol_anchor_offset`` to
+            reconcile scales). When ``None``, the walk is anchored at the
+            constant log-scale, matching the previous scalar prior's level.
         parameterization : Parameterization
             Model parameterization approach used for the latent state. Options are:
             "auto", "non_centered", "centered", or "marginalized". Default is "auto",
@@ -982,7 +1138,9 @@ class KalmanFilterPriceTarget:
                 "PyMC is not available. Install pymc + arviz to use KalmanFilterPriceTarget."
             )
 
-        pt_arr, log_pt, scale, dates = self._prepare_log_targets(price_targets, dates)
+        pt_arr, log_pt, scale, dates, rv_anchor = self._prepare_log_targets(
+            price_targets, dates, realized_vol if stochastic_volatility else None
+        )
 
         # Optional spot-price anchor: when a strictly-positive ``last_price`` is
         # supplied the latent log-level prior is centred at ``log(last_price)``
@@ -1008,6 +1166,24 @@ class KalmanFilterPriceTarget:
                 len(pt_arr),
             )
 
+        # Stochastic volatility needs an explicit latent state (its time-varying
+        # observation noise cannot be folded into the marginalized closed-form's
+        # scalar covariance diagonal). Override marginalized — including when
+        # "auto" resolved to it for a short series — to the funnel-free
+        # non-centred path.
+        if stochastic_volatility and parameterization == "marginalized":
+            logger.warning(
+                "KalmanFilterPriceTarget: stochastic_volatility is incompatible "
+                "with the marginalized closed-form likelihood (needs a scalar "
+                "sigma_obs); overriding parameterization to 'non_centered'."
+            )
+            parameterization = "non_centered"
+
+        # The augmented (level + log-volatility) latent geometry samples harder;
+        # nudge the target acceptance up when the caller left it at the default.
+        if stochastic_volatility and target_accept == 0.9:
+            target_accept = 0.95
+
         # Elapsed-time vector for the (optionally marginalized) GRW covariance —
         # scales process variance by real spacing across the irregular cohort.
         tau = self._resolve_time_deltas(dates, len(pt_arr))
@@ -1028,14 +1204,28 @@ class KalmanFilterPriceTarget:
             # log-returns are naturally O(0.05-0.2), so anchor sigma_state there;
             # sigma_obs is anchored to the observed log-scale scatter.
             sigma_state = pm.Gamma("sigma_state", mu=0.10, sigma=0.05)
-            sigma_obs = pm.Gamma("sigma_obs", mu=scale, sigma=scale)
+            # In the stochastic-volatility path the observation noise is a latent
+            # per-time process (built below), so the scalar prior is omitted.
+            if not stochastic_volatility:
+                sigma_obs = pm.Gamma("sigma_obs", mu=scale, sigma=scale)
 
             # Optional structural trend: a per-year log-price slope shared by the
             # likelihood mean and recovered by :meth:`forecast` so projections
             # carry directional structure (reference: "Specifying a Trend Model").
             beta_trend = pm.Normal("beta_trend", 0.0, float(trend_sigma)) if trend else None
 
-            if parameterization == "marginalized":
+            if stochastic_volatility:
+                # Explicit latent level (marginalized already overridden above) +
+                # a latent log-volatility random walk feeding a robust Student-t
+                # observation model with time-varying scale.
+                log_state = self._build_log_state(
+                    parameterization, log_pt, sigma_state, scale, tau,
+                    init_mu=init_mu, beta_trend=beta_trend,
+                )
+                self._build_stochastic_volatility(
+                    log_state, log_obs_data, scale, realized_vol_anchor=rv_anchor,
+                )
+            elif parameterization == "marginalized":
                 # Integrate the latent path out: the GRW (process) and
                 # observation (measurement) variances both enter the MvNormal
                 # likelihood covariance. ``log_state`` is the analytic smoother
@@ -1108,6 +1298,7 @@ class KalmanFilterPriceTarget:
         self._fit_idata_ = idata if hasattr(idata, "posterior") else None
         self._fit_last_price_ = float(last_price) if has_last_price else None
         self._fit_has_trend_ = bool(trend)
+        self._fit_stochastic_volatility_ = bool(stochastic_volatility)
         return idata, model
 
     def forecast(
@@ -1144,6 +1335,13 @@ class KalmanFilterPriceTarget:
         ``DiracDelta(ar[..., -1])`` and conditioned on the learned coefficients.
         Each horizon is independent of :math:`x_T`, so the predictive variance is
         non-decreasing in the horizon.
+
+        When :meth:`fit` was run with ``stochastic_volatility=True`` the
+        posterior ``sigma_obs`` is a per-time latent path rather than a scalar;
+        the forward projection holds the **terminal** posterior volatility flat
+        for :math:`\\sigma_{\\text{obs}}` (the log-volatility random walk has no
+        mean reversion, so its last value is the optimal flat forecast of future
+        observation noise).
 
         Parameters
         ----------
@@ -1199,7 +1397,16 @@ class KalmanFilterPriceTarget:
 
         post = self._fit_idata_.posterior
         sigma_state = np.asarray(post["sigma_state"].values, dtype="float64")
-        sigma_obs = np.asarray(post["sigma_obs"].values, dtype="float64")
+        # Under stochastic volatility ``sigma_obs`` is per-time (dims
+        # chain × draw × time); the log-volatility random walk has no mean
+        # reversion, so its terminal value is the optimal flat forecast of
+        # future observation noise. Continuing the walk would inflate the band
+        # with unanchored vol-of-vol. Otherwise it is the usual scalar.
+        so_var = post["sigma_obs"]
+        sigma_obs = np.asarray(
+            (so_var.isel(time=-1) if "time" in so_var.dims else so_var).values,
+            dtype="float64",
+        )
         # Terminal smoothed latent log-state x_T (per posterior draw).
         x_term = np.asarray(post["log_state"].isel(time=-1).values, dtype="float64")
         beta_trend = (

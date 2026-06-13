@@ -102,11 +102,8 @@ Every model's `fit(...)` accepts a unified
 from probabilistic_ml_model.pymc_models import EarningsBeatBayesian
 
 model = EarningsBeatBayesian()
-idata, _ = model.fit(
-    n_beats, n_total, isins,
-    categories_df=df_categories,        # cols ⊆ HIERARCHICAL_CATEGORY_COLS
-    hierarchy_levels=["exchange", "sector", "industry"],
-)
+idata, _ = model.fit(n_beats, n_total, isins, categories_df=df_categories,
+                     hierarchy_levels=["exchange", "sector", "industry"])
 ```
 
 ### Core Models (`probabilistic_ml_model/pymc_models/`)

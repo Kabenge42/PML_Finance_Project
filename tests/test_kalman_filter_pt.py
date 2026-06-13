@@ -81,21 +81,40 @@ class TestFiscalAnchoring:
 # ---------------------------------------------------------------------------
 # forecast() — structural projection invariants (pure; fabricated posterior)
 # ---------------------------------------------------------------------------
-def _fake_fitted_model(*, trend=True, chain=2, draw=40, n_time=6, seed=0, last_price=98.0):
+def _fake_fitted_model(
+        *, trend=True, chain=2, draw=40, n_time=6, seed=0, last_price=98.0,
+        stochastic_volatility=False,
+):
     """A KalmanFilterPriceTarget with a fabricated posterior so forecast() can be
     exercised without running MCMC (the draw order is fixed so trend/no-trend
-    share an identical terminal state)."""
+    share an identical terminal state).
+
+    When ``stochastic_volatility`` is True the fabricated ``sigma_obs`` carries a
+    ``time`` dim (mirroring the SV path) and a ``log_vol`` variable is added, so
+    the dim-sniffing branch in :meth:`forecast` is exercised."""
     import xarray as xr
 
     rng = np.random.default_rng(seed)
     data = {
         "sigma_state": (("chain", "draw"), np.abs(rng.normal(0.1, 0.02, (chain, draw)))),
-        "sigma_obs": (("chain", "draw"), np.abs(rng.normal(0.05, 0.01, (chain, draw)))),
         "log_state": (
             ("chain", "draw", "time"),
             rng.normal(np.log(100.0), 0.05, (chain, draw, n_time)),
         ),
     }
+    if stochastic_volatility:
+        data["sigma_obs"] = (
+            ("chain", "draw", "time"),
+            np.abs(rng.normal(0.05, 0.01, (chain, draw, n_time))),
+        )
+        data["log_vol"] = (
+            ("chain", "draw", "time"),
+            rng.normal(np.log(0.05), 0.1, (chain, draw, n_time)),
+        )
+    else:
+        data["sigma_obs"] = (
+            ("chain", "draw"), np.abs(rng.normal(0.05, 0.01, (chain, draw)))
+        )
     if trend:
         data["beta_trend"] = (("chain", "draw"), rng.normal(0.2, 0.05, (chain, draw)))
     post = xr.Dataset(
@@ -162,6 +181,19 @@ class TestForecast:
         )
         assert ft > fn
 
+    def test_forecast_handles_time_varying_sigma_obs(self):
+        # Under stochastic volatility sigma_obs carries a `time` dim; forecast()
+        # must dim-sniff it (holding the terminal volatility flat) and still
+        # produce the same shapes/positivity as the scalar path, with a
+        # non-decreasing predictive sd in the horizon.
+        kf = _fake_fitted_model(stochastic_volatility=True)
+        pred = kf.forecast([10, 30, 60, 120, 365])
+        ds = pred.predictions
+        assert ds.sizes["time_future"] == 5
+        assert (ds["forecast_pt"].values > 0).all()
+        sd = ds["predictive_sd_log"].mean(("chain", "draw")).values
+        assert np.all(np.diff(sd) >= -1e-9)
+
 
 # ---------------------------------------------------------------------------
 # fit() — last_price anchor + implied_upside Deterministic
@@ -199,6 +231,27 @@ def test_fit_without_last_price_omits_implied_upside():
     assert "state" in idata.posterior  # unchanged baseline behaviour preserved
 
 
+def test_default_fit_is_opt_in_marginalized_not_sv():
+    """Regression guard: fit() defaults must be opt-in (trend=False,
+    stochastic_volatility=False). A flipped default silently routes every caller
+    through the SV / non_centered path — dropping ``log_state_init`` and the
+    scalar ``sigma_obs`` (the §12 notebook KeyError). The other fit tests only
+    assert vars common to both paths, so they do not catch this; this one does."""
+    kf = KalmanFilterPriceTarget()
+    idata, _ = kf.fit(price_targets=_PTS, isin="TEST", **_FIT_KW)
+    post = idata.posterior
+    # "auto" on a short series resolves to the marginalized closed form, which
+    # exposes the scalar initial-level RV and a *scalar* sigma_obs.
+    assert "log_state_init" in post
+    assert "sigma_obs" in post and "time" not in post["sigma_obs"].dims
+    # No stochastic-volatility latents must leak in by default.
+    assert not ({"log_vol", "vol_step_size", "z_vol", "nu_obs"} & set(post.data_vars))
+    # No structural trend by default.
+    assert "beta_trend" not in post
+    assert kf._fit_stochastic_volatility_ is False
+    assert kf._fit_has_trend_ is False
+
+
 def test_fit_with_trend_emits_beta_trend_and_forecasts():
     """trend=True adds the beta_trend slope, and forecast() projects to fiscal dates."""
     kf = KalmanFilterPriceTarget()
@@ -217,3 +270,74 @@ def test_fit_with_trend_emits_beta_trend_and_forecasts():
     assert ds.sizes["time_future"] == 2
     assert (ds["forecast_pt"].values > 0).all()
     assert "implied_upside_future" in ds.data_vars  # last_price was supplied
+
+
+# ---------------------------------------------------------------------------
+# fit() — stochastic volatility (opt-in, time-varying observation noise)
+# ---------------------------------------------------------------------------
+def test_sv_emits_per_time_sigma_obs_and_priors():
+    """stochastic_volatility=True swaps the scalar sigma_obs for a per-time
+    log-volatility walk feeding a Student-t likelihood."""
+    kf = KalmanFilterPriceTarget()
+    idata, _ = kf.fit(
+        price_targets=_PTS, isin="TEST", last_price=100.0,
+        stochastic_volatility=True, parameterization="non_centered", **_FIT_KW,
+    )
+    post = idata.posterior
+    assert {"log_vol", "vol_step_size", "nu_obs"}.issubset(set(post.data_vars))
+    assert "sigma_obs" in post and post["sigma_obs"].dims[-1] == "time"
+    assert kf._fit_stochastic_volatility_ is True
+
+
+def test_sv_overrides_marginalized_with_warning(caplog):
+    """SV is incompatible with the marginalized closed-form; the requested
+    marginalized parameterization is silently downgraded to non_centered."""
+    import logging
+
+    kf = KalmanFilterPriceTarget()
+    with caplog.at_level(logging.WARNING):
+        idata, _ = kf.fit(
+            price_targets=_PTS, isin="TEST",
+            stochastic_volatility=True, parameterization="marginalized", **_FIT_KW,
+        )
+    assert "log_vol" in idata.posterior  # fell back to the explicit-state path
+    assert any("marginalized" in rec.message for rec in caplog.records)
+
+
+def test_sv_with_realized_vol_anchor_emits_offset():
+    kf = KalmanFilterPriceTarget()
+    realized_vol = np.full(_PTS.shape, 0.25, dtype="float64")
+    idata, _ = kf.fit(
+        price_targets=_PTS, isin="TEST", stochastic_volatility=True,
+        realized_vol=realized_vol, parameterization="non_centered", **_FIT_KW,
+    )
+    assert "vol_anchor_offset" in idata.posterior
+
+
+@pytest.mark.parametrize(
+    "bad_vol",
+    [
+        np.full(len(_PTS) + 1, 0.2),  # length mismatch
+        np.array([0.2] * (len(_PTS) - 1) + [-0.1]),  # non-positive entry
+    ],
+)
+def test_sv_rejects_invalid_realized_vol(bad_vol):
+    kf = KalmanFilterPriceTarget()
+    with pytest.raises(ValueError):
+        kf.fit(
+            price_targets=_PTS, isin="TEST", stochastic_volatility=True,
+            realized_vol=bad_vol, parameterization="non_centered", **_FIT_KW,
+        )
+
+
+def test_sv_composes_with_trend():
+    kf = KalmanFilterPriceTarget()
+    dates = pd.date_range("2025-01-01", periods=len(_PTS), freq="30D")
+    idata, _ = kf.fit(
+        price_targets=_PTS, isin="TEST", dates=dates, last_price=109.0,
+        trend=True, stochastic_volatility=True, parameterization="non_centered",
+        **_FIT_KW,
+    )
+    post = idata.posterior
+    assert "beta_trend" in post
+    assert "log_vol" in post
