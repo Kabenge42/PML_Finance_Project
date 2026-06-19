@@ -63,13 +63,19 @@ if ($GxxPath)
     {
         $env:Path = "$MingwBin;$env:Path"
     }
-    $env:PYTENSOR_FLAGS = "device=cpu,floatX=float64,cxx=$GxxPath"
-    Write-Host "PyTensor C backend ENABLED via $GxxPath" -ForegroundColor Green
+    # PyTensor's PYTENSOR_FLAGS parser treats backslashes as escape characters and
+    # silently strips them, so a Windows path like C:\msys64\ucrt64\bin\g++.exe is
+    # mangled into C:msys64ucrt64bing++.exe (a nonexistent compiler). The C-compile
+    # step ("Compiling new CVM") then hangs invoking the broken path. Emit the path
+    # with forward slashes, which survive the parser and are accepted by g++/Windows.
+    $GxxFwd = $GxxPath -replace '\\', '/'
+    $env:PYTENSOR_FLAGS = "floatX=float64,cxx=$GxxFwd"
+    Write-Host "PyTensor C backend ENABLED via $GxxFwd" -ForegroundColor Green
 }
 else
 {
     Write-Warning "g++.exe not found in C:\msys64\ucrt64\bin or C:\msys64\mingw64\bin -- falling back to pure-Python PyTensor VM (nutpie will be unavailable)."
-    $env:PYTENSOR_FLAGS = "device=cpu,floatX=float64,cxx="
+    $env:PYTENSOR_FLAGS = "floatX=float64,cxx="
 }
 
 # Logging configuration

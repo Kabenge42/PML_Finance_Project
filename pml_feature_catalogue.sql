@@ -447,6 +447,9 @@ SELECT isin,
        -- ---- Fiscal-calendar anchors for the MvGRW time axis ----
        income_statement_report_date,
        next_earnings,
+       -- Low-cardinality categorical fiscal-calendar coords (encode upstream in PyMC)
+       next_earnings_when,
+       next_earnings_status,
        fy_end_date,
        next_income_statement_report_date,
        next_fy_end_date,
@@ -560,9 +563,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_price_target_isin ON pml.mv_pymc_p
 -- target_drift is now computed for every price_* / price_target_* trail (mean,
 -- high, low, median, raw price, analyst-count and dispersion) so the per-ISIN
 -- snapshot exposes the full drift/state-transition signal set.
+--
+-- FUSED MvGRW PANEL: the cross-sectional fused model
+-- (build_fused_kalman_pt_model) consumes these same MV columns in fused
+-- state-space roles — feat_avg_beta (the NULL-aware mean of beta_{1y,2y,5y}) as
+-- the SYSTEMATIC RISK (CAPM beta) driver that conditions
+-- risk_adj_return = expected_return * exp(-risk_penalty * z(feat_avg_beta)),
+-- feat_pt_noise_sigma as the cv that widens
+-- sigma_isin = sigma_base * (1 + cv) / sqrt(n_analysts), and n_analysts as the
+-- precision count. feat_vol_{1m,3m,6m,1y} is retained as a provenance / EDA
+-- volatility term-structure (no longer the risk-adjustment driver).
 CREATE MATERIALIZED VIEW IF NOT EXISTS pml.mv_pymc_kalman_pt AS
 SELECT isin,
        ticker,
+       name,
        region,
        country,
        trading_country,
@@ -575,6 +589,9 @@ SELECT isin,
        -- ---- Fiscal-calendar anchors (raw DATE coords for the GRW time axis) ----
        income_statement_report_date,
        next_earnings,
+       -- Low-cardinality categorical fiscal-calendar coords (encode upstream in PyMC)
+       next_earnings_when,
+       next_earnings_status,
        fy_end_date,
        next_income_statement_report_date,
        next_fy_end_date,
@@ -662,7 +679,23 @@ SELECT isin,
        volatility_3m                                                                                                                                                                                                                                   AS feat_vol_3m,
        volatility_6m                                                                                                                                                                                                                                   AS feat_vol_6m,
        volatility_1y                                                                                                                                                                                                                                   AS feat_vol_1y,
-       total_return_ytd                                                                                                                                                                                                                                AS feat_total_return_ytd
+       -- Raw beta windows (systematic-risk inputs to feat_avg_beta below).
+       beta_1y,
+       beta_2y,
+       beta_5y,
+       -- feat_avg_beta: NULL-aware mean of the available beta windows. The fused
+       -- panel keys its risk adjustment on this systematic-risk (CAPM) driver,
+       -- risk_adj_return = expected_return * exp(-risk_penalty * z(feat_avg_beta)),
+       -- replacing the prior expected-volatility (feat_vol_*) penalty.
+       ((COALESCE(beta_1y, 0::double precision) + COALESCE(beta_2y, 0::double precision) +
+         COALESCE(beta_5y, 0::double precision)) /
+        NULLIF((beta_1y IS NOT NULL)::int + (beta_2y IS NOT NULL)::int + (beta_5y IS NOT NULL)::int,
+               0))             AS feat_avg_beta,
+       total_return_ytd        AS feat_total_return_ytd,
+       total_return_5y         AS feat_total_return_5y,
+       total_return_10y        AS feat_total_return_10y,
+       tot_return_pct_cagr_3y  AS feat_tr_cagr_3y,
+       tot_return_pct_cagr_10y AS feat_tr_cagr_10y
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_kalman_pt_isin ON pml.mv_pymc_kalman_pt (isin);

@@ -13,6 +13,8 @@ SELECT isin,
        industry,
        income_statement_report_date,
        next_earnings,
+       next_earnings_when,
+       next_earnings_status,
        fy_end_date,
        next_income_statement_report_date,
        next_fy_end_date,
@@ -83,7 +85,18 @@ SELECT isin,
        volatility_3m                                                                                                                                                                                                                               AS feat_vol_3m,
        volatility_6m                                                                                                                                                                                                                               AS feat_vol_6m,
        volatility_1y                                                                                                                                                                                                                               AS feat_vol_1y,
-       total_return_ytd                                                                                                                                                                                                                            AS feat_total_return_ytd
+       beta_1y,
+       beta_2y,
+       beta_5y,
+       (COALESCE(beta_1y, 0::double precision) + COALESCE(beta_2y, 0::double precision) +
+        COALESCE(beta_5y, 0::double precision)) /
+       NULLIF((beta_1y IS NOT NULL)::integer + (beta_2y IS NOT NULL)::integer + (beta_5y IS NOT NULL)::integer,
+              0)::double precision AS feat_avg_beta,
+       total_return_ytd            AS feat_total_return_ytd,
+       total_return_5y             AS feat_total_return_5y,
+       total_return_10y            AS feat_total_return_10y,
+       tot_return_pct_cagr_3y      AS feat_tr_cagr_3y,
+       tot_return_pct_cagr_10y     AS feat_tr_cagr_10y
 FROM pml_df;
 
 ALTER MATERIALIZED VIEW mv_pymc_kalman_pt OWNER TO postgres;
