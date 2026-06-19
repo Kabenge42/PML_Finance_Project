@@ -124,3 +124,18 @@ COMMENT ON COLUMN pml.pml_df_metadata.feature_alias IS 'Default (model-agnostic)
 COMMENT ON COLUMN pml.pml_df_feature_alias.pymc_role IS 'Per-model pymc_role override. NULL inherits pml_df_metadata.pymc_role. vw_pymc_feature_catalogue resolves the effective role via COALESCE(fa.pymc_role, md.pymc_role), so a column can be globally observed/derived_input yet act as a mutable_predictor for a specific model.';
 
 COMMENT ON TABLE pml.pml_df_feature_alias IS 'Per-model alias overrides for source columns in pml.pml_df_metadata. Surfaces through pml.vw_pymc_feature_catalogue.feature_alias and the notebook''s MODEL_FEATURE_CONTAINERS registry. Multi-source engineered features (e.g. the normalized analyst-sentiment feat_analyst_bullish_pct / feat_analyst_bearish_pct / feat_analyst_neutral_pct / feat_analyst_conviction columns in pml.mv_pymc_price_target, each derived from all six num_*_ratings buckets) record provenance against a single representative source column per (column_name, model_target) key.';
+
+-- ---------------------------------------------------------------------------
+-- Fused Kalman MvGRW panel (kalman_pt) — role notes.
+--   The fused cross-sectional Kalman model (build_fused_kalman_pt_model) reuses
+--   the existing kalman_pt catalogue roles in fused state-space positions:
+--     * feat_vol_{1m,3m,6m,1y} (mutable_predictor) -> EXPECTED VOLATILITY: the
+--       term-structure mean conditions risk_adj_return = expected_return *
+--       exp(-risk_penalty * expected_vol) and the expected_return prior scale.
+--     * feat_pt_noise_sigma (mutable_predictor) -> cv = feat_pt_noise_sigma /
+--       last_price, widening sigma_isin = sigma_base * (1 + cv) / sqrt(n_analysts).
+--     * n_analysts (constant_data) -> sqrt(n) precision weight.
+--     * the price_target_*_ago response trails (observed) -> the (isin, time,
+--       y_series) MvGRW response tensor.
+--   No metadata schema change is required; this note documents the consumption.
+-- ---------------------------------------------------------------------------

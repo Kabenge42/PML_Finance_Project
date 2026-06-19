@@ -447,6 +447,9 @@ SELECT isin,
        -- ---- Fiscal-calendar anchors for the MvGRW time axis ----
        income_statement_report_date,
        next_earnings,
+       -- Low-cardinality categorical fiscal-calendar coords (encode upstream in PyMC)
+       next_earnings_when,
+       next_earnings_status,
        fy_end_date,
        next_income_statement_report_date,
        next_fy_end_date,
@@ -560,6 +563,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_price_target_isin ON pml.mv_pymc_p
 -- target_drift is now computed for every price_* / price_target_* trail (mean,
 -- high, low, median, raw price, analyst-count and dispersion) so the per-ISIN
 -- snapshot exposes the full drift/state-transition signal set.
+--
+-- FUSED MvGRW PANEL: the cross-sectional fused model
+-- (build_fused_kalman_pt_model) consumes these same MV columns in fused
+-- state-space roles — feat_vol_{1m,3m,6m,1y} as the EXPECTED VOLATILITY that
+-- conditions risk_adj_return = expected_return * exp(-risk_penalty * expected_vol)
+-- (and sets the expected_return prior scale), feat_pt_noise_sigma as the cv that
+-- widens sigma_isin = sigma_base * (1 + cv) / sqrt(n_analysts), and n_analysts as
+-- the precision count. No additional MV columns are needed.
 CREATE MATERIALIZED VIEW IF NOT EXISTS pml.mv_pymc_kalman_pt AS
 SELECT isin,
        ticker,
@@ -575,6 +586,9 @@ SELECT isin,
        -- ---- Fiscal-calendar anchors (raw DATE coords for the GRW time axis) ----
        income_statement_report_date,
        next_earnings,
+       -- Low-cardinality categorical fiscal-calendar coords (encode upstream in PyMC)
+       next_earnings_when,
+       next_earnings_status,
        fy_end_date,
        next_income_statement_report_date,
        next_fy_end_date,

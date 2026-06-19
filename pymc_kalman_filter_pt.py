@@ -77,6 +77,7 @@ from probabilistic_ml_model.pymc_models._price_target_mc import (
     simulate_lagged_risk_adjusted_returns,
     summarize_mc_returns,
 )
+from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -87,19 +88,19 @@ rng = np.random.default_rng(RANDOM_SEED)
 # Cross-sectional snapshot: one row per ISIN with a usable analyst target, scoped
 # to names whose next earnings land in the current modelling horizon.
 KALMAN_DF_QUERY = """
-    SELECT *
-    FROM pml.mv_pymc_kalman_pt mpkp
-    WHERE observed_pt IS NOT NULL
-      AND next_earnings >= '2026-01-01'
-"""
+                  SELECT *
+                  FROM pml.mv_pymc_kalman_pt mpkp
+                  WHERE observed_pt IS NOT NULL
+                    AND next_earnings >= '2026-01-01' \
+                  """
 
 # Per-model feature catalogue (pymc_role / feature_role / alias) for kalman_pt.
 FEATURE_CATALOGUE_QUERY = """
-    SELECT *
-    FROM pml.vw_pymc_feature_catalogue
-    WHERE model_target = 'kalman_pt'
-    ORDER BY pymc_role, feature_role, feature_alias
-"""
+                          SELECT *
+                          FROM pml.vw_pymc_feature_catalogue
+                          WHERE model_target = 'kalman_pt'
+                          ORDER BY pymc_role, feature_role, feature_alias \
+                          """
 
 # Canonical schema of pml.mv_pymc_kalman_pt: per-trail drift feature for every
 # price_* / price_target_* family plus the noise wideners. Resilience fallback for
@@ -116,9 +117,16 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
 # define the single-security time axis (sections 11–13) and must NOT be treated as
 # categorical effects in the cross-sectional model.
 CLASSIFICATION_COORDS_ALL = (
-    'isin', 'ticker', 'name', 'region', 'country', 'trading_country',
-    'exchange', 'unit', 'style_class', 'size_class', 'sector', 'industry',
-    'next_earnings_when', 'next_earnings_status',
+    'region',
+    'country',
+    'trading_country',
+    'exchange',
+    'unit',
+    'style_class',
+    'size_class',
+    'sector',
+    'industry'
+
 )
 FISCAL_CALENDAR_COLS_ALL = (
     'income_statement_report_date', 'next_earnings', 'fy_end_date',
@@ -130,12 +138,11 @@ DAY_COUNT_COLS_ALL = (
 )
 
 # Candidate categorical group-effect coords for the hierarchical drift mean (section 5).
-_CANDIDATE_GROUPS = ('region', 'unit', 'style_class', 'size_class', 'sector', 'industry')
+_CANDIDATE_GROUPS = ('region', 'style_class', 'size_class', 'sector')
 
 # *_ago price-target history column pattern shared by sections 11–13.
 HIST_COL_PATTERN = (r"^(price_target(_high|_low|_median)?|price)"
                     r"_(5d|1w|1m|3m|6m|1y|3y|5y|mtd|qtd|ytd)_ago$")
-
 
 # ``display`` exists only in IPython; fall back to ``print`` for plain-script runs.
 try:  # pragma: no cover - depends on runtime
@@ -827,7 +834,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     axes[1].set_xlabel('6m volatility  (feat_vol_6m)')
     axes[1].set_title('Upside vs 6m volatility')
     axes[1].set_xlim(0, float(np.nanquantile(_gs['vol_6m'], 0.97))
-                     if _gs['vol_6m'].notna().any() else 1)
+    if _gs['vol_6m'].notna().any() else 1)
     axes[1].legend(fontsize=7, framealpha=0.25, title='sector', title_fontsize=8,
                    loc='upper right')
     plt.tight_layout()
@@ -1102,11 +1109,14 @@ def build_kalman_pt_model(data: ModelData, *, robust: bool = True) -> "pm.Model"
 # D-dimensional joint response series broadcast across the T fiscal anchors.
 # Mirrors PANEL_RESPONSE_COLS in _price_target_mc.py, re-homed onto the kalman MV.
 KALMAN_PANEL_RESPONSE_COLS: tuple[str, ...] = (
+    # Distinct, low-collinearity signals only. The dropped price-target levels
+    # (median/high/low) are near-collinear with observed_pt and are already
+    # captured via the dispersion path (feat_pt_noise_sigma -> sigma_isin); as
+    # response series they only inflated D and added posterior correlation.
+    # feat_implied_upside MUST stay first — it is the de-standardisation key in
+    # panel_posterior_upside.
     'feat_implied_upside',
     'observed_pt',
-    'price_target_median',
-    'price_target_high',
-    'price_target_low',
     'feat_pt_drift',
 )
 
@@ -1119,6 +1129,8 @@ def prepare_kalman_panel_inputs(
         classification_coords: Optional[Sequence[str]] = None,
         fiscal_anchor_cols: Sequence[str] = FISCAL_CALENDAR_COLS_ALL,
         response_cols: Sequence[str] = KALMAN_PANEL_RESPONSE_COLS,
+        collapse_time: bool = True,
+        time_covariate_cols: Sequence[str] = DAY_COUNT_COLS_ALL,
 ) -> KalmanPanelInputs:
     """Assemble the 3-D MvGRW panel tensors for :func:`build_fused_kalman_pt_model`.
 
@@ -1180,31 +1192,62 @@ def prepare_kalman_panel_inputs(
     if n_isin == 0:
         raise ValueError('No modelling rows after filtering observed_pt / last_price.')
 
-    # --- Fiscal-anchor time matrix (n_isin, T) --------------------------------
-    anchors = [c for c in fiscal_anchor_cols if c in model_df.columns]
-    if not anchors:
-        raise KeyError(f'None of the fiscal-anchor columns {list(fiscal_anchor_cols)} present.')
-    t0 = pd.to_datetime(model_df[anchors[0]], errors='coerce')
-    t_days = np.stack(
-        [(pd.to_datetime(model_df[c], errors='coerce') - t0).dt.days.to_numpy(dtype='float64')
-         for c in anchors],
-        axis=1,
-    )
-    t_mean = np.nanmean(t_days) if np.isfinite(t_days).any() else 0.0
-    t_std = np.nanstd(t_days)
-    t_std = t_std if t_std and np.isfinite(t_std) else 1.0
-    t_scaled = np.nan_to_num((t_days - t_mean) / t_std, nan=0.0)
-
-    # --- Response tensor (n_isin, T, D) standardised --------------------------
+    # --- Time axis + response tensor (n_isin, T, D) standardised --------------
+    # The source MV (pml.mv_pymc_kalman_pt) is one row per ISIN, so the response
+    # columns carry NO genuine per-anchor variation. The previous build tiled them
+    # identically across the T fiscal anchors (np.tile), feeding the MvGRW spine
+    # time-invariant data — the dominant cause of the ill-conditioned (0-divergence
+    # but max-tree-depth, ~0.001 step) posterior, a T-fold likelihood blow-up, and
+    # T-fold observation double-counting. With ``collapse_time`` (default) we model
+    # a single cross-sectional slice (T=1); the MvGRW degenerates to a
+    # well-conditioned cross-section and reactivates automatically when a genuine
+    # (isin, time) response panel is later supplied via ``collapse_time=False``.
     resp = [c for c in response_cols if c in model_df.columns]
     if not resp:
         raise KeyError(f'None of the response columns {list(response_cols)} present.')
-    T = t_scaled.shape[1]
     D = len(resp)
-    Y = np.stack(
-        [np.tile(model_df[c].astype('float64').to_numpy()[:, None], (1, T)) for c in resp],
-        axis=-1,
-    )
+
+    if collapse_time:
+        T = 1
+        # A single standardised time-to-event covariate keeps the beta_t slope a
+        # meaningful cross-sectional tilt instead of multiplying by an all-zero
+        # anchor difference; falls back to zeros when no day-count column exists.
+        tcov_col = next((c for c in time_covariate_cols if c in model_df.columns), None)
+        if tcov_col is not None:
+            tcov = pd.to_numeric(model_df[tcov_col], errors='coerce').to_numpy(dtype='float64')
+            tc_mean = np.nanmean(tcov) if np.isfinite(tcov).any() else 0.0
+            tc_std = np.nanstd(tcov)
+            tc_std = tc_std if tc_std and np.isfinite(tc_std) else 1.0
+            t_scaled = np.nan_to_num((tcov - tc_mean) / tc_std, nan=0.0)[:, None]
+        else:
+            t_scaled = np.zeros((n_isin, 1), dtype='float64')
+        # Response tensor (n_isin, 1, D) — per-ISIN scalar values, no tiling.
+        Y = np.stack(
+            [model_df[c].astype('float64').to_numpy()[:, None] for c in resp],
+            axis=-1,
+        )
+    else:
+        # Full (n_isin, T, D) panel — for a genuine time-varying response source.
+        anchors = [c for c in fiscal_anchor_cols if c in model_df.columns]
+        if not anchors:
+            raise KeyError(f'None of the fiscal-anchor columns {list(fiscal_anchor_cols)} present.')
+        t0 = pd.to_datetime(model_df[anchors[0]], errors='coerce')
+        t_days = np.stack(
+            [(pd.to_datetime(model_df[c], errors='coerce') - t0).dt.days.to_numpy(dtype='float64')
+             for c in anchors],
+            axis=1,
+        )
+        t_mean = np.nanmean(t_days) if np.isfinite(t_days).any() else 0.0
+        t_std = np.nanstd(t_days)
+        t_std = t_std if t_std and np.isfinite(t_std) else 1.0
+        t_scaled = np.nan_to_num((t_days - t_mean) / t_std, nan=0.0)
+        T = t_scaled.shape[1]
+        Y = np.stack(
+            [np.tile(model_df[c].astype('float64').to_numpy()[:, None], (1, T)) for c in resp],
+            axis=-1,
+        )
+
+    # Standardise the response tensor across (isin, time) per series.
     y_mean = Y.reshape(-1, D).mean(axis=0)
     y_std = Y.reshape(-1, D).std(axis=0)
     y_std = np.where(y_std > 1e-6, y_std, 1.0)
@@ -1258,11 +1301,12 @@ def prepare_kalman_panel_inputs(
 # Scalars (global hyper-parameters); group-effect scales ``sigma_<coord>`` are
 # appended at runtime from the panel coords actually present.
 FUSED_SCALAR_VARS: tuple[str, ...] = (
-    'mu_global', 'mu_logit', 'sigma_logit', 'sigma_base', 'nu',
+    'mu_logit', 'sigma_logit', 'sigma_base', 'sigma_expected_return', 'nu',
 )
-# Vector hyper-parameters (have a non-sample dim): drift slopes + GRW innovation scales.
+# Vector hyper-parameters (have a non-sample dim): drift slopes + GRW innovation
+# scales + per-series factor loadings on the shared per-ISIN baseline.
 FUSED_VECTOR_VARS: tuple[str, ...] = (
-    'beta', 'sigma_alpha_innov', 'sigma_beta_innov',
+    'beta', 'sigma_alpha_innov', 'sigma_beta_innov', 'mu_isin_loading',
 )
 
 
@@ -1395,6 +1439,7 @@ def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs):
         prior_idata = pm.sample_prior_predictive(
             draws=1000, var_names=var_names,
             random_seed=RANDOM_SEED, return_inferencedata=True,
+            compile_kwargs=get_pytensor_compile_kwargs(),
         )
 
     eu_prior, _ = panel_posterior_upside(prior_idata, panel, source='prior')
@@ -1443,8 +1488,21 @@ def sample_posterior(model: "pm.Model", prior_idata):
 
     Merges the prior groups into the posterior idata for one-object downstream access.
     """
+    # After the §4 structural fix (inert tiled time axis collapsed to a single
+    # cross-sectional slice) AND the identifiability fixes in
+    # ``build_fused_kalman_pt_model`` (learned O(1) ``sigma_expected_return``
+    # instead of the raw percent ``expected_vol`` level; standardised risk-penalty
+    # tilt; sum-to-zero ``ZeroSumNormal`` group intercepts) the structural
+    # parameters are genuinely identified again. The earlier 500/500 @ 0.90 run
+    # left R-hat ≈ 4.5 / ESS ≈ 4 because the regression was decoupled from the
+    # likelihood — a sampling budget could never have fixed that. With the model
+    # well-conditioned we use draws=1000, tune=1000 (the cross-section adapts fast)
+    # and target_accept=0.95 — the documented escalation for the prior R-hat > 1.01
+    # readout, cheap insurance against residual ridge curvature. chains=4, cores=4
+    # (all chains in parallel). When a genuine (isin, time) panel is later supplied
+    # (collapse_time=False), keep tune≈1000 for the richer geometry.
     sample_kwargs = dict(
-        draws=4500, tune=1500, chains=4, cores=2,
+        draws=1000, tune=1000, chains=4, cores=4,
         target_accept=0.95, random_seed=RANDOM_SEED,
         progressbar=True, return_inferencedata=True,
         idata_kwargs={"log_likelihood": False},
@@ -1494,6 +1552,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
         pm.sample_posterior_predictive(
             idata, extend_inferencedata=True,
             random_seed=RANDOM_SEED, progressbar=True,
+            compile_kwargs=get_pytensor_compile_kwargs(),
         )
 
     # (a) arviz distributional overlay — replicated draws vs the observed ECDF.
@@ -1822,7 +1881,9 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
     n_an = np.asarray(panel.n_analysts, dtype='float64')
     cv = np.asarray(panel.dispersion_cv, dtype='float64')
 
-    fig, axes = plt.subplots(2, 2, figsize=(13.5, 9.5))
+    # Create the figure with a managed layout engine that is compatible
+    # with colorbars. Use this INSTEAD of calling tight_layout() later.
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), layout="constrained")
 
     # (a) Volatility risk discount.
     sc = axes[0, 0].scatter(er, rar, c=exp_vol, cmap='viridis', s=14, alpha=0.75)
@@ -1867,7 +1928,6 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
         axes[1, 1].legend(fontsize=6.5, framealpha=0.25, ncol=2)
     else:
         axes[1, 1].set_visible(False)
-    plt.tight_layout()
     plt.show()
 
 
@@ -1983,8 +2043,8 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     """
     model_df = panel.frame
     _post = idata.posterior
-    _est = screen.ept             # (chain, draw, isin) — de-standardised price target
-    _eu = screen.eu               # (chain, draw, isin) — de-standardised implied upside
+    _est = screen.ept  # (chain, draw, isin) — de-standardised price target
+    _eu = screen.eu  # (chain, draw, isin) — de-standardised implied upside
     _rar = _post['risk_adj_return']  # (chain, draw, isin) — risk-adjusted return latent
 
     kalman_estimate = _est.mean(('chain', 'draw')).values
@@ -2104,7 +2164,7 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         kf = KalmanFilterPriceTarget()
         kf_idata, kf_model = kf.fit(
             price_targets=observed, isin=str(chosen), dates=dates,
-            samples=2500, tune=1000, chains=8,
+            samples=1500, tune=1000, chains=4,
             random_seed=RANDOM_SEED, parameterization='marginalized', trend=True,
             target_accept=0.95, nuts_sampler='nutpie',
         )
@@ -2191,7 +2251,7 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
         kf_sv = KalmanFilterPriceTarget()
         kf_sv_idata, _ = kf_sv.fit(
             price_targets=observed, isin=str(chosen), dates=dates,
-            samples=2500, tune=2000, chains=8, random_seed=RANDOM_SEED,
+            samples=1000, tune=1000, chains=4, random_seed=RANDOM_SEED,
             stochastic_volatility=True, realized_vol=rv_path,
             parameterization='non_centered', trend=True, nuts_sampler='nutpie',
         )
@@ -2199,7 +2259,7 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
         n_div = int(kf_sv_idata.sample_stats['diverging'].sum())
         print(f'Stochastic-volatility fit: {len(observed)} obs, divergences={n_div}.')
         _sv_vars = [v for v in ('sigma_state', 'vol_step_size', 'nu_obs',
-                                 'vol_anchor_offset', 'beta_trend')
+                                'vol_anchor_offset', 'beta_trend')
                     if v in kf_sv_idata.posterior]
         display(azs.summary(kf_sv_idata, var_names=_sv_vars, round_to=4))
 
@@ -2292,7 +2352,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         kf = KalmanFilterPriceTarget()
         kf_idata, kf_model = kf.fit(
             price_targets=observed, isin=label, dates=dates,
-            samples=2500, tune=2000, chains=8,
+            samples=1000, tune=1000, chains=4,
             random_seed=RANDOM_SEED, parameterization='marginalized', trend=True,
             target_accept=0.95, nuts_sampler='nutpie',
         )
@@ -2422,7 +2482,7 @@ def run_mingled_cohort_stochastic_vol(frame: pd.DataFrame, ctx: Optional[dict]) 
         kf_sv = KalmanFilterPriceTarget()
         kf_sv_idata, _ = kf_sv.fit(
             price_targets=_observed_sv, isin=label, dates=_dates_sv,
-            samples=2500, tune=2000, chains=8, random_seed=RANDOM_SEED,
+            samples=1000, tune=1000, chains=4, random_seed=RANDOM_SEED,
             stochastic_volatility=True, realized_vol=rv_path,
             parameterization='non_centered', trend=True, nuts_sampler='nutpie',
         )
@@ -2431,7 +2491,7 @@ def run_mingled_cohort_stochastic_vol(frame: pd.DataFrame, ctx: Optional[dict]) 
         print(f'Mingled-cohort stochastic-volatility fit: {len(_observed_sv)} obs, '
               f'divergences={n_div}.')
         _sv_vars = [v for v in ('sigma_state', 'vol_step_size', 'nu_obs',
-                                 'vol_anchor_offset', 'beta_trend')
+                                'vol_anchor_offset', 'beta_trend')
                     if v in kf_sv_idata.posterior]
         display(azs.summary(kf_sv_idata, var_names=_sv_vars, round_to=4))
 
@@ -2911,14 +2971,16 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
           f'UNDERWEIGHT if < universe{UW_PP:.0f}pp or P(>0)<={P_LO:.0%}.')
 
     # 4. Group allocation signals (hierarchical coords).
-    _coords = [c for c in ('region', 'sector', 'industry', 'size_class', 'style_class', 'unit')
+    _coords = [c for c in ('region', 'sector', 'size_class', 'style_class')
                if c in model_df.columns]
     for col in _coords:
         lab = model_df[col].fillna('Unknown').astype(str).to_numpy()
         da = xr.DataArray(lab, dims='isin', coords={'isin': isin_dim})
         grp = eu.groupby(da.rename(col)).mean('isin')
         stk = grp.stack(s=('chain', 'draw'))
-        gmean = stk.mean('s'); glo = stk.quantile(0.03, 's'); ghi = stk.quantile(0.97, 's')
+        gmean = stk.mean('s');
+        glo = stk.quantile(0.03, 's');
+        ghi = stk.quantile(0.97, 's')
         gpos = (grp > 0).mean(('chain', 'draw'))
         counts = pd.Series(lab).value_counts()
         rows = [(str(g), float(gmean.sel({col: g})), float(glo.sel({col: g})),
