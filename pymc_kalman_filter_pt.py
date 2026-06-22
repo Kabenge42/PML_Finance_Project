@@ -115,7 +115,10 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
                   'feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y',
                   'feat_avg_beta',
                   'feat_total_return_ytd', 'feat_total_return_5y', 'feat_total_return_10y',
-                  'feat_tr_cagr_3y', 'feat_tr_cagr_10y']
+                  'feat_tr_cagr_3y', 'feat_tr_cagr_10y',
+                  # Cross-cutting market-cap / EV size & trend feats (added to every
+                  # mv_pymc_* view; provenance-only for the fused panel — see §note below).
+                  'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg']
 
 # Hierarchical classification coords (categorical group effects), distinct from the
 # fiscal-calendar DATE anchors. Both carry pymc_role='coord', but the date anchors
@@ -760,7 +763,10 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     eda_noise = [c for c in ('feat_pt_range_norm', 'feat_pt_noise_sigma',
                              'feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y')
                  if c in kalman_df.columns]
-    eda_features = eda_drift + eda_noise
+    # Size / valuation context (market-cap trend, size-vs-3y-avg, EV-vs-3y-avg).
+    eda_size = [c for c in ('feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg')
+                if c in kalman_df.columns]
+    eda_features = eda_drift + eda_noise + eda_size
 
     _eda = kalman_df[eda_features].astype('float64')
     _lo = _eda.quantile(0.01)
@@ -1366,6 +1372,17 @@ def prepare_kalman_panel_inputs(
     else:
         avg_beta = np.full(n_isin, np.nan, dtype='float64')
 
+    # --- Size driver (feat_mcap_vs_3yavg) -------------------------------------
+    # feat_mcap_vs_3yavg == market_cap / market_cap_3yavg (mv_pymc_kalman_pt): the
+    # firm's current size relative to its own 3y-average size. Carried raw here and
+    # z-scored inside build_fused_kalman_pt_model, where it discounts risk_adj_return
+    # multiplicatively via exp(-size_penalty * z(size)). Falls back to NaN
+    # (-> neutral 1.0 discount after the model's nan_to_num) when the column is absent.
+    if 'feat_mcap_vs_3yavg' in model_df.columns:
+        size_ratio = pd.to_numeric(model_df['feat_mcap_vs_3yavg'], errors='coerce').to_numpy('float64')
+    else:
+        size_ratio = np.full(n_isin, np.nan, dtype='float64')
+
     # --- Categorical group-effect coords (classification coords only) ---------
     # Resolve the coord source: explicit arg > roles object > module default.
     if classification_coords is not None:
@@ -1386,6 +1403,7 @@ def prepare_kalman_panel_inputs(
 
     print(f'Fused panel — isins:{n_isin}  T:{T}  D:{D} ({resp})')
     print(f'  drift_features:{len(drift_features)}  avg_beta(mean):{np.nanmean(avg_beta):.3f}'
+          f'  size_ratio(mean):{np.nanmean(size_ratio):.3f}'
           f'  expected_vol(mean):{np.nanmean(expected_vol):.3f}'
           f'  cv(mean):{np.nanmean(dispersion_cv):.3f}')
 
@@ -1393,6 +1411,7 @@ def prepare_kalman_panel_inputs(
         frame=model_df, isins=isin_labels, Y=Y_std, t_scaled=t_scaled,
         X_drift=x_std, n_analysts=n_analysts, sqrt_n_analysts=sqrt_n,
         expected_vol=expected_vol, dispersion_cv=dispersion_cv, avg_beta=avg_beta,
+        size_ratio=size_ratio,
         drift_names=list(drift_features), response_names=list(resp),
         coord_uniques=coord_uniques, coord_idx=coord_idx,
     )
@@ -1723,12 +1742,51 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
         except Exception:
             continue
 
-    # (d) arviz PIT calibration (best-effort; should track the diagonal).
-    try:
-        pc_pit = azp.plot_ppc_pit(idata, var_names=["target_pct_obs"], backend="matplotlib")
-        pc_pit.show()
-    except Exception as e:  # pragma: no cover - diagnostic is best-effort
-        print(f"PPC PIT calibration plot skipped: {e!r}")
+        # (d) arviz PIT calibration (best-effort; should track the diagonal).
+        # plot_ppc_pit needs a variable with a single non-sample dim. ``target_pct_obs``
+        # is the (isin, time, y_series) tensor, so feeding it whole makes the PIT routine
+        # try to coerce a multi-element sub-array to a scalar -> TypeError. We squeeze the
+        # degenerate ``time`` dim and run the plot per ``y_series`` (each call then sees a
+        # clean (chain, draw, isin) variable).
+        try:
+            pp_obs = idata.observed_data['target_pct_obs']
+            extra_dims = [d for d in pp_obs.dims if d not in ('chain', 'draw')]
+            # Collapse any size-1 dims (e.g. the collapsed T=1 ``time`` axis).
+            squeeze_dims = [d for d in extra_dims if pp_obs.sizes[d] == 1]
+
+            series_dim = next((d for d in ('y_series',) if d in pp_obs.dims), None)
+            series_vals = (list(pp_obs[series_dim].values)
+                           if series_dim is not None else [None])
+
+            any_pit = False
+            for sv in series_vals:
+                sel = {series_dim: sv} if sv is not None else {}
+                sub = idata.copy()
+                # Build a lightweight idata view with a flattened response per series.
+                pp_g = idata.posterior_predictive['target_pct_obs'].sel(sel)
+                od_g = idata.observed_data['target_pct_obs'].sel(sel)
+                for d in squeeze_dims:
+                    if d in pp_g.dims:
+                        pp_g = pp_g.squeeze(d, drop=True)
+                    if d in od_g.dims:
+                        od_g = od_g.squeeze(d, drop=True)
+                sub.posterior_predictive = pp_g.rename('target_pct_obs').to_dataset()
+                sub.observed_data = od_g.rename('target_pct_obs').to_dataset()
+
+                pc_pit = azp.plot_ppc_pit(
+                    sub, var_names=["target_pct_obs"], backend="matplotlib",
+                )
+                title = f'PPC PIT — {sv}' if sv is not None else 'PPC PIT'
+                try:
+                    pc_pit.add_title(title)
+                except Exception:
+                    pass
+                pc_pit.show()
+                any_pit = True
+            if not any_pit:
+                print("PPC PIT calibration plot skipped: no response series resolved.")
+        except Exception as e:  # pragma: no cover - diagnostic is best-effort
+            print(f"PPC PIT calibration plot skipped: {e!r}")
 
 
 # =============================================================================

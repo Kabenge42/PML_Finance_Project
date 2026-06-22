@@ -1,5 +1,4 @@
-CREATE PROCEDURE refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT TRUE,
-                                                 IN assert_coverage  boolean DEFAULT FALSE)
+CREATE PROCEDURE refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT true, IN assert_coverage boolean DEFAULT false)
 	LANGUAGE plpgsql AS
 $$
 DECLARE
@@ -26,4 +25,4 @@ BEGIN
 END;
 $$;
 
-ALTER PROCEDURE refresh_pymc_materialized_views(boolean, boolean) OWNER TO postgres;
+ALTER PROCEDURE refresh_pymc_materialized_views(unknown, unknown) OWNER TO postgres;

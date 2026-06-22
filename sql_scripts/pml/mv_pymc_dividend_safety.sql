@@ -24,7 +24,10 @@ SELECT isin,
        repurchase_common_stock_ltm                                                            AS feat_repurchases_ltm,
        altman_z_score_ltm                                                                     AS feat_altman_z,
        return_on_assets_roa_pct_ltm                                                           AS feat_roa_ltm,
-       div_yield_ltm - div_yield_5yavgltm                                                     AS feat_yield_spread_vs_5y
+       div_yield_ltm - div_yield_5yavgltm                                                     AS feat_yield_spread_vs_5y,
+       calc_change_ratio(market_cap, market_cap_neg1fy)                                       AS feat_mcap_trend_1y,
+       safe_divide(market_cap, market_cap_3yavg)                                              AS feat_mcap_vs_3yavg,
+       safe_divide(enterprise_value, enterprise_value_3yavg)                                  AS feat_ev_vs_3yavg
 FROM pml_df;
 
 ALTER MATERIALIZED VIEW mv_pymc_dividend_safety OWNER TO postgres;

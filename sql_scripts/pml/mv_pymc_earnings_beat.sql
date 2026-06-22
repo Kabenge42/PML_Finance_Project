@@ -39,7 +39,12 @@ WITH beats AS (SELECT pml_df.isin,
                       pml_df.sales_neg0fysurprise_pct,
                       pml_df.days_to_earnings,
                       pml_df.earnings_report_recency,
-                      pml_df.next_earnings_status
+                      pml_df.next_earnings_status,
+                      pml_df.market_cap,
+                      pml_df.market_cap_neg1fy,
+                      pml_df.market_cap_3yavg,
+                      pml_df.enterprise_value,
+                      pml_df.enterprise_value_3yavg
                FROM pml_df
               )
 SELECT b.isin,
@@ -102,7 +107,10 @@ SELECT b.isin,
        b.sales_neg0fysurprise_pct                                                          AS feat_sales_last_y_surprise,
        b.days_to_earnings                                                                  AS feat_days_to_earnings,
        b.earnings_report_recency                                                           AS feat_report_recency,
-       b.next_earnings_status                                                              AS feat_next_earnings_status
+       b.next_earnings_status                                                              AS feat_next_earnings_status,
+       calc_change_ratio(b.market_cap, b.market_cap_neg1fy)                                AS feat_mcap_trend_1y,
+       safe_divide(b.market_cap, b.market_cap_3yavg)                                       AS feat_mcap_vs_3yavg,
+       safe_divide(b.enterprise_value, b.enterprise_value_3yavg)                           AS feat_ev_vs_3yavg
 FROM beats                                                b,
      LATERAL beat_counts(b.eps_surprises_q::numeric[])    bc_q(n_total, n_beats),
      LATERAL beat_counts(b.eps_surprises_y::numeric[])    bc_y(n_total, n_beats),

@@ -91,12 +91,15 @@ SELECT isin,
        (COALESCE(beta_1y, 0::double precision) + COALESCE(beta_2y, 0::double precision) +
         COALESCE(beta_5y, 0::double precision)) /
        NULLIF((beta_1y IS NOT NULL)::integer + (beta_2y IS NOT NULL)::integer + (beta_5y IS NOT NULL)::integer,
-              0)::double precision AS feat_avg_beta,
-       total_return_ytd            AS feat_total_return_ytd,
-       total_return_5y             AS feat_total_return_5y,
-       total_return_10y            AS feat_total_return_10y,
-       tot_return_pct_cagr_3y      AS feat_tr_cagr_3y,
-       tot_return_pct_cagr_10y     AS feat_tr_cagr_10y
+              0)::double precision                                                                                                                                                                                                                 AS feat_avg_beta,
+       total_return_ytd                                                                                                                                                                                                                            AS feat_total_return_ytd,
+       total_return_5y                                                                                                                                                                                                                             AS feat_total_return_5y,
+       total_return_10y                                                                                                                                                                                                                            AS feat_total_return_10y,
+       tot_return_pct_cagr_3y                                                                                                                                                                                                                      AS feat_tr_cagr_3y,
+       tot_return_pct_cagr_10y                                                                                                                                                                                                                     AS feat_tr_cagr_10y,
+       calc_change_ratio(market_cap, market_cap_neg1fy)                                                                                                                                                                                            AS feat_mcap_trend_1y,
+       safe_divide(market_cap, market_cap_3yavg)                                                                                                                                                                                                   AS feat_mcap_vs_3yavg,
+       safe_divide(enterprise_value, enterprise_value_3yavg)                                                                                                                                                                                       AS feat_ev_vs_3yavg
 FROM pml_df;
 
 ALTER MATERIALIZED VIEW mv_pymc_kalman_pt OWNER TO postgres;

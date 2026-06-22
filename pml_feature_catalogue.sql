@@ -348,7 +348,13 @@ WITH beats AS (SELECT isin,
                       sales_neg0fysurprise_pct,
                       days_to_earnings,
                       earnings_report_recency,
-                      next_earnings_status
+                      next_earnings_status,
+                      -- ---- Market-cap / EV size & trend raw carriers ----
+                      market_cap,
+                      market_cap_neg1fy,
+                      market_cap_3yavg,
+                      enterprise_value,
+                      enterprise_value_3yavg
                FROM pml.pml_df
               )
 SELECT b.isin,
@@ -413,7 +419,11 @@ SELECT b.isin,
        b.sales_neg0fysurprise_pct                                                           AS feat_sales_last_y_surprise,
        b.days_to_earnings                                                                   AS feat_days_to_earnings,
        b.earnings_report_recency                                                            AS feat_report_recency,
-       b.next_earnings_status                                                               AS feat_next_earnings_status
+       b.next_earnings_status                                                               AS feat_next_earnings_status,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(b.market_cap, b.market_cap_neg1fy)                             AS feat_mcap_trend_1y,
+       pml.safe_divide(b.market_cap, b.market_cap_3yavg)                                    AS feat_mcap_vs_3yavg,
+       pml.safe_divide(b.enterprise_value, b.enterprise_value_3yavg)                        AS feat_ev_vs_3yavg
 FROM beats                                                       b,
      LATERAL pml.beat_counts(b.eps_surprises_q::NUMERIC[])    bc_q,
      LATERAL pml.beat_counts(b.eps_surprises_y::NUMERIC[])    bc_y,
@@ -548,7 +558,11 @@ SELECT isin,
                        price_target_median_1y_ago)                                                             AS feat_pt_high_low_convergence_1y,
        -- Current coverage vs its trailing 3m/6m/1y average (>1 = coverage rising).
        pml.safe_divide(price_target_num, (price_target_num_1y_ago + price_target_num_6m_ago + price_target_num_3m_ago) /
-                                         3.0)                                                                  AS feat_analyst_count_stability
+                                         3.0)                                                                  AS feat_analyst_count_stability,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                                                    AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                                                           AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                                               AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_price_target_isin ON pml.mv_pymc_price_target (isin);
@@ -695,7 +709,11 @@ SELECT isin,
        total_return_5y         AS feat_total_return_5y,
        total_return_10y        AS feat_total_return_10y,
        tot_return_pct_cagr_3y  AS feat_tr_cagr_3y,
-       tot_return_pct_cagr_10y AS feat_tr_cagr_10y
+       tot_return_pct_cagr_10y AS feat_tr_cagr_10y,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)        AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)               AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)   AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_kalman_pt_isin ON pml.mv_pymc_kalman_pt (isin);
@@ -740,7 +758,11 @@ SELECT isin,
        ev_ebitda_ntm                                                               AS feat_ev_ebitda_ntm,
        return_on_assets_roa_pct_ltm                                                AS feat_roa_ltm,
        gross_profit_margin_pct_ltm                                                 AS feat_gpm_ltm,
-       beta_5y                                                                     AS feat_beta_5y
+       beta_5y                                                                     AS feat_beta_5y,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                        AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                               AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                   AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_dcf_pt_isin ON pml.mv_pymc_dcf_pt (isin);
@@ -777,7 +799,11 @@ SELECT isin,
        repurchase_common_stock_ltm                                                                AS feat_repurchases_ltm,
        altman_z_score_ltm                                                                         AS feat_altman_z,
        return_on_assets_roa_pct_ltm                                                               AS feat_roa_ltm,
-       div_yield_ltm - div_yield_5yavgltm                                                         AS feat_yield_spread_vs_5y
+       div_yield_ltm - div_yield_5yavgltm                                                         AS feat_yield_spread_vs_5y,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                                        AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                                               AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                                   AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_dividend_safety_isin ON pml.mv_pymc_dividend_safety (isin);
@@ -813,7 +839,11 @@ SELECT isin,
        p_b_ltm                                                                                         AS feat_pb_ltm,
        beta_2y                                                                                         AS feat_beta_2y,
        volatility_6m                                                                                   AS feat_vol_6m,
-       volatility_1y                                                                                   AS feat_vol_1y
+       volatility_1y                                                                                   AS feat_vol_1y,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                                            AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                                                   AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                                       AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_credit_risk_isin ON pml.mv_pymc_credit_risk (isin);
@@ -849,7 +879,11 @@ SELECT isin,
        pml.calc_change_ratio(full_time_employees_fy, full_time_employees_neg1fy)          AS feat_employee_growth_1y,
        -- FCF-per-share divergence from EPS – classic earnings-quality red flag
        pml.calc_change_ratio(fcf_per_share_ltm, net_eps_basic_ltm)                        AS feat_fcfps_vs_eps_gap,
-       peg_ntm                                                                            AS feat_peg_ntm
+       peg_ntm                                                                            AS feat_peg_ntm,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                               AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                                      AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                          AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_accounting_anomaly_isin ON pml.mv_pymc_accounting_anomaly (isin);

@@ -575,7 +575,19 @@ CREATE TABLE pml_df
 	gross_profit_margin_pct_neg4fy    double precision,
 	gross_profit_margin_pct_neg5fy    double precision,
 	gross_profit_margin_pct_3yavgfq   double precision,
-	gross_profit_margin_pct_5yavgfq   double precision
+	gross_profit_margin_pct_5yavgfq   double precision,
+	market_cap_neg1fq                 double precision,
+	market_cap_neg2fq                 double precision,
+	market_cap_neg3fq                 double precision,
+	market_cap_neg4fq                 double precision,
+	market_cap_neg1fy                 double precision,
+	market_cap_neg2fy                 double precision,
+	market_cap_neg3fy                 double precision,
+	market_cap_neg4fy                 double precision,
+	market_cap_3yavg                  double precision,
+	market_cap_5yavg                  double precision,
+	enterprise_value_3yavg            double precision,
+	enterprise_value_5yavg            double precision
 );
 
 ALTER TABLE pml_df

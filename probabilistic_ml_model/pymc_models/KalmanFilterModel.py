@@ -1634,6 +1634,12 @@ class KalmanPanelInputs:
         Per-ISIN average market beta (``feat_avg_beta`` = NULL-aware mean of
         ``beta_{1y,2y,5y}``). The systematic-risk (CAPM) driver of the
         ``exp(-risk_penalty * z(avg_beta))`` risk adjustment.
+    size_ratio : numpy.ndarray
+        Per-ISIN size ratio (``feat_mcap_vs_3yavg`` = ``market_cap /
+        market_cap_3yavg``): current market cap relative to its own 3-year
+        average. Carried raw and z-scored inside
+        :func:`build_fused_kalman_pt_model`, where it discounts ``risk_adj_return``
+        multiplicatively via ``exp(-size_penalty * z(size_ratio))``.
     dispersion_cv : numpy.ndarray
         Per-ISIN consensus noise coefficient of variation
         (``feat_pt_noise_sigma / last_price``); widens ``sigma_isin``.
@@ -1655,6 +1661,7 @@ class KalmanPanelInputs:
     expected_vol: np.ndarray
     dispersion_cv: np.ndarray
     avg_beta: np.ndarray
+    size_ratio: np.ndarray
     drift_names: list[str]
     response_names: list[str]
     coord_uniques: dict[str, np.ndarray]
@@ -1666,6 +1673,7 @@ def build_fused_kalman_pt_model(
         *,
         group_effects: Optional[tuple[str, ...]] = None,
         risk_penalty: float = 0.1,
+        size_penalty: float = 0.1,
         robust: bool = True,
 ) -> "pm_typing.Model":
     """Build the fused 3-D MvGRW + volatility-conditioned Kalman model.
@@ -1691,6 +1699,17 @@ def build_fused_kalman_pt_model(
     cross-sectional tilt, never as a raw level (see the convergence notes below).
     Expected volatility (``feat_vol_*``) is retained as a provenance container but
     no longer drives the penalty.
+
+    A second multiplicative **size discount** sits alongside the beta penalty on
+    ``risk_adj_return``:
+    ``risk_adj_return = expected_return * exp(-risk_penalty * z(avg_beta)) *
+    exp(-size_penalty * z(feat_mcap_vs_3yavg))`` where ``feat_mcap_vs_3yavg =
+    market_cap / market_cap_3yavg`` is the firm's current size relative to its own
+    3-year average. With ``size_penalty > 0`` names trading **above** their 3-year
+    average size (re-rated up) are discounted while names **below** it earn a
+    premium — a mean-reversion / "don't chase the re-rating" tilt — exactly
+    parallel to the systematic-risk (beta) discount. The driver is z-scored so the
+    discount is a *relative* cross-sectional factor with mean ≈ 1.
 
     NUTS-inplace-safety constraints (preserved from the notebook):
 
@@ -1751,6 +1770,11 @@ def build_fused_kalman_pt_model(
     risk_penalty : float
         Exponential risk-penalty factor applied to ``expected_return`` via the
         per-ISIN average market beta (z-scored systematic risk).
+    size_penalty : float
+        Exponential size-discount factor applied to ``risk_adj_return`` via the
+        per-ISIN size ratio ``feat_mcap_vs_3yavg`` (z-scored). Positive values
+        discount names trading above their 3-year average size; ``0.0`` disables
+        the size factor entirely.
     robust : bool
         ``True`` (default) → Student-t panel likelihood (absorbs analyst
         outliers); ``False`` → Normal-likelihood twin.
@@ -1810,6 +1834,21 @@ def build_fused_kalman_pt_model(
     # the raw beta scale (and unbiased) rather than collapsing them to 0.
     avg_beta_filled = np.nan_to_num(_beta_raw, nan=_beta_mu)
 
+    # Standardised size ratio for the learned size tilt on ``expected_return``.
+    # ``panel.size_ratio`` is ``feat_mcap_vs_3yavg`` (= market_cap / market_cap_3yavg):
+    # the firm's current market cap relative to its own 3-year average. Raw values
+    # are O(1) around 1.0, so z-scoring keeps the tilt a *relative* cross-sectional
+    # factor (currently-shrunk vs currently-extended names) robust to level shifts,
+    # exactly as for ``avg_beta``. Missing entries (NaN) map to a 0 tilt via the
+    # z-scored container; the raw container is filled with the cross-sectional mean
+    # for an honest provenance record (PyMC 6.0 rejects NaN in ``pm.Data``).
+    _size_raw = np.asarray(panel.size_ratio, dtype="float64")
+    _size_mu = float(np.nanmean(_size_raw)) if np.isfinite(_size_raw).any() else 0.0
+    _size_sd = float(np.nanstd(_size_raw))
+    _size_sd = _size_sd if (np.isfinite(_size_sd) and _size_sd > 1e-9) else 1.0
+    size_ratio_z = np.nan_to_num((_size_raw - _size_mu) / _size_sd, nan=0.0)
+    size_ratio_filled = np.nan_to_num(_size_raw, nan=_size_mu)
+
     # Standardised expected volatility, retained for provenance only. ``feat_vol_*``
     # arrives in *percent* units (≈ 45); it is z-scored here purely so the stored
     # ``feat_expected_vol_z`` container stays on the same relative scale as before.
@@ -1847,6 +1886,11 @@ def build_fused_kalman_pt_model(
         # provenance; the math consumes the standardised ``beta_z``.
         pm.Data("feat_avg_beta", avg_beta_filled, dims="isin")
         beta_z = pm.Data("feat_avg_beta_z", avg_beta_z, dims="isin")
+        # Size driver (feat_mcap_vs_3yavg = market_cap / market_cap_3yavg): the
+        # learned additive size tilt on ``expected_return`` below. Raw container
+        # retained for provenance; the math consumes the standardised ``size_z``.
+        pm.Data("feat_mcap_vs_3yavg", size_ratio_filled, dims="isin")
+        size_z = pm.Data("feat_mcap_vs_3yavg_z", size_ratio_z, dims="isin")
         # Expected volatility (feat_vol_* term-structure mean) retained as a
         # provenance container only — no longer drives the risk adjustment.
         # ``build_noise_wideners(..., fillna=True)`` already 0-fills these for the
@@ -1960,9 +2004,23 @@ def build_fused_kalman_pt_model(
         # prior expected-volatility (``exp_vol_z``) penalty: beta isolates the
         # priced, non-diversifiable risk that should discount expected return,
         # rather than total volatility (which conflates idiosyncratic noise).
+        #
+        # A second multiplicative SIZE DISCOUNT rides alongside the beta penalty:
+        # ``exp(-size_penalty * z(feat_mcap_vs_3yavg))``. feat_mcap_vs_3yavg
+        # (= market_cap / market_cap_3yavg) is the firm's current size vs its own
+        # 3y average; with ``size_penalty > 0`` names re-rated ABOVE their history
+        # (size_z > 0) are discounted and names below earn a premium — a
+        # mean-reversion tilt, structurally identical to the beta discount and
+        # equally identifiable (a fixed-coefficient z-scored multiplicative factor,
+        # mean ≈ 1, no new sampled parameter). ``size_discount`` is exposed
+        # (dims='isin') so downstream consumers can attribute the per-ISIN size
+        # contribution; ``size_penalty = 0`` collapses it to 1 (factor disabled).
+        size_discount = pm.Deterministic(
+            "size_discount", pt.exp(-size_penalty * size_z), dims="isin"
+        )
         risk_adj_return = pm.Deterministic(
             "risk_adj_return",
-            expected_return * pt.exp(-risk_penalty * beta_z),
+            expected_return * pt.exp(-risk_penalty * beta_z) * size_discount,
             dims="isin",
         )
         # The volatility-aware risk-adjusted return is the GRW baseline.

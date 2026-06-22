@@ -34,7 +34,10 @@ SELECT isin,
        ev_ebitda_ntm                                                           AS feat_ev_ebitda_ntm,
        return_on_assets_roa_pct_ltm                                            AS feat_roa_ltm,
        gross_profit_margin_pct_ltm                                             AS feat_gpm_ltm,
-       beta_5y                                                                 AS feat_beta_5y
+       beta_5y                                                                 AS feat_beta_5y,
+       calc_change_ratio(market_cap, market_cap_neg1fy)                        AS feat_mcap_trend_1y,
+       safe_divide(market_cap, market_cap_3yavg)                               AS feat_mcap_vs_3yavg,
+       safe_divide(enterprise_value, enterprise_value_3yavg)                   AS feat_ev_vs_3yavg
 FROM pml_df;
 
 ALTER MATERIALIZED VIEW mv_pymc_dcf_pt OWNER TO postgres;

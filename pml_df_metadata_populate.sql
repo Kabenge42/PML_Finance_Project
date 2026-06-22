@@ -150,7 +150,9 @@ UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
     feature_role = 'predictor'
 WHERE column_name IN ('market_cap', 'enterprise_value', 'volume_shrs', 'rel_volume',
-                      'shrs_out', 'shrs_out_3yavg', 'shrs_out_5yavg');
+                      'shrs_out', 'shrs_out_3yavg', 'shrs_out_5yavg',
+                      'market_cap_3yavg', 'market_cap_5yavg',
+                      'enterprise_value_3yavg', 'enterprise_value_5yavg');
 
 UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
@@ -161,6 +163,7 @@ UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
     feature_role = 'historical'
 WHERE column_name LIKE 'enterprise_value_neg%'
+   OR column_name LIKE 'market_cap_neg%'
    OR column_name LIKE 'shrs_out_neg%'
    OR column_name = 'shrs_out_neg1fy';
 
@@ -631,6 +634,24 @@ WHERE column_name LIKE 'enterprise_value_neg%';
 UPDATE pml.pml_df_metadata
 SET description = 'Lagged shares outstanding (prior period)'
 WHERE column_name LIKE 'shrs_out_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged market capitalization (prior fiscal quarter)'
+WHERE column_name SIMILAR TO 'market_cap_neg[0-9]+fq';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged market capitalization (prior fiscal year)'
+WHERE column_name SIMILAR TO 'market_cap_neg[0-9]+fy';
+UPDATE pml.pml_df_metadata
+SET description = 'Market capitalization 3-year average'
+WHERE column_name = 'market_cap_3yavg';
+UPDATE pml.pml_df_metadata
+SET description = 'Market capitalization 5-year average'
+WHERE column_name = 'market_cap_5yavg';
+UPDATE pml.pml_df_metadata
+SET description = 'Enterprise value 3-year average'
+WHERE column_name = 'enterprise_value_3yavg';
+UPDATE pml.pml_df_metadata
+SET description = 'Enterprise value 5-year average'
+WHERE column_name = 'enterprise_value_5yavg';
 
 -- Historical prices
 UPDATE pml.pml_df_metadata
@@ -1607,7 +1628,13 @@ VALUES
 	                            ('feat_pt_accuracy_1y',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_accuracy_1y',                ARRAY ['price_target']             ),
 	                            ('feat_pt_optimism_bias',              'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_optimism_bias',              ARRAY ['price_target']             ),
 	                            ('feat_net_buy_sentiment',             'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_net_buy_sentiment',             ARRAY ['price_target']             ),
-	                            ('feat_conviction_ratio',              'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_conviction_ratio',              ARRAY ['price_target']             )
+	                            ('feat_conviction_ratio',              'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_conviction_ratio',              ARRAY ['price_target']             ),
+	-- Cross-cutting market-cap / EV size & trend feats. Each is multi-source
+	-- (raw level vs lag / average) so it cannot be a per-source alias row; it is
+	-- registered as its own self-row consumed by EVERY mv_pymc_* view.
+	                            ('feat_mcap_trend_1y',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_trend_1y',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
+	                            ('feat_mcap_vs_3yavg',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_vs_3yavg',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
+	                            ('feat_ev_vs_3yavg',                   'market_data',     'predictor',  'mutable_predictor', 'feat_ev_vs_3yavg',                   ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])
 ON CONFLICT (column_name) DO UPDATE SET pymc_role     = excluded.pymc_role,
                                         feature_alias = excluded.feature_alias,
                                         model_targets = (SELECT ARRAY(SELECT DISTINCT

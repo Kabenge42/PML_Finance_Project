@@ -765,7 +765,10 @@ INSERT INTO pml_df (ticker, isin, name, description, region, country, trading_co
                     gross_profit_margin_pct_fq, gross_profit_margin_pct_neg1fqfq, gross_profit_margin_pct_neg2fqfq,
                     gross_profit_margin_pct_neg3fqfq, gross_profit_margin_pct_neg4fqfq, gross_profit_margin_pct_neg1fy,
                     gross_profit_margin_pct_neg2fy, gross_profit_margin_pct_neg3fy, gross_profit_margin_pct_neg4fy,
-                    gross_profit_margin_pct_neg5fy, gross_profit_margin_pct_3yavgfq, gross_profit_margin_pct_5yavgfq)
+                    gross_profit_margin_pct_neg5fy, gross_profit_margin_pct_3yavgfq, gross_profit_margin_pct_5yavgfq,
+                    market_cap_neg1fq, market_cap_neg2fq, market_cap_neg3fq, market_cap_neg4fq, market_cap_neg1fy,
+                    market_cap_neg2fy, market_cap_neg3fy, market_cap_neg4fy, market_cap_3yavg, market_cap_5yavg,
+                    enterprise_value_3yavg, enterprise_value_5yavg)
 SELECT NULLIF(TRIM(s."Ticker"), '')                                                                 AS ticker,
        NULLIF(TRIM(s."ISIN"), '')                                                                   AS isin,
        NULLIF(TRIM(s."Name"), '')                                                                   AS name,
@@ -1348,7 +1351,19 @@ SELECT NULLIF(TRIM(s."Ticker"), '')                                             
        text_to_numeric_safe(s."Gross Profit Margin % (-4FY)")               AS gross_profit_margin_pct_neg4fy,
        text_to_numeric_safe(s."Gross Profit Margin % (-5FY)")               AS gross_profit_margin_pct_neg5fy,
        text_to_numeric_safe(s."Gross Profit Margin % (3YAVGFQ)")            AS gross_profit_margin_pct_3yavgfq,
-       text_to_numeric_safe(s."Gross Profit Margin % (5YAVGFQ)")            AS gross_profit_margin_pct_5yavgfq
+       text_to_numeric_safe(s."Gross Profit Margin % (5YAVGFQ)")            AS gross_profit_margin_pct_5yavgfq,
+       text_to_numeric_safe(s."Market Cap (-1FQ)")                          AS market_cap_neg1fq,
+       text_to_numeric_safe(s."Market Cap (-2FQ)")                          AS market_cap_neg2fq,
+       text_to_numeric_safe(s."Market Cap (-3FQ)")                          AS market_cap_neg3fq,
+       text_to_numeric_safe(s."Market Cap (-4FQ)")                          AS market_cap_neg4fq,
+       text_to_numeric_safe(s."Market Cap (-1FY)")                          AS market_cap_neg1fy,
+       text_to_numeric_safe(s."Market Cap (-2FY)")                          AS market_cap_neg2fy,
+       text_to_numeric_safe(s."Market Cap (-3FY)")                          AS market_cap_neg3fy,
+       text_to_numeric_safe(s."Market Cap (-4FY)")                          AS market_cap_neg4fy,
+       text_to_numeric_safe(s."Market Cap (3YAVG)")                         AS market_cap_3yavg,
+       text_to_numeric_safe(s."Market Cap (5YAVG)")                         AS market_cap_5yavg,
+       text_to_numeric_safe(s."Enterprise Value (3YAVG)")                   AS enterprise_value_3yavg,
+       text_to_numeric_safe(s."Enterprise Value (5YAVG)")                   AS enterprise_value_5yavg
 
 
 FROM staging_header_buf s;
