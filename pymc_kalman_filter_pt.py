@@ -564,16 +564,31 @@ def build_realized_vol_path(vol_term_structure, dates) -> Optional[np.ndarray]:
     return np.clip(rv, 1e-6, None)
 
 
-def resolve_db_url(env_file: str = 'environment_variables.txt') -> str:
-    """Return ``DB_URL`` from the environment, falling back to environment_variables.txt.
+def _resolve_env_setting(key: str, env_file: str = 'environment_variables.txt',
+                         default: Optional[str] = None) -> Optional[str]:
+    """Return ``key`` from ``os.environ``, falling back to environment_variables.txt.
 
     The process may have been started without sourcing ``set_env.ps1``, in which case
-    ``os.environ`` has no ``DB_URL``; we then parse the ``KEY=VALUE`` lines of the
-    project's ``environment_variables.txt`` as a fallback.
+    ``os.environ`` lacks ``key``; we then parse the ``KEY=VALUE`` lines of the project's
+    ``environment_variables.txt`` as a fallback before returning ``default``.
+
+    Parameters
+    ----------
+    key
+        Environment variable name to resolve (e.g. ``'DB_URL'``).
+    env_file
+        Name of the dotenv-style file searched upward from the CWD.
+    default
+        Value returned when ``key`` is set neither in the environment nor the file.
+
+    Returns
+    -------
+    Optional[str]
+        The resolved value, or ``default`` when not found.
     """
-    url = os.environ.get('DB_URL')
-    if url:
-        return url
+    val = os.environ.get(key)
+    if val:
+        return val
 
     here = Path.cwd()
     for base in (here, *here.parents):
@@ -583,14 +598,67 @@ def resolve_db_url(env_file: str = 'environment_variables.txt') -> str:
                 line = raw.strip()
                 if not line or line.startswith('#') or '=' not in line:
                     continue
-                key, _, value = line.partition('=')
-                if key.strip() == 'DB_URL':
+                k, _, value = line.partition('=')
+                if k.strip() == key:
                     return value.strip().strip('"').strip("'")
             break
+    return default
+
+
+def resolve_db_url(env_file: str = 'environment_variables.txt') -> str:
+    """Return ``DB_URL`` from the environment, falling back to environment_variables.txt.
+
+    The process may have been started without sourcing ``set_env.ps1``, in which case
+    ``os.environ`` has no ``DB_URL``; we then parse the ``KEY=VALUE`` lines of the
+    project's ``environment_variables.txt`` as a fallback.
+    """
+    url = _resolve_env_setting('DB_URL', env_file=env_file)
+    if url:
+        return url
     raise KeyError(
         "DB_URL not set in os.environ and not found in environment_variables.txt. "
         "Run `. .\\set_env.ps1` before launching, or add a DB_URL line."
     )
+
+
+def export_to_analytics_db(df: pd.DataFrame, table_name: str,
+                           if_exists: str = 'replace') -> Optional[int]:
+    """Export ``df`` to the PostgreSQL analytics schema.
+
+    Local copy of ``data_utils.export_to_analytics_db`` that resolves the DB connection
+    via :func:`resolve_db_url` — so it inherits the ``environment_variables.txt`` fallback
+    used everywhere else in this script, instead of the bare ``os.environ['DB_URL']``
+    lookup in ``get_analytics_engine`` that raises when ``set_env.ps1`` was not sourced.
+    The target schema is read from ``DB_ANALYTICS_SCHEMA`` (default ``analytics``) with
+    the same env-file fallback.
+
+    Parameters
+    ----------
+    df
+        DataFrame to export.
+    table_name
+        Target table name (without schema prefix).
+    if_exists
+        Behaviour when the table exists: ``'fail'``, ``'replace'``, or ``'append'``.
+
+    Returns
+    -------
+    Optional[int]
+        Number of rows affected, as returned by :meth:`pandas.DataFrame.to_sql`.
+    """
+    engine = create_engine(resolve_db_url())
+    schema = _resolve_env_setting('DB_ANALYTICS_SCHEMA', default='analytics')
+
+    logging.info("Exporting %d rows to %s.%s", len(df), schema, table_name)
+    result = df.to_sql(
+        name=table_name,
+        con=engine,
+        schema=schema,
+        if_exists=if_exists,
+        index=False,
+    )
+    logging.info("Export complete: %s.%s", schema, table_name)
+    return result
 
 
 def fetch_history_columns(engine, keep: Sequence[str],
@@ -1639,7 +1707,7 @@ def sample_posterior(model: "pm.Model", prior_idata):
     # chains=4, cores=4 (all chains in parallel). When a genuine (isin, time) panel
     # is later supplied (collapse_time=False), keep tune≈2000 for the richer geometry.
     sample_kwargs = dict(
-        draws=1500, tune=2000, chains=4, cores=4,
+        draws=2000, tune=2000, chains=4, cores=4,
         target_accept=0.97, random_seed=RANDOM_SEED,
         progressbar=True, return_inferencedata=True,
         idata_kwargs={"log_likelihood": False},
@@ -2046,6 +2114,8 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
         'industry': frame.get('industry'),
         'size_class': frame.get('size_class'),
         'style_class': frame.get('style_class'),
+        'market_cap': frame.get('market_cap'),
+        'enterprise_value': frame.get('enterprise_value'),
         'last_price': frame['last_price'].to_numpy(),
         'observed_pt': frame['observed_pt'].to_numpy(),
         'expected_pt': exp_pt,
@@ -2499,7 +2569,7 @@ def compute_cvar_aware_book(
 # =============================================================================
 def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
                      *, risk_book: Optional[RiskBook] = None,
-                     write: bool = False) -> pd.DataFrame:
+                     write: bool = True) -> pd.DataFrame:
     """Build the ``analytics.kalman_filtered_price_targets`` row-set from the fused posterior.
 
     Maps the fused MvGRW + volatility-conditioned posterior onto the analytics table's
@@ -2511,6 +2581,16 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     * ``kalman_gain`` — the logit-normal ``achieve_prob`` (the smoother's confidence
       analogue: probability the implied target is achieved).
     * ``signal_strength`` — ``|E[risk_adj_return]| / sd(risk_adj_return)``.
+
+    It enriches each row with the valuation, posterior-band and structural-TS Monte-Carlo
+    columns pulled straight from the §10 screen table (``screen.results``), so the export
+    reuses — and never drifts from — those figures rather than recomputing them:
+
+    * ``market_cap`` / ``enterprise_value`` — size context from the panel frame.
+    * ``expected_pt_hdi_lo`` / ``expected_pt_hdi_hi`` — 94% posterior price-target band.
+    * ``risk_adj_return`` — posterior-mean risk-adjusted-return latent.
+    * ``er_mean`` / ``er_p05`` / ``er_p50`` / ``er_p95`` — MC return distribution summary.
+    * ``mc_prob_pos`` — MC probability of a positive return.
 
     It also wires the §10b CVaR-aware sizing onto each row:
 
@@ -2553,19 +2633,28 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
         'ticker': _idcol('ticker'),
         'name': _idcol('name'),
         'country': _idcol('country'),
+        'unit': _idcol('unit'),
         'exchange': _idcol('exchange'),
         'sector': _idcol('sector'),
         'industry': _idcol('industry'),
-        'implied_return_kalman': implied_return_kalman,
-        'expected_upside_kalman': expected_upside_kalman,
+        'expected_return_kalman': expected_upside_kalman,
         'price_target_kalman': kalman_estimate,
-        'kalman_estimate': kalman_estimate,
         'kalman_variance': kalman_variance,
         'kalman_gain': kalman_gain,
         'signal_strength': signal_strength,
         'original_price': model_df['last_price'].to_numpy(),
         'original_target': model_df['observed_pt'].to_numpy(),
     })
+
+    # Pull valuation, posterior-band and MC summary columns straight from the §10 screen
+    # table (the SSOT), keyed on isin — so the export never recomputes, nor drifts from,
+    # those figures. Columns absent from an older screen are simply skipped.
+    _screen_cols = ['market_cap', 'enterprise_value',
+                    'expected_pt_hdi_lo', 'expected_pt_hdi_hi', 'risk_adj_return',
+                    'er_mean', 'er_p05', 'er_p50', 'er_p95', 'mc_prob_pos']
+    _present = [c for c in _screen_cols if c in screen.results.columns]
+    kalman_results = kalman_results.merge(
+        screen.results[['isin', *_present]], on='isin', how='left')
 
     # Wire the §10b CVaR-aware sizing (reusing the shared RiskBook when supplied).
     rb = risk_book if risk_book is not None else compute_cvar_aware_book(
@@ -2583,7 +2672,6 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
             .head(25).round(4))
 
     if write:
-        from probabilistic_ml_model.data_utils.data_utils import export_to_analytics_db
         _n = export_to_analytics_db(kalman_results, 'kalman_filtered_price_targets',
                                     if_exists='append')
         print(f'Appended {_n} rows to analytics.kalman_filtered_price_targets.')
@@ -3728,8 +3816,7 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = False,
     screen = summarize_panel_screen(idata, panel)
     results = screen.results
     risk_book = compute_cvar_aware_book(idata, panel, screen, results)
-    kalman_results = export_analytics(idata, panel, screen,
-                                      risk_book=risk_book, write=write_analytics)
+    kalman_results = export_analytics(idata, panel, screen, risk_book=risk_book, write=write_analytics)
 
     # §11 single-ISIN filter (+11b SV).
     single_ctx = run_single_isin_filter(panel.frame, engine)

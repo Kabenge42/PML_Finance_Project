@@ -1731,11 +1731,15 @@ def build_fused_kalman_pt_model(
       σ≈1.0, group ``sigma`` HalfNormal(0.5)) rather than the previous diffuse
       ``10``/``5``, so the posterior is well-conditioned.
     * Crossed group intercepts (region/sector/size_class/style_class) use a
-      **non-centred** :class:`pm.ZeroSumNormal` with a **single shared scale**
-      ``sigma_group``: each effect is ``sigma_group * z_g`` for a unit-scale
-      zero-sum deviation ``z_g``. The sum-to-zero constraint removes the additive
-      level ridge (level carried by ``alpha``); the non-centred rescale removes
-      Neal's funnel. Crucially the scale is *shared* rather than one ``sigma_<col>``
+      **centred** :class:`pm.ZeroSumNormal` with a **single shared scale**
+      ``sigma_group`` (``HalfNormal(0.25)``): each effect is
+      ``ZeroSumNormal(sigma=sigma_group)``. The sum-to-zero constraint removes the
+      additive level ridge (level carried by ``alpha``). The centred form is used
+      because the cross-section is informative about the group means (their ESS is
+      ≈ 4k–9k); the earlier non-centred ``sigma_group * z_g`` rescale then left the
+      shared scale in a multiplicative funnel (``sigma_group`` R-hat ≈ 1.02,
+      ESS-bulk ≈ 376, ~19 divergences), which centring resolves. Crucially the
+      scale is *shared* rather than one ``sigma_<col>``
       per group: with the panel collapsed to a single cross-sectional slice
       (T=1, ~1 obs/ISIN) per-group scales plus the per-ISIN signal scale formed an
       unidentified 6-way variance *partition* over the same ``mu_isin`` dispersion,
@@ -1944,11 +1948,10 @@ def build_fused_kalman_pt_model(
         beta = pm.Normal("beta", mu=0.0, sigma=1.0, dims="drift_feature")
 
         eta = pt.dot(X_data, beta)
-        # Sum-to-zero partial pooling (``ZeroSumNormal``), NON-CENTRED, with a
-        # SINGLE SHARED scale across all crossed group intercepts. The zero-sum
-        # constraint removes the additive *level* ridge (the level is carried
-        # uniquely by ``alpha`` per series), and the non-centred rescale
-        # ``sigma_group * z_g`` removes Neal's funnel between scale and effects.
+        # Sum-to-zero partial pooling (``ZeroSumNormal``), CENTRED, with a SINGLE
+        # SHARED scale across all crossed group intercepts. The zero-sum constraint
+        # removes the additive *level* ridge (the level is carried uniquely by
+        # ``alpha`` per series).
         #
         # Why a single shared scale rather than one ``sigma_<col>`` per group:
         # previously each crossed scale had its own ``HalfNormal(0.5)`` prior, so
@@ -1962,20 +1965,38 @@ def build_fused_kalman_pt_model(
         # competing crossed scales into a single identified scale (a clean
         # between-group vs residual variance model once the per-ISIN latent is
         # dropped below); the relative magnitudes of the groups stay free via the
-        # zero-sum ``z_g`` vectors. ``industry`` is dropped from
+        # zero-sum effect vectors. ``industry`` is dropped from
         # ``_FUSED_KALMAN_GROUP_EFFECTS`` (near-nested under ``sector``, worst
         # mixer) to further reduce collinearity.
         #
-        # Per-coord ``sigma_<col>`` are re-exposed as Deterministic ALIASES of the
-        # shared scale so ``present_group_effects`` and the notebook/script
-        # ``sigma_<group>`` diagnostics resolve unchanged.
-        sigma_group = pm.HalfNormal("sigma_group", sigma=0.5)
+        # CENTRED vs NON-CENTRED. The earlier build sampled the effects
+        # NON-CENTRED (``effect = sigma_group * z_g`` with ``z_g ~ ZSN(1)``). That
+        # is optimal only when the data is *weak*; here the cross-section pins the
+        # group means tightly — the ``*_effect`` vectors mix at ESS ≈ 4k–9k,
+        # R-hat ≈ 1.00, with intervals like ``sector_effect[Utilities] = -0.168 ±
+        # 0.013`` — so the multiplicative neck between the shared scale and the
+        # pinned effects left ``sigma_group`` itself lagging (R-hat ≈ 1.02,
+        # ESS-bulk ≈ 376, [WARN]) and drove the residual ~19 divergences. With
+        # informative data the CENTRED form ``effect ~ ZSN(sigma=sigma_group)``
+        # lets the scale and effects co-adapt without that neck (Betancourt &
+        # Girolami; the standard centred-when-informative / non-centred-when-weak
+        # trade-off), lifting ``sigma_group``'s ESS toward the effects' and
+        # clearing the divergences. The shared-scale identifiability above is
+        # unchanged — only the funnel partner geometry flips.
+        #
+        # The prior is also tightened ``HalfNormal(0.5) -> HalfNormal(0.25)``: the
+        # scale posterior is ``0.097 ± 0.018`` (≈ 43 % of the total cross-sectional
+        # variance), so 0.25 covers it at ≈ 0.4 prior-sd while truncating the wide-
+        # σ funnel mouth NUTS otherwise wastes steps exploring. Per-coord
+        # ``sigma_<col>`` stay re-exposed as Deterministic ALIASES of the shared
+        # scale so ``present_group_effects`` and the ``sigma_<group>`` diagnostics
+        # resolve unchanged.
+        sigma_group = pm.HalfNormal("sigma_group", sigma=0.25)
         for col in avail_groups:
-            z_g = pm.ZeroSumNormal(f"{col}_effect_z", sigma=1.0, dims=col)
-            pm.Deterministic(f"sigma_{col}", sigma_group)
-            group_effect = pm.Deterministic(
-                f"{col}_effect", sigma_group * z_g, dims=col
+            group_effect = pm.ZeroSumNormal(
+                f"{col}_effect", sigma=sigma_group, dims=col
             )
+            pm.Deterministic(f"sigma_{col}", sigma_group)
             eta = eta + group_effect[idx_data_vars[col]]
         mu_reg = pm.Deterministic("mu_reg", eta, dims="isin")
 
