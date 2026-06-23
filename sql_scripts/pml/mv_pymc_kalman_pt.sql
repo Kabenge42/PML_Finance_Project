@@ -83,6 +83,8 @@ SELECT isin,
        price_target_stddev                                                                                                                                                                                                                         AS feat_pt_noise_sigma,
        safe_divide(price_target_high - price_target_low,
                    NULLIF(price_target, 0::double precision))                                                                                                                                                                                      AS feat_pt_range_norm,
+       -- Short-term momentum: last day's price change (mutable_predictor).
+       one_day_pct AS feat_one_day_return,
        volatility_1m                                                                                                                                                                                                                               AS feat_vol_1m,
        volatility_3m                                                                                                                                                                                                                               AS feat_vol_3m,
        volatility_6m                                                                                                                                                                                                                               AS feat_vol_6m,

@@ -12,15 +12,15 @@ import traceback
 from typing import Tuple
 
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
+from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
+from ..metrics import PRICE_TARGET_HORIZON_YEARS, return_volatility
 from ..theme import GOLD, GREEN, RED, control
 from ..theme import card as theme_card
-from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 
 component_id = "efficient_frontier_optimization"
 
@@ -79,7 +79,7 @@ def component() -> "object":
         card_id=component_id,
         children=[
             html.Div(
-                style={"display": "flex", "flexWrap": "wrap", "rowGap": "10px"},
+                className="geib-controls-row",
                 children=[
                     control("Risk-Free Rate:", dcc.Dropdown(
                         id=risk_free_rate_id, options=risk_free_rate_options,
@@ -147,7 +147,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
         return _empty("No data is available to display"), html.Div()
 
     df = df[["ticker", "name", "sector", "market_cap", "mc_prob_pos",
-             "expected_return_kalman", "kalman_variance"]].copy()
+             "original_price", "expected_return_kalman", "kalman_variance"]].copy()
     logger.debug(schema(df))
 
     rf = _coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default)
@@ -159,8 +159,8 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     df = df[df["market_cap"] >= min_market_cap]
     if sector_filter:
         df = df[df["sector"].isin(sector_filter)]
-    df = df.dropna(subset=["expected_return_kalman", "kalman_variance"])
-    df = df[df["kalman_variance"] > 0]
+    df = df.dropna(subset=["expected_return_kalman", "kalman_variance", "original_price"])
+    df = df[(df["kalman_variance"] > 0) & (df["original_price"] > 0)]
 
     if len(df) < 2:
         return _empty("Need at least 2 eligible stocks for an efficient frontier"), html.Div()
@@ -172,11 +172,15 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     df = df.reset_index(drop=True)
     tickers = df["ticker"].tolist()
 
-    # Annualised per-asset return and volatility from Kalman outputs.
-    mu = (df["expected_return_kalman"] * 252).to_numpy()
-    sigma = (np.sqrt(df["kalman_variance"]) * np.sqrt(252)).to_numpy()
+    # Annualised per-asset return and volatility from the Kalman outputs (both
+    # decimal). ``expected_return_kalman`` is already the total NTM upside and
+    # ``kalman_variance`` is the price-target *level* variance, so they are scaled
+    # by the real price-target horizon (not a daily 252) and the level variance is
+    # divided by the spot price to become a return — see ``geib.metrics``.
+    mu = (df["expected_return_kalman"] / PRICE_TARGET_HORIZON_YEARS).to_numpy()
+    sigma = return_volatility(df["kalman_variance"], df["original_price"]).to_numpy()
 
-    # Covariance from seeded simulated annualised returns (252 obs/asset).
+    # Covariance from seeded simulated annualised returns (252 draws/asset).
     rng = np.random.default_rng(42)
     sim = rng.normal(loc=mu, scale=sigma, size=(252, len(mu)))
     cov = np.cov(sim, rowvar=False)

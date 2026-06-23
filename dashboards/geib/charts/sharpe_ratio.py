@@ -10,15 +10,17 @@ import traceback
 from typing import Tuple
 
 import numpy as np
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
+from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
+from ..metrics import annualized_return_pct, annualized_volatility_pct
 from ..theme import GRAPH_STYLE, control
 from ..theme import card as theme_card
-from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 
 component_id = "sharpe_ratio_risk_adjusted_return"
 
@@ -91,7 +93,7 @@ def component() -> "object":
         card_id=component_id,
         children=[
             html.Div(
-                style={"display": "flex", "flexWrap": "wrap", "rowGap": "10px"},
+                className="geib-controls-row",
                 children=[
                     control(
                         "Risk-Free Rate:",
@@ -125,10 +127,10 @@ def component() -> "object":
                 ],
             ),
             html.Div(
-                style={"display": "flex", "flexDirection": "row", "gap": "10px"},
+                className="geib-dual-graph",
                 children=[
                     html.Div(
-                        style={"flex": "1"},
+                        className="geib-graph-pane",
                         children=[
                             dcc.Loading(type="circle",
                                         children=[dcc.Graph(id=graph_id_1, style=GRAPH_STYLE)]),
@@ -136,7 +138,7 @@ def component() -> "object":
                         ],
                     ),
                     html.Div(
-                        style={"flex": "1"},
+                        className="geib-graph-pane",
                         children=[
                             dcc.Loading(type="circle",
                                         children=[dcc.Graph(id=graph_id_2, style=GRAPH_STYLE)]),
@@ -155,7 +157,10 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         empty = _empty("No data is available to display")
         return empty, empty
 
-    df = df[["name", "sector", "market_cap", "expected_return_kalman", "kalman_variance", "mc_prob_pos"]].copy()
+    df = df[[
+        "name", "sector", "market_cap", "original_price",
+        "expected_return_kalman", "kalman_variance", "mc_prob_pos",
+    ]].copy()
     logger.debug(schema(df))
 
     risk_free_rate = _coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default)
@@ -168,9 +173,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         top_stocks = None
     sector_filter = kwargs.get(sector_filter_id) or []
 
-    df["annualized_return"] = df["expected_return_kalman"] * 252 * 100
-    df["annualized_volatility"] = np.sqrt(df["kalman_variance"]) * np.sqrt(252) * 100
-    df["sharpe_ratio"] = (df["annualized_return"] - (risk_free_rate * 100)) / df["annualized_volatility"]
+    df = _annualized_risk_metrics(df, risk_free_rate)
 
     df = df[df["mc_prob_pos"] >= prob_pos_threshold]
     df = df[df["market_cap"] >= min_market_cap]
@@ -199,6 +202,42 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
                        hovermode="closest")
     fig2.update_traces(marker=dict(sizemin=6))
     return fig1, fig2
+
+
+def _annualized_risk_metrics(df: pd.DataFrame, risk_free_rate: float) -> pd.DataFrame:
+    """Attach horizon-correct annualized return, volatility, and Sharpe ratio.
+
+    Delegates the unit/horizon conversion to :mod:`dashboards.geib.metrics` (the
+    single source of truth shared with the other Kalman charts), then forms the
+    Sharpe ratio and drops non-finite rows.
+
+    Parameters
+    ----------
+    df
+        Frame carrying ``expected_return_kalman``, ``kalman_variance`` and
+        ``original_price`` (the spot price the implied upside is measured from).
+    risk_free_rate
+        Annual risk-free rate as a fraction (e.g. ``0.03`` for 3%).
+
+    Returns
+    -------
+    pandas.DataFrame
+        ``df`` with ``annualized_return``, ``annualized_volatility`` and
+        ``sharpe_ratio`` columns (all in percent), with non-finite rows dropped.
+    """
+    out = df.copy()
+    out["annualized_return"] = annualized_return_pct(out["expected_return_kalman"])
+    out["annualized_volatility"] = annualized_volatility_pct(
+        out["kalman_variance"], out["original_price"]
+    )
+    out["sharpe_ratio"] = (
+                                  out["annualized_return"] - risk_free_rate * 100.0
+                          ) / out["annualized_volatility"]
+
+    out = out.replace([np.inf, -np.inf], np.nan)
+    return out.dropna(
+        subset=["annualized_return", "annualized_volatility", "sharpe_ratio"]
+    )
 
 
 def _coalesce(value, default):

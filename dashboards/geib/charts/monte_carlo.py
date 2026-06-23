@@ -16,11 +16,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
+from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
+from ..metrics import return_volatility
 from ..theme import DUAL_GRAPH_STYLE, control
 from ..theme import card as theme_card
-from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 
 component_id = "monte_carlo_return_distribution"
 
@@ -75,7 +76,7 @@ def component() -> "object":
         card_id=component_id,
         children=[
             html.Div(
-                style={"display": "flex", "flexWrap": "wrap", "rowGap": "10px"},
+                className="geib-controls-row",
                 children=[
                     control("Time Horizon:", dcc.Dropdown(
                         id=time_horizon_id, options=time_horizon_options,
@@ -92,16 +93,16 @@ def component() -> "object":
                 ],
             ),
             html.Div(
-                style={"display": "flex", "flexDirection": "row", "gap": "10px"},
+                className="geib-dual-graph",
                 children=[
-                    html.Div(style={"flex": "1"}, children=[
-                        html.Label("Probability Density Heatmap", style={"fontWeight": "bold"}),
+                    html.Div(className="geib-graph-pane", children=[
+                        html.Label("Probability Density Heatmap", className="geib-graph-label"),
                         dcc.Loading(type="circle", children=[
                             dcc.Graph(id=f"{component_id}_heatmap_graph", style=DUAL_GRAPH_STYLE)]),
                         html.Pre(id=f"{component_id}_heatmap_error", className="geib-error"),
                     ]),
-                    html.Div(style={"flex": "1"}, children=[
-                        html.Label("Cumulative Distribution Function", style={"fontWeight": "bold"}),
+                    html.Div(className="geib-graph-pane", children=[
+                        html.Label("Cumulative Distribution Function", className="geib-graph-label"),
                         dcc.Loading(type="circle", children=[
                             dcc.Graph(id=f"{component_id}_cdf_graph", style=DUAL_GRAPH_STYLE)]),
                         html.Pre(id=f"{component_id}_cdf_error", className="geib-error"),
@@ -124,14 +125,23 @@ def _simulate(df: pd.DataFrame, num_simulations: int, time_horizon: int) -> dict
     """Return {stock_name: simulated returns (%)} using a seeded RNG."""
     rng = np.random.default_rng(42)
     horizon_years = time_horizon / 252.0
+
+    # Annualised return std (decimal) from the price-target *level* variance, then
+    # scaled to the selected sub-horizon. ``geib.metrics.return_volatility``
+    # divides sqrt(kalman_variance) by the spot price so the dispersion is a
+    # return rather than a currency amount (the original bare sqrt(var) was in
+    # price units). Degenerate / missing dispersion is floored so the normal draw
+    # always has a positive scale.
+    annual_sigma = return_volatility(df["kalman_variance"], df["original_price"]).to_numpy()
+    annual_sigma = np.where(np.isfinite(annual_sigma) & (annual_sigma > 0), annual_sigma, 0.01)
+    horizon_sigma = annual_sigma * np.sqrt(horizon_years)
+
+    names = df["name"].to_numpy()
+    er_mean = df["er_mean"].to_numpy(dtype="float64")
     out: dict[str, np.ndarray] = {}
-    for _, row in df.iterrows():
-        var = float(row["kalman_variance"])
-        if var <= 0:
-            var = 0.01
-        std = np.sqrt(var) * np.sqrt(horizon_years)
-        draws = rng.normal(loc=float(row["er_mean"]), scale=std, size=num_simulations)
-        out[row["name"]] = draws * 100.0
+    for name, mean, std in zip(names, er_mean, horizon_sigma):
+        draws = rng.normal(loc=float(mean), scale=float(std), size=num_simulations)
+        out[name] = draws * 100.0
     return out
 
 
@@ -141,7 +151,8 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         empty = _empty("No data is available to display")
         return empty, empty
 
-    df = df[["name", "ticker", "market_cap", "er_mean", "kalman_variance", "mc_prob_pos"]].copy()
+    df = df[["name", "ticker", "market_cap", "er_mean", "kalman_variance",
+             "mc_prob_pos", "original_price"]].copy()
     logger.debug(schema(df))
 
     time_horizon = int(kwargs.get(time_horizon_id) or time_horizon_default)

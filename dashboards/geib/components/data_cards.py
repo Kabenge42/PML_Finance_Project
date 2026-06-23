@@ -10,9 +10,9 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import Input, Output, callback, html
 
+from .filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger
-from .filter_component import FILTER_CALLBACK_INPUTS, filter_data
 
 component_id = "data_cards"
 
@@ -50,8 +50,7 @@ def component() -> dbc.Row:
     """Build the single row of five KPI cards."""
     return dbc.Row(
         [_kpi_card(card_id, title) for card_id, title in _CARDS],
-        className="g-3",
-        style={"marginBottom": "8px"},
+        className="g-3 geib-kpi-row",
     )
 
 

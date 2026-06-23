@@ -13,11 +13,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
+from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..theme import DUAL_GRAPH_STYLE, control
 from ..theme import card as theme_card
-from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 
 component_id = "value_at_risk_downside_assessment"
 
@@ -89,7 +89,7 @@ def component() -> "object":
         card_id=component_id,
         children=[
             html.Div(
-                style={"display": "flex", "flexWrap": "wrap", "rowGap": "10px"},
+                className="geib-controls-row",
                 children=[
                     control("Confidence Level:", dcc.Dropdown(
                         id=confidence_level_id, options=confidence_level_options,
@@ -112,16 +112,16 @@ def component() -> "object":
                 ],
             ),
             html.Div(
-                style={"display": "flex", "flexDirection": "row", "gap": "10px"},
+                className="geib-dual-graph",
                 children=[
-                    html.Div(style={"flex": "1"}, children=[
-                        html.Label("CVaR by Stock and Sector", style={"fontWeight": "bold"}),
+                    html.Div(className="geib-graph-pane", children=[
+                        html.Label("CVaR by Stock and Sector", className="geib-graph-label"),
                         dcc.Loading(type="circle", children=[
                             dcc.Graph(id=f"{component_id}_graph_1", style=DUAL_GRAPH_STYLE)]),
                         html.Pre(id=f"{component_id}_error_1", className="geib-error"),
                     ]),
-                    html.Div(style={"flex": "1"}, children=[
-                        html.Label("Risk-Return Profile", style={"fontWeight": "bold"}),
+                    html.Div(className="geib-graph-pane", children=[
+                        html.Label("Risk-Return Profile", className="geib-graph-label"),
                         dcc.Loading(type="circle", children=[
                             dcc.Graph(id=f"{component_id}_graph_2", style=DUAL_GRAPH_STYLE)]),
                         html.Pre(id=f"{component_id}_error_2", className="geib-error"),

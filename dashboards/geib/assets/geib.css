@@ -22,7 +22,7 @@ body,
 }
 
 .geib-page {
-    padding: 24px;
+    padding: 24px 32px 8px;
 }
 
 /* --- Hero / header --- */
@@ -53,7 +53,14 @@ body,
     border: 1px solid var(--geib-border) !important;
     border-radius: 8px !important;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    margin: 20px 0;
+    margin: 28px 0;
+    /* Keep dropdown menus from being clipped by the card edge. */
+    overflow: visible;
+}
+
+/* Breathing room around card contents so graphs never sit flush to the edge. */
+.geib-card > .card-body {
+    padding: 20px;
 }
 
 .geib-card-header {
@@ -99,11 +106,30 @@ body,
 }
 
 /* --- Controls --- */
+/* A single control row: wraps cleanly and keeps a clear gap from the graph
+   that follows it. The per-control bottom margin doubles as wrap spacing. */
+.geib-controls-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    margin-bottom: 12px;
+}
+
 .geib-control {
     display: flex;
     flex-direction: column;
-    margin-right: 15px;
+    margin: 0 16px 16px 0;
     min-width: 150px;
+    /* Establish a stacking context so an open menu can be lifted above the
+       graph rendered below it (see :focus-within rule). */
+    position: relative;
+}
+
+/* When a dropdown inside a control is open/focused, lift the whole control
+   above sibling controls and any Plotly graph beneath it. */
+.geib-control:focus-within {
+    z-index: 1200;
 }
 
 .geib-control-label {
@@ -127,6 +153,8 @@ body,
     background-color: var(--geib-slate-dark);
     border: 1px solid var(--geib-control-border);
     color: var(--geib-body);
+    /* Float the open menu above the chart that follows the controls row. */
+    z-index: 1200;
 }
 
 .geib-page .Select-value-label,
@@ -146,12 +174,38 @@ body,
     background-color: #1E40AF;
 }
 
+/* --- Charts / graph panes --- */
+/* KPI tile row sits between the filter panel and the first analytic card. */
+.geib-kpi-row {
+    margin-bottom: 24px;
+}
+
+/* Two graphs side by side: wrap (instead of squashing into each other) once
+   there isn't room, and min-width:0 keeps wide figures from overflowing. */
+.geib-dual-graph {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.geib-graph-pane {
+    flex: 1 1 360px;
+    min-width: 0;
+}
+
+.geib-graph-label {
+    display: block;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
 /* --- Filter panel & results --- */
 .geib-filter-panel {
     background-color: var(--geib-slate-dark) !important;
     border: 1px solid var(--geib-border) !important;
     border-radius: 8px !important;
-    margin-bottom: 20px;
+    margin-bottom: 24px;
 }
 
 .geib-results {

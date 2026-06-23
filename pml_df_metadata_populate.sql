@@ -152,7 +152,8 @@ SET category     = 'market_data',
 WHERE column_name IN ('market_cap', 'enterprise_value', 'volume_shrs', 'rel_volume',
                       'shrs_out', 'shrs_out_3yavg', 'shrs_out_5yavg',
                       'market_cap_3yavg', 'market_cap_5yavg',
-                      'enterprise_value_3yavg', 'enterprise_value_5yavg');
+                      'enterprise_value_3yavg', 'enterprise_value_5yavg',
+                      'one_day_pct');
 
 UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
@@ -191,7 +192,7 @@ SET category     = 'technical',
     feature_role = 'predictor'
 WHERE column_name IN ('w_52high_adj', 'w_52low_adj',
                       'ema_20d', 'ema_50d', 'ema_100d', 'ema_250d',
-                      'price_chg_pct_3m', 'one_day_pct');
+                      'price_chg_pct_3m');
 
 UPDATE pml.pml_df_metadata
 SET category     = 'volatility',
@@ -684,7 +685,7 @@ UPDATE pml.pml_df_metadata
 SET description = '3-month price change percentage'
 WHERE column_name = 'price_chg_pct_3m';
 UPDATE pml.pml_df_metadata
-SET description = '1-day price change percentage'
+SET description = 'Last day''s price change'
 WHERE column_name = 'one_day_pct';
 
 -- Volatility / beta
@@ -1340,6 +1341,15 @@ WHERE column_name IN ('price_target_high',
                       'tot_return_pct_cagr_3y',
                       'tot_return_pct_cagr_10y');
 
+-- 7h.3b KalmanFilterPriceTarget: short-term momentum. one_day_pct (last day's
+--       price change) is emitted by mv_pymc_kalman_pt as feat_one_day_return, a
+--       drift / state-transition mutable_predictor. Extend its model_targets so it
+--       surfaces in vw_pymc_feature_catalogue for kalman_pt (the per-source alias
+--       is registered in pml.pml_df_feature_alias below).
+UPDATE pml.pml_df_metadata
+SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
+WHERE column_name = 'one_day_pct';
+
 -- 7h.3a KalmanFilterPriceTarget: fiscal-calendar anchors + derived day-count
 --       horizons (mirrors the price_target wiring in 7h.2). These give the
 --       marginalized GaussianRandomWalk a real, irregular time axis so the
@@ -1768,6 +1778,8 @@ VALUES
 	('total_return_10y',        'kalman_pt', 'feat_total_return_10y', 'mutable_predictor'),
 	('tot_return_pct_cagr_3y',  'kalman_pt', 'feat_tr_cagr_3y',       'mutable_predictor'),
 	('tot_return_pct_cagr_10y', 'kalman_pt', 'feat_tr_cagr_10y',      'mutable_predictor'),
+	-- Short-term momentum: one_day_pct (last day's price change) -> feat_one_day_return.
+	('one_day_pct', 'kalman_pt', 'feat_one_day_return', 'mutable_predictor'),
 	-- Raw beta windows: emitted un-prefixed by mv_pymc_kalman_pt as the
 	-- systematic-risk inputs to feat_avg_beta (the NULL-aware mean), which is the
 	-- model-facing risk-adjustment driver. Aliased == column name (present-check)

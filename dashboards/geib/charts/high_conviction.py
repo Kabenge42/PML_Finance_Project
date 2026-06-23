@@ -12,11 +12,11 @@ from typing import Tuple
 from dash import Input, Output, callback, dash_table, dcc, html
 from dash.dash_table.Format import Format, Scheme
 
+from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger
 from ..theme import BODY_TEXT, BORDER, NAVY, SLATE_DARK, control
 from ..theme import card as theme_card
-from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 
 component_id = "high_conviction_opportunities"
 
@@ -84,7 +84,7 @@ def component() -> "object":
         card_id=component_id,
         children=[
             html.Div(
-                style={"display": "flex", "flexWrap": "wrap", "rowGap": "10px"},
+                className="geib-controls-row",
                 children=[
                     control("Country:", dcc.Dropdown(
                         id=country_id, options=country_options, value=country_default,

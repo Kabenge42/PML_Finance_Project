@@ -69,6 +69,19 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from sqlalchemy import create_engine, text
 
+# Plotly powers the interactive §2.4 EDA panels. It is an approved visualization
+# dependency (see CLAUDE.md); imported defensively so the EDA degrades to its
+# matplotlib / arviz_plots panels when the optional dep is unavailable.
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+
+    _HAS_PLOTLY = True
+except ImportError:  # pragma: no cover - optional dependency
+    px = None  # type: ignore[assignment]
+    go = None  # type: ignore[assignment]
+    _HAS_PLOTLY = False
+
 from probabilistic_ml_model._pymc_arviz_compat import extend_datatree
 from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
     KalmanFilterPriceTarget,
@@ -114,6 +127,8 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
                   'feat_pt_noise_sigma', 'feat_pt_range_norm',
                   'feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y',
                   'feat_avg_beta',
+                  # Short-term momentum: last day's price change (one_day_pct).
+                  'feat_one_day_return',
                   'feat_total_return_ytd', 'feat_total_return_5y', 'feat_total_return_10y',
                   'feat_tr_cagr_3y', 'feat_tr_cagr_10y',
                   # Cross-cutting market-cap / EV size & trend feats (added to every
@@ -772,6 +787,218 @@ def resolve_feature_roles(kalman_df: pd.DataFrame,
 # =============================================================================
 # 2. Exploratory Data Analysis (EDA)
 # =============================================================================
+# Interactive (Plotly) EDA helpers. Each is side-effecting (mirrors the
+# ``plt.show()`` / ``pc.show()`` convention) and aligned to the fused-panel drivers
+# the model actually consumes (build_fused_kalman_pt_model): the systematic-risk
+# ``feat_avg_beta`` penalty and the ``feat_mcap_vs_3yavg`` size discount on
+# ``risk_adj_return``, plus the new short-horizon momentum ``feat_one_day_return``.
+# When plotly is unavailable, ``run_eda`` falls back to the matplotlib panels.
+
+# (column, hover/axis label) of the cross-sectional drivers the §2.4e facets scan.
+# Only the columns present in the snapshot are plotted.
+_EDA_DRIVER_SPECS: tuple[tuple[str, str], ...] = (
+    ('feat_avg_beta', 'avg beta — systematic-risk penalty'),
+    ('feat_mcap_vs_3yavg', 'mcap / 3y-avg — size discount'),
+    ('feat_one_day_return', 'one-day return — short-horizon momentum'),
+    ('noise_cv', 'consensus noise CV — sigma_obs widener'),
+    ('feat_vol_6m', '6m volatility — sigma_obs widener'),
+    ('feat_total_return_ytd', 'YTD total return — momentum'),
+)
+
+
+def _render_plotly(fig: object, *, height: Optional[int] = None) -> None:
+    """Render a Plotly figure in the notebook (side-effecting; dark theme).
+
+    Mirrors the ``plt.show()`` / ``pc.show()`` convention used throughout
+    :func:`run_eda`. Falls back to :func:`display` and is a silent no-op when no
+    renderer is available, so a headless / plain-script run never raises.
+    """
+    if fig is None:
+        return
+    fig.update_layout(template='plotly_dark', margin=dict(l=60, r=30, t=70, b=50))
+    if height is not None:
+        fig.update_layout(height=height)
+    try:
+        fig.show()
+    except Exception:  # pragma: no cover - non-notebook / no renderer
+        try:
+            display(fig)
+        except Exception:
+            pass
+
+
+def _sector_grouped(df: pd.DataFrame, *, max_sectors: int = 8) -> pd.DataFrame:
+    """Return ``df`` with a capped ``sector_grp`` column (top-N sectors + ``Other``)."""
+    g = df.copy()
+    sec = g.get('sector', pd.Series('Unknown', index=g.index)).fillna('Unknown').astype(str)
+    top = sec.value_counts().head(max_sectors).index.tolist()
+    g['sector_grp'] = np.where(sec.isin(top), sec, 'Other')
+    return g
+
+
+def _eda_upside_frame(kalman_df: pd.DataFrame) -> pd.DataFrame:
+    """Filtered ISIN frame carrying the ``upside_pct`` response and the cv widener.
+
+    Implied upside is ``observed_pt / last_price - 1`` (the cross-sectional response the
+    fused panel reconstructs), clipped to [-100 %, +500 %]. ``noise_cv`` is the
+    consensus-dispersion observation-noise widener (``feat_pt_noise_sigma / last_price``).
+    """
+    d = kalman_df[(kalman_df['observed_pt'] > 0) & (kalman_df['last_price'] > 0)].copy()
+    if d.empty:
+        return d
+    d['upside_pct'] = ((d['observed_pt'] / d['last_price'] - 1.0) * 100.0).clip(-100, 500)
+    if 'feat_pt_noise_sigma' in d.columns:
+        d['noise_cv'] = (d['feat_pt_noise_sigma'].astype('float64')
+                         / d['last_price'].clip(lower=1e-9)).clip(0, 1)
+    return d
+
+
+def _plot_upside_vs_drivers_plotly(kalman_df: pd.DataFrame) -> None:
+    """Interactive implied-upside vs fused-panel risk/return drivers (faceted scatter).
+
+    Refactors the former static §2.4e scatter into a hoverable Plotly view spanning the
+    drivers ``build_fused_kalman_pt_model`` actually consumes — the systematic-risk
+    ``feat_avg_beta`` tilt and the ``feat_mcap_vs_3yavg`` size discount on
+    ``risk_adj_return``, the consensus-noise / volatility ``sigma_obs`` wideners, and the
+    new short-horizon momentum ``feat_one_day_return``. Each facet's x-axis is independent
+    and winsorised to the 1/99 pct for readability; hover surfaces ticker / name.
+    """
+    d = _eda_upside_frame(kalman_df)
+    if d.empty:
+        return
+    drivers = [(c, lab) for c, lab in _EDA_DRIVER_SPECS if c in d.columns]
+    if not drivers:
+        return
+    g = _sector_grouped(d)
+    id_cols = [c for c in ('ticker', 'name') if c in g.columns]
+    frames = []
+    for col, lab in drivers:
+        sub = g[[col, 'upside_pct', 'sector_grp', *id_cols]].copy()
+        lo, hi = sub[col].astype('float64').quantile([0.01, 0.99])
+        sub[col] = sub[col].astype('float64').clip(lo, hi)
+        sub = sub.rename(columns={col: 'driver_value'})
+        sub['driver'] = lab
+        frames.append(sub)
+    long = pd.concat(frames, ignore_index=True)
+    hover = {c: True for c in id_cols}
+    hover.update({'driver': False, 'sector_grp': False})
+    fig = px.scatter(
+        long, x='driver_value', y='upside_pct', color='sector_grp',
+        facet_col='driver', facet_col_wrap=3, opacity=0.55, hover_data=hover,
+        category_orders={'driver': [lab for _, lab in drivers]},
+        labels={'sector_grp': 'sector', 'driver_value': '', 'upside_pct': 'implied upside (%)'},
+        color_discrete_sequence=px.colors.qualitative.Set2,
+    )
+    fig.update_xaxes(matches=None, showticklabels=True)
+    fig.for_each_annotation(lambda a: a.update(text=a.text.split('=', 1)[-1], font_size=10))
+    fig.add_hline(y=0, line_dash='dash', line_color='#888888', opacity=0.7)
+    fig.update_layout(
+        title='Implied upside vs fused-panel risk / return drivers (interactive)',
+        legend_title_text='sector',
+    )
+    _render_plotly(fig, height=640)
+
+
+def _plot_upside_vs_signals_mpl(kalman_df: pd.DataFrame) -> None:
+    """Static seaborn fallback for §2.4e (upside vs consensus dispersion / 6m vol)."""
+    _g = kalman_df[(kalman_df['observed_pt'] > 0) & (kalman_df['last_price'] > 0)].copy()
+    _g['upside_pct'] = ((_g['observed_pt'] / _g['last_price'] - 1.0) * 100.0).clip(-100, 500)
+    _g['sector'] = _g.get('sector', pd.Series('Unknown', index=_g.index)).fillna('Unknown')
+    if 'feat_pt_noise_sigma' in _g.columns:
+        _g['noise_cv'] = (_g['feat_pt_noise_sigma'].astype('float64')
+                          / _g['last_price'].clip(lower=1e-9)).clip(0, 1)
+    _g['vol_6m'] = _g.get('feat_vol_6m', pd.Series(np.nan, index=_g.index)).astype('float64')
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
+    _top_sectors = _g['sector'].value_counts().head(9).index.tolist()
+    _gs = _g[_g['sector'].isin(_top_sectors)]
+    _pal = dict(zip(_top_sectors, sns.color_palette('Set2', len(_top_sectors))))
+    if 'noise_cv' in _gs.columns:
+        for sec, sub in _gs.groupby('sector'):
+            axes[0].scatter(sub['noise_cv'], sub['upside_pct'], s=8, alpha=0.4,
+                            color=_pal[sec], label=sec)
+        axes[0].set_xlabel('consensus noise CV  (feat_pt_noise_sigma / last_price)')
+        axes[0].set_ylabel('implied upside (%)')
+        axes[0].set_title('Upside vs consensus dispersion')
+        axes[0].set_xlim(0, 0.5)
+    for sec, sub in _gs.groupby('sector'):
+        axes[1].scatter(sub['vol_6m'], sub['upside_pct'], s=8, alpha=0.4,
+                        color=_pal[sec], label=sec)
+    axes[1].set_xlabel('6m volatility  (feat_vol_6m)')
+    axes[1].set_title('Upside vs 6m volatility')
+    axes[1].set_xlim(0, float(np.nanquantile(_gs['vol_6m'], 0.97))
+    if _gs['vol_6m'].notna().any() else 1)
+    axes[1].legend(fontsize=7, framealpha=0.25, title='sector', title_fontsize=8,
+                   loc='upper right')
+    plt.show()
+
+
+def _plot_feature_corr_heatmap_plotly(kalman_df: pd.DataFrame, feature_cols: list[str]) -> None:
+    """Interactive Spearman-correlation heatmap of the feat_* drift / noise blocks."""
+    cols = [c for c in feature_cols if c in kalman_df.columns and kalman_df[c].notna().sum() > 5]
+    if len(cols) < 2:
+        return
+    corr = kalman_df[cols].astype('float64').corr(method='spearman')
+    fig = go.Figure(go.Heatmap(
+        z=corr.to_numpy(), x=cols, y=cols, zmin=-1, zmax=1, zmid=0,
+        colorscale='RdBu', reversescale=True, colorbar=dict(title='Spearman rho'),
+        text=corr.round(2).to_numpy(), texttemplate='%{text}', textfont=dict(size=8),
+        hovertemplate='%{y}<br>vs %{x}<br>rho = %{z:.2f}<extra></extra>',
+    ))
+    fig.update_layout(
+        title='feat_* correlation — drift / momentum vs noise-widener blocks (interactive)',
+        width=860, yaxis_autorange='reversed',
+    )
+    _render_plotly(fig, height=760)
+
+
+def _momentum_signal_table(kalman_df: pd.DataFrame,
+                           drift_cols: list[str]) -> Optional[pd.DataFrame]:
+    """Spearman rho of each momentum / drift feature with implied upside.
+
+    Scans the drift term structure — the new short-horizon ``feat_one_day_return``, the
+    analyst-trail drifts, and the YTD -> multi-year realised-return block — to quantify
+    where each horizon's marginal signal sits. Returns a tidy, rho-sorted frame
+    (``feature``, ``spearman_rho``, ``n``) or ``None`` when no column qualifies.
+    """
+    d = _eda_upside_frame(kalman_df)
+    if d.empty:
+        return None
+    rows = []
+    for c in drift_cols:
+        if c not in d.columns:
+            continue
+        sub = d[[c, 'upside_pct']].astype('float64').dropna()
+        if len(sub) <= 5:
+            continue
+        rows.append({
+            'feature': c,
+            'spearman_rho': round(float(sub[c].corr(sub['upside_pct'], method='spearman')), 4),
+            'n': int(len(sub)),
+        })
+    if not rows:
+        return None
+    return pd.DataFrame(rows).sort_values('spearman_rho').reset_index(drop=True)
+
+
+def _plot_momentum_signal_plotly(corr_df: pd.DataFrame) -> None:
+    """Interactive horizontal rho-bar of the momentum table (new feature highlighted)."""
+    colors = np.where(corr_df['feature'] == 'feat_one_day_return', '#e69f00', '#56b4e9')
+    fig = go.Figure(go.Bar(
+        x=corr_df['spearman_rho'], y=corr_df['feature'], orientation='h',
+        marker_color=colors, customdata=corr_df[['n']].to_numpy(),
+        hovertemplate='%{y}<br>rho = %{x:.3f}<br>n = %{customdata[0]}<extra></extra>',
+    ))
+    fig.add_vline(x=0, line_dash='dash', line_color='#888888')
+    fig.update_layout(
+        title='Momentum / drift signal vs implied upside '
+              '(Spearman rho; feat_one_day_return highlighted)',
+        xaxis_title='Spearman rho with implied upside (%)', yaxis_title='',
+        showlegend=False,
+    )
+    _render_plotly(fig, height=max(320, 26 * len(corr_df) + 140))
+
+
 def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     """Exploratory views over ``kalman_df`` (source: ``pml.mv_pymc_kalman_pt``).
 
@@ -824,6 +1051,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     eda_drift = [c for c in ('feat_pt_drift', 'feat_price_drift', 'feat_pt_high_drift',
                              'feat_pt_low_drift', 'feat_pt_median_drift',
                              'feat_coverage_drift', 'feat_pt_noise_drift',
+                             'feat_one_day_return',
                              'feat_total_return_ytd', 'feat_total_return_5y',
                              'feat_total_return_10y', 'feat_tr_cagr_3y',
                              'feat_tr_cagr_10y')
@@ -926,48 +1154,29 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
           f'{(mult < 1.0).mean() * 100:.0f}% (high-coverage) tighten it below base.')
 
     # 2.4d Feature collinearity heatmap (Spearman, robust to heavy feat_* tails).
+    #      Interactive Plotly heatmap (hover + cell labels) when available; static
+    #      seaborn heatmap fallback otherwise.
     _corr_cols = [c for c in eda_features if kalman_df[c].notna().sum() > 5]
-    _corr = kalman_df[_corr_cols].astype('float64').corr(method='spearman')
-    fig, ax = plt.subplots(figsize=(9, 7.5), layout='constrained')
-    sns.heatmap(_corr, ax=ax, cmap='vlag', center=0.0, vmin=-1, vmax=1,
-                square=True, linewidths=0.4, linecolor='#1e1e1e',
-                cbar_kws={'shrink': 0.7, 'label': 'Spearman ρ'},
-                annot=True, fmt='.2f', annot_kws={'size': 6})
-    ax.set_title('feat_* correlation — drift vs noise-widener blocks', pad=10)
-    plt.show()
+    if _HAS_PLOTLY:
+        _plot_feature_corr_heatmap_plotly(kalman_df, _corr_cols)
+    elif len(_corr_cols) >= 2:
+        _corr = kalman_df[_corr_cols].astype('float64').corr(method='spearman')
+        fig, ax = plt.subplots(figsize=(9, 7.5), layout='constrained')
+        sns.heatmap(_corr, ax=ax, cmap='vlag', center=0.0, vmin=-1, vmax=1,
+                    square=True, linewidths=0.4, linecolor='#1e1e1e',
+                    cbar_kws={'shrink': 0.7, 'label': 'Spearman ρ'},
+                    annot=True, fmt='.2f', annot_kws={'size': 6})
+        ax.set_title('feat_* correlation — drift vs noise-widener blocks', pad=10)
+        plt.show()
 
-    # 2.4e Implied upside vs drift/noise signals, grouped by sector.
-    _g = kalman_df[(kalman_df['observed_pt'] > 0) & (kalman_df['last_price'] > 0)].copy()
-    _g['upside_pct'] = ((_g['observed_pt'] / _g['last_price'] - 1.0) * 100.0).clip(-100, 500)
-    _g['sector'] = _g.get('sector', pd.Series('Unknown', index=_g.index)).fillna('Unknown')
-    if 'feat_pt_noise_sigma' in _g.columns:
-        _g['noise_cv'] = (_g['feat_pt_noise_sigma'].astype('float64')
-                          / _g['last_price'].clip(lower=1e-9)).clip(0, 1)
-    _g['vol_6m'] = _g.get('feat_vol_6m', pd.Series(np.nan, index=_g.index)).astype('float64')
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
-    _top_sectors = _g['sector'].value_counts().head(9).index.tolist()
-    _gs = _g[_g['sector'].isin(_top_sectors)]
-    _pal = dict(zip(_top_sectors, sns.color_palette('Set2', len(_top_sectors))))
-    if 'noise_cv' in _gs.columns:
-        for sec, sub in _gs.groupby('sector'):
-            axes[0].scatter(sub['noise_cv'], sub['upside_pct'], s=8, alpha=0.4,
-                            color=_pal[sec], label=sec)
-        axes[0].set_xlabel('consensus noise CV  (feat_pt_noise_sigma / last_price)')
-        axes[0].set_ylabel('implied upside (%)')
-        axes[0].set_title('Upside vs consensus dispersion')
-        axes[0].set_xlim(0, 0.5)
-    for sec, sub in _gs.groupby('sector'):
-        axes[1].scatter(sub['vol_6m'], sub['upside_pct'], s=8, alpha=0.4,
-                        color=_pal[sec], label=sec)
-    axes[1].set_xlabel('6m volatility  (feat_vol_6m)')
-    axes[1].set_title('Upside vs 6m volatility')
-    axes[1].set_xlim(0, float(np.nanquantile(_gs['vol_6m'], 0.97))
-    if _gs['vol_6m'].notna().any() else 1)
-    axes[1].legend(fontsize=7, framealpha=0.25, title='sector', title_fontsize=8,
-                   loc='upper right')
-    plt.tight_layout()
-    plt.show()
+    # 2.4e Implied upside vs the fused-panel risk/return drivers. Interactive Plotly
+    #      facets — systematic-risk feat_avg_beta, feat_mcap_vs_3yavg size discount,
+    #      short-horizon feat_one_day_return, plus the sigma_obs wideners — with
+    #      ticker/name hover. Static seaborn scatter (noise-CV / 6m-vol) fallback.
+    if _HAS_PLOTLY:
+        _plot_upside_vs_drivers_plotly(kalman_df)
+    else:
+        _plot_upside_vs_signals_mpl(kalman_df)
 
     # 2.4f Empirical per-group implied-upside forest (EDA preview of §5 group effects).
     _fe = kalman_df[(kalman_df['observed_pt'] > 0) & (kalman_df['last_price'] > 0)].copy()
@@ -1005,6 +1214,18 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
         _ax.set_xlabel('implied upside vs last_price  (observed_pt / last_price − 1, %)')
         pc.show()
 
+    # 2.4g Momentum / drift term-structure signal. Spearman ρ of each drift feature —
+    #      including the new short-horizon feat_one_day_return — against implied upside,
+    #      surfacing where the highest-frequency momentum signal sits across the
+    #      1-day → multi-year horizons. Statistical table always; interactive ρ-bar
+    #      (new feature highlighted) when plotly is available.
+    _mom_corr = _momentum_signal_table(kalman_df, eda_drift)
+    if _mom_corr is not None:
+        print('Momentum / drift signal vs implied upside (Spearman ρ; 1-day → multi-year):')
+        display(_mom_corr)
+        if _HAS_PLOTLY:
+            _plot_momentum_signal_plotly(_mom_corr)
+
 
 # =============================================================================
 # 3. State-space feature mapping (Kalman semantics)
@@ -1024,6 +1245,7 @@ def map_state_space_features(kalman_df: pd.DataFrame) -> tuple[list[str], pd.Dat
     drift_features = [c for c in ('feat_pt_drift', 'feat_price_drift',
                                   'feat_pt_high_drift', 'feat_pt_low_drift',
                                   'feat_pt_median_drift', 'feat_coverage_drift',
+                                  'feat_one_day_return',
                                   'feat_total_return_ytd', 'feat_total_return_5y',
                                   'feat_total_return_10y', 'feat_tr_cagr_3y',
                                   'feat_tr_cagr_10y')
@@ -2673,7 +2895,7 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
 
     if write:
         _n = export_to_analytics_db(kalman_results, 'kalman_filtered_price_targets',
-                                    if_exists='append')
+                                    if_exists='replace')
         print(f'Appended {_n} rows to analytics.kalman_filtered_price_targets.')
     else:
         print('write=False -> not persisted. Pass write=True to append to the DB sink.')
