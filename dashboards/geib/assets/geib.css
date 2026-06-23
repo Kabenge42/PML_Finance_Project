@@ -1,0 +1,217 @@
+/* GEIB dashboard theme — navy/gold dark scheme.
+   Auto-loaded by Dash from the app's assets/ folder. */
+
+:root {
+    --geib-gold: #D4AF37;
+    --geib-green: #10B981;
+    --geib-red: #EF4444;
+    --geib-navy: #0F172A;
+    --geib-slate-dark: #1E293B;
+    --geib-body: #E2E8F0;
+    --geib-subtle: #CBD5E1;
+    --geib-border: #334155;
+    --geib-control-border: #475569;
+}
+
+body,
+.geib-page {
+    background-color: var(--geib-navy);
+    color: var(--geib-body);
+    font-family: "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    font-size: 14px;
+}
+
+.geib-page {
+    padding: 24px;
+}
+
+/* --- Hero / header --- */
+.geib-header {
+    background-color: var(--geib-navy);
+    border-bottom: 2px solid var(--geib-gold);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    padding: 20px 24px;
+    margin-bottom: 32px;
+}
+
+.geib-header-title {
+    color: #ffffff;
+    font-size: 42px;
+    font-weight: 700;
+    margin: 0;
+}
+
+.geib-header-subtitle {
+    color: var(--geib-subtle);
+    font-size: 16px;
+    margin: 4px 0 0 0;
+}
+
+/* --- Cards --- */
+.geib-card {
+    background-color: var(--geib-slate-dark) !important;
+    border: 1px solid var(--geib-border) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    margin: 20px 0;
+}
+
+.geib-card-header {
+    background-color: var(--geib-slate-dark) !important;
+    border-bottom: 2px solid var(--geib-gold) !important;
+    padding: 16px !important;
+}
+
+.geib-card-title {
+    color: #ffffff;
+    font-size: 18px;
+    margin: 0;
+}
+
+.geib-card-desc {
+    background-color: var(--geib-slate-dark) !important;
+    color: var(--geib-subtle) !important;
+    font-size: 14px;
+    border-top: 1px solid var(--geib-border) !important;
+}
+
+/* --- KPI cards --- */
+.geib-kpi-card {
+    background-color: var(--geib-slate-dark) !important;
+    border: 1px solid var(--geib-border) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    text-align: center;
+    padding: 8px;
+}
+
+.geib-kpi-title {
+    color: var(--geib-subtle);
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+
+.geib-kpi-value {
+    color: var(--geib-gold);
+    font-size: 26px;
+    font-weight: 700;
+    margin: 0;
+}
+
+/* --- Controls --- */
+.geib-control {
+    display: flex;
+    flex-direction: column;
+    margin-right: 15px;
+    min-width: 150px;
+}
+
+.geib-control-label {
+    color: var(--geib-subtle);
+    font-weight: bold;
+    font-size: 13px;
+    margin-bottom: 5px;
+    display: block;
+}
+
+/* Dropdown theming (react-select inside dcc.Dropdown). */
+.geib-page .Select-control,
+.geib-page .is-focused:not(.is-open) > .Select-control {
+    background-color: var(--geib-slate-dark);
+    border: 1px solid var(--geib-control-border);
+    border-radius: 6px;
+    color: var(--geib-body);
+}
+
+.geib-page .Select-menu-outer {
+    background-color: var(--geib-slate-dark);
+    border: 1px solid var(--geib-control-border);
+    color: var(--geib-body);
+}
+
+.geib-page .Select-value-label,
+.geib-page .Select-placeholder,
+.geib-page .Select--single > .Select-control .Select-value {
+    color: var(--geib-body) !important;
+}
+
+.geib-page .Select--multi .Select-value {
+    background-color: #1E40AF;
+    border: 1px solid #3B82F6;
+    color: #93C5FD;
+    border-radius: 6px;
+}
+
+.geib-page .VirtualizedSelectFocusedOption {
+    background-color: #1E40AF;
+}
+
+/* --- Filter panel & results --- */
+.geib-filter-panel {
+    background-color: var(--geib-slate-dark) !important;
+    border: 1px solid var(--geib-border) !important;
+    border-radius: 8px !important;
+    margin-bottom: 20px;
+}
+
+.geib-results {
+    color: var(--geib-gold);
+    font-weight: bold;
+    font-size: 14px;
+    align-self: center;
+    margin-left: auto;
+}
+
+/* --- Buttons --- */
+.geib-btn,
+.geib-page .btn-primary {
+    background-color: #1E40AF !important;
+    border: none !important;
+    color: #ffffff !important;
+    border-radius: 6px !important;
+    text-transform: none !important;
+}
+
+/* --- Tables --- */
+.geib-table {
+    width: 100%;
+    border-collapse: collapse;
+    color: var(--geib-body);
+}
+
+.geib-table th {
+    padding: 8px;
+    text-align: left;
+    border-bottom: 2px solid var(--geib-gold);
+    color: #ffffff;
+}
+
+.geib-table td {
+    padding: 8px;
+    border-bottom: 1px solid var(--geib-border);
+}
+
+.geib-table tr:nth-child(even) {
+    background-color: var(--geib-slate-dark);
+}
+
+.geib-table tr:nth-child(odd) {
+    background-color: var(--geib-navy);
+}
+
+/* --- Footer --- */
+.geib-footer {
+    background-color: var(--geib-navy);
+    color: var(--geib-gold);
+    font-size: 16px;
+    text-align: center;
+    padding: 24px;
+    border-top: 1px solid var(--geib-border);
+    margin-top: 24px;
+}
+
+.geib-error {
+    color: var(--geib-red);
+    margin: 10px 0;
+    white-space: pre-wrap;
+}
