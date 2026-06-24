@@ -21,6 +21,7 @@ from ..logger import logger, schema, tbl
 from ..metrics import PRICE_TARGET_HORIZON_YEARS, return_volatility
 from ..theme import GOLD, GREEN, RED, control
 from ..theme import card as theme_card
+from ._common import coalesce, empty_figure, sector_values
 
 component_id = "efficient_frontier_optimization"
 
@@ -67,11 +68,7 @@ description = (
 
 def component() -> "object":
     df = get_data()
-    try:
-        sectors = sorted(s for s in df["sector"].dropna().unique().tolist() if s)
-    except Exception:  # pragma: no cover - defensive
-        sectors = []
-    sector_opts = [{"label": s, "value": s} for s in sectors]
+    sector_opts = [{"label": s, "value": s} for s in sector_values(df)]
 
     return theme_card(
         title,
@@ -144,16 +141,16 @@ def _holdings(tickers: list[str], weights: np.ndarray, top: int = 5) -> str:
 def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     df = filter_data(get_data(), **kwargs)
     if df is None or len(df) == 0:
-        return _empty("No data is available to display"), html.Div()
+        return empty_figure("No data is available to display"), html.Div()
 
     df = df[["ticker", "name", "sector", "market_cap", "mc_prob_pos",
              "original_price", "expected_return_kalman", "kalman_variance"]].copy()
     logger.debug(schema(df))
 
-    rf = _coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default)
+    rf = coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default)
     sector_filter = kwargs.get(sector_filter_id) or []
-    min_market_cap = _coalesce(kwargs.get(min_market_cap_id), min_market_cap_default)
-    n_portfolios = int(_coalesce(kwargs.get(num_portfolios_id), num_portfolios_default))
+    min_market_cap = coalesce(kwargs.get(min_market_cap_id), min_market_cap_default)
+    n_portfolios = int(coalesce(kwargs.get(num_portfolios_id), num_portfolios_default))
 
     df = df[df["mc_prob_pos"] > 0.5]
     df = df[df["market_cap"] >= min_market_cap]
@@ -163,7 +160,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     df = df[(df["kalman_variance"] > 0) & (df["original_price"] > 0)]
 
     if len(df) < 2:
-        return _empty("Need at least 2 eligible stocks for an efficient frontier"), html.Div()
+        return empty_figure("Need at least 2 eligible stocks for an efficient frontier"), html.Div()
 
     if len(df) > _MAX_ASSETS:
         logger.info("Capping efficient-frontier universe from %d to %d assets", len(df), _MAX_ASSETS)
@@ -249,16 +246,6 @@ def _build_table(ret_pct, vol_pct, sharpe, weights, tickers, min_var_idx, max_sh
     ])
 
 
-def _coalesce(value, default):
-    return default if value is None else value
-
-
-def _empty(message: str) -> go.Figure:
-    fig = go.Figure()
-    fig.update_layout(annotations=[{"text": message, "showarrow": False, "font": {"size": 18}}])
-    return fig
-
-
 @callback(
     output=[
         Output(f"{component_id}_graph", "figure"),
@@ -281,4 +268,4 @@ def update(**kwargs) -> Tuple[go.Figure, html.Div, str]:
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return _empty("An error occurred"), html.Div(), msg
+        return empty_figure("An error occurred"), html.Div(), msg

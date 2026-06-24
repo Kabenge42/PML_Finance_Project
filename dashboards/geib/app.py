@@ -32,6 +32,7 @@ from .charts import (
     high_conviction,
     kelly,
     monte_carlo,
+    monte_carlo_forecast,
     pt_convergence,
     risk_adj_return,
     sharpe_ratio,
@@ -56,6 +57,7 @@ _CHART_MODULES = [
     var_cvar,
     kelly,
     monte_carlo,
+    monte_carlo_forecast,
     high_conviction,
 ]
 

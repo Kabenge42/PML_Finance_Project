@@ -18,6 +18,7 @@ from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..theme import DUAL_GRAPH_STYLE, control
 from ..theme import card as theme_card
+from ._common import empty_figure, sector_values
 
 component_id = "value_at_risk_downside_assessment"
 
@@ -77,11 +78,7 @@ description = (
 
 def component() -> "object":
     df = get_data()
-    try:
-        sectors = sorted(s for s in df["sector"].dropna().unique().tolist() if s)
-    except Exception:  # pragma: no cover - defensive
-        sectors = []
-    sector_opts = [{"label": s, "value": s} for s in sectors]
+    sector_opts = [{"label": s, "value": s} for s in sector_values(df)]
 
     return theme_card(
         title,
@@ -135,7 +132,7 @@ def component() -> "object":
 def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     df = filter_data(get_data(), **kwargs)
     if df is None or len(df) == 0:
-        empty = _empty("No data is available to display")
+        empty = empty_figure("No data is available to display")
         return empty, empty
 
     df = df[["name", "sector", "market_cap", "mc_prob_pos", "cvar_5pct_kalman",
@@ -151,12 +148,12 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
 
     df = df[(df["market_cap"] >= min_market_cap) & (df["mc_prob_pos"] >= min_prob_positive)]
     if len(df) == 0:
-        empty = _empty("No stocks match the selected criteria")
+        empty = empty_figure("No stocks match the selected criteria")
         return empty, empty
     if sector_filter:
         df = df[df["sector"].isin(sector_filter)]
     if len(df) == 0:
-        empty = _empty("No stocks match the selected sectors")
+        empty = empty_figure("No stocks match the selected sectors")
         return empty, empty
 
     if confidence_level == "5":
@@ -204,12 +201,6 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     return fig1, fig2
 
 
-def _empty(message: str) -> go.Figure:
-    fig = go.Figure()
-    fig.update_layout(annotations=[{"text": message, "showarrow": False, "font": {"size": 18}}])
-    return fig
-
-
 @callback(
     output=[
         Output(f"{component_id}_graph_1", "figure"),
@@ -235,5 +226,5 @@ def update(**kwargs) -> Tuple[go.Figure, str, go.Figure, str]:
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        empty = _empty("An error occurred")
+        empty = empty_figure("An error occurred")
         return empty, msg, empty, msg
