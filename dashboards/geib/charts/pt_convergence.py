@@ -17,6 +17,7 @@ from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..theme import GRAPH_STYLE, control
 from ..theme import card as theme_card
+from ._common import empty_figure, sector_values
 
 component_id = "price_target_convergence"
 
@@ -53,11 +54,7 @@ def component() -> "object":
 
     df = get_data()
     sector_options = [{"label": "All", "value": "All"}]
-    try:
-        sectors = sorted(s for s in df["sector"].dropna().unique().tolist() if s)
-        sector_options.extend({"label": str(s), "value": s} for s in sectors)
-    except Exception:  # pragma: no cover - defensive
-        pass
+    sector_options.extend({"label": str(s), "value": s} for s in sector_values(df))
 
     return theme_card(
         title,
@@ -111,7 +108,7 @@ def _update_logic(**kwargs) -> go.Figure:
     df = filter_data(get_data(), **kwargs)
 
     if df is None or len(df) == 0:
-        return _empty("No data is available to display")
+        return empty_figure("No data is available to display")
 
     df = df[
         ["ticker", "sector", "market_cap", "original_price", "original_target", "price_target_kalman"]
@@ -125,12 +122,12 @@ def _update_logic(**kwargs) -> go.Figure:
     if sector_value != "All":
         df = df[df["sector"] == sector_value]
     if len(df) == 0:
-        return _empty("No data is available for the selected sector")
+        return empty_figure("No data is available for the selected sector")
 
     top_tickers = df.nlargest(top_n_value, "market_cap")["ticker"].unique()
     df = df[df["ticker"].isin(top_tickers)]
     if len(df) == 0:
-        return _empty("No data is available to display")
+        return empty_figure("No data is available to display")
 
     df["gap_percentage"] = (
         (df["price_target_kalman"] - df["original_price"]) / df["original_price"] * 100
@@ -168,14 +165,6 @@ def _update_logic(**kwargs) -> go.Figure:
     return fig
 
 
-def _empty(message: str) -> go.Figure:
-    fig = go.Figure()
-    fig.update_layout(
-        annotations=[{"text": message, "showarrow": False, "font": {"size": 18}}]
-    )
-    return fig
-
-
 @callback(
     output=[Output(f"{component_id}_graph", "figure"), Output(f"{component_id}_error", "children")],
     inputs={
@@ -192,4 +181,4 @@ def update(**kwargs) -> Tuple[go.Figure, str]:
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return _empty("An error occurred"), msg
+        return empty_figure("An error occurred"), msg

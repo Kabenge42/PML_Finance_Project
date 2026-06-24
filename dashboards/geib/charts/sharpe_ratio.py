@@ -21,6 +21,7 @@ from ..logger import logger, schema, tbl
 from ..metrics import annualized_return_pct, annualized_volatility_pct
 from ..theme import GRAPH_STYLE, control
 from ..theme import card as theme_card
+from ._common import coalesce, empty_figure, sector_values
 
 component_id = "sharpe_ratio_risk_adjusted_return"
 
@@ -81,11 +82,7 @@ def component() -> "object":
     error_id_2 = f"{component_id}_error_2"
 
     df = get_data()
-    try:
-        sectors = sorted(s for s in df["sector"].dropna().unique().tolist() if s)
-    except Exception:  # pragma: no cover - defensive
-        sectors = []
-    sector_opts = [{"label": s, "value": s} for s in sectors]
+    sector_opts = [{"label": s, "value": s} for s in sector_values(df)]
 
     return theme_card(
         title,
@@ -154,7 +151,7 @@ def component() -> "object":
 def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     df = filter_data(get_data(), **kwargs)
     if df is None or len(df) == 0:
-        empty = _empty("No data is available to display")
+        empty = empty_figure("No data is available to display")
         return empty, empty
 
     df = df[[
@@ -163,9 +160,9 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     ]].copy()
     logger.debug(schema(df))
 
-    risk_free_rate = _coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default)
-    prob_pos_threshold = _coalesce(kwargs.get(prob_pos_threshold_id), prob_pos_threshold_default)
-    min_market_cap = _coalesce(kwargs.get(min_market_cap_id), min_market_cap_default)
+    risk_free_rate = coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default)
+    prob_pos_threshold = coalesce(kwargs.get(prob_pos_threshold_id), prob_pos_threshold_default)
+    min_market_cap = coalesce(kwargs.get(min_market_cap_id), min_market_cap_default)
     top_stocks = kwargs.get(top_stocks_id, top_stocks_default)
     if top_stocks is None:
         top_stocks = top_stocks_default
@@ -185,7 +182,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         df = df.head(top_stocks)
 
     if len(df) == 0:
-        empty = _empty("No data matches the selected filters")
+        empty = empty_figure("No data matches the selected filters")
         return empty, empty
     logger.debug(tbl(df))
 
@@ -240,16 +237,6 @@ def _annualized_risk_metrics(df: pd.DataFrame, risk_free_rate: float) -> pd.Data
     )
 
 
-def _coalesce(value, default):
-    return default if value is None else value
-
-
-def _empty(message: str) -> go.Figure:
-    fig = go.Figure()
-    fig.update_layout(annotations=[{"text": message, "showarrow": False, "font": {"size": 18}}])
-    return fig
-
-
 @callback(
     output=[
         Output(f"{component_id}_graph_1", "figure"),
@@ -274,5 +261,5 @@ def update(**kwargs) -> Tuple[go.Figure, str, go.Figure, str]:
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        empty = _empty("An error occurred")
+        empty = empty_figure("An error occurred")
         return empty, msg, empty, msg

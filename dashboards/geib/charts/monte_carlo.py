@@ -22,6 +22,7 @@ from ..logger import logger, schema
 from ..metrics import return_volatility
 from ..theme import DUAL_GRAPH_STYLE, control
 from ..theme import card as theme_card
+from ._common import empty_figure
 
 component_id = "monte_carlo_return_distribution"
 
@@ -148,7 +149,7 @@ def _simulate(df: pd.DataFrame, num_simulations: int, time_horizon: int) -> dict
 def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     df = filter_data(get_data(), **kwargs)
     if df is None or len(df) == 0:
-        empty = _empty("No data is available to display")
+        empty = empty_figure("No data is available to display")
         return empty, empty
 
     df = df[["name", "ticker", "market_cap", "er_mean", "kalman_variance",
@@ -163,7 +164,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     selected = _select_stocks(df, stock_selection)
     df = df[df["name"].isin(selected)].copy()
     if len(df) == 0:
-        empty = _empty("No stocks available for the selected criteria")
+        empty = empty_figure("No stocks available for the selected criteria")
         return empty, empty
 
     sims = _simulate(df, num_simulations, time_horizon)
@@ -218,12 +219,6 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     return fig_heatmap, fig_cdf
 
 
-def _empty(message: str) -> go.Figure:
-    fig = go.Figure()
-    fig.update_layout(annotations=[{"text": message, "showarrow": False, "font": {"size": 18}}])
-    return fig
-
-
 @callback(
     output=[
         Output(f"{component_id}_heatmap_graph", "figure"),
@@ -247,5 +242,5 @@ def update(**kwargs) -> Tuple[go.Figure, go.Figure, str, str]:
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        empty = _empty("An error occurred")
+        empty = empty_figure("An error occurred")
         return empty, empty, msg, msg

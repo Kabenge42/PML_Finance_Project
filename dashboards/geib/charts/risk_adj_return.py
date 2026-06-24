@@ -17,6 +17,7 @@ from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..theme import GRAPH_STYLE, control
 from ..theme import card as theme_card
+from ._common import empty_figure
 
 component_id = "return_vs_risk_scatter_plot"
 
@@ -120,7 +121,7 @@ def component() -> "object":
 def _update_logic(**kwargs) -> go.Figure:
     df = filter_data(get_data(), **kwargs)
     if df is None or len(df) == 0:
-        return _empty("No data is available to display")
+        return empty_figure("No data is available to display")
 
     df = df[
         [
@@ -141,7 +142,7 @@ def _update_logic(**kwargs) -> go.Figure:
 
     df = df[df["sector"].isin(sector_filter)]
     if len(df) == 0:
-        return _empty("No data matches the selected filters")
+        return empty_figure("No data matches the selected filters")
     logger.debug(tbl(df))
 
     scatter_kwargs = dict(x="expected_return_kalman", y="risk_adj_return")
@@ -161,14 +162,6 @@ def _update_logic(**kwargs) -> go.Figure:
     return fig
 
 
-def _empty(message: str) -> go.Figure:
-    fig = go.Figure()
-    fig.update_layout(
-        annotations=[{"text": message, "showarrow": False, "font": {"size": 18}}]
-    )
-    return fig
-
-
 @callback(
     output=[Output(f"{component_id}_graph", "figure"), Output(f"{component_id}_error", "children")],
     inputs={
@@ -185,4 +178,4 @@ def update(**kwargs) -> Tuple[go.Figure, str]:
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return _empty("An error occurred"), msg
+        return empty_figure("An error occurred"), msg

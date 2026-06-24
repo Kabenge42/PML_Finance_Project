@@ -19,6 +19,7 @@ from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..theme import GRAPH_STYLE, control
 from ..theme import card as theme_card
+from ._common import coalesce, empty_figure, sector_values
 
 component_id = "kelly_criterion_position_sizing"
 
@@ -80,11 +81,7 @@ description = (
 
 def component() -> "object":
     df = get_data()
-    try:
-        sectors = sorted(s for s in df["sector"].dropna().unique().tolist() if s)
-    except Exception:  # pragma: no cover - defensive
-        sectors = []
-    sector_opts = [{"label": s, "value": s} for s in sectors]
+    sector_opts = [{"label": s, "value": s} for s in sector_values(df)]
 
     return theme_card(
         title,
@@ -160,31 +157,31 @@ def _create_table(df: pd.DataFrame) -> html.Div:
 def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     df = filter_data(get_data(), **kwargs)
     if df is None or len(df) == 0:
-        return _empty("No data is available to display"), html.Div()
+        return empty_figure("No data is available to display"), html.Div()
 
     df = df[["ticker", "name", "sector", "market_cap", "mc_prob_pos",
              "expected_return_kalman", "cvar_5pct_kalman"]].copy()
     logger.debug(schema(df))
 
-    kelly_multiplier = _coalesce(kwargs.get(kelly_multiplier_id), kelly_multiplier_default)
-    max_position_size = _coalesce(kwargs.get(max_position_size_id), max_position_size_default)
-    min_prob = _coalesce(kwargs.get(min_prob_id), min_prob_default)
-    top_n = _coalesce(kwargs.get(top_n_id), top_n_default)
+    kelly_multiplier = coalesce(kwargs.get(kelly_multiplier_id), kelly_multiplier_default)
+    max_position_size = coalesce(kwargs.get(max_position_size_id), max_position_size_default)
+    min_prob = coalesce(kwargs.get(min_prob_id), min_prob_default)
+    top_n = coalesce(kwargs.get(top_n_id), top_n_default)
     sector_filter = kwargs.get(sector_filter_id)
     if not sector_filter:
         sector_filter = df["sector"].dropna().unique().tolist()
-    min_market_cap = _coalesce(kwargs.get(min_market_cap_id), min_market_cap_default)
+    min_market_cap = coalesce(kwargs.get(min_market_cap_id), min_market_cap_default)
 
     df = df[df["sector"].isin(sector_filter)]
     df = df[df["market_cap"] >= min_market_cap]
     df = df[df["mc_prob_pos"] >= min_prob]
     if len(df) == 0:
-        return _empty("No stocks meet the filtering criteria"), html.Div()
+        return empty_figure("No stocks meet the filtering criteria"), html.Div()
 
     df["kelly_fraction"] = df.apply(_calculate_kelly_fraction, axis=1)
     df = df[df["kelly_fraction"] > 0]
     if len(df) == 0:
-        return _empty("No stocks have positive Kelly fraction"), html.Div()
+        return empty_figure("No stocks have positive Kelly fraction"), html.Div()
 
     df = df.sort_values("kelly_fraction", ascending=False).head(top_n)
     df["kelly_fraction_adjusted"] = df["kelly_fraction"] * kelly_multiplier
@@ -203,16 +200,6 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
                       hovermode="x unified", height=550)
     fig.update_xaxes(tickangle=-45)
     return fig, _create_table(df)
-
-
-def _coalesce(value, default):
-    return default if value is None else value
-
-
-def _empty(message: str) -> go.Figure:
-    fig = go.Figure()
-    fig.update_layout(annotations=[{"text": message, "showarrow": False, "font": {"size": 18}}])
-    return fig
 
 
 @callback(
@@ -239,4 +226,4 @@ def update(**kwargs) -> Tuple[go.Figure, html.Div, str]:
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return _empty("An error occurred"), html.Div(), msg
+        return empty_figure("An error occurred"), html.Div(), msg
