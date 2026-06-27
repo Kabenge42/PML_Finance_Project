@@ -3,9 +3,12 @@
 The cross-sectional spine is the **fused MvGRW panel model** (Model A + Model B,
 :func:`probabilistic_ml_model.pymc_models.KalmanFilterModel.build_fused_kalman_pt_model`):
 
-* **Model B spine** — a diagonal (NUTS-safe) Multivariate Gaussian Random Walk over
-  the ``(isin, time, y_series)`` response tensor with a cross-sectional baseline
-  ``mu_isin``.
+* **Model B spine** — a rank-1 Intrinsic Coregionalization Model (ICM) over the
+  ``(isin, time, y_series)`` response tensor: the response series share the latent
+  per-ISIN factor ``mu_isin`` through per-series loadings (primary anchored at 1),
+  with direct per-series intercept/slope on the collapsed cross-section (a
+  zero-anchored Gaussian-random-walk deviation is re-added only for genuine
+  ``T > 1`` panels) and a per-series noise diagonal ``sigma_series``.
 * **Model A refinement** — the risk-aware ``expected_return`` →
   ``risk_adj_return`` latent (with a non-centred logit-normal ``achieve_prob``)
   *is* the GRW baseline ``mu_isin``, and the heteroscedastic scale
@@ -107,6 +110,7 @@ KALMAN_DF_QUERY = """
                   FROM pml.mv_pymc_kalman_pt mpkp
                   WHERE observed_pt IS NOT NULL
                     AND next_earnings >= '2026-01-01'
+                    AND income_statement_report_date IS NOT NULL 
                     AND size_class <> 'n/a' \
                   """
 
@@ -130,7 +134,7 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
                   # Short-term momentum: last day's price change (one_day_pct).
                   'feat_one_day_return',
                   'feat_total_return_ytd', 'feat_total_return_5y', 'feat_total_return_10y',
-                  'feat_tr_cagr_3y', 'feat_tr_cagr_10y',
+                  'feat_tr_cagr_3y',
                   # Cross-cutting market-cap / EV size & trend feats (added to every
                   # mv_pymc_* view; provenance-only for the fused panel — see §note below).
                   'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg']
@@ -422,27 +426,79 @@ def plot_price_target_path(
     return pc
 
 
+def _annotate_forecast_horizons(ax, fx, pg, *, color):
+    """Mark each forecast horizon with a dotted vline + its human label.
+
+    ``pg`` is the ``forecast`` ``predictions`` group; when present its ``label``
+    coord carries the canonical human-readable horizon names (e.g. ``"Next
+    earnings"`` / ``"Next report"``) resolved from
+    :data:`KalmanFilterModel.FISCAL_HORIZONS`. Labels are placed at the top of
+    the axes (axes-fraction y) so they read as fiscal-event markers on the time
+    axis rather than colliding with the forecast band.
+    """
+    labels = (np.asarray(pg['label'].values) if 'label' in pg.coords
+              else np.asarray([f'+{int(round(v))}d' for v in
+                               np.atleast_1d(pg['time_future'].values)
+                               if np.isscalar(v) or True]))
+    for xv, lb in zip(np.atleast_1d(fx), labels):
+        ax.axvline(xv, color=color, ls=':', lw=1.0, alpha=0.4, zorder=1)
+        ax.annotate(str(lb), xy=(xv, 1.0), xycoords=('data', 'axes fraction'),
+                    xytext=(0, -4), textcoords='offset points',
+                    fontsize=7, rotation=30, color=color, ha='right', va='top')
+
+
 def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
                          last_price=None, ticker=None, state_var='state',
                          figsize=(11, 5), hist_color='#56b4e9',
-                         fc_color='#cc79a7', observed_color='#ffb000'):
+                         fc_color='#cc79a7', observed_color='#ffb000',
+                         pp_overlay=True, pp_draws=80, pp_color='#4daf4a',
+                         volatility_panel='auto', vol_color='#ff7f0e',
+                         random_seed=RANDOM_SEED):
     """Overlay the fitted smoothed state with the structural forecast bands.
 
     Mirrors the reference notebook's "Posterior Predictions Plotted": the fitted
     Kalman-smoothed state + HDI up to the last observation, a vertical boundary at
     "now", then ``KalmanFilterPriceTarget.forecast()`` predictive bands extending to
-    the future fiscal-calendar events.
+    the future fiscal-calendar events. Each forecast horizon is marked with its
+    **human label** (e.g. ``"Next earnings"`` / ``"Next report"``) carried on the
+    ``predictions`` group's ``label`` coord — the canonical
+    :data:`KalmanFilterModel.FISCAL_HORIZONS` names, so the time axis is annotated
+    with the fiscal events the horizon projects to rather than raw column names.
+
+    Following the canonical PyMC stochastic-volatility example (true returns +
+    posterior-predictive returns overlaid above, posterior volatility below), the
+    forecast band is augmented with a thinned **posterior-predictive spaghetti** of
+    ``forecast_pt`` draws, and — when the fit carries a time-varying
+    ``sigma_obs(t)`` (``stochastic_volatility=True``) — a companion lower panel
+    plots the posterior observation-volatility path over the historical axis.
 
     Parameters
     ----------
     idata_fit
-        InferenceData from :meth:`KalmanFilterPriceTarget.fit` (``state`` over ``time``).
+        InferenceData from :meth:`KalmanFilterPriceTarget.fit` (``state`` over ``time``;
+        and, under stochastic volatility, ``sigma_obs`` over ``time``).
     pred
         Output of :meth:`KalmanFilterPriceTarget.forecast` (``predictions`` group or a
-        raw ``xarray.Dataset``) with ``forecast_pt`` over ``time_future``.
+        raw ``xarray.Dataset``) with ``forecast_pt`` over ``time_future`` and an
+        optional human-label ``label`` coord.
     observed, dates, last_price, ticker
         Observed targets, historical as-of dates, the spot price reference, and a title
         label, all aligned to the fitted ``time`` axis.
+    pp_overlay, pp_draws, pp_color
+        Whether to overlay ``pp_draws`` thinned posterior-predictive ``forecast_pt``
+        draws (green spaghetti, example style), and their colour.
+    volatility_panel, vol_color
+        ``'auto'`` adds the lower posterior-volatility panel only when the fit exposes
+        a time-varying ``sigma_obs``; pass ``True`` / ``False`` to force it. ``vol_color``
+        is that panel's colour.
+    random_seed
+        Seed for thinning the posterior-predictive draws (reproducible spaghetti).
+
+    Returns
+    -------
+    tuple
+        ``(fig, ax)`` for the single-panel layout, or ``(fig, (ax_state, ax_vol))``
+        when the posterior-volatility panel is drawn.
     """
     post = idata_fit.posterior[state_var]
     n_time = post.sizes['time']
@@ -464,31 +520,78 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
     f_lo = fpt.quantile(0.03, dim=('chain', 'draw')).values
     f_hi = fpt.quantile(0.97, dim=('chain', 'draw')).values
 
-    fig, ax = plt.subplots(figsize=figsize)
+    # Resolve the optional stochastic-volatility observation-noise path. The
+    # companion volatility panel mirrors the reference example's lower subplot.
+    so = idata_fit.posterior['sigma_obs'] if 'sigma_obs' in idata_fit.posterior else None
+    has_vol = so is not None and 'time' in so.dims and so.sizes['time'] == n_time
+    show_vol = has_vol if volatility_panel == 'auto' else bool(volatility_panel) and has_vol
+
+    if show_vol:
+        fig, (ax, ax_vol) = plt.subplots(
+            nrows=2, figsize=(figsize[0], figsize[1] + 2.2), sharex=True,
+            gridspec_kw={'height_ratios': [3, 1]})
+    else:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax_vol = None
+
     ax.fill_between(hx, hlo, hhi, color=hist_color, alpha=0.25, label='94% HDI (fit)')
     ax.plot(hx, hist_med, color=hist_color, lw=2.2, label='Kalman state (fit)')
     if observed is not None:
         ax.scatter(hx, np.asarray(observed, dtype=float), color=observed_color, s=34,
                    zorder=6, edgecolor='#1e1e1e', linewidth=0.6, label='observed target')
+
+    # Posterior-predictive forecast spaghetti (canonical SV-example overlay): a
+    # thinned set of forecast_pt draws, each stitched to the now-boundary so the
+    # predictive fan reads as draws rather than a single band.
+    if pp_overlay and pp_draws > 0:
+        draws = fpt.stack(s=('chain', 'draw')).transpose('s', 'time_future').values
+        n_draw = draws.shape[0]
+        if n_draw:
+            rng_local = np.random.default_rng(random_seed)
+            idx = (rng_local.choice(n_draw, size=min(pp_draws, n_draw), replace=False)
+                   if n_draw > pp_draws else np.arange(n_draw))
+            xline = np.r_[hx[-1], fx]
+            for j in idx:
+                ax.plot(xline, np.r_[hist_med[-1], draws[j]], color=pp_color,
+                        alpha=0.18, lw=0.8, zorder=-10)
+            # Single proxy handle for the legend (one label, not pp_draws of them).
+            ax.plot([], [], color=pp_color, alpha=0.6, lw=1.0,
+                    label='posterior-predictive draws')
+
     ax.fill_between(fx, f_lo, f_hi, color=fc_color, alpha=0.22, label='94% PI (forecast)')
     ax.plot(np.r_[hx[-1], fx], np.r_[hist_med[-1], f_med], color=fc_color, lw=2.2,
             ls='--', marker='o', label='forecast pt')
     ax.axvline(hx[-1], color='#bbbbbb', ls=':', lw=1.2)
     if last_price is not None and np.isfinite(last_price):
         ax.axhline(float(last_price), ls='--', color='#bbbbbb', lw=1.0, label='last price')
-    if 'label' in pg.coords:
-        for xv, lb, yv in zip(fx, np.asarray(pg['label'].values), f_med):
-            ax.annotate(str(lb), (xv, yv), fontsize=7, rotation=25,
-                        color=fc_color, ha='left', va='bottom')
-    if use_dates:
-        ax.xaxis_date()
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %y'))
-    ax.set_xlabel('as-of date' if use_dates else 'time step')
+
+    # Human-labelled fiscal-event horizon markers (Next earnings / Next report / ...).
+    _annotate_forecast_horizons(ax, fx, pg, color=fc_color)
+
     ax.set_ylabel('price target')
     ax.set_title('Kalman state + structural forecast'
                  + (f' — {ticker}' if ticker else ''))
     ax.legend(fontsize=8, framealpha=0.25, loc='best')
-    return fig, ax
+
+    if show_vol:
+        v_med = so.mean(('chain', 'draw')).values
+        v_lo = so.quantile(0.03, dim=('chain', 'draw')).values
+        v_hi = so.quantile(0.97, dim=('chain', 'draw')).values
+        ax_vol.plot(hx, v_med, color=vol_color, lw=2.0,
+                    label=r'posterior mean $\sigma_{obs}(t)$')
+        ax_vol.fill_between(hx, v_lo, v_hi, color=vol_color, alpha=0.25, label='94% HDI')
+        ax_vol.axvline(hx[-1], color='#bbbbbb', ls=':', lw=1.2)
+        ax_vol.set_ylabel(r'$\sigma_{obs}$')
+        ax_vol.set_title('Posterior observation volatility', fontsize=9)
+        ax_vol.legend(fontsize=7, framealpha=0.25, loc='best')
+
+    axis_ax = ax_vol if show_vol else ax
+    if use_dates:
+        axis_ax.xaxis_date()
+        axis_ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %y'))
+    axis_ax.set_xlabel('as-of date' if use_dates else 'time step')
+
+    return (fig, (ax, ax_vol)) if show_vol else (fig, ax)
 
 
 def build_noise_wideners(df: pd.DataFrame, *, fillna: bool = True) -> dict[str, np.ndarray]:
@@ -1053,8 +1156,8 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
                              'feat_coverage_drift', 'feat_pt_noise_drift',
                              'feat_one_day_return',
                              'feat_total_return_ytd', 'feat_total_return_5y',
-                             'feat_total_return_10y', 'feat_tr_cagr_3y',
-                             'feat_tr_cagr_10y')
+                             'feat_total_return_10y', 'feat_tr_cagr_3y'
+                             )
                  if c in kalman_df.columns]
     eda_noise = [c for c in ('feat_pt_range_norm', 'feat_pt_noise_sigma',
                              'feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y')
@@ -1248,7 +1351,7 @@ def map_state_space_features(kalman_df: pd.DataFrame) -> tuple[list[str], pd.Dat
                                   'feat_one_day_return',
                                   'feat_total_return_ytd', 'feat_total_return_5y',
                                   'feat_total_return_10y', 'feat_tr_cagr_3y',
-                                  'feat_tr_cagr_10y')
+                                  )
                       if c in kalman_df.columns]
     assert 'feat_implied_upside' not in drift_features, (
         'feat_implied_upside must not be a drift predictor (target leakage).'
@@ -1666,8 +1769,8 @@ def prepare_kalman_panel_inputs(
     # feat_mcap_vs_3yavg == market_cap / market_cap_3yavg (mv_pymc_kalman_pt): the
     # firm's current size relative to its own 3y-average size. Carried raw here and
     # z-scored inside build_fused_kalman_pt_model, where it discounts risk_adj_return
-    # multiplicatively via exp(-size_penalty * z(size)). Falls back to NaN
-    # (-> neutral 1.0 discount after the model's nan_to_num) when the column is absent.
+    # additively via - size_loading * z(size). Falls back to NaN
+    # (-> neutral 0.0 tilt after the model's nan_to_num) when the column is absent.
     if 'feat_mcap_vs_3yavg' in model_df.columns:
         size_ratio = pd.to_numeric(model_df['feat_mcap_vs_3yavg'], errors='coerce').to_numpy('float64')
     else:
@@ -1711,12 +1814,19 @@ def prepare_kalman_panel_inputs(
 # Scalars (global hyper-parameters); group-effect scales ``sigma_<coord>`` are
 # appended at runtime from the panel coords actually present.
 FUSED_SCALAR_VARS: tuple[str, ...] = (
-    'mu_logit', 'sigma_logit', 'sigma_base', 'sigma_group', 'nu',
+    'mu_logit', 'sigma_logit', 'sigma_base', 'nu',
+    # Learned, sign-fixed risk / size loadings (additive tilts on the per-ISIN
+    # baseline keyed on feat_avg_beta / feat_mcap_vs_3yavg). Present only when the
+    # corresponding penalty prior scale is > 0; run_diagnostics skips absent vars.
+    'risk_loading', 'size_loading',
 )
-# Vector hyper-parameters (have a non-sample dim): drift slopes + GRW innovation
-# scales + per-series factor loadings on the shared per-ISIN baseline.
+# Vector hyper-parameters (have a non-sample dim): drift slopes, the per-series
+# coregion level/slope/loading/noise terms, and (genuine time panels only) the GRW
+# innovation scales. run_diagnostics skips any that are absent for the fitted shape
+# (e.g. ``sigma_*_innov`` exist only when T > 1; ``sigma_series`` only when D > 1).
 FUSED_VECTOR_VARS: tuple[str, ...] = (
-    'beta', 'sigma_alpha_innov', 'sigma_beta_innov', 'mu_isin_loading',
+    'beta', 'alpha_level', 'beta_slope', 'mu_isin_loading', 'sigma_series',
+    'sigma_alpha_innov', 'sigma_beta_innov',
 )
 
 
@@ -1919,18 +2029,21 @@ def sample_posterior(model: "pm.Model", prior_idata):
     # genuinely identified. The decisive fix is structural, not budgetary: the
     # per-ISIN signal latent (``sigma_expected_return`` + ``z_expected_return``)
     # was dropped (``expected_return`` is now the deterministic structural mean
-    # ``mu_reg``), and the five crossed group scales were collapsed to a single
-    # shared ``sigma_group`` with ``industry`` removed. Previously those six
-    # variance components formed an unidentified partition over the same per-ISIN
-    # dispersion (every scale stuck at R-hat ≈ 4.4, ESS ≈ 4) — a sampling budget
-    # could never have fixed that. With the model well-conditioned we now use
-    # draws=1500, tune=2000 and target_accept=0.97 purely as insurance to push the
-    # minimum ESS comfortably over 400 (the cross-section still adapts fast).
-    # chains=4, cores=4 (all chains in parallel). When a genuine (isin, time) panel
-    # is later supplied (collapse_time=False), keep tune≈2000 for the richer geometry.
+    # ``mu_reg``), and — the last unidentified variance component — the learned
+    # group scale ``sigma_group`` was removed: the crossed effects are now
+    # fixed-scale ``ZeroSumNormal`` regularized effects (``GROUP_EFFECT_SCALE``),
+    # with ``industry`` dropped. Previously those variance components formed an
+    # unidentified partition over the same per-ISIN dispersion (every learned scale
+    # stuck at R-hat ≈ 1.5–4.5, ESS ≈ 4–7) — a sampling budget could never have
+    # fixed that, since a single collapsed slice (T=1) cannot identify a
+    # between-group variance. With the model well-conditioned the cross-section
+    # adapts fast: draws=1000, tune=1000, target_accept=0.95, chains=4, cores=4
+    # (all chains in parallel) clears ESS > 400 comfortably. When a genuine
+    # (isin, time) panel is later supplied (collapse_time=False), raise tune≈2000
+    # for the richer GRW geometry.
     sample_kwargs = dict(
-        draws=2000, tune=2000, chains=4, cores=4,
-        target_accept=0.97, random_seed=RANDOM_SEED,
+        draws=1000, tune=1000, chains=4, cores=4,
+        target_accept=0.95, random_seed=RANDOM_SEED,
         progressbar=True, return_inferencedata=True,
         idata_kwargs={"log_likelihood": False},
     )
@@ -1986,7 +2099,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
     try:
         pc_ppc = azp.plot_ppc_dist(
             idata, group="posterior_predictive", var_names=["target_pct_obs"],
-            kind="ecdf", num_samples=400, backend="matplotlib",
+            kind="ecdf", num_samples=2000, backend="matplotlib",
         )
         pc_ppc.show()
     except Exception as e:  # pragma: no cover - arviz multidim PPC is best-effort
@@ -2138,8 +2251,13 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
 
     ess_tail_ds = azs.ess(posterior[keep_vars], method='tail')
 
-    max_rhat = float(max(float(rhat_ds[v].max()) for v in rhat_ds.data_vars))
-    min_ess = float(min(float(ess_ds[v].min()) for v in ess_ds.data_vars))
+    # Use nan-aware reductions: deterministically-anchored entries (e.g. the
+    # primary-series ICM loading ``mu_isin_loading``/noise ``sigma_series`` pinned
+    # at 1.0) are constant across draws, so arviz returns a NaN R-hat for them
+    # (0/0 within/between variance). Those NaNs are expected and must not mask the
+    # genuine worst-case R-hat / ESS — ``np.nanmax`` / ``np.nanmin`` skip them.
+    max_rhat = float(np.nanmax([float(rhat_ds[v].max()) for v in rhat_ds.data_vars]))
+    min_ess = float(np.nanmin([float(ess_ds[v].min()) for v in ess_ds.data_vars]))
 
     # Convergence gates (Vehtari et al. 2021): R-hat < 1.01 and ESS > 400.
     _RHAT_GATE, _ESS_GATE = 1.01, 400.0
@@ -2165,15 +2283,15 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
             print(f'  - {v:>20s}: r_hat={r:6.3f}  ess_bulk={e_bulk:7.1f}  '
                   f'ess_tail={e_tail:7.1f}  [{status}]')
 
-        # Variance-partition readout: the single shared between-group scale
-        # ``sigma_group`` vs the residual/measurement base scale ``sigma_base``
-        # (the per-ISIN signal latent ``sigma_expected_return`` was removed — the
-        # per-ISIN mean is now the deterministic structural mean ``mu_reg``). A
-        # collapsed ``sigma_group`` (≈ 0) signals full pooling (no group signal);
-        # a dominant ``sigma_group`` signals strong between-group structure.
+        # Variance-partition readout: each genuine per-coord between-group sd
+        # ``sigma_<col>`` (the empirical sd of that coord's fixed-scale
+        # ``ZeroSumNormal`` effect — well-identified, no longer a stuck shared
+        # ``sigma_group`` scalar) vs the residual/measurement base scale
+        # ``sigma_base``. A small ``sigma_<col>`` signals little between-group
+        # signal for that coord; a larger one signals real between-group structure.
         partition = {
             name: float(posterior[name].mean())
-            for name in ('sigma_group', 'sigma_base')
+            for name in (*grp_keys, 'sigma_base')
             if name in posterior.data_vars
         }
         if partition:
@@ -2367,10 +2485,6 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
             frame['feat_tr_cagr_3y'].to_numpy() * 100
             if 'feat_tr_cagr_3y' in frame.columns else np.nan
         ),
-        'tr_cagr_10y_pct': (
-            frame['feat_tr_cagr_10y'].to_numpy() * 100
-            if 'feat_tr_cagr_10y' in frame.columns else np.nan
-        ),
         'n_analysts': frame['n_analysts'].to_numpy(),
     })
     # Merge the MC risk-adjusted-return summary (er_mean / percentiles / prob_pos_mc).
@@ -2422,7 +2536,7 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
     Four panels make the §5b structure legible:
 
     (a) ``expected_return`` → ``risk_adj_return`` coloured by the per-ISIN average
-        market beta — the ``exp(-risk_penalty * z(avg_beta))`` systematic-risk
+        market beta — the ``- risk_loading * z(avg_beta)`` systematic-risk
         discount that is the Kalman-specific refinement.
     (b) the logit-normal ``achieve_prob`` against the risk-adjusted return.
     (c) the heteroscedastic ``sigma_isin`` against analyst count, coloured by the
@@ -2447,7 +2561,7 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
     _lim = [float(np.nanmin([er.min(), rar.min()])), float(np.nanmax([er.max(), rar.max()]))]
     axes[0, 0].plot(_lim, _lim, '--', color='#bbbbbb', lw=1.1)
     axes[0, 0].set_xlabel('expected_return (latent)')
-    axes[0, 0].set_ylabel('risk_adj_return = expected_return · e^(−λ·z(β))')
+    axes[0, 0].set_ylabel('risk_adj_return = expected_return − λ·z(β) − γ·z(size)')
     axes[0, 0].set_title('Model A — systematic-risk (beta) discount')
     fig.colorbar(sc, ax=axes[0, 0], shrink=0.8, label='avg market beta')
 
@@ -2854,11 +2968,28 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
         'isin': np.asarray(panel.isins),
         'ticker': _idcol('ticker'),
         'name': _idcol('name'),
+        'region': _idcol('region'),
         'country': _idcol('country'),
         'unit': _idcol('unit'),
         'exchange': _idcol('exchange'),
         'sector': _idcol('sector'),
         'industry': _idcol('industry'),
+        'style_class': _idcol('style_class'),
+        'size_class': _idcol('size_class'),
+        'next_earnings': _idcol('next_earnings'),
+        'next_earnings_when': _idcol('next_earnings_when'),
+        'next_earnings_status': _idcol('next_earnings_status'),
+        'fy_end_date': _idcol('fy_end_date'),
+        'income_statement_report_date': _idcol('income_statement_report_date'),
+        'next_income_statement_report_date': _idcol('next_income_statement_report_date'),
+        'next_fy_end_date': _idcol('next_fy_end_date'),
+        'expected_report_date': _idcol('expected_report_date'),
+        'days_to_next_earnings': _idcol('days_to_next_earnings'),
+        'days_since_last_report': _idcol('days_since_last_report'),
+        'days_to_next_fy_end': _idcol('days_to_next_fy_end'),
+        'days_to_next_report': _idcol('days_to_next_report'),
+        'days_to_expected_report': _idcol('days_to_expected_report'),
+        'days_to_fy_end': _idcol('days_to_fy_end'),
         'expected_return_kalman': expected_upside_kalman,
         'price_target_kalman': kalman_estimate,
         'kalman_variance': kalman_variance,
@@ -2875,23 +3006,47 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
                     'expected_pt_hdi_lo', 'expected_pt_hdi_hi', 'risk_adj_return',
                     'er_mean', 'er_p05', 'er_p50', 'er_p95', 'mc_prob_pos']
     _present = [c for c in _screen_cols if c in screen.results.columns]
-    kalman_results = kalman_results.merge(
-        screen.results[['isin', *_present]], on='isin', how='left')
+    if _present:
+        kalman_results = kalman_results.merge(
+            screen.results[['isin', *_present]], on='isin', how='left')
 
-    # Wire the §10b CVaR-aware sizing (reusing the shared RiskBook when supplied).
+    # Resolve the CVaR-aware sizing book: reuse the one passed in (so the export and the
+    # §14b screen share a single computation), otherwise recompute it from the screen —
+    # exactly as the docstring promises. ``RiskBook.analytics`` carries the per-ISIN
+    # book_weight / cvar05_pct / starr keyed on isin.
     rb = risk_book if risk_book is not None else compute_cvar_aware_book(
         idata, panel, screen, screen.results)
-    _sized = rb.analytics[['isin', 'book_weight', 'cvar05_pct', 'starr']].rename(
-        columns={'book_weight': 'cvar_book_weight', 'cvar05_pct': 'cvar_5pct_kalman',
-                 'starr': 'reward_to_cvar'})
+    _sized = (rb.analytics[['isin', 'book_weight', 'cvar05_pct', 'starr']]
+              .rename(columns={'book_weight': 'cvar_book_weight',
+                               'cvar05_pct': 'cvar_5pct_kalman',
+                               'starr': 'reward_to_cvar'}))
     kalman_results = kalman_results.merge(_sized, on='isin', how='left')
+
+    # Guarantee the column exists regardless of whether a risk book was passed.
+    if 'cvar_book_weight' not in kalman_results.columns:
+        kalman_results['cvar_book_weight'] = 0.0
     kalman_results['cvar_book_weight'] = kalman_results['cvar_book_weight'].fillna(0.0)
     _held = int((kalman_results['cvar_book_weight'] > 0).sum())
     print(f'Built kalman_filtered_price_targets row-set: {kalman_results.shape}  '
           f'(CVaR-aware book: {_held} sized names, gross='
           f'{kalman_results["cvar_book_weight"].sum() * 100:.0f}%).')
-    display(kalman_results.sort_values('cvar_book_weight', ascending=False)
-            .head(25).round(4))
+
+    # Curate the top-25 preview so the fiscal-calendar date columns surface up front
+    # (after the identifiers) rather than being buried at the right edge. Round only
+    # the numeric columns -- the DATE / day-count columns are date/object dtypes that
+    # ``DataFrame.round`` would either ignore or choke on.
+    _date_cols = [c for c in (*FISCAL_CALENDAR_COLS_ALL, 'next_earnings_when',
+                              'next_earnings_status', *DAY_COUNT_COLS_ALL)
+                  if c in kalman_results.columns]
+    _id_cols = [c for c in ('isin', 'ticker', 'name', 'region', 'country', 'unit', 'exchange',
+                            'sector', 'industry','size_class','style_class') if c in kalman_results.columns]
+    _other_cols = [c for c in kalman_results.columns
+                   if c not in (*_id_cols, *_date_cols)]
+    _preview_cols = [*_id_cols, *_date_cols, *_other_cols]
+    _num_cols = kalman_results[_other_cols].select_dtypes(include='number').columns
+    display(kalman_results[_preview_cols]
+            .sort_values('cvar_book_weight', ascending=False)
+            .head(25).round({c: 4 for c in _num_cols}))
 
     if write:
         _n = export_to_analytics_db(kalman_results, 'kalman_filtered_price_targets',
@@ -2917,8 +3072,8 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
     """
     model_df = frame
     try:
-        keep = ('isin', 'ticker', 'last_price', 'price_target', 'market_cap',
-                'income_statement_report_date', 'next_earnings', 'expected_report_date')
+        keep = ('isin', 'ticker','name', 'last_price', 'price_target', 'market_cap','enterprise_value',
+                'income_statement_report_date', 'next_earnings')
         hist_cols, col_sql = fetch_history_columns(engine, keep)
         cohort = model_df['isin'].astype(str).tolist()
         with engine.connect() as conn:
@@ -2973,7 +3128,7 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         kf = KalmanFilterPriceTarget()
         kf_idata, kf_model = kf.fit(
             price_targets=observed, isin=str(chosen), dates=dates,
-            samples=1500, tune=1000, chains=4,
+            samples=2500, tune=2500, chains=4,
             random_seed=RANDOM_SEED, parameterization='marginalized', trend=True,
             target_accept=0.95, nuts_sampler='nutpie',
         )
@@ -2993,19 +3148,14 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
             last_price=last_price, ticker=ticker,
         ).show()
 
-        # Structural forecast to the next fiscal events.
+        # Structural forecast to the next fiscal events. Horizons, future dates and
+        # human labels are resolved from the canonical FISCAL_HORIZONS map (SSOT =
+        # the days_* aliases on pml.mv_pymc_kalman_pt), so every label matches its
+        # own date column instead of the previously mislabelled hand-built tuples.
         last_obs = dates.max()
-        fc_specs = []
-        for _col, _lbl in (('next_earnings', 'next_earnings'),
-                           ('next_income_statement_report_date', 'next_fy_end_date')):
-            if len(_row) and _col in _row.columns:
-                _d = pd.to_datetime(_row[_col].iloc[0], errors='coerce')
-                if pd.notna(_d) and _d > last_obs:
-                    fc_specs.append((_d, _lbl))
-        if fc_specs:
-            _fdates = [d for d, _ in fc_specs]
-            _labels = [lbl for _, lbl in fc_specs]
-            _horizons = [int((d - last_obs).days) for d in _fdates]
+        _horizons, _fdates, _labels = KalmanFilterPriceTarget.build_forecast_specs(
+            _row, last_obs, aggregate='first')
+        if _horizons:
             pred = kf.forecast(_horizons, fiscal_dates=_fdates, labels=_labels,
                                last_price=last_price)
             fig_fc, _ = plot_kalman_forecast(
@@ -3023,7 +3173,7 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
             })
             if last_price:
                 fc_tbl['implied_upside_pct'] = (fc_tbl['forecast_pt'] / last_price - 1.0) * 100
-            print(f'Structural forecast to {len(fc_specs)} fiscal event(s) for {ticker}:')
+            print(f'Structural forecast to {len(_horizons)} fiscal event(s) for {ticker}:')
             display(fc_tbl.round(3))
         else:
             print(f'No future fiscal event beyond the last observation for {chosen}; '
@@ -3049,6 +3199,7 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
             return
         chosen, dates, observed = ctx['chosen'], ctx['dates'], ctx['observed']
         ticker, _row = ctx['ticker'], ctx['row']
+        last_price = ctx.get('last_price')
         _vts = [
             _row[c].iloc[0] if (len(_row) and c in _row.columns) else np.nan
             for c in ('feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y')
@@ -3060,7 +3211,7 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
         kf_sv = KalmanFilterPriceTarget()
         kf_sv_idata, _ = kf_sv.fit(
             price_targets=observed, isin=str(chosen), dates=dates,
-            samples=1000, tune=1000, chains=4, random_seed=RANDOM_SEED,
+            samples=2500, tune=2500, chains=4, random_seed=RANDOM_SEED,
             stochastic_volatility=True, realized_vol=rv_path,
             parameterization='non_centered', trend=True, nuts_sampler='nutpie',
         )
@@ -3072,20 +3223,39 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
                     if v in kf_sv_idata.posterior]
         display(azs.summary(kf_sv_idata, var_names=_sv_vars, round_to=4))
 
-        _so = kf_sv_idata.posterior['sigma_obs']
-        _mean = _so.mean(('chain', 'draw')).values
-        _lo = _so.quantile(0.03, dim=('chain', 'draw')).values
-        _hi = _so.quantile(0.97, dim=('chain', 'draw')).values
-        fig_sv, ax_sv = plt.subplots(figsize=(11, 4))
-        ax_sv.plot(dates, _mean, color='tab:orange', lw=2,
-                   label='posterior mean $\\sigma_{obs}(t)$')
-        ax_sv.fill_between(dates, _lo, _hi, color='tab:orange', alpha=0.25, label='94% HDI')
-        ax_sv.set_title(f'Stochastic volatility - time-varying observation noise ({ticker})')
-        ax_sv.set_ylabel('$\\sigma_{obs}$ (log-price scale)')
-        ax_sv.set_xlabel('asof_date')
-        ax_sv.legend()
-        fig_sv.autofmt_xdate()
-        plt.show()
+        # Structural forecast to the next fiscal events (human-labelled horizons from
+        # the canonical FISCAL_HORIZONS map). Rendered through the unified
+        # plot_kalman_forecast: its SV-aware lower panel draws the posterior
+        # sigma_obs(t) path beneath the state + posterior-predictive forecast,
+        # mirroring the reference SV example (returns + posterior predictive above,
+        # posterior volatility below).
+        last_obs = dates.max()
+        _h, _fd, _lbl = KalmanFilterPriceTarget.build_forecast_specs(
+            _row, last_obs, aggregate='first')
+        if _h:
+            pred_sv = kf_sv.forecast(_h, fiscal_dates=_fd, labels=_lbl,
+                                     last_price=last_price)
+            fig_sv, _ = plot_kalman_forecast(
+                kf_sv_idata, pred_sv, observed=observed, dates=dates,
+                last_price=last_price, ticker=f'{ticker} (SV)')
+            fig_sv.show()
+        else:
+            # No future fiscal event beyond the last observation: still surface the
+            # standalone posterior observation-volatility path.
+            _so = kf_sv_idata.posterior['sigma_obs']
+            _mean = _so.mean(('chain', 'draw')).values
+            _lo = _so.quantile(0.03, dim=('chain', 'draw')).values
+            _hi = _so.quantile(0.97, dim=('chain', 'draw')).values
+            fig_sv, ax_sv = plt.subplots(figsize=(11, 4))
+            ax_sv.plot(dates, _mean, color='tab:orange', lw=2,
+                       label='posterior mean $\\sigma_{obs}(t)$')
+            ax_sv.fill_between(dates, _lo, _hi, color='tab:orange', alpha=0.25, label='94% HDI')
+            ax_sv.set_title(f'Stochastic volatility - time-varying observation noise ({ticker})')
+            ax_sv.set_ylabel('$\\sigma_{obs}$ (log-price scale)')
+            ax_sv.set_xlabel('asof_date')
+            ax_sv.legend()
+            fig_sv.autofmt_xdate()
+            plt.show()
 
         _trace_vars = [v for v in _sv_vars
                        if v in ('vol_step_size', 'nu_obs', 'vol_anchor_offset')]
@@ -3161,9 +3331,9 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         kf = KalmanFilterPriceTarget()
         kf_idata, kf_model = kf.fit(
             price_targets=observed, isin=label, dates=dates,
-            samples=1000, tune=1000, chains=4,
+            samples=2500, tune=2500, chains=4,
             random_seed=RANDOM_SEED, parameterization='marginalized', trend=True,
-            target_accept=0.95, nuts_sampler='nutpie',
+            target_accept=0.97, nuts_sampler='nutpie',
         )
 
         n_div = int(kf_idata.sample_stats['diverging'].sum())
@@ -3182,21 +3352,14 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
             last_price=last_price, ticker=label,
         ).show()
 
-        # (a2) Structural forecast to the cohort's next fiscal events.
+        # (a2) Structural forecast to the cohort's next fiscal events. Cohort-median
+        # dates, day-offsets and human labels come from the canonical FISCAL_HORIZONS
+        # map (SSOT = the days_* aliases on pml.mv_pymc_kalman_pt), so each label
+        # tracks its own date column rather than the old mislabelled tuples.
         last_obs = dates.max()
-        fc_specs = []
-        for _col, _lbl in (('next_earnings', 'income_statement_report_date'),
-                           ('next_income_statement_report_date', 'next_fy_end_date')):
-            if _col in snap.columns:
-                _d = pd.to_datetime(snap[_col], errors='coerce').dropna()
-                if not _d.empty:
-                    _dm = _d.median()
-                    if pd.notna(_dm) and _dm > last_obs:
-                        fc_specs.append((_dm, _lbl))
-        if fc_specs:
-            _fdates = [d for d, _ in fc_specs]
-            _labels = [lbl for _, lbl in fc_specs]
-            _horizons = [int((d - last_obs).days) for d in _fdates]
+        _horizons, _fdates, _labels = KalmanFilterPriceTarget.build_forecast_specs(
+            snap, last_obs, aggregate='median')
+        if _horizons:
             pred = kf.forecast(_horizons, fiscal_dates=_fdates, labels=_labels,
                                last_price=last_price)
             fig_fc, _ = plot_kalman_forecast(
@@ -3212,7 +3375,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
                 'forecast_pt_lo': _pg['forecast_pt'].quantile(0.03, dim=('chain', 'draw')).values,
                 'forecast_pt_hi': _pg['forecast_pt'].quantile(0.97, dim=('chain', 'draw')).values,
             })
-            print(f'Cohort structural forecast to {len(fc_specs)} fiscal event(s):')
+            print(f'Cohort structural forecast to {len(_horizons)} fiscal event(s):')
             display(fc_tbl.round(3))
 
         # (b) ArviZ forest of the per-as-of-date expected_pt posterior HDIs.
@@ -3291,7 +3454,7 @@ def run_mingled_cohort_stochastic_vol(frame: pd.DataFrame, ctx: Optional[dict]) 
         kf_sv = KalmanFilterPriceTarget()
         kf_sv_idata, _ = kf_sv.fit(
             price_targets=_observed_sv, isin=label, dates=_dates_sv,
-            samples=1000, tune=1000, chains=4, random_seed=RANDOM_SEED,
+            samples=2500, tune=2500, chains=4, random_seed=RANDOM_SEED,
             stochastic_volatility=True, realized_vol=rv_path,
             parameterization='non_centered', trend=True, nuts_sampler='nutpie',
         )
