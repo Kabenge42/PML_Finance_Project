@@ -16,17 +16,19 @@ from .data import refresh as refresh_data
 from .logger import logger
 from .components import data_cards
 from .components.filter_component import (
-    COUNTRY_ID,
-    EXCHANGE_ID,
+    ACTIVE_COORD_IDS,
     FILTER_CALLBACK_INPUTS,
     MKTCAP_ID,
     RESET_ID,
     RESULTS_ID,
-    SECTOR_ID,
     build_filter_panel,
     default_filter_values,
     filter_data,
 )
+
+# Reset restores every active global filter (coord dropdowns + market cap) to its
+# "all selected" default; the order here is the order of the callback outputs.
+_RESET_FILTER_IDS = [*ACTIVE_COORD_IDS, MKTCAP_ID]
 from .charts import (
     efficient_frontier,
     high_conviction,
@@ -97,10 +99,7 @@ app.layout = serve_layout
 
 @callback(
     output=[
-        Output(SECTOR_ID, "value"),
-        Output(COUNTRY_ID, "value"),
-        Output(EXCHANGE_ID, "value"),
-        Output(MKTCAP_ID, "value"),
+        *[Output(filter_id, "value") for filter_id in _RESET_FILTER_IDS],
         Output("refresh_trigger", "data"),
     ],
     inputs=[Input(RESET_ID, "n_clicks")],
@@ -113,10 +112,7 @@ def reset_filters(_n_clicks, current):
     defaults = default_filter_values(get_data())
     logger.info("Filters reset; data reloaded")
     return (
-        defaults[SECTOR_ID],
-        defaults[COUNTRY_ID],
-        defaults[EXCHANGE_ID],
-        defaults[MKTCAP_ID],
+        *[defaults[filter_id] for filter_id in _RESET_FILTER_IDS],
         (current or 0) + 1,
     )
 

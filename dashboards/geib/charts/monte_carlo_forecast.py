@@ -1,6 +1,6 @@
-"""Monte Carlo Return Distribution Forecast (single ticker).
+"""Monte Carlo Return Distribution Forecast (single name).
 
-Simulates thousands of forward price paths for one selected ticker and renders
+Simulates thousands of forward price paths for one selected name and renders
 the resulting terminal-return distribution, overlaid with the posterior
 percentiles already carried on the analytics row (``er_p05`` / ``er_p50`` /
 ``er_p95``) plus a statistics table.
@@ -36,7 +36,7 @@ from ._common import coalesce, empty_figure
 
 component_id = "monte_carlo_return_distribution_forecast"
 
-ticker_id = f"{component_id}_ticker"
+name_id = f"{component_id}_name"
 
 horizon_id = f"{component_id}_horizon"
 horizon_options = [
@@ -44,6 +44,7 @@ horizon_options = [
     {"label": "60 days", "value": 60},
     {"label": "90 days", "value": 90},
     {"label": "180 days", "value": 180},
+    {"label": "270 days", "value": 270},
     {"label": "365 days", "value": 365},
 ]
 horizon_default = 90
@@ -71,7 +72,7 @@ _STUDENT_T_DF = 5
 
 title = "Monte Carlo Return Distribution Forecast"
 description = (
-    "Simulates thousands of forward price paths for a single ticker from its "
+    "Simulates thousands of forward price paths for a single name from its "
     "Kalman-filtered expected return and volatility, then plots the terminal "
     "return distribution against the posterior 5th / 50th / 95th percentiles. "
     "Use it to weigh likely outcomes versus the tails for one name."
@@ -81,11 +82,11 @@ description = (
 def component() -> "object":
     df = get_data()
     try:
-        tickers = sorted(t for t in df["ticker"].dropna().unique().tolist() if str(t).strip())
+        names = sorted(t for t in df["name"].dropna().unique().tolist() if str(t).strip())
     except Exception:  # pragma: no cover - defensive
-        tickers = []
-    ticker_opts = [{"label": str(t), "value": str(t)} for t in tickers]
-    ticker_default = "NVDA" if "NVDA" in tickers else (tickers[0] if tickers else None)
+        names = []
+    name_opts = [{"label": str(t), "value": str(t)} for t in names]
+    name_default = "NVIDIA Corporation" if "NVIDIA Corporation" in names else (names[0] if names else None)
 
     return theme_card(
         title,
@@ -95,8 +96,8 @@ def component() -> "object":
             html.Div(
                 className="geib-controls-row",
                 children=[
-                    control("Ticker:", dcc.Dropdown(
-                        id=ticker_id, options=ticker_opts, value=ticker_default,
+                    control("Name:", dcc.Dropdown(
+                        id=name_id, options=name_opts, value=name_default,
                         searchable=True, style={"minWidth": "200px"})),
                     control("Forecast Horizon:", dcc.Dropdown(
                         id=horizon_id, options=horizon_options, value=horizon_default,
@@ -160,19 +161,19 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if df is None or len(df) == 0:
         return empty_figure("No data is available to display"), html.Div()
 
-    ticker = kwargs.get(ticker_id)
-    if not ticker:
-        return empty_figure("Select a ticker to run the forecast"), html.Div()
+    name = kwargs.get(name_id)
+    if not name:
+        return empty_figure("Select a name to run the forecast"), html.Div()
 
-    df = df[df["ticker"] == ticker]
+    df = df[df["name"] == name]
     if len(df) == 0:
-        return empty_figure(f"No data available for {ticker}"), html.Div()
+        return empty_figure(f"No data available for {name}"), html.Div()
     logger.debug(schema(df))
 
     row = df.iloc[0]
     initial_price = float(row["original_price"])
     if not np.isfinite(initial_price) or initial_price <= 0:
-        return empty_figure(f"No usable price for {ticker}"), html.Div()
+        return empty_figure(f"No usable price for {name}"), html.Div()
 
     horizon_days = int(coalesce(kwargs.get(horizon_id), horizon_default))
     num_simulations = int(coalesce(kwargs.get(simulations_id), simulations_default))
@@ -184,7 +185,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if not np.isfinite(annual_sigma) or annual_sigma <= 0:
         annual_sigma = 0.01
 
-    logger.debug("Simulating %d paths x %d days for %s", num_simulations, horizon_days, ticker)
+    logger.debug("Simulating %d paths x %d days for %s", num_simulations, horizon_days, name)
     terminal = _simulate_terminal_returns(
         initial_price, annual_mean, annual_sigma, horizon_days, num_simulations, distribution_type
     )
@@ -206,12 +207,17 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
         ))
 
     er_p05, er_p50, er_p95 = float(row["er_p05"]), float(row["er_p50"]), float(row["er_p95"])
+    sim_median = float(np.median(terminal))
     fig.add_vline(x=er_p05 * 100, line_dash="dash", line_color=RED,
                   annotation_text="5th %ile", annotation_position="top left")
     fig.add_vline(x=er_p50 * 100, line_dash="solid", line_color=GREEN,
                   annotation_text="Median", annotation_position="top right")
     fig.add_vline(x=er_p95 * 100, line_dash="dash", line_color="#0EA5E9",
                   annotation_text="95th %ile", annotation_position="bottom right")
+    # Median of the actual simulated distribution (distinct from the posterior
+    # er_p50 median above), drawn in a contrasting colour/style.
+    fig.add_vline(x=sim_median * 100, line_dash="dot", line_color="#A855F7",
+                  annotation_text="Sim. Median", annotation_position="bottom left")
 
     fig.update_layout(
         xaxis_title="Return (%)", yaxis_title="Probability Density",
@@ -223,9 +229,24 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
 
 
 def _build_table(row, terminal, num_simulations, horizon_days, initial_price) -> html.Div:
+    # Median of the actual simulated terminal-return distribution (distinct from
+    # the posterior er_p50). The simulated price target is that median return
+    # applied to the path's starting price, i.e. the median terminal price level.
+    sim_median_return = float(np.median(terminal))
+    sim_price_target = initial_price * (1.0 + sim_median_return)
+    # Kalman-filtered posterior-mean price target level (analytics row column).
+    kalman_price_target = float(row["price_target_kalman"])
+
     rows = [
         ("Expected Return", f"{float(row['expected_return_kalman']) * 100:.2f}%",
          "Mean implied upside from the Kalman filter"),
+        ("Simulated Expected Return", f"{sim_median_return * 100:.2f}%",
+         "Median simulated return based on the simulated distribution"),
+        ("Initial Price", f"{initial_price:.2f}", "Current price the paths start from"),
+        ("Expected Price Target", f"{kalman_price_target:.2f}",
+         "Expected price target from the Kalman filter"),
+        ("Simulated Price Target", f"{sim_price_target:.2f}",
+         "Median simulated terminal price target path"),
         ("Median Return (50th %ile)", f"{float(row['er_p50']) * 100:.2f}%",
          "Median posterior outcome"),
         ("5th Percentile (VaR)", f"{float(row['er_p05']) * 100:.2f}%",
@@ -243,8 +264,8 @@ def _build_table(row, terminal, num_simulations, horizon_days, initial_price) ->
         ("Reward-to-CVaR", f"{float(row['reward_to_cvar']):.2f}",
          "Risk-adjusted return vs tail loss"),
         ("Simulations Run", f"{num_simulations:,}", "Number of price paths simulated"),
-        ("Forecast Horizon (days)", f"{horizon_days}", "Time horizon for the forecast"),
-        ("Initial Price", f"{initial_price:.2f}", "Current price the paths start from"),
+        ("Forecast Horizon (days)", f"{horizon_days}", "Time horizon for the forecast")
+
     ]
     headers = ["Metric", "Value", "Interpretation"]
     body = [
@@ -268,7 +289,7 @@ def _build_table(row, terminal, num_simulations, horizon_days, initial_price) ->
     ],
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
-        ticker_id: Input(ticker_id, "value"),
+        name_id: Input(name_id, "value"),
         horizon_id: Input(horizon_id, "value"),
         simulations_id: Input(simulations_id, "value"),
         distribution_id: Input(distribution_id, "value"),

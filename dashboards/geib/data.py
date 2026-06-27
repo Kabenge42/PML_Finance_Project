@@ -38,6 +38,12 @@ IDENTIFIER_COLUMNS: list[str] = [
     "exchange",
     "sector",
     "industry",
+    # Categorical earnings-timing coords the global filter panel exposes. The
+    # live table also carries the raw date coords (income_statement_report_date,
+    # next_earnings, fy_end_date, …) via ``SELECT *``; they are not declared
+    # here because the board does not surface dates as filters.
+    "next_earnings_when",
+    "next_earnings_status",
 ]
 
 NUMERIC_COLUMNS: list[str] = [

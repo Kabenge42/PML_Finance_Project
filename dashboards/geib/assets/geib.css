@@ -189,9 +189,21 @@ body,
     gap: 20px;
 }
 
+/* Stacked variant: charts run top-to-bottom (one per row) instead of
+   side-by-side. Each pane takes the full card width. */
+.geib-dual-graph--stacked {
+    flex-direction: column;
+    flex-wrap: nowrap;
+}
+
 .geib-graph-pane {
     flex: 1 1 360px;
     min-width: 0;
+}
+
+.geib-dual-graph--stacked .geib-graph-pane {
+    flex: 1 1 auto;
+    width: 100%;
 }
 
 .geib-graph-label {
@@ -214,6 +226,49 @@ body,
     font-size: 14px;
     align-self: center;
     margin-left: auto;
+}
+
+/* Global filter dropdowns: light fields with dark text for readability.
+   The global COORD + Market-Cap filters sit on the slate panel; rendering them
+   as light input fields with dark text makes the active selections read clearly
+   (scoped to the filter panel so the per-chart dark dropdowns are unaffected).
+   Selectors are nested under .geib-page .geib-filter-panel so they out-specify
+   the dark .geib-page .Select-* theme above regardless of source order. */
+.geib-page .geib-filter-panel .Select-control,
+.geib-page .geib-filter-panel .is-focused:not(.is-open) > .Select-control {
+    background-color: #FFFFFF;
+    border: 1px solid var(--geib-control-border);
+    color: var(--geib-navy);
+}
+
+.geib-page .geib-filter-panel .Select-menu-outer {
+    background-color: #FFFFFF;
+    border: 1px solid var(--geib-control-border);
+    color: var(--geib-navy);
+    z-index: 1200;
+}
+
+.geib-page .geib-filter-panel .Select-value-label,
+.geib-page .geib-filter-panel .Select-placeholder,
+.geib-page .geib-filter-panel .Select--single > .Select-control .Select-value,
+.geib-page .geib-filter-panel .Select-input > input {
+    color: var(--geib-navy) !important;
+}
+
+.geib-page .geib-filter-panel .Select--multi .Select-value {
+    background-color: #DBEAFE;
+    border: 1px solid #3B82F6;
+    color: var(--geib-navy);
+}
+
+.geib-page .geib-filter-panel .Select-option {
+    color: var(--geib-navy);
+}
+
+.geib-page .geib-filter-panel .VirtualizedSelectFocusedOption,
+.geib-page .geib-filter-panel .Select-option.is-focused {
+    background-color: #DBEAFE;
+    color: var(--geib-navy);
 }
 
 /* --- Buttons --- */

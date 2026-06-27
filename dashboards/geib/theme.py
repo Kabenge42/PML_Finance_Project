@@ -81,6 +81,10 @@ pio.templates.default = "plotly_dark+geib_dark"
 # --- Layout helpers --------------------------------------------------------
 GRAPH_STYLE = {"minHeight": "550px", "height": "calc(100vh - 600px)"}
 DUAL_GRAPH_STYLE = {"minHeight": "500px", "height": "calc(100vh - 700px)"}
+# Stacked (vertical) variant: each pane spans the full card width, so give the
+# figures a fixed height rather than a viewport-relative one (two panes share
+# the column, viewport-relative heights would push the second graph off-screen).
+STACKED_GRAPH_STYLE = {"minHeight": "420px", "height": "480px"}
 
 CONTROLS_ROW_STYLE = {
     "display": "flex",

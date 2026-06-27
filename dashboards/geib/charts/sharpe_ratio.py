@@ -18,7 +18,7 @@ from dash import Input, Output, callback, dcc, html
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
-from ..metrics import annualized_return_pct, annualized_volatility_pct
+from ..metrics import annualized_return_pct, quantile_volatility_pct
 from ..theme import GRAPH_STYLE, control
 from ..theme import card as theme_card
 from ._common import coalesce, empty_figure, sector_values
@@ -155,8 +155,8 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         return empty, empty
 
     df = df[[
-        "name", "sector", "market_cap", "original_price",
-        "expected_return_kalman", "kalman_variance", "mc_prob_pos",
+        "name", "sector", "market_cap",
+        "expected_return_kalman", "er_p05", "er_p95", "mc_prob_pos",
     ]].copy()
     logger.debug(schema(df))
 
@@ -208,11 +208,17 @@ def _annualized_risk_metrics(df: pd.DataFrame, risk_free_rate: float) -> pd.Data
     single source of truth shared with the other Kalman charts), then forms the
     Sharpe ratio and drops non-finite rows.
 
+    Risk is the asset's *return* dispersion implied by the Monte-Carlo return
+    distribution's 5th–95th percentiles (``quantile_volatility_pct``), not the
+    posterior variance of the price-target *level* (``kalman_variance``). The
+    latter is estimation uncertainty of the mean and understated risk by ~1-2
+    orders of magnitude, inflating the Sharpe ratio accordingly.
+
     Parameters
     ----------
     df
-        Frame carrying ``expected_return_kalman``, ``kalman_variance`` and
-        ``original_price`` (the spot price the implied upside is measured from).
+        Frame carrying ``expected_return_kalman`` and the per-name return
+        percentiles ``er_p05`` / ``er_p95``.
     risk_free_rate
         Annual risk-free rate as a fraction (e.g. ``0.03`` for 3%).
 
@@ -224,8 +230,8 @@ def _annualized_risk_metrics(df: pd.DataFrame, risk_free_rate: float) -> pd.Data
     """
     out = df.copy()
     out["annualized_return"] = annualized_return_pct(out["expected_return_kalman"])
-    out["annualized_volatility"] = annualized_volatility_pct(
-        out["kalman_variance"], out["original_price"]
+    out["annualized_volatility"] = quantile_volatility_pct(
+        out["er_p05"], out["er_p95"]
     )
     out["sharpe_ratio"] = (
                                   out["annualized_return"] - risk_free_rate * 100.0
