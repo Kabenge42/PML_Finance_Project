@@ -1,3 +1,9 @@
+-- One row per ISIN (a point-in-time cross-sectional snapshot). The fused panel
+-- model (build_fused_kalman_pt_model) therefore collapses to a single time
+-- slice (T=1, collapse_time=True); crossed group effects are fixed-scale pooled
+-- downstream because a between-group variance component is not identifiable from
+-- one slice. The embedded *_ago lag columns carry the only historical axis and
+-- feed the single-security GaussianRandomWalk filter (KalmanFilterPriceTarget).
 CREATE MATERIALIZED VIEW mv_pymc_kalman_pt AS
 SELECT isin,
        ticker,
@@ -70,6 +76,7 @@ SELECT isin,
        price_target_num_1m_ago,
        price_target_num_qtd_ago,
        price_target_num_3m_ago,
+       price_target_num_6m_ago,
        price_target_num_ytd_ago,
        price_target_num_1y_ago,
        calc_change_ratio(price_target::numeric, last_price::numeric)                                                                                                                                                                               AS feat_implied_upside,
