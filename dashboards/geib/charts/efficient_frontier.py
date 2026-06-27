@@ -18,7 +18,7 @@ from dash import Input, Output, callback, dcc, html
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
-from ..metrics import PRICE_TARGET_HORIZON_YEARS, return_volatility
+from ..metrics import PRICE_TARGET_HORIZON_YEARS, quantile_return_volatility
 from ..theme import GOLD, GREEN, RED, control
 from ..theme import card as theme_card
 from ._common import coalesce, empty_figure, sector_values
@@ -144,7 +144,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
         return empty_figure("No data is available to display"), html.Div()
 
     df = df[["ticker", "name", "sector", "market_cap", "mc_prob_pos",
-             "original_price", "expected_return_kalman", "kalman_variance"]].copy()
+             "expected_return_kalman", "er_p05", "er_p95"]].copy()
     logger.debug(schema(df))
 
     rf = coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default)
@@ -156,8 +156,8 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     df = df[df["market_cap"] >= min_market_cap]
     if sector_filter:
         df = df[df["sector"].isin(sector_filter)]
-    df = df.dropna(subset=["expected_return_kalman", "kalman_variance", "original_price"])
-    df = df[(df["kalman_variance"] > 0) & (df["original_price"] > 0)]
+    df = df.dropna(subset=["expected_return_kalman", "er_p05", "er_p95"])
+    df = df[df["er_p95"] > df["er_p05"]]
 
     if len(df) < 2:
         return empty_figure("Need at least 2 eligible stocks for an efficient frontier"), html.Div()
@@ -169,13 +169,20 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     df = df.reset_index(drop=True)
     tickers = df["ticker"].tolist()
 
-    # Annualised per-asset return and volatility from the Kalman outputs (both
-    # decimal). ``expected_return_kalman`` is already the total NTM upside and
-    # ``kalman_variance`` is the price-target *level* variance, so they are scaled
-    # by the real price-target horizon (not a daily 252) and the level variance is
-    # divided by the spot price to become a return — see ``geib.metrics``.
+    # Per-asset expected return and risk — both decimal and already on the NTM
+    # price-target horizon (so no daily-252 annualisation). ``expected_return_kalman``
+    # is the total NTM upside. Risk is the asset's *return* dispersion taken from the
+    # Monte-Carlo return distribution: the 5th–95th-percentile spread implies, under a
+    # normal approximation (``quantile_return_volatility``). ``er_mean`` tracks
+    # ``expected_return_kalman``, so the mean and risk stay on one distribution.
+    #
+    # NOTE: ``kalman_variance`` must NOT be used as risk here. It is the posterior
+    # variance of the price-target *level* (estimation uncertainty of the mean), not
+    # the return volatility; converted to a return and diversified across the book it
+    # collapsed portfolio vol to ~0.1% and pushed Sharpe ratios past 150 (e.g. a
+    # "Volatility (%) 0.13" with Sharpe 168 against a 24.68% expected return).
     mu = (df["expected_return_kalman"] / PRICE_TARGET_HORIZON_YEARS).to_numpy()
-    sigma = return_volatility(df["kalman_variance"], df["original_price"]).to_numpy()
+    sigma = quantile_return_volatility(df["er_p05"], df["er_p95"]).to_numpy()
 
     # Covariance from seeded simulated annualised returns (252 draws/asset).
     rng = np.random.default_rng(42)

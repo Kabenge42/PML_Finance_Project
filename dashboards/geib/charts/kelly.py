@@ -33,30 +33,39 @@ kelly_multiplier_options = [
 kelly_multiplier_default = 0.5
 
 max_position_size_id = f"{component_id}_max_position_size"
+# "No Limit" == cap at 100%; since adjusted Kelly fractions are <= 1.0 the
+# upper clip never binds, leaving allocations uncapped.
 max_position_size_options = [
     {"label": "5%", "value": 0.05},
     {"label": "10%", "value": 0.10},
     {"label": "15%", "value": 0.15},
     {"label": "20%", "value": 0.20},
     {"label": "25%", "value": 0.25},
+    {"label": "No Limit", "value": 1.0},
 ]
 max_position_size_default = 0.10
 
 min_prob_id = f"{component_id}_min_prob"
+# "No Limit" == 0% floor; ``mc_prob_pos >= 0`` admits every name (rows with a
+# zero/NaN probability still drop out at the positive-Kelly-fraction filter).
 min_prob_options = [
     {"label": "60%", "value": 0.6},
     {"label": "70%", "value": 0.7},
     {"label": "80%", "value": 0.8},
     {"label": "90%", "value": 0.9},
+    {"label": "No Limit", "value": 0.0},
 ]
 min_prob_default = 0.7
 
 top_n_id = f"{component_id}_top_n"
+# Sentinel value for the "No Limit" Top-N option (keep every qualifying name).
+top_n_no_limit = "all"
 top_n_options = [
     {"label": "Top 10", "value": 10},
     {"label": "Top 20", "value": 20},
     {"label": "Top 30", "value": 30},
     {"label": "Top 50", "value": 50},
+    {"label": "No Limit", "value": top_n_no_limit},
 ]
 top_n_default = 20
 
@@ -70,6 +79,23 @@ min_market_cap_options = [
     {"label": "$50B", "value": 50000},
 ]
 min_market_cap_default = 5000
+
+# Optional CVaR-aware sizing. When a Top-N is chosen, the Kelly universe is
+# restricted to the CVaR optimiser's allocated longs — names with a non-zero
+# ``cvar_book_weight`` in ``analytics.kalman_filtered_price_targets`` — and the
+# chosen Top-N of reward-to-CVaR names governs the book (a 100%-gross long book,
+# still subject to the Min Win Probability and Max Position Size controls).
+# Defaults to "Off" so the chart is unchanged until the user opts in.
+cvar_sizing_id = f"{component_id}_cvar_sizing"
+cvar_sizing_off = "off"
+cvar_sizing_options = [
+    {"label": "Off", "value": cvar_sizing_off},
+    {"label": "Top 10", "value": 10},
+    {"label": "Top 20", "value": 20},
+    {"label": "Top 30", "value": 30},
+    {"label": "Top 50", "value": 50},
+]
+cvar_sizing_default = cvar_sizing_off
 
 title = "Kelly Criterion Position Sizing"
 description = (
@@ -103,6 +129,10 @@ def component() -> "object":
                     control("Top N Stocks:", dcc.Dropdown(
                         id=top_n_id, options=top_n_options,
                         value=top_n_default, searchable=False, style={"minWidth": "140px"})),
+                    control("CVaR-aware sizing:", dcc.Dropdown(
+                        id=cvar_sizing_id, options=cvar_sizing_options,
+                        value=cvar_sizing_default, searchable=False, clearable=False,
+                        style={"minWidth": "170px"})),
                     control("Sector:", dcc.Dropdown(
                         id=sector_filter_id, options=sector_opts,
                         value=[s["value"] for s in sector_opts], multi=True, style={"minWidth": "200px"})),
@@ -160,7 +190,8 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
         return empty_figure("No data is available to display"), html.Div()
 
     df = df[["ticker", "name", "sector", "market_cap", "mc_prob_pos",
-             "expected_return_kalman", "cvar_5pct_kalman"]].copy()
+             "expected_return_kalman", "cvar_5pct_kalman",
+             "cvar_book_weight", "reward_to_cvar"]].copy()
     logger.debug(schema(df))
 
     kelly_multiplier = coalesce(kwargs.get(kelly_multiplier_id), kelly_multiplier_default)
@@ -171,6 +202,18 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if not sector_filter:
         sector_filter = df["sector"].dropna().unique().tolist()
     min_market_cap = coalesce(kwargs.get(min_market_cap_id), min_market_cap_default)
+
+    # CVaR-aware sizing (optional): restrict to the CVaR optimiser's allocated
+    # longs (non-zero ``cvar_book_weight``) and let the chosen Top-N of
+    # reward-to-CVaR names govern the book. The Min Win Probability / Max
+    # Position Size caps and the 100%-gross normalisation below still apply.
+    cvar_sizing = kwargs.get(cvar_sizing_id, cvar_sizing_default)
+    cvar_aware = cvar_sizing not in (None, cvar_sizing_off)
+    if cvar_aware:
+        df = df[df["cvar_book_weight"].fillna(0.0) > 0]
+        if len(df) == 0:
+            return empty_figure("No names carry a non-zero CVaR book weight"), html.Div()
+        top_n = int(cvar_sizing)
 
     df = df[df["sector"].isin(sector_filter)]
     df = df[df["market_cap"] >= min_market_cap]
@@ -183,7 +226,10 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if len(df) == 0:
         return empty_figure("No stocks have positive Kelly fraction"), html.Div()
 
-    df = df.sort_values("kelly_fraction", ascending=False).head(top_n)
+    rank_col = "reward_to_cvar" if cvar_aware else "kelly_fraction"
+    df = df.sort_values(rank_col, ascending=False)
+    if top_n != top_n_no_limit:
+        df = df.head(int(top_n))
     df["kelly_fraction_adjusted"] = df["kelly_fraction"] * kelly_multiplier
     df["kelly_fraction_capped"] = df["kelly_fraction_adjusted"].clip(upper=max_position_size)
 
@@ -214,6 +260,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
         max_position_size_id: Input(max_position_size_id, "value"),
         min_prob_id: Input(min_prob_id, "value"),
         top_n_id: Input(top_n_id, "value"),
+        cvar_sizing_id: Input(cvar_sizing_id, "value"),
         sector_filter_id: Input(sector_filter_id, "value"),
         min_market_cap_id: Input(min_market_cap_id, "value"),
         **FILTER_CALLBACK_INPUTS,

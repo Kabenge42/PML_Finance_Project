@@ -20,7 +20,7 @@ from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
 from ..metrics import return_volatility
-from ..theme import DUAL_GRAPH_STYLE, control
+from ..theme import STACKED_GRAPH_STYLE, control
 from ..theme import card as theme_card
 from ._common import empty_figure
 
@@ -94,18 +94,18 @@ def component() -> "object":
                 ],
             ),
             html.Div(
-                className="geib-dual-graph",
+                className="geib-dual-graph geib-dual-graph--stacked",
                 children=[
                     html.Div(className="geib-graph-pane", children=[
                         html.Label("Probability Density Heatmap", className="geib-graph-label"),
                         dcc.Loading(type="circle", children=[
-                            dcc.Graph(id=f"{component_id}_heatmap_graph", style=DUAL_GRAPH_STYLE)]),
+                            dcc.Graph(id=f"{component_id}_heatmap_graph", style=STACKED_GRAPH_STYLE)]),
                         html.Pre(id=f"{component_id}_heatmap_error", className="geib-error"),
                     ]),
                     html.Div(className="geib-graph-pane", children=[
                         html.Label("Cumulative Distribution Function", className="geib-graph-label"),
                         dcc.Loading(type="circle", children=[
-                            dcc.Graph(id=f"{component_id}_cdf_graph", style=DUAL_GRAPH_STYLE)]),
+                            dcc.Graph(id=f"{component_id}_cdf_graph", style=STACKED_GRAPH_STYLE)]),
                         html.Pre(id=f"{component_id}_cdf_error", className="geib-error"),
                     ]),
                 ],
