@@ -35,13 +35,22 @@ def coalesce(value: Any, default: Any) -> Any:
     return default if value is None else value
 
 
+def column_values(df: Optional[pd.DataFrame], column: str) -> list[str]:
+    """Return the sorted, de-duplicated, non-empty values of *column* in *df*.
+
+    Used to populate categorical dropdowns (sectors, currencies/``unit`` …) at
+    layout-construction time. Defensive against a missing column or unhashable
+    values so it can run before any data has loaded.
+    """
+    try:
+        return sorted(v for v in df[column].dropna().unique().tolist() if v)
+    except Exception:  # pragma: no cover - defensive (missing column / bad dtype)
+        return []
+
+
 def sector_values(df: Optional[pd.DataFrame]) -> list[str]:
     """Return the sorted, de-duplicated, non-empty ``sector`` values in *df*.
 
-    Defensive against a missing column or unhashable values so it can run during
-    layout construction before any data has loaded.
+    Thin wrapper over :func:`column_values` kept for the existing call sites.
     """
-    try:
-        return sorted(s for s in df["sector"].dropna().unique().tolist() if s)
-    except Exception:  # pragma: no cover - defensive (missing column / bad dtype)
-        return []
+    return column_values(df, "sector")

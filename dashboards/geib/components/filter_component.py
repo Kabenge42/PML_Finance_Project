@@ -17,14 +17,21 @@ Exposes:
 * ``filter_data(df, **kwargs)`` — applies the active global filters generically.
 * ``default_filter_values(df)`` — the "all selected" defaults (used by Reset).
 * ``ACTIVE_COORD_IDS`` — the coord filter ids present in the data (for Reset).
+
+The coord dropdowns are **cascading/dependent**: the ``sync_filters`` callback
+(the single owner of every coord ``value``/``options``, the Market-Cap value, and
+``refresh_trigger``) repopulates each downstream coord whenever an upstream one
+changes, and restores the "all selected" defaults on Reset.
 """
 
 from __future__ import annotations
 
 import pandas as pd
-from dash import Input, dcc, html
+from dash import Input, Output, State, callback, ctx, dcc, html, no_update
 
 from ..data import get_data
+from ..data import refresh as refresh_data
+from ..logger import logger
 from ..theme import CONTROLS_ROW_STYLE, control
 
 # --- Coord filter registry -------------------------------------------------
@@ -202,13 +209,147 @@ def filter_data(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
 
     ranges = kwargs.get(MKTCAP_ID)
     if ranges and "market_cap" in out.columns:
-        mask = pd.Series(False, index=out.index)
-        for label in ranges:
-            bounds = MKTCAP_BOUNDS.get(label)
-            if bounds is None:
-                continue
-            lo, hi = bounds
-            mask = mask | ((out["market_cap"] >= lo) & (out["market_cap"] < hi))
-        out = out[mask]
+        out = _apply_mktcap(out, ranges)
 
     return out
+
+
+def _apply_mktcap(df: pd.DataFrame, ranges: list) -> pd.DataFrame:
+    """Narrow *df* to rows whose ``market_cap`` falls in any selected range."""
+    if not ranges or "market_cap" not in df.columns:
+        return df
+    mask = pd.Series(False, index=df.index)
+    for label in ranges:
+        bounds = MKTCAP_BOUNDS.get(label)
+        if bounds is None:
+            continue
+        lo, hi = bounds
+        mask = mask | ((df["market_cap"] >= lo) & (df["market_cap"] < hi))
+    return df[mask]
+
+
+# --- Cascading (dependent) coord filters -----------------------------------
+# The coord dropdowns cascade top-down in registry order: changing an upstream
+# filter (e.g. ``region``) repopulates every downstream filter (``country``,
+# ``sector``, ``industry`` …) to the values still present under the upstream
+# selection, and re-selects them all. The Market-Cap range sits above all coords,
+# so changing it repopulates the entire coord stack. This keeps the choices a
+# user sees consistent with what they have already narrowed to, and guarantees
+# the filters apply consistently across every chart and KPI (they all read the
+# same coord/mktcap values via ``FILTER_CALLBACK_INPUTS`` + :func:`filter_data`).
+
+
+def _triggered_index(triggered_ids: set[str]) -> int:
+    """Lowest coord position that changed (``-1`` for Market-Cap, the upstream).
+
+    Returns ``len(ACTIVE_COORD_COLUMNS)`` (a no-op sentinel) when nothing
+    cascade-relevant fired, so downstream recomputation is skipped.
+    """
+    if MKTCAP_ID in triggered_ids:
+        return -1
+    positions = [
+        idx
+        for idx, column in enumerate(ACTIVE_COORD_COLUMNS)
+        if coord_filter_id(column) in triggered_ids
+    ]
+    return min(positions) if positions else len(ACTIVE_COORD_COLUMNS)
+
+
+def _cascade(coord_values: dict[str, list], mktcap: list, trigger_idx: int) -> tuple[list, list]:
+    """Recompute coord ``options``/``value`` downstream of *trigger_idx*.
+
+    Walks the coord registry in order, narrowing a running frame by each
+    upstream coord's current selection. Coords at or above *trigger_idx* keep
+    their options/value untouched (``dash.no_update``); coords below are
+    repopulated to the running frame's remaining values and re-selected in full.
+
+    Parameters
+    ----------
+    coord_values
+        Current ``{coord_filter_id: selected_values}`` for every active coord.
+    mktcap
+        Selected Market-Cap range labels (scopes the whole coord stack).
+    trigger_idx
+        Position of the changed coord (``-1`` = Market-Cap, upstream of all).
+
+    Returns
+    -------
+    tuple[list, list]
+        ``(options_outputs, value_outputs)`` aligned to ``ACTIVE_COORD_COLUMNS``.
+    """
+    running = _apply_mktcap(get_data(), mktcap)
+    options_out: list = []
+    values_out: list = []
+
+    for idx, column in enumerate(ACTIVE_COORD_COLUMNS):
+        if idx <= trigger_idx:
+            # Upstream / the trigger itself: leave the control as the user set it,
+            # but still narrow the running frame by its current selection.
+            selected = coord_values.get(coord_filter_id(column))
+            if selected and column in running.columns:
+                running = running[running[column].isin(selected)]
+            options_out.append(no_update)
+            values_out.append(no_update)
+            continue
+
+        # Downstream: repopulate to what remains, and re-select all of it.
+        opts = _options(running, column)
+        values = [opt["value"] for opt in opts]
+        options_out.append(opts)
+        values_out.append(values)
+        if values and column in running.columns:
+            running = running[running[column].isin(values)]
+
+    return options_out, values_out
+
+
+_COORD_VALUE_OUTPUTS = [Output(coord_filter_id(c), "value") for c in ACTIVE_COORD_COLUMNS]
+_COORD_OPTIONS_OUTPUTS = [Output(coord_filter_id(c), "options") for c in ACTIVE_COORD_COLUMNS]
+
+
+@callback(
+    output=[
+        *_COORD_OPTIONS_OUTPUTS,
+        *_COORD_VALUE_OUTPUTS,
+        Output(MKTCAP_ID, "value"),
+        Output("refresh_trigger", "data"),
+    ],
+    inputs=[
+        *[Input(coord_filter_id(c), "value") for c in ACTIVE_COORD_COLUMNS],
+        Input(MKTCAP_ID, "value"),
+        Input(RESET_ID, "n_clicks"),
+    ],
+    state=State("refresh_trigger", "data"),
+    prevent_initial_call=True,
+)
+def sync_filters(*args):
+    """Single owner of the global filter state: Reset + cascading dependencies.
+
+    On Reset, reloads the data and restores every coord + Market-Cap filter to
+    "all selected". On any coord/Market-Cap change, cascades the selection down
+    the coord registry so downstream dropdowns only offer (and select) values
+    consistent with the upstream choice. Centralising both behaviours in one
+    callback keeps the coord ``value``/``options`` single-owned (no duplicate
+    outputs) and the panel in lockstep with what every chart filters on.
+    """
+    n = len(ACTIVE_COORD_COLUMNS)
+    coord_values = {
+        coord_filter_id(column): args[idx] for idx, column in enumerate(ACTIVE_COORD_COLUMNS)
+    }
+    mktcap = args[n]
+    refresh_state = args[n + 2]
+
+    triggered_ids = {entry["prop_id"].split(".")[0] for entry in ctx.triggered}
+
+    if RESET_ID in triggered_ids:
+        refresh_data()
+        df = get_data()
+        defaults = default_filter_values(df)
+        logger.info("Filters reset; data reloaded")
+        options = [_options(df, column) for column in ACTIVE_COORD_COLUMNS]
+        values = [defaults[coord_filter_id(column)] for column in ACTIVE_COORD_COLUMNS]
+        return (*options, *values, list(MKTCAP_VALUES), (refresh_state or 0) + 1)
+
+    trigger_idx = _triggered_index(triggered_ids)
+    options, values = _cascade(coord_values, mktcap, trigger_idx)
+    return (*options, *values, no_update, no_update)

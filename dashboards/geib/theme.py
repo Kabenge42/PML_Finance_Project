@@ -1,10 +1,14 @@
 """Navy/gold dark theme for the GEIB dashboard.
 
-Single source of styling: brand colour constants, a registered Plotly template
-(``geib_dark``, set as the default and composed over ``plotly_dark``), and a few
-``dbc`` layout helpers that replace the Dash-Enterprise ``ddk.Card`` shell used
-by the reference stubs. Page-level chrome (background, controls, tables, hero)
-is handled by ``assets/geib.css``.
+Single source of styling. :data:`THEME` mirrors the design spec verbatim (the
+Plotly Studio token dict) and is the canonical reference for every colour, font,
+and spacing token. The named constants below are thin views onto that dict so
+the chart/table modules can keep importing short names (``GOLD``, ``NAVY`` …).
+A registered Plotly template (``geib_dark``, composed over ``plotly_dark`` and
+set as the default) and a few ``dbc`` layout helpers replace the Dash-Enterprise
+``ddk.Card`` shell used by the reference stubs. Page-level chrome (background,
+controls, tables, hero) is handled by ``assets/geib.css``, which mirrors the same
+tokens as CSS custom properties.
 """
 
 from __future__ import annotations
@@ -16,46 +20,135 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from dash import html
 
-# --- Brand palette ---------------------------------------------------------
-GOLD = "#D4AF37"
-GREEN = "#10B981"
-RED = "#EF4444"
-NAVY = "#0F172A"
-SLATE_DARK = "#1E293B"
-BODY_TEXT = "#E2E8F0"
-SUBTLE_TEXT = "#CBD5E1"
-BORDER = "#334155"
-CONTROL_BORDER = "#475569"
-WHITE = "#FFFFFF"
+# --- Design spec (single source of truth) ----------------------------------
+# Verbatim mirror of the Plotly Studio theme export. Treat this dict as the
+# authoritative palette/typography reference; the named constants and the Plotly
+# template + CSS variables are all derived from these values.
+THEME: dict[str, object] = {
+    "accent": "#D4AF37",
+    "accent_positive": "#10B981",
+    "accent_negative": "#EF4444",
+    "background_content": "#1A2332",
+    "background_page": "#0F172A",
+    "body_text": "#E2E8F0",
+    "border": "#334155",
+    "button_text": "#FFFFFF",
+    "button_background_color": "#1E3A8A",
+    "control_border_color": "#475569",
+    "control_background_color": "#1E293B",
+    "control_text": "#E2E8F0",
+    "card_background_color": "#F8FAFC",
+    "card_box_shadow": "0px 4px 12px rgba(0,0,0,0.3)",
+    "card_outline_color": "#334155",
+    "card_header_accent": "#D4AF37",
+    "card_header_background_color": "#1A2332",
+    "card_title_text": "#FFFFFF",
+    "card_title_font_size": "18px",
+    "card_description_text": "#CBD5E1",
+    "card_description_font_size": "14px",
+    "colorway": [
+        "#1E3A8A",  # dark blue
+        "#D4AF37",  # gold
+        "#10B981",  # green
+        "#0EA5E9",  # sky blue
+        "#8B5CF6",  # purple
+        "#EC4899",  # pink
+        "#F59E0B",  # amber
+        "#EF4444",  # red
+        "#6366F1",  # indigo
+    ],
+    "colorscale": [
+        "#0F172A",  # navy
+        "#1E3A8A",  # dark blue
+        "#1E40AF",  # blue
+        "#2563EB",  # bright blue
+        "#3B82F6",  # medium blue
+        "#60A5FA",  # light blue
+        "#93C5FD",  # lighter blue
+        "#DBEAFE",  # very light blue
+        "#F0F9FF",  # almost-white blue
+        "#D4AF37",  # gold
+    ],
+    "dbc_primary": "#1E3A8A",
+    "dbc_secondary": "#64748B",
+    "dbc_info": "#0EA5E9",
+    "dbc_gray": "#94A3B8",
+    "dbc_success": "#10B981",
+    "dbc_warning": "#F59E0B",
+    "dbc_danger": "#EF4444",
+    "font_family": "Segoe UI, Roboto, Helvetica Neue, sans-serif",
+    "font_size": "14px",
+    "font_size_smaller_screen": "13px",
+    "font_size_header": "28px",
+    "section_title_font_size": "22px",
+    "footer_background_color": "#0F172A",
+    "footer_title_text": "#FFFFFF",
+    "footer_title_font_size": "16px",
+    "header_background_color": "#1A2332",
+    "header_text": "#FFFFFF",
+    "heading_text": "#0F172A",
+    "hero_background_color": "#0F172A",
+    "hero_title_text": "#FFFFFF",
+    "hero_title_font_size": "42px",
+    "hero_subtitle_text": "#CBD5E1",
+    "hero_subtitle_font_size": "16px",
+    "hero_controls_accent": "#D4AF37",
+    "text": "#1E293B",
+    "subtle_text": "#CBD5E1",
+    "graph_grid_color": "#E2E8F0",
+    "table_striped_even": "#1A2332",
+    "table_striped_odd": "#0F172A",
+    "table_border": "#334155",
+    "tag_background_color": "#1E3A8A",
+    "tag_border_color": "#3B82F6",
+    "tooltip_background_color": "#0F172A",
+    "tooltip_text": "#FFFFFF",
+    "tooltip_font_size": "13px",
+    "button_border_radius": "6px",
+    "button_text_transform": "none",
+    "tag_text_color": "#1E3A8A",
+    "tag_font_size": "12px",
+    "tag_border_radius": "4px",
+    "card_menu_background_color": "#1A2332",
+    "card_menu_text": "#E2E8F0",
+    "card_margin": "20px",
+    "card_padding": "16px",
+    "hero_controls_background_color": "rgba(15,23,42,0.95)",
+    "hero_controls_label_text": "#E2E8F0",
+    "hero_controls_label_font_size": "13px",
+    "hero_controls_grid_columns": 4,
+    "section_padding": "24px",
+    "section_gap": "24px",
+    "breakpoint_px": "700px",
+    "dbc_font_size": "12px",
+    "dbc_border": "#E2E8F0",
+    "color_scheme": "dark",
+}
 
-FONT_FAMILY = "Segoe UI, Roboto, Helvetica Neue, sans-serif"
+# --- Brand palette (named views onto THEME) --------------------------------
+GOLD = THEME["accent"]  # "#D4AF37"
+GREEN = THEME["accent_positive"]  # "#10B981"
+RED = THEME["accent_negative"]  # "#EF4444"
+NAVY = THEME["background_page"]  # "#0F172A" — page background
+BACKGROUND_CONTENT = THEME["background_content"]  # "#1A2332" — cards / headers / table-even
+DARK_BLUE = THEME["button_background_color"]  # "#1E3A8A" — buttons / tags / dbc primary
+CONTROL_BG = THEME["control_background_color"]  # "#1E293B" — input fields
+# Back-compat alias: SLATE_DARK historically named the control/input fill.
+SLATE_DARK = CONTROL_BG  # "#1E293B"
+BODY_TEXT = THEME["body_text"]  # "#E2E8F0"
+SUBTLE_TEXT = THEME["subtle_text"]  # "#CBD5E1"
+BORDER = THEME["border"]  # "#334155"
+GRID = THEME["graph_grid_color"]  # "#E2E8F0" — chart gridlines (spec)
+CONTROL_BORDER = THEME["control_border_color"]  # "#475569"
+WHITE = THEME["button_text"]  # "#FFFFFF"
+
+FONT_FAMILY = THEME["font_family"]
 
 # Categorical colourway (spec "Chart Colors - Colorway").
-COLORWAY = [
-    "#1E3A8A",  # dark blue
-    "#D4AF37",  # gold
-    "#10B981",  # green
-    "#0EA5E9",  # sky blue
-    "#8B5CF6",  # purple
-    "#EC4899",  # pink
-    "#F59E0B",  # amber
-    "#06B6D4",  # cyan
-    "#6366F1",  # indigo
-]
+COLORWAY = list(THEME["colorway"])
 
 # Sequential colourscale (spec "Chart Colors - Colorscale"): navy -> gold.
-_SCALE_COLORS = [
-    "#0F172A",
-    "#1E3A8A",
-    "#1E40AF",
-    "#2563EB",
-    "#3B82F6",
-    "#60A5FA",
-    "#93C5FD",
-    "#DBEAFE",
-    "#F0F9FF",
-    "#D4AF37",
-]
+_SCALE_COLORS = list(THEME["colorscale"])
 CONTINUOUS_SCALE = [
     [i / (len(_SCALE_COLORS) - 1), color] for i, color in enumerate(_SCALE_COLORS)
 ]
@@ -64,12 +157,12 @@ CONTINUOUS_SCALE = [
 _template = go.layout.Template()
 _template.layout = go.Layout(
     paper_bgcolor=NAVY,
-    plot_bgcolor=SLATE_DARK,
+    plot_bgcolor=BACKGROUND_CONTENT,
     font=dict(family=FONT_FAMILY, color=BODY_TEXT, size=13),
     title=dict(font=dict(family=FONT_FAMILY, color=WHITE, size=18)),
     colorway=COLORWAY,
-    xaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, linecolor=BORDER),
-    yaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, linecolor=BORDER),
+    xaxis=dict(gridcolor=GRID, zerolinecolor=BORDER, linecolor=BORDER),
+    yaxis=dict(gridcolor=GRID, zerolinecolor=BORDER, linecolor=BORDER),
     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=BODY_TEXT)),
     colorscale=dict(sequential=CONTINUOUS_SCALE, sequentialminus=CONTINUOUS_SCALE),
     hoverlabel=dict(bgcolor=NAVY, font=dict(color=WHITE, size=13)),

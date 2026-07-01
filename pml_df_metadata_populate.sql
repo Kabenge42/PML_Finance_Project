@@ -1609,8 +1609,19 @@ VALUES
 	                            ('feat_pt_median_drift',               'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_median_drift',               ARRAY ['kalman_pt']                ),
 	                            ('feat_coverage_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_coverage_drift',                ARRAY ['kalman_pt']                ),
 	                            ('feat_pt_noise_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_noise_drift',                ARRAY ['kalman_pt']                ),
+	-- Valid-pair coverage counts for the drift trails (pml.target_drift_n):
+	-- constant_data the fused panel / coverage guard gate on so a sparse,
+	-- mostly-NULL trail cannot enter the ICM as a degenerate response.
+	('feat_pt_drift_n',    'analyst_targets', 'metadata',  'constant_data',     'feat_pt_drift_n',    ARRAY ['kalman_pt']),
+	('feat_price_drift_n', 'analyst_targets', 'metadata',  'constant_data',     'feat_price_drift_n', ARRAY ['kalman_pt']),
 	                            ('feat_pt_range_norm',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_norm',                 ARRAY ['kalman_pt']                ),
-	('feat_avg_beta', 'volatility', 'predictor', 'mutable_predictor', 'feat_avg_beta', ARRAY ['kalman_pt']),
+	-- Drift of the market_cap / enterprise_value ratio trail
+	-- (equity share of EV) across the fiscal-year lags. A
+	-- multi-source self-row (matched market_cap / EV lag pairs)
+	-- consumed by the fused panel as a state-transition (beta)
+	-- drift predictor — see feat_mv_ev_drift in mv_pymc_kalman_pt.
+	('feat_mv_ev_drift',   'market_data',     'predictor', 'mutable_predictor', 'feat_mv_ev_drift',   ARRAY ['kalman_pt']),
+	('feat_avg_beta',      'volatility',      'predictor', 'mutable_predictor', 'feat_avg_beta',      ARRAY ['kalman_pt']),
 	-- earnings_beat logit-beat-rate + revision-acceleration feats (mv_pymc_earnings_beat)
 	                            ('feat_logit_beat_rate',               'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate',               ARRAY ['earnings_beat']            ),
 	                            ('feat_logit_beat_rate_annual',        'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate_annual',        ARRAY ['earnings_beat']            ),

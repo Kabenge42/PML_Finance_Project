@@ -21,4 +21,4 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION frequency_to_months(unknown, unknown, unknown) OWNER TO postgres;
+ALTER FUNCTION frequency_to_months(text, date, date) OWNER TO postgres;

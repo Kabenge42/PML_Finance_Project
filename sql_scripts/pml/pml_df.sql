@@ -1,7 +1,8 @@
 CREATE TABLE pml_df
 (
 	ticker                            text,
-	isin                              text,
+	isin text NOT NULL
+		CONSTRAINT pml_isin_pk PRIMARY KEY,
 	name                              text,
 	description                       text,
 	region                            text,

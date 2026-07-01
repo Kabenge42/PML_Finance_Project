@@ -46,4 +46,4 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION calculate_next_fiscal_quarter(unknown, unknown, unknown, unknown) OWNER TO postgres;
+ALTER FUNCTION calculate_next_fiscal_quarter(date, date, date, text) OWNER TO postgres;

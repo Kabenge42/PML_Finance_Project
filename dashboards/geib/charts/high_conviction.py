@@ -15,7 +15,7 @@ from dash.dash_table.Format import Format, Scheme
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger
-from ..theme import BODY_TEXT, BORDER, NAVY, SLATE_DARK, control
+from ..theme import BACKGROUND_CONTENT, BODY_TEXT, BORDER, GOLD, NAVY, control
 from ..theme import card as theme_card
 
 component_id = "high_conviction_opportunities"
@@ -112,11 +112,11 @@ def component() -> "object":
                             "backgroundColor": NAVY,
                             "color": "#FFFFFF",
                             "fontWeight": "bold",
-                            "borderBottom": "2px solid #D4AF37",
+                            "borderBottom": f"2px solid {GOLD}",
                             "fontFamily": "monospace",
                         },
                         style_cell={
-                            "backgroundColor": SLATE_DARK,
+                            "backgroundColor": BACKGROUND_CONTENT,
                             "color": BODY_TEXT,
                             "fontFamily": "monospace",
                             "fontSize": "12px",

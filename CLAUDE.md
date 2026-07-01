@@ -95,8 +95,9 @@ PML_Finance_Project/
 ├── tests/                       # 545 pytest cases across 25 modules
 ├── sql_scripts/
 │   ├── pml/                     # Authoritative DDL: pml_df, metadata, MVs, helper fns (SSOT)
+│   ├── analytics/               # Output analytics tables/screens (kalman_filtered_price_targets, screens)
 │   └── public/                  # Legacy public-schema views
-├── dashboards/                  # geib_dash_app.py (Dash, :8050)
+├── dashboards/                  # geib/ package (Dash GEIB board, :8050) + launcher; legacy geib_dash_app.py
 ├── feature_factory/             # Ad-hoc feature/cohort SQL + plotting
 ├── docs/                        # Architecture guides (PyMC, ArviZ 1.0, SQL)
 ├── data/                        # Regional PML / screening CSV snapshots
@@ -168,15 +169,15 @@ from probabilistic_ml_model import (
 
 7 Bayesian models with unified interface:
 
-| Model                     | Purpose            |
-|---------------------------|--------------------|
-| EarningsBeatBayesian      | Beat probability   |
-| PriceTargetAchievement    | Return expectation |
-| KalmanFilterPriceTarget   | Smoothed signals   |
-| DCFPriceTarget            | Fair-value bands   |
-| DividendSafetyBayesian    | Cut probability    |
-| CreditRiskBayesian        | Distress risk      |
-| AccountingAnomalyBayesian | Quality flags      |
+| Model                     | Purpose                                                                                                                                                                                                                                              |
+|---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| EarningsBeatBayesian      | Beat probability                                                                                                                                                                                                                                     |
+| PriceTargetAchievement    | Return expectation                                                                                                                                                                                                                                   |
+| KalmanFilterPriceTarget   | Smoothed signals (single-response hierarchical cross-section by default on the T=1 MV snapshot; learned risk/size tilts. Rank-1 ICM panel spine reserved for a genuine `collapse_time=False` (isin, time) panel — see `build_fused_kalman_pt_model`) |
+| DCFPriceTarget            | Fair-value bands                                                                                                                                                                                                                                     |
+| DividendSafetyBayesian    | Cut probability                                                                                                                                                                                                                                      |
+| CreditRiskBayesian        | Distress risk                                                                                                                                                                                                                                        |
+| AccountingAnomalyBayesian | Quality flags                                                                                                                                                                                                                                        |
 
 Each returns `InferenceLike` (i.e. `arviz.InferenceData | xarray.DataTree`) with posterior, constant_data (features +
 provenance attrs), and diagnostics. Use the compat shim in `_pymc_arviz_compat.py` for type annotations instead of
@@ -264,10 +265,24 @@ Console-script entry points declared in `pyproject.toml` `[project.scripts]`:
 
 ### Dashboards
 
+The **GEIB** (Global Equity Investment Board) dashboard lives in the
+`dashboards/geib/` package (`app.py`, `charts/`, `components/`, `data.py`,
+`metrics.py`, `theme.py`). It is driven by the single analytics table
+`analytics.kalman_filtered_price_targets` (DDL in
+`sql_scripts/analytics/kalman_filtered_price_targets.sql`, exported by
+`pymc_kalman_filter_pt.py`). Each chart module exposes a `component()` factory and
+self-registers its Dash `@callback` on import. Cards include efficient frontier,
+CVaR-aware Kelly sizing, Monte Carlo (+ return forecast by name), Sharpe / VaR-CVaR,
+PT convergence, and high-conviction picks.
+
 ```powershell
-python dashboards/geib_dash_app.py
-# Open http://localhost:8050
+. .\set_env.ps1   # sets DB_URL / DB_ANALYTICS_SCHEMA
+python dashboards/global_equity_investment_dashboard.py
+# Open http://localhost:8050  (env: GEIB_DEBUG=true, GEIB_PORT to override)
 ```
+
+The monolithic `dashboards/geib_dash_app.py` is the legacy single-file version,
+superseded by the `geib/` package above.
 
 ## SQL Schema — Authoritative Column & Dataframe Reference
 
@@ -277,12 +292,12 @@ schema — not from Python variable names or notebook outputs.
 
 ### Core Tables (pml schema)
 
-| Table                      | Purpose                                                                                                                                |
-|----------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
-| `pml.pml_df`               | Master 578-column denormalized equity dataframe. All numeric columns are `double precision`; identifiers are `text`; dates are `date`. |
-| `pml.staging`              | Raw CSV/vendor landing zone with original vendor column names (mixed case). Mirrors `pml_df` structure.                                |
-| `pml.pml_df_metadata`      | Feature registry: one row per `pml_df` column with `pymc_role`, `feature_role`, `category`, `data_type`, `model_targets[]`.            |
-| `pml.pml_df_feature_alias` | Per-model alias overrides: `(column_name, model_target) → feature_alias`.                                                              |
+| Table                      | Purpose                                                                                                                                 |
+|----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| `pml.pml_df`               | Master ~590-column denormalized equity dataframe. All numeric columns are `double precision`; identifiers are `text`; dates are `date`. |
+| `pml.staging`              | Raw CSV/vendor landing zone with original vendor column names (mixed case). Mirrors `pml_df` structure.                                 |
+| `pml.pml_df_metadata`      | Feature registry: one row per `pml_df` column with `pymc_role`, `feature_role`, `category`, `data_type`, `model_targets[]`.             |
+| `pml.pml_df_feature_alias` | Per-model alias overrides: `(column_name, model_target) → feature_alias`.                                                               |
 
 ### pml_df Column Categories
 
@@ -306,8 +321,9 @@ next_income_statement_report_date, next_fy_end_date
 
 ```
 market_cap, enterprise_value, last_price,
+market_cap_neg{1..4}f{q,y}, market_cap_{3,5}yavg, enterprise_value_{3,5}yavg,
 price_target, price_target_low, price_target_median, price_target_high,
-price_target_num, p_e_ntm, p_e_ltm, analyst_rating,
+price_target_num, price_target_num_6m_ago, p_e_ntm, p_e_ltm, analyst_rating,
 altman_z_score_{fy,fq,ltm}, beta_{1y,2y,5y}
 ```
 
@@ -393,6 +409,11 @@ ORDER BY ordinal_position;
 
 Each MV is indexed on `isin` (UNIQUE). All use `feat_` prefix for engineered columns. Refresh with
 `CALL pml.refresh_pymc_materialized_views();`
+
+All seven MVs additionally carry a shared market-cap/EV size-&-trend trio:
+`feat_mcap_trend_1y`, `feat_mcap_vs_3yavg`, `feat_ev_vs_3yavg` (derived from the
+`market_cap_neg{1..4}f{q,y}` lags and `market_cap`/`enterprise_value` `_{3,5}yavg`
+columns added to `pml_df`). `mv_pymc_kalman_pt` is a single time-slice snapshot.
 
 | MV                           | Observed column                                                                | Key `feat_` columns                                                                                                                                       |
 |------------------------------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
