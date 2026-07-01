@@ -1,16 +1,21 @@
 /* GEIB dashboard theme — navy/gold dark scheme.
-   Auto-loaded by Dash from the app's assets/ folder. */
+   Auto-loaded by Dash from the app's assets/ folder.
+   Tokens mirror THEME in dashboards/geib/theme.py (single source of truth). */
 
 :root {
-    --geib-gold: #D4AF37;
-    --geib-green: #10B981;
-    --geib-red: #EF4444;
-    --geib-navy: #0F172A;
+    --geib-gold: #D4AF37; /* accent */
+    --geib-green: #10B981; /* accent positive */
+    --geib-red: #EF4444; /* accent negative */
+    --geib-navy: #0F172A; /* background page */
+    --geib-bg-content: #1A2332; /* background content (cards / header) */
+    --geib-control-bg: #1E293B; /* control / input fill */
+    --geib-dark-blue: #1E3A8A; /* buttons / tags / dbc primary */
+    --geib-body: #E2E8F0; /* body text */
+    --geib-subtle: #CBD5E1; /* subtle / description text */
+    --geib-border: #334155; /* borders */
+    --geib-control-border: #475569; /* control borders */
+    /* Back-compat alias retained for any selectors still using the old name. */
     --geib-slate-dark: #1E293B;
-    --geib-body: #E2E8F0;
-    --geib-subtle: #CBD5E1;
-    --geib-border: #334155;
-    --geib-control-border: #475569;
 }
 
 body,
@@ -19,6 +24,13 @@ body,
     color: var(--geib-body);
     font-family: "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
     font-size: 14px;
+}
+
+@media (max-width: 700px) {
+    body,
+    .geib-page {
+        font-size: 13px;
+    }
 }
 
 .geib-page {
@@ -49,24 +61,27 @@ body,
 
 /* --- Cards --- */
 .geib-card {
-    background-color: var(--geib-slate-dark) !important;
-    border: 1px solid var(--geib-border) !important;
+    background-color: var(--geib-bg-content) !important;
+    border: none !important;
     border-radius: 8px !important;
+    outline: 1px solid var(--geib-border);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    margin: 28px 0;
+    margin: 20px 0;
     /* Keep dropdown menus from being clipped by the card edge. */
     overflow: visible;
 }
 
 /* Breathing room around card contents so graphs never sit flush to the edge. */
 .geib-card > .card-body {
-    padding: 20px;
+    padding: 16px;
 }
 
 .geib-card-header {
-    background-color: var(--geib-slate-dark) !important;
+    background-color: var(--geib-bg-content) !important;
     border-bottom: 2px solid var(--geib-gold) !important;
-    padding: 16px !important;
+    /* Spec: 12px vertical; keep 16px horizontal so the title aligns with the
+       card body padding rather than sitting flush against the card edge. */
+    padding: 12px 16px !important;
 }
 
 .geib-card-title {
@@ -76,7 +91,7 @@ body,
 }
 
 .geib-card-desc {
-    background-color: var(--geib-slate-dark) !important;
+    background-color: var(--geib-bg-content) !important;
     color: var(--geib-subtle) !important;
     font-size: 14px;
     border-top: 1px solid var(--geib-border) !important;
@@ -84,7 +99,7 @@ body,
 
 /* --- KPI cards --- */
 .geib-kpi-card {
-    background-color: var(--geib-slate-dark) !important;
+    background-color: var(--geib-bg-content) !important;
     border: 1px solid var(--geib-border) !important;
     border-radius: 8px !important;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
@@ -143,14 +158,14 @@ body,
 /* Dropdown theming (react-select inside dcc.Dropdown). */
 .geib-page .Select-control,
 .geib-page .is-focused:not(.is-open) > .Select-control {
-    background-color: var(--geib-slate-dark);
+    background-color: var(--geib-control-bg);
     border: 1px solid var(--geib-control-border);
     border-radius: 6px;
     color: var(--geib-body);
 }
 
 .geib-page .Select-menu-outer {
-    background-color: var(--geib-slate-dark);
+    background-color: var(--geib-control-bg);
     border: 1px solid var(--geib-control-border);
     color: var(--geib-body);
     /* Float the open menu above the chart that follows the controls row. */
@@ -214,7 +229,7 @@ body,
 
 /* --- Filter panel & results --- */
 .geib-filter-panel {
-    background-color: var(--geib-slate-dark) !important;
+    background-color: var(--geib-bg-content) !important;
     border: 1px solid var(--geib-border) !important;
     border-radius: 8px !important;
     margin-bottom: 24px;
@@ -228,23 +243,24 @@ body,
     margin-left: auto;
 }
 
-/* Global filter dropdowns: light fields with dark text for readability.
-   The global COORD + Market-Cap filters sit on the slate panel; rendering them
-   as light input fields with dark text makes the active selections read clearly
-   (scoped to the filter panel so the per-chart dark dropdowns are unaffected).
-   Selectors are nested under .geib-page .geib-filter-panel so they out-specify
-   the dark .geib-page .Select-* theme above regardless of source order. */
+/* Global filter dropdowns: dark-blue fields with white text.
+   The global COORD + Market-Cap filters sit on the content panel; rendering them
+   as dark-blue input fields with white text makes the active (white) selections
+   read clearly against the panel (scoped to the filter panel so the per-chart
+   slate dropdowns are unaffected). Selectors are nested under
+   .geib-page .geib-filter-panel so they out-specify the .geib-page .Select-*
+   theme above regardless of source order. */
 .geib-page .geib-filter-panel .Select-control,
 .geib-page .geib-filter-panel .is-focused:not(.is-open) > .Select-control {
-    background-color: #FFFFFF;
+    background-color: var(--geib-dark-blue);
     border: 1px solid var(--geib-control-border);
-    color: var(--geib-navy);
+    color: #ffffff;
 }
 
 .geib-page .geib-filter-panel .Select-menu-outer {
-    background-color: #FFFFFF;
+    background-color: var(--geib-dark-blue);
     border: 1px solid var(--geib-control-border);
-    color: var(--geib-navy);
+    color: #ffffff;
     z-index: 1200;
 }
 
@@ -252,29 +268,35 @@ body,
 .geib-page .geib-filter-panel .Select-placeholder,
 .geib-page .geib-filter-panel .Select--single > .Select-control .Select-value,
 .geib-page .geib-filter-panel .Select-input > input {
-    color: var(--geib-navy) !important;
+    color: #ffffff !important;
 }
 
 .geib-page .geib-filter-panel .Select--multi .Select-value {
-    background-color: #DBEAFE;
-    border: 1px solid #3B82F6;
-    color: var(--geib-navy);
+    background-color: #2563EB;
+    border: 1px solid #60A5FA;
+    color: #ffffff;
+}
+
+.geib-page .geib-filter-panel .Select--multi .Select-value-icon {
+    border-right: 1px solid #60A5FA;
+    color: #ffffff;
 }
 
 .geib-page .geib-filter-panel .Select-option {
-    color: var(--geib-navy);
+    background-color: var(--geib-dark-blue);
+    color: #ffffff;
 }
 
 .geib-page .geib-filter-panel .VirtualizedSelectFocusedOption,
 .geib-page .geib-filter-panel .Select-option.is-focused {
-    background-color: #DBEAFE;
-    color: var(--geib-navy);
+    background-color: #2563EB;
+    color: #ffffff;
 }
 
 /* --- Buttons --- */
 .geib-btn,
 .geib-page .btn-primary {
-    background-color: #1E40AF !important;
+    background-color: var(--geib-dark-blue) !important;
     border: none !important;
     color: #ffffff !important;
     border-radius: 6px !important;
@@ -301,7 +323,7 @@ body,
 }
 
 .geib-table tr:nth-child(even) {
-    background-color: var(--geib-slate-dark);
+    background-color: var(--geib-bg-content);
 }
 
 .geib-table tr:nth-child(odd) {
@@ -311,7 +333,7 @@ body,
 /* --- Footer --- */
 .geib-footer {
     background-color: var(--geib-navy);
-    color: var(--geib-gold);
+    color: #ffffff;
     font-size: 16px;
     text-align: center;
     padding: 24px;

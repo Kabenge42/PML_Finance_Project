@@ -25,4 +25,4 @@ BEGIN
 END;
 $$;
 
-ALTER PROCEDURE refresh_pymc_materialized_views(unknown, unknown) OWNER TO postgres;
+ALTER PROCEDURE refresh_pymc_materialized_views(boolean, boolean) OWNER TO postgres;

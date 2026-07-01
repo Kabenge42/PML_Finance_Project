@@ -9,26 +9,16 @@ global Dash callback registry.
 from __future__ import annotations
 
 import dash_bootstrap_components as dbc
-from dash import Dash, Input, Output, State, callback, dcc, html
+from dash import Dash, Input, Output, callback, dcc, html
 
 from .data import get_data
-from .data import refresh as refresh_data
-from .logger import logger
 from .components import data_cards
 from .components.filter_component import (
-    ACTIVE_COORD_IDS,
     FILTER_CALLBACK_INPUTS,
-    MKTCAP_ID,
-    RESET_ID,
     RESULTS_ID,
     build_filter_panel,
-    default_filter_values,
     filter_data,
 )
-
-# Reset restores every active global filter (coord dropdowns + market cap) to its
-# "all selected" default; the order here is the order of the callback outputs.
-_RESET_FILTER_IDS = [*ACTIVE_COORD_IDS, MKTCAP_ID]
 from .charts import (
     efficient_frontier,
     high_conviction,
@@ -97,24 +87,9 @@ def serve_layout() -> html.Div:
 app.layout = serve_layout
 
 
-@callback(
-    output=[
-        *[Output(filter_id, "value") for filter_id in _RESET_FILTER_IDS],
-        Output("refresh_trigger", "data"),
-    ],
-    inputs=[Input(RESET_ID, "n_clicks")],
-    state=[State("refresh_trigger", "data")],
-    prevent_initial_call=True,
-)
-def reset_filters(_n_clicks, current):
-    """Reload data and restore every global filter to "all selected"."""
-    refresh_data()
-    defaults = default_filter_values(get_data())
-    logger.info("Filters reset; data reloaded")
-    return (
-        *[defaults[filter_id] for filter_id in _RESET_FILTER_IDS],
-        (current or 0) + 1,
-    )
+# Reset + cascading dependent filters are owned by ``sync_filters`` in
+# ``components.filter_component`` (registered on import above). This module keeps
+# only the live results-count callback below.
 
 
 @callback(

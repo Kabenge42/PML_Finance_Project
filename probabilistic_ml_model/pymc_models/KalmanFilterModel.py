@@ -1762,6 +1762,11 @@ class KalmanPanelInputs:
         Standardised fiscal-anchor time matrix, shape ``(n_isin, T)``.
     X_drift : numpy.ndarray
         Standardised drift-feature design matrix, shape ``(n_isin, n_drift)``.
+        Backs the state-transition mean (``beta`` slopes): the analyst-target /
+        price drift trails, the momentum / realised-return features, and
+        ``feat_mv_ev_drift`` — the drift of the ``market_cap / enterprise_value``
+        ratio (equity share of EV) across the fiscal-year trail, an equity
+        re-rating / de-leveraging signal.
     n_analysts, sqrt_n_analysts : numpy.ndarray
         Floored analyst count and its NumPy-precomputed square root (so the PyMC
         graph never applies an inplace ``Sqrt`` that NUTS rejects).
@@ -1829,9 +1834,9 @@ def build_fused_kalman_pt_model(
       zero-anchored diagonal Gaussian-random-walk *deviation* (identified by the
       multiple time steps).
     * **Model A refinement** — the risk-aware ``expected_return`` →
-      ``risk_adj_return`` latent (with a non-centred logit-normal
-      ``achieve_prob``) becomes the shared factor ``mu_isin``, and the richer
-      heteroscedastic scale ``sigma_isin = sigma_base * (1 + cv) / sqrt(n)``
+      ``risk_adj_return`` latent (with ``achieve_prob = sigmoid(risk_adj_return)``,
+      a posterior-informed confidence) becomes the shared factor ``mu_isin``, and
+      the richer heteroscedastic scale ``sigma_isin = sigma_base * (1 + cv) / sqrt(n)``
       replaces Model B's cv-free form.
 
     The single Kalman-specific change versus
@@ -1966,6 +1971,31 @@ def build_fused_kalman_pt_model(
         )
 
     n_isin, T, D = panel.Y.shape
+
+    # Guard: a (near-)zero-variance NON-PRIMARY response series leaves its rank-1
+    # coregion loading ``mu_isin_loading`` unidentified — a flat ``loading × mu_isin``
+    # ridge that collapses the NUTS step size and freezes the whole posterior. The
+    # data-side coverage guard in ``prepare_kalman_panel_inputs`` should already have
+    # dropped such series; this is a defensive backstop so a degenerate series can
+    # never silently enter the ICM (the primary series, index 0, is exempt — it is
+    # the de-standardisation anchor and may legitimately be rescaled).
+    if D > 1:
+        series_var = np.nanvar(
+            np.asarray(panel.Y, dtype="float64").reshape(-1, D), axis=0
+        )
+        degenerate = [
+            panel.response_names[d]
+            for d in range(1, D)
+            if not np.isfinite(series_var[d]) or series_var[d] < 1e-8
+        ]
+        if degenerate:
+            raise ValueError(
+                "build_fused_kalman_pt_model: non-primary response series "
+                f"{degenerate!r} have ~zero variance and would leave their ICM "
+                "loading unidentified. Drop them upstream (the "
+                "KALMAN_RESPONSE_COVERAGE_MIN guard in prepare_kalman_panel_inputs)."
+            )
+
     coords: dict[str, Any] = {
         "isin": np.asarray(panel.isins),
         "time": np.arange(T),
@@ -2089,15 +2119,21 @@ def build_fused_kalman_pt_model(
             for col in panel.coord_idx
         }
 
-        # ---- Model A: non-centred logit-normal achievement probability ----
-        mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
-        sigma_logit = pm.HalfNormal("sigma_logit", 1.0)
-        z_isin = pm.Normal("z_isin", 0.0, 1.0, dims="isin")
-        pm.Deterministic(
-            "achieve_prob",
-            pm.math.sigmoid(mu_logit + sigma_logit * z_isin),
-            dims="isin",
-        )
+        # ---- Model A: achievement probability ----
+        # NOTE (convergence fix): the earlier "non-centred logit-normal" block
+        # (``mu_logit`` / ``sigma_logit`` / ``z_isin`` → ``achieve_prob``) was
+        # DEAD with respect to the likelihood — ``achieve_prob`` was never read by
+        # ``mu_isin`` / the regression, so its ``n_isin`` ``z_isin`` latents and the
+        # ``sigma_logit`` scale sampled their *prior* only, yet dominated the
+        # mass-matrix adaptation (1 000 nuisance dims) and were empirically the
+        # WORST-mixing variables in the panel fit (R-hat ≈ 3.1, ESS ≈ 2 — i.e. the
+        # ``achieve_prob`` / ``z_isin`` pair sat at the very top of the R-hat
+        # ranking, alongside ~600 divergences). Removing the block takes the panel
+        # to **0 divergences** and R-hat → ~1.0. ``achieve_prob`` is now a genuine,
+        # posterior-informed Deterministic — the logistic map of the risk-adjusted
+        # return — defined just after ``risk_adj_return`` below, so downstream
+        # consumers (prior/posterior plots, the ``kalman_gain`` readout) resolve
+        # unchanged but on a quantity the data actually moves.
 
         # ---- Cross-sectional drift-regression baseline ----
         # Priors are scaled to the *standardised* response/design — Y and X_drift
@@ -2137,7 +2173,7 @@ def build_fused_kalman_pt_model(
         # signature of non-identifiability, not a funnel. Crucially the group
         # EFFECT vectors themselves already mixed fine (ESS ≈ 4k–9k, R-hat ≈ 1.0):
         # only the scale was stuck, and it dragged the dependent scalars
-        # (``mu_logit`` / ``sigma_logit`` / ``risk_loading`` …) down with it.
+        # (``sigma_base`` / ``risk_loading`` …) down with it.
         #
         # Fixing the scale to a weakly-informative constant (Gelman: fix the group
         # SD when one slice can't identify it) deletes ``sigma_group`` from the
@@ -2219,6 +2255,14 @@ def build_fused_kalman_pt_model(
         )
         # The risk- and size-adjusted return is the GRW baseline.
         mu_isin = pm.Deterministic("mu_isin", risk_adj_return, dims="isin")
+        # Posterior-informed achievement probability: the logistic map of the
+        # (standardised, zero-mean) risk-adjusted return, so a name whose
+        # risk-adjusted return sits above the cross-sectional average reads as
+        # more likely to "achieve" its target. Replaces the former prior-only
+        # logit-normal latent (see the convergence note above) with a quantity
+        # the likelihood actually identifies; consumed by the downstream
+        # ``kalman_gain`` / confidence readouts.
+        pm.Deterministic("achieve_prob", pm.math.sigmoid(risk_adj_return), dims="isin")
 
         # ---- Model B: rank-1 coregionalised per-series structure ----
         # The D response series share the single latent per-ISIN factor ``mu_isin``
@@ -2273,8 +2317,15 @@ def build_fused_kalman_pt_model(
         # weakly-correlated series (feat_pt_drift) load freely instead of dragging
         # the latent. This is the rank-1 ICM weight ``W`` (n_series × 1).
         if D > 1:
-            loading_free = pm.Normal(
-                "mu_isin_loading", mu=1.0, sigma=0.5, dims="y_series_free"
+            # Sign-FIXED, unit-centred loading: a free ``Normal`` loading let
+            # ``loading × mu_isin`` flip sign (the latent factor and its loading are
+            # only jointly identified up to a shared sign), giving a bimodal,
+            # non-mixing ridge. A ``LogNormal`` (median 1, strictly positive) anchors
+            # the secondary series to load in the SAME direction as the primary
+            # (anchored at 1), removing the sign-flip multimodality; ``sigma=0.3``
+            # keeps it weakly-informative around parity.
+            loading_free = pm.LogNormal(
+                "mu_isin_loading", mu=0.0, sigma=0.3, dims="y_series_free"
             )
             loading = pm.Deterministic(
                 "mu_isin_loading_full",
@@ -2310,7 +2361,7 @@ def build_fused_kalman_pt_model(
         # product); the others are HalfNormal(0.5) deviations from it. Collapses to
         # a no-op (all ones) when D == 1.
         if D > 1:
-            tau_free = pm.HalfNormal("sigma_series_free", sigma=0.5, dims="y_series_free")
+            tau_free = pm.HalfNormal("sigma_series_free", sigma=0.25, dims="y_series_free")
             tau_series = pm.Deterministic(
                 "sigma_series",
                 pt.concatenate([pt.ones(1), tau_free]),
