@@ -7,7 +7,8 @@ $$;
 
 ALTER FUNCTION clamp_score(numeric, numeric, numeric) OWNER TO postgres;
 
-CREATE FUNCTION clamp_score(val double precision, min_val double precision DEFAULT 0, max_val double precision DEFAULT 100) RETURNS double precision
+CREATE FUNCTION clamp_score(val     double precision, min_val double precision DEFAULT 0,
+                            max_val double precision DEFAULT 100) RETURNS double precision
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql AS
 $$

@@ -15,15 +15,27 @@ from data import get_data
 from components.filter_component import filter_data, FILTER_CALLBACK_INPUTS
 from logger import logger, schema, tbl
 
+
 class TestInput(TypedDict):
     options: list[Any]
     default: Any
+
 
 class ComponentResponse(TypedDict):
     layout: ddk.Card
     test_inputs: dict[str, TestInput]
 
-component_id = "monte_carlo_portfolio_simulator"
+
+component_id = "monte_carlo_return_distribution"
+
+time_horizon_id = f"{component_id}_time_horizon"
+time_horizon_options = [
+    {"label": "1 Month", "value": 30},
+    {"label": "3 Months", "value": 90},
+    {"label": "6 Months", "value": 180},
+    {"label": "1 Year", "value": 252}
+]
+time_horizon_default = 90
 
 num_simulations_id = f"{component_id}_num_simulations"
 num_simulations_options = [
@@ -34,121 +46,97 @@ num_simulations_options = [
 ]
 num_simulations_default = 10000
 
-loss_ratio_id = f"{component_id}_loss_ratio"
-loss_ratio_options = [
-    {"label": "0.25 (25%)", "value": 0.25},
-    {"label": "0.5 (50%)", "value": 0.5},
-    {"label": "0.75 (75%)", "value": 0.75},
-    {"label": "1.0 (100%)", "value": 1.0}
+stock_selection_id = f"{component_id}_stock_selection"
+stock_selection_options = [
+    {"label": "Top 10 by Market Cap", "value": "top10_mc"},
+    {"label": "Top 20 by Market Cap", "value": "top20_mc"},
+    {"label": "Top 10 by Expected Return", "value": "top10_er"},
+    {"label": "Custom Selection", "value": "custom"}
 ]
-loss_ratio_default = 0.5
+stock_selection_default = "top10_mc"
 
-weighting_id = f"{component_id}_weighting"
-weighting_options = [
-    {"label": "Equal-weighted", "value": "equal"},
-    {"label": "Kelly-weighted", "value": "kelly"},
-    {"label": "Market cap proxy", "value": "market_cap"}
-]
-weighting_default = "equal"
+custom_stocks_id = f"{component_id}_custom_stocks"
 
-target_return_id = f"{component_id}_target_return"
-target_return_options = [
-    {"label": "0%", "value": 0.0},
-    {"label": "5%", "value": 5.0},
-    {"label": "10%", "value": 10.0},
-    {"label": "15%", "value": 15.0},
-    {"label": "20%", "value": 20.0}
+confidence_interval_id = f"{component_id}_confidence_interval"
+confidence_interval_options = [
+    {"label": "90%", "value": 0.90},
+    {"label": "95%", "value": 0.95},
+    {"label": "99%", "value": 0.99}
 ]
-target_return_default = 10.0
+confidence_interval_default = 0.95
 
-signal_filter_id = f"{component_id}_signal_filter"
-signal_options = [
-    {"label": "Strong Bullish (4/4)", "value": "Strong Bullish (4/4)"},
-    {"label": "Bullish (3/4)", "value": "Bullish (3/4)"},
-    {"label": "Neutral (2/4)", "value": "Neutral (2/4)"},
-    {"label": "Bearish (1/4)", "value": "Bearish (1/4)"},
-    {"label": "Strong Bearish (0/4)", "value": "Strong Bearish (0/4)"}
-]
-signal_default = ["Strong Bullish (4/4)", "Bullish (3/4)"]
 
 def component() -> ComponentResponse:
-    graph_1_id = f"{component_id}_graph_1"
-    error_1_id = f"{component_id}_error_1"
-    loading_1_id = f"{component_id}_loading_1"
+    graph_heatmap_id = f"{component_id}_heatmap_graph"
+    graph_cdf_id = f"{component_id}_cdf_graph"
+    error_heatmap_id = f"{component_id}_heatmap_error"
+    error_cdf_id = f"{component_id}_cdf_error"
+    loading_heatmap_id = f"{component_id}_heatmap_loading"
+    loading_cdf_id = f"{component_id}_cdf_loading"
 
-    graph_2_id = f"{component_id}_graph_2"
-    error_2_id = f"{component_id}_error_2"
-    loading_2_id = f"{component_id}_loading_2"
-
-    stats_id = f"{component_id}_stats"
-
-    title = "Monte Carlo Portfolio Outcome Simulator"
-    description = "Simulate thousands of possible portfolio outcomes based on expected returns and probabilities. See the range of potential results and the likelihood of achieving your target return."
+    title = "Monte Carlo Return Distribution Simulation"
+    description = "Simulates thousands of possible future return scenarios using Monte Carlo methods based on each stock's expected return and volatility. View the probability distribution of outcomes to understand the range of potential returns and downside risks."
 
     layout = ddk.Card(
         id=component_id,
         children=[
             ddk.CardHeader(title=title),
             html.Div(
-                style={"display": "flex", "flexDirection": "row", "flexWrap": "wrap", "rowGap": "10px", "alignItems": "center", "marginBottom": "15px"},
+                style={"display": "flex", "flexDirection": "row", "flexWrap": "wrap", "rowGap": "10px",
+                       "alignItems": "center", "marginBottom": "15px"},
                 children=[
                     html.Div(
                         children=[
-                            html.Label("Simulations:", style={"marginBottom": "5px", "fontWeight": "bold", "display": "block"}),
+                            html.Label("Time Horizon:",
+                                       style={"marginBottom": "5px", "fontWeight": "bold", "display": "block"}),
+                            dcc.Dropdown(
+                                id=time_horizon_id,
+                                options=time_horizon_options,
+                                value=time_horizon_default,
+                                style={"minWidth": "200px"},
+                                searchable=False
+                            )
+                        ],
+                        style={"display": "flex", "flexDirection": "column", "marginRight": "15px"}
+                    ),
+                    html.Div(
+                        children=[
+                            html.Label("Simulations:",
+                                       style={"marginBottom": "5px", "fontWeight": "bold", "display": "block"}),
                             dcc.Dropdown(
                                 id=num_simulations_id,
                                 options=num_simulations_options,
                                 value=num_simulations_default,
-                                style={"minWidth": "200px"}
+                                style={"minWidth": "200px"},
+                                searchable=False
                             )
                         ],
                         style={"display": "flex", "flexDirection": "column", "marginRight": "15px"}
                     ),
                     html.Div(
                         children=[
-                            html.Label("Loss Ratio:", style={"marginBottom": "5px", "fontWeight": "bold", "display": "block"}),
+                            html.Label("Stock Selection:",
+                                       style={"marginBottom": "5px", "fontWeight": "bold", "display": "block"}),
                             dcc.Dropdown(
-                                id=loss_ratio_id,
-                                options=loss_ratio_options,
-                                value=loss_ratio_default,
-                                style={"minWidth": "200px"}
+                                id=stock_selection_id,
+                                options=stock_selection_options,
+                                value=stock_selection_default,
+                                style={"minWidth": "200px"},
+                                searchable=False
                             )
                         ],
                         style={"display": "flex", "flexDirection": "column", "marginRight": "15px"}
                     ),
                     html.Div(
                         children=[
-                            html.Label("Weighting:", style={"marginBottom": "5px", "fontWeight": "bold", "display": "block"}),
+                            html.Label("Confidence Interval:",
+                                       style={"marginBottom": "5px", "fontWeight": "bold", "display": "block"}),
                             dcc.Dropdown(
-                                id=weighting_id,
-                                options=weighting_options,
-                                value=weighting_default,
-                                style={"minWidth": "200px"}
-                            )
-                        ],
-                        style={"display": "flex", "flexDirection": "column", "marginRight": "15px"}
-                    ),
-                    html.Div(
-                        children=[
-                            html.Label("Target Return:", style={"marginBottom": "5px", "fontWeight": "bold", "display": "block"}),
-                            dcc.Dropdown(
-                                id=target_return_id,
-                                options=target_return_options,
-                                value=target_return_default,
-                                style={"minWidth": "200px"}
-                            )
-                        ],
-                        style={"display": "flex", "flexDirection": "column", "marginRight": "15px"}
-                    ),
-                    html.Div(
-                        children=[
-                            html.Label("Signal Filter:", style={"marginBottom": "5px", "fontWeight": "bold", "display": "block"}),
-                            dcc.Dropdown(
-                                id=signal_filter_id,
-                                options=signal_options,
-                                value=signal_default,
-                                multi=True,
-                                style={"minWidth": "250px"}
+                                id=confidence_interval_id,
+                                options=confidence_interval_options,
+                                value=confidence_interval_default,
+                                style={"minWidth": "200px"},
+                                searchable=False
                             )
                         ],
                         style={"display": "flex", "flexDirection": "column", "marginRight": "15px"}
@@ -156,38 +144,42 @@ def component() -> ComponentResponse:
                 ],
             ),
             html.Div(
-                id=stats_id,
-                style={"backgroundColor": "#f5f5f5", "padding": "15px", "marginBottom": "15px", "borderRadius": "4px", "fontSize": "14px"}
+                id=custom_stocks_id,
+                style={"display": "none"}
             ),
             html.Div(
-                style={"display": "flex", "flexDirection": "row", "gap": "15px", "marginBottom": "15px"},
+                style={"display": "flex", "flexDirection": "row", "gap": "10px", "marginBottom": "15px"},
                 children=[
                     html.Div(
                         style={"flex": "1"},
                         children=[
-                            html.H4("Percentile Distribution", style={"marginTop": "0", "marginBottom": "10px"}),
+                            html.Label("Probability Density Heatmap",
+                                       style={"fontWeight": "bold", "marginBottom": "10px", "display": "block"}),
                             dcc.Loading(
-                                id=loading_1_id,
+                                id=loading_heatmap_id,
                                 type="circle",
                                 children=[
-                                    ddk.Graph(id=graph_1_id, style={"minHeight": "450px"}),
+                                    ddk.Graph(id=graph_heatmap_id,
+                                              style={"minHeight": "500px", "height": "calc(100vh - 700px)"}),
                                 ]
                             ),
-                            html.Pre(id=error_1_id, style={"color": "red", "margin": "10px 0", "fontSize": "12px"}),
+                            html.Pre(id=error_heatmap_id, style={"color": "red", "margin": "10px 0"}),
                         ]
                     ),
                     html.Div(
                         style={"flex": "1"},
                         children=[
-                            html.H4("Return Distribution", style={"marginTop": "0", "marginBottom": "10px"}),
+                            html.Label("Cumulative Distribution Function",
+                                       style={"fontWeight": "bold", "marginBottom": "10px", "display": "block"}),
                             dcc.Loading(
-                                id=loading_2_id,
+                                id=loading_cdf_id,
                                 type="circle",
                                 children=[
-                                    ddk.Graph(id=graph_2_id, style={"minHeight": "450px"}),
+                                    ddk.Graph(id=graph_cdf_id,
+                                              style={"minHeight": "500px", "height": "calc(100vh - 700px)"}),
                                 ]
                             ),
-                            html.Pre(id=error_2_id, style={"color": "red", "margin": "10px 0", "fontSize": "12px"}),
+                            html.Pre(id=error_cdf_id, style={"color": "red", "margin": "10px 0"}),
                         ]
                     ),
                 ]
@@ -198,25 +190,21 @@ def component() -> ComponentResponse:
     )
 
     test_inputs: dict[str, TestInput] = {
+        time_horizon_id: {
+            "options": [opt["value"] for opt in time_horizon_options],
+            "default": time_horizon_default
+        },
         num_simulations_id: {
             "options": [opt["value"] for opt in num_simulations_options],
             "default": num_simulations_default
         },
-        loss_ratio_id: {
-            "options": [opt["value"] for opt in loss_ratio_options],
-            "default": loss_ratio_default
+        stock_selection_id: {
+            "options": [opt["value"] for opt in stock_selection_options],
+            "default": stock_selection_default
         },
-        weighting_id: {
-            "options": [opt["value"] for opt in weighting_options],
-            "default": weighting_default
-        },
-        target_return_id: {
-            "options": [opt["value"] for opt in target_return_options],
-            "default": target_return_default
-        },
-        signal_filter_id: {
-            "options": [opt["value"] for opt in signal_options],
-            "default": signal_default
+        confidence_interval_id: {
+            "options": [opt["value"] for opt in confidence_interval_options],
+            "default": confidence_interval_default
         }
     }
 
@@ -225,250 +213,299 @@ def component() -> ComponentResponse:
         "test_inputs": test_inputs
     }
 
-def _run_monte_carlo_simulation(df: pd.DataFrame, num_simulations: int, loss_ratio: float, weighting: str, target_return: float) -> Tuple[np.ndarray, dict]:
-    """Run Monte Carlo simulation and return results."""
-    logger.debug("Running Monte Carlo simulation with %d simulations...", num_simulations)
 
-    if len(df) == 0:
-        logger.error("No data available for simulation")
-        return np.array([]), {}
-
-    df = df.copy()
-
-    df['prob_positive_upside'] = pd.to_numeric(df['prob_positive_upside'], errors='coerce')
-    df['filtered_upside'] = pd.to_numeric(df['filtered_upside'], errors='coerce')
-    df['achievement_probability'] = pd.to_numeric(df['achievement_probability'], errors='coerce')
-
-    df = df.dropna(subset=['prob_positive_upside', 'filtered_upside', 'achievement_probability'])
-
-    if len(df) == 0:
-        logger.error("No valid data after cleaning")
-        return np.array([]), {}
-
-    num_stocks = len(df)
-    logger.debug("Simulating portfolio with %d stocks", num_stocks)
-
-    if weighting == "equal":
-        weights = np.ones(num_stocks) / num_stocks
-    elif weighting == "kelly":
-        kelly_fractions = []
-        for _, row in df.iterrows():
-            p = row['prob_positive_upside'] / 100.0
-            b = row['filtered_upside'] / 100.0
-            if b > 0 and p > 0 and p < 1:
-                kelly = (p * b - (1 - p) * loss_ratio * b) / (b * b) if b != 0 else 0
-                kelly = max(0, min(kelly, 0.25))
-            else:
-                kelly = 0
-            kelly_fractions.append(kelly)
-        kelly_fractions = np.array(kelly_fractions)
-        total = kelly_fractions.sum()
-        if total > 0:
-            weights = kelly_fractions / total
-        else:
-            weights = np.ones(num_stocks) / num_stocks
-    elif weighting == "market_cap":
-        weights = np.ones(num_stocks) / num_stocks
+def _get_selected_stocks(df: pd.DataFrame, selection_type: str) -> list[str]:
+    """Get list of stock names based on selection type."""
+    if selection_type == "top10_mc":
+        return df.nlargest(10, "market_cap")["name"].tolist()
+    elif selection_type == "top20_mc":
+        return df.nlargest(20, "market_cap")["name"].tolist()
+    elif selection_type == "top10_er":
+        return df.nlargest(10, "er_mean")["name"].tolist()
     else:
-        weights = np.ones(num_stocks) / num_stocks
+        return df.nlargest(10, "market_cap")["name"].tolist()
 
-    prob_wins = (df['prob_positive_upside'].values / 100.0) * df['achievement_probability'].values
-    prob_wins = np.clip(prob_wins, 0, 1.0)
-    upside_returns = df['filtered_upside'].values / 100.0
 
-    portfolio_returns = np.zeros(num_simulations)
+def _simulate_returns(df: pd.DataFrame, num_simulations: int, time_horizon: int) -> pd.DataFrame:
+    """Simulate future returns using Monte Carlo method."""
+    logger.debug("Simulating %d return scenarios for %d days...", num_simulations, time_horizon)
 
-    np.random.seed(42)
-    for sim in range(num_simulations):
-        outcomes = np.random.random(num_stocks) < prob_wins
-        stock_returns = np.where(outcomes, upside_returns, -upside_returns * loss_ratio)
-        portfolio_returns[sim] = np.dot(weights, stock_returns) * 100
+    simulations = []
+    time_horizon_years = time_horizon / 252.0
 
-    percentiles = np.percentile(portfolio_returns, [5, 25, 50, 75, 95])
-    var_5 = percentiles[0]
-    below_var = portfolio_returns[portfolio_returns <= var_5]
-    cvar_5 = below_var.mean() if len(below_var) > 0 else var_5
-    prob_positive = (portfolio_returns > 0).sum() / num_simulations * 100
-    prob_target = (portfolio_returns > target_return).sum() / num_simulations * 100
+    for idx, row in df.iterrows():
+        stock_name = row["name"]
+        er_mean = float(row["er_mean"])
+        kalman_var = float(row["kalman_variance"])
 
-    stats = {
-        "var_5": var_5,
-        "cvar_5": cvar_5,
-        "median": percentiles[2],
-        "prob_positive": prob_positive,
-        "prob_target": prob_target,
-        "p5": percentiles[0],
-        "p25": percentiles[1],
-        "p50": percentiles[2],
-        "p75": percentiles[3],
-        "p95": percentiles[4]
-    }
+        if kalman_var <= 0:
+            kalman_var = 0.01
 
-    logger.debug("Simulation complete. Median return: %.2f%%, VaR(5%%): %.2f%%, Prob(>0%%): %.1f%%, Prob(>%.0f%%): %.1f%%",
-                 stats["median"], stats["var_5"], stats["prob_positive"], target_return, stats["prob_target"])
+        std_dev = np.sqrt(kalman_var) * np.sqrt(time_horizon_years)
 
-    return portfolio_returns, stats
+        simulated_returns = np.random.normal(
+            loc=er_mean,
+            scale=std_dev,
+            size=num_simulations
+        )
 
-def _create_percentile_chart(portfolio_returns: np.ndarray) -> go.Figure:
-    """Create percentile distribution line chart."""
-    if len(portfolio_returns) == 0:
-        empty_fig = go.Figure()
-        empty_fig.update_layout(title="No data available")
-        return empty_fig
+        for ret in simulated_returns:
+            simulations.append({
+                "name": stock_name,
+                "return": ret * 100
+            })
 
-    percentiles = np.arange(0, 101, 1)
-    percentile_values = np.percentile(portfolio_returns, percentiles)
+    sim_df = pd.DataFrame(simulations)
+    logger.debug(tbl(sim_df))
+    return sim_df
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=percentiles,
-        y=percentile_values,
-        mode="lines",
-        name="Portfolio Return",
-        line=dict(width=2)
-    ))
 
-    fig.update_layout(
-        xaxis_title="Percentile",
-        yaxis_title="Simulated Portfolio Return (%)",
-        hovermode="x unified",
-        margin=dict(l=60, r=20, t=20, b=60)
-    )
+def _create_return_bins() -> list[float]:
+    """Create return bins from -50% to +200% in 10% increments."""
+    return list(np.arange(-50, 210, 10))
 
-    return fig
 
-def _create_distribution_chart(portfolio_returns: np.ndarray) -> go.Figure:
-    """Create return distribution histogram."""
-    if len(portfolio_returns) == 0:
-        empty_fig = go.Figure()
-        empty_fig.update_layout(title="No data available")
-        return empty_fig
+def _calculate_probability_density(sim_df: pd.DataFrame, stocks: list[str]) -> pd.DataFrame:
+    """Calculate probability density for each stock and return bin."""
+    logger.debug("Calculating probability density...")
 
-    min_return = portfolio_returns.min()
-    max_return = portfolio_returns.max()
+    bins = _create_return_bins()
+    density_data = []
 
-    bucket_width = 10
-    bucket_edges = np.arange(np.floor(min_return / bucket_width) * bucket_width,
-                             np.ceil(max_return / bucket_width) * bucket_width + bucket_width,
-                             bucket_width)
+    for stock in stocks:
+        stock_returns = sim_df[sim_df["name"] == stock]["return"].values
 
-    counts, _ = np.histogram(portfolio_returns, bins=bucket_edges)
+        if len(stock_returns) == 0:
+            continue
 
-    bucket_labels = []
-    for i in range(len(bucket_edges) - 1):
-        label = f"{bucket_edges[i]:.0f}% to {bucket_edges[i+1]:.0f}%"
-        bucket_labels.append(label)
+        for i in range(len(bins) - 1):
+            bin_start = bins[i]
+            bin_end = bins[i + 1]
 
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=bucket_labels,
-        y=counts,
-        name="Frequency",
-        marker_line_width=0
-    ))
+            count = np.sum((stock_returns >= bin_start) & (stock_returns < bin_end))
+            probability = count / len(stock_returns)
 
-    fig.update_layout(
-        xaxis_title="Return Bucket",
-        yaxis_title="Frequency (Number of Simulations)",
-        hovermode="x",
-        margin=dict(l=60, r=20, t=20, b=80),
-        xaxis=dict(tickangle=-45)
-    )
+            density_data.append({
+                "name": stock,
+                "return_bin": f"{bin_start}% to {bin_end}%",
+                "return_center": (bin_start + bin_end) / 2,
+                "probability": probability
+            })
 
-    return fig
+    density_df = pd.DataFrame(density_data)
+    logger.debug(tbl(density_df))
+    return density_df
 
-def _update_logic(**kwargs) -> Tuple[go.Figure, str, go.Figure, str, str]:
+
+def _calculate_cdf(sim_df: pd.DataFrame, stocks: list[str]) -> pd.DataFrame:
+    """Calculate cumulative distribution function for each stock."""
+    logger.debug("Calculating cumulative distribution function...")
+
+    cdf_data = []
+    return_levels = np.arange(-50, 210, 5)
+
+    for stock in stocks:
+        stock_returns = sim_df[sim_df["name"] == stock]["return"].values
+
+        if len(stock_returns) == 0:
+            continue
+
+        sorted_returns = np.sort(stock_returns)
+
+        for return_level in return_levels:
+            cumulative_prob = np.sum(sorted_returns <= return_level) / len(sorted_returns)
+
+            cdf_data.append({
+                "name": stock,
+                "return_level": return_level,
+                "cumulative_probability": cumulative_prob
+            })
+
+    cdf_df = pd.DataFrame(cdf_data)
+    logger.debug(tbl(cdf_df))
+    return cdf_df
+
+
+def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     """Core chart update logic without error handling."""
-    logger.debug("Updating Monte Carlo simulator with inputs:\n%s", "\n".join(f"  • {k}: {v}" for k, v in kwargs.items()))
+    logger.debug("Updating Monte Carlo charts with inputs:\n%s", "\n".join(f"  • {k}: {v}" for k, v in kwargs.items()))
 
     df = filter_data(get_data(), **kwargs)
 
     if len(df) == 0:
-        logger.warning("No data available after filtering")
         empty_fig = go.Figure()
-        empty_fig.update_layout(title="No data available")
-        return empty_fig, "", empty_fig, "", "No data available"
+        empty_fig.update_layout(
+            title="No data available",
+            annotations=[{
+                "text": "No data is available to display",
+                "showarrow": False,
+                "font": {"size": 20}
+            }]
+        )
+        return empty_fig, empty_fig
+
+    logger.debug("Selecting columns for analysis...")
+    df = df[["name", "ticker", "market_cap", "er_mean", "kalman_variance", "mc_prob_pos"]].copy()
+    logger.debug(schema(df))
+    logger.debug(tbl(df))
+
+    time_horizon = kwargs.get(time_horizon_id, time_horizon_default)
+    if time_horizon is None:
+        time_horizon = time_horizon_default
+    time_horizon = int(time_horizon)
 
     num_simulations = kwargs.get(num_simulations_id, num_simulations_default)
     if num_simulations is None:
         num_simulations = num_simulations_default
     num_simulations = int(num_simulations)
 
-    loss_ratio = kwargs.get(loss_ratio_id, loss_ratio_default)
-    if loss_ratio is None:
-        loss_ratio = loss_ratio_default
-    loss_ratio = float(loss_ratio)
+    stock_selection = kwargs.get(stock_selection_id, stock_selection_default)
+    if stock_selection is None:
+        stock_selection = stock_selection_default
 
-    weighting = kwargs.get(weighting_id, weighting_default)
-    if weighting is None:
-        weighting = weighting_default
+    confidence_interval = kwargs.get(confidence_interval_id, confidence_interval_default)
+    if confidence_interval is None:
+        confidence_interval = confidence_interval_default
+    confidence_interval = float(confidence_interval)
 
-    target_return = kwargs.get(target_return_id, target_return_default)
-    if target_return is None:
-        target_return = target_return_default
-    target_return = float(target_return)
+    logger.debug("Getting selected stocks...")
+    selected_stocks = _get_selected_stocks(df, stock_selection)
+    logger.debug("Selected %d stocks: %s", len(selected_stocks), selected_stocks[:5])
 
-    signal_filter = kwargs.get(signal_filter_id, signal_default)
-    if signal_filter is None or len(signal_filter) == 0:
-        signal_filter = signal_default
-
-    logger.debug("Filtering by signal: %s...", signal_filter)
-    df = df[df['signal'].isin(signal_filter)]
+    logger.debug("Filtering to selected stocks...")
+    df = df[df["name"].isin(selected_stocks)].copy()
     logger.debug(tbl(df))
 
     if len(df) == 0:
-        logger.warning("No data available after signal filtering")
         empty_fig = go.Figure()
-        empty_fig.update_layout(title="No data available")
-        return empty_fig, "", empty_fig, "", "No data available after filtering"
+        empty_fig.update_layout(
+            title="No stocks available",
+            annotations=[{
+                "text": "No stocks available for the selected criteria",
+                "showarrow": False,
+                "font": {"size": 20}
+            }]
+        )
+        return empty_fig, empty_fig
 
-    logger.debug("Running simulation with %d stocks", len(df))
-    portfolio_returns, stats = _run_monte_carlo_simulation(df, num_simulations, loss_ratio, weighting, target_return)
+    logger.debug("Running Monte Carlo simulations...")
+    sim_df = _simulate_returns(df, num_simulations, time_horizon)
 
-    if len(portfolio_returns) == 0:
-        logger.error("Simulation failed")
-        empty_fig = go.Figure()
-        empty_fig.update_layout(title="Simulation failed")
-        return empty_fig, "", empty_fig, "", "Simulation failed"
+    logger.debug("Calculating probability density...")
+    density_df = _calculate_probability_density(sim_df, selected_stocks)
 
-    logger.debug("Creating percentile chart...")
-    fig_1 = _create_percentile_chart(portfolio_returns)
+    logger.debug("Calculating cumulative distribution...")
+    cdf_df = _calculate_cdf(sim_df, selected_stocks)
 
-    logger.debug("Creating distribution chart...")
-    fig_2 = _create_distribution_chart(portfolio_returns)
+    logger.debug("Creating heatmap figure...")
+    if len(density_df) > 0:
+        heatmap_pivot = density_df.pivot_table(
+            index="return_bin",
+            columns="name",
+            values="probability",
+            fill_value=0
+        )
 
-    stats_html = f"""
-    <b>Simulation Results ({num_simulations:,} runs, {len(df)} stocks)</b><br>
-    <b>Value at Risk (5th percentile):</b> {stats['var_5']:.2f}%<br>
-    <b>Conditional VaR (avg below 5th):</b> {stats['cvar_5']:.2f}%<br>
-    <b>Median Return:</b> {stats['median']:.2f}%<br>
-    <b>Probability of Positive Return:</b> {stats['prob_positive']:.1f}%<br>
-    <b>Probability of Beating {target_return:.0f}% Target:</b> {stats['prob_target']:.1f}%<br>
-    <b>Percentiles:</b> 5th: {stats['p5']:.2f}% | 25th: {stats['p25']:.2f}% | 50th: {stats['p50']:.2f}% | 75th: {stats['p75']:.2f}% | 95th: {stats['p95']:.2f}%
-    """
+        bin_order = [f"{int(b)}% to {int(b + 10)}%" for b in np.arange(-50, 200, 10)]
+        heatmap_pivot = heatmap_pivot.reindex([b for b in bin_order if b in heatmap_pivot.index])
+
+        fig_heatmap = go.Figure(
+            data=go.Heatmap(
+                z=heatmap_pivot.values,
+                x=heatmap_pivot.columns,
+                y=heatmap_pivot.index,
+                colorscale="Viridis",
+                colorbar={"title": "Probability"}
+            )
+        )
+        fig_heatmap.update_layout(
+            xaxis_title="Stock Name",
+            yaxis_title="Return Range",
+            height=500
+        )
+    else:
+        fig_heatmap = go.Figure()
+        fig_heatmap.update_layout(
+            title="No data for heatmap",
+            annotations=[{"text": "No simulation data available", "showarrow": False}]
+        )
+
+    logger.debug("Creating CDF figure...")
+    if len(cdf_df) > 0:
+        fig_cdf = px.line(
+            cdf_df,
+            x="return_level",
+            y="cumulative_probability",
+            color="name",
+            labels={
+                "return_level": "Return Level (%)",
+                "cumulative_probability": "Cumulative Probability"
+            }
+        )
+        fig_cdf.update_layout(
+            xaxis_title="Return Level (%)",
+            yaxis_title="Cumulative Probability",
+            height=500,
+            hovermode="x unified"
+        )
+
+        lower_percentile = (1 - confidence_interval) / 2
+        upper_percentile = 1 - lower_percentile
+
+        for stock in selected_stocks:
+            stock_cdf = cdf_df[cdf_df["name"] == stock].sort_values("return_level")
+
+            if len(stock_cdf) > 0:
+                lower_return = stock_cdf[stock_cdf["cumulative_probability"] >= lower_percentile]["return_level"].min()
+                upper_return = stock_cdf[stock_cdf["cumulative_probability"] >= upper_percentile]["return_level"].min()
+
+                if not np.isnan(lower_return):
+                    fig_cdf.add_vline(
+                        x=lower_return,
+                        line_dash="dash",
+                        line_color="gray",
+                        opacity=0.5,
+                        annotation_text=f"Lower {lower_percentile * 100:.0f}%",
+                        annotation_position="top"
+                    )
+
+                if not np.isnan(upper_return):
+                    fig_cdf.add_vline(
+                        x=upper_return,
+                        line_dash="dash",
+                        line_color="gray",
+                        opacity=0.5,
+                        annotation_text=f"Upper {upper_percentile * 100:.0f}%",
+                        annotation_position="top"
+                    )
+    else:
+        fig_cdf = go.Figure()
+        fig_cdf.update_layout(
+            title="No data for CDF",
+            annotations=[{"text": "No simulation data available", "showarrow": False}]
+        )
 
     logger.debug("Done")
-    return fig_1, "", fig_2, "", stats_html
+    return fig_heatmap, fig_cdf
+
 
 @callback(
     output=[
-        Output(f"{component_id}_graph_1", "figure"),
-        Output(f"{component_id}_error_1", "children"),
-        Output(f"{component_id}_graph_2", "figure"),
-        Output(f"{component_id}_error_2", "children"),
-        Output(f"{component_id}_stats", "children")
+        Output(f"{component_id}_heatmap_graph", "figure"),
+        Output(f"{component_id}_cdf_graph", "figure"),
+        Output(f"{component_id}_heatmap_error", "children"),
+        Output(f"{component_id}_cdf_error", "children")
     ],
     inputs={
         'refresh_trigger': Input("refresh_trigger", "data"),
+        time_horizon_id: Input(time_horizon_id, "value"),
         num_simulations_id: Input(num_simulations_id, "value"),
-        loss_ratio_id: Input(loss_ratio_id, "value"),
-        weighting_id: Input(weighting_id, "value"),
-        target_return_id: Input(target_return_id, "value"),
-        signal_filter_id: Input(signal_filter_id, "value"),
+        stock_selection_id: Input(stock_selection_id, "value"),
+        confidence_interval_id: Input(confidence_interval_id, "value"),
         **FILTER_CALLBACK_INPUTS
     }
 )
-def update(**kwargs) -> Tuple[go.Figure, str, go.Figure, str, str]:
+def update(**kwargs) -> Tuple[go.Figure, go.Figure, str, str]:
     empty_fig = go.Figure()
     empty_fig.update_layout(
         title="Error in chart",
@@ -476,10 +513,10 @@ def update(**kwargs) -> Tuple[go.Figure, str, go.Figure, str, str]:
     )
 
     try:
-        fig_1, err_1, fig_2, err_2, stats_html = _update_logic(**kwargs)
-        return fig_1, err_1, fig_2, err_2, stats_html
+        fig_heatmap, fig_cdf = _update_logic(**kwargs)
+        return fig_heatmap, fig_cdf, "", ""
 
     except Exception as e:
         error_msg = f"Error updating chart: {str(e)}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        return empty_fig, error_msg, empty_fig, error_msg, f"<span style='color: red;'>{error_msg}</span>"
+        return empty_fig, empty_fig, error_msg, error_msg

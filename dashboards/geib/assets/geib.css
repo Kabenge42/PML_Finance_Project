@@ -1,0 +1,348 @@
+/* GEIB dashboard theme — navy/gold dark scheme.
+   Auto-loaded by Dash from the app's assets/ folder.
+   Tokens mirror THEME in dashboards/geib/theme.py (single source of truth). */
+
+:root {
+    --geib-gold: #D4AF37; /* accent */
+    --geib-green: #10B981; /* accent positive */
+    --geib-red: #EF4444; /* accent negative */
+    --geib-navy: #0F172A; /* background page */
+    --geib-bg-content: #1A2332; /* background content (cards / header) */
+    --geib-control-bg: #1E293B; /* control / input fill */
+    --geib-dark-blue: #1E3A8A; /* buttons / tags / dbc primary */
+    --geib-body: #E2E8F0; /* body text */
+    --geib-subtle: #CBD5E1; /* subtle / description text */
+    --geib-border: #334155; /* borders */
+    --geib-control-border: #475569; /* control borders */
+    /* Back-compat alias retained for any selectors still using the old name. */
+    --geib-slate-dark: #1E293B;
+}
+
+body,
+.geib-page {
+    background-color: var(--geib-navy);
+    color: var(--geib-body);
+    font-family: "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    font-size: 14px;
+}
+
+@media (max-width: 700px) {
+    body,
+    .geib-page {
+        font-size: 13px;
+    }
+}
+
+.geib-page {
+    padding: 24px 32px 8px;
+}
+
+/* --- Hero / header --- */
+.geib-header {
+    background-color: var(--geib-navy);
+    border-bottom: 2px solid var(--geib-gold);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    padding: 20px 24px;
+    margin-bottom: 32px;
+}
+
+.geib-header-title {
+    color: #ffffff;
+    font-size: 42px;
+    font-weight: 700;
+    margin: 0;
+}
+
+.geib-header-subtitle {
+    color: var(--geib-subtle);
+    font-size: 16px;
+    margin: 4px 0 0 0;
+}
+
+/* --- Cards --- */
+.geib-card {
+    background-color: var(--geib-bg-content) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    outline: 1px solid var(--geib-border);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    margin: 20px 0;
+    /* Keep dropdown menus from being clipped by the card edge. */
+    overflow: visible;
+}
+
+/* Breathing room around card contents so graphs never sit flush to the edge. */
+.geib-card > .card-body {
+    padding: 16px;
+}
+
+.geib-card-header {
+    background-color: var(--geib-bg-content) !important;
+    border-bottom: 2px solid var(--geib-gold) !important;
+    /* Spec: 12px vertical; keep 16px horizontal so the title aligns with the
+       card body padding rather than sitting flush against the card edge. */
+    padding: 12px 16px !important;
+}
+
+.geib-card-title {
+    color: #ffffff;
+    font-size: 18px;
+    margin: 0;
+}
+
+.geib-card-desc {
+    background-color: var(--geib-bg-content) !important;
+    color: var(--geib-subtle) !important;
+    font-size: 14px;
+    border-top: 1px solid var(--geib-border) !important;
+}
+
+/* --- KPI cards --- */
+.geib-kpi-card {
+    background-color: var(--geib-bg-content) !important;
+    border: 1px solid var(--geib-border) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    text-align: center;
+    padding: 8px;
+}
+
+.geib-kpi-title {
+    color: var(--geib-subtle);
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+
+.geib-kpi-value {
+    color: var(--geib-gold);
+    font-size: 26px;
+    font-weight: 700;
+    margin: 0;
+}
+
+/* --- Controls --- */
+/* A single control row: wraps cleanly and keeps a clear gap from the graph
+   that follows it. The per-control bottom margin doubles as wrap spacing. */
+.geib-controls-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    margin-bottom: 12px;
+}
+
+.geib-control {
+    display: flex;
+    flex-direction: column;
+    margin: 0 16px 16px 0;
+    min-width: 150px;
+    /* Establish a stacking context so an open menu can be lifted above the
+       graph rendered below it (see :focus-within rule). */
+    position: relative;
+}
+
+/* When a dropdown inside a control is open/focused, lift the whole control
+   above sibling controls and any Plotly graph beneath it. */
+.geib-control:focus-within {
+    z-index: 1200;
+}
+
+.geib-control-label {
+    color: var(--geib-subtle);
+    font-weight: bold;
+    font-size: 13px;
+    margin-bottom: 5px;
+    display: block;
+}
+
+/* Dropdown theming (react-select inside dcc.Dropdown). */
+.geib-page .Select-control,
+.geib-page .is-focused:not(.is-open) > .Select-control {
+    background-color: var(--geib-control-bg);
+    border: 1px solid var(--geib-control-border);
+    border-radius: 6px;
+    color: var(--geib-body);
+}
+
+.geib-page .Select-menu-outer {
+    background-color: var(--geib-control-bg);
+    border: 1px solid var(--geib-control-border);
+    color: var(--geib-body);
+    /* Float the open menu above the chart that follows the controls row. */
+    z-index: 1200;
+}
+
+.geib-page .Select-value-label,
+.geib-page .Select-placeholder,
+.geib-page .Select--single > .Select-control .Select-value {
+    color: var(--geib-body) !important;
+}
+
+.geib-page .Select--multi .Select-value {
+    background-color: #1E40AF;
+    border: 1px solid #3B82F6;
+    color: #93C5FD;
+    border-radius: 6px;
+}
+
+.geib-page .VirtualizedSelectFocusedOption {
+    background-color: #1E40AF;
+}
+
+/* --- Charts / graph panes --- */
+/* KPI tile row sits between the filter panel and the first analytic card. */
+.geib-kpi-row {
+    margin-bottom: 24px;
+}
+
+/* Two graphs side by side: wrap (instead of squashing into each other) once
+   there isn't room, and min-width:0 keeps wide figures from overflowing. */
+.geib-dual-graph {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+/* Stacked variant: charts run top-to-bottom (one per row) instead of
+   side-by-side. Each pane takes the full card width. */
+.geib-dual-graph--stacked {
+    flex-direction: column;
+    flex-wrap: nowrap;
+}
+
+.geib-graph-pane {
+    flex: 1 1 360px;
+    min-width: 0;
+}
+
+.geib-dual-graph--stacked .geib-graph-pane {
+    flex: 1 1 auto;
+    width: 100%;
+}
+
+.geib-graph-label {
+    display: block;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
+/* --- Filter panel & results --- */
+.geib-filter-panel {
+    background-color: var(--geib-bg-content) !important;
+    border: 1px solid var(--geib-border) !important;
+    border-radius: 8px !important;
+    margin-bottom: 24px;
+}
+
+.geib-results {
+    color: var(--geib-gold);
+    font-weight: bold;
+    font-size: 14px;
+    align-self: center;
+    margin-left: auto;
+}
+
+/* Global filter dropdowns: dark-blue fields with white text.
+   The global COORD + Market-Cap filters sit on the content panel; rendering them
+   as dark-blue input fields with white text makes the active (white) selections
+   read clearly against the panel (scoped to the filter panel so the per-chart
+   slate dropdowns are unaffected). Selectors are nested under
+   .geib-page .geib-filter-panel so they out-specify the .geib-page .Select-*
+   theme above regardless of source order. */
+.geib-page .geib-filter-panel .Select-control,
+.geib-page .geib-filter-panel .is-focused:not(.is-open) > .Select-control {
+    background-color: var(--geib-dark-blue);
+    border: 1px solid var(--geib-control-border);
+    color: #ffffff;
+}
+
+.geib-page .geib-filter-panel .Select-menu-outer {
+    background-color: var(--geib-dark-blue);
+    border: 1px solid var(--geib-control-border);
+    color: #ffffff;
+    z-index: 1200;
+}
+
+.geib-page .geib-filter-panel .Select-value-label,
+.geib-page .geib-filter-panel .Select-placeholder,
+.geib-page .geib-filter-panel .Select--single > .Select-control .Select-value,
+.geib-page .geib-filter-panel .Select-input > input {
+    color: #ffffff !important;
+}
+
+.geib-page .geib-filter-panel .Select--multi .Select-value {
+    background-color: #2563EB;
+    border: 1px solid #60A5FA;
+    color: #ffffff;
+}
+
+.geib-page .geib-filter-panel .Select--multi .Select-value-icon {
+    border-right: 1px solid #60A5FA;
+    color: #ffffff;
+}
+
+.geib-page .geib-filter-panel .Select-option {
+    background-color: var(--geib-dark-blue);
+    color: #ffffff;
+}
+
+.geib-page .geib-filter-panel .VirtualizedSelectFocusedOption,
+.geib-page .geib-filter-panel .Select-option.is-focused {
+    background-color: #2563EB;
+    color: #ffffff;
+}
+
+/* --- Buttons --- */
+.geib-btn,
+.geib-page .btn-primary {
+    background-color: var(--geib-dark-blue) !important;
+    border: none !important;
+    color: #ffffff !important;
+    border-radius: 6px !important;
+    text-transform: none !important;
+}
+
+/* --- Tables --- */
+.geib-table {
+    width: 100%;
+    border-collapse: collapse;
+    color: var(--geib-body);
+}
+
+.geib-table th {
+    padding: 8px;
+    text-align: left;
+    border-bottom: 2px solid var(--geib-gold);
+    color: #ffffff;
+}
+
+.geib-table td {
+    padding: 8px;
+    border-bottom: 1px solid var(--geib-border);
+}
+
+.geib-table tr:nth-child(even) {
+    background-color: var(--geib-bg-content);
+}
+
+.geib-table tr:nth-child(odd) {
+    background-color: var(--geib-navy);
+}
+
+/* --- Footer --- */
+.geib-footer {
+    background-color: var(--geib-navy);
+    color: #ffffff;
+    font-size: 16px;
+    text-align: center;
+    padding: 24px;
+    border-top: 1px solid var(--geib-border);
+    margin-top: 24px;
+}
+
+.geib-error {
+    color: var(--geib-red);
+    margin: 10px 0;
+    white-space: pre-wrap;
+}

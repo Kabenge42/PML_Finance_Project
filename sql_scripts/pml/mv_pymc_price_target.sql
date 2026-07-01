@@ -91,7 +91,10 @@ SELECT isin,
        safe_divide(price_target_high_1y_ago - price_target_low_1y_ago,
                    price_target_median_1y_ago)                                                        AS feat_pt_high_low_convergence_1y,
        safe_divide(price_target_num, (price_target_num_1y_ago + price_target_num_6m_ago + price_target_num_3m_ago) /
-                                     3.0::double precision)                                           AS feat_analyst_count_stability
+                                     3.0::double precision)                                           AS feat_analyst_count_stability,
+       calc_change_ratio(market_cap, market_cap_neg1fy)                                               AS feat_mcap_trend_1y,
+       safe_divide(market_cap, market_cap_3yavg)                                                      AS feat_mcap_vs_3yavg,
+       safe_divide(enterprise_value, enterprise_value_3yavg)                                          AS feat_ev_vs_3yavg
 FROM pml_df;
 
 ALTER MATERIALIZED VIEW mv_pymc_price_target OWNER TO postgres;

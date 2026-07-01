@@ -15,7 +15,7 @@ import re
 import warnings
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Hashable, Literal, Optional, TYPE_CHECKING, Union
+from typing import Any, Hashable, Literal, Optional, Sequence, TYPE_CHECKING, Union
 
 from pandas import Timestamp
 from pandas._libs import NaTType
@@ -104,6 +104,69 @@ def _build_ago_offset_map() -> dict[str, Any]:
         "qtd": QuarterBegin(0, startingMonth=1),
         "ytd": YearBegin(0),
     }
+
+
+# ---------------------------------------------------------------------------
+# Fiscal-calendar forecast horizons (single source of truth = the ``days_*``
+# aliases minted by ``pml.mv_pymc_kalman_pt``).
+#
+# ``mv_pymc_kalman_pt`` derives an integer day-count horizon from each
+# fiscal-calendar DATE column, e.g.::
+#
+#     next_earnings                     - CURRENT_DATE  AS days_to_next_earnings
+#     CURRENT_DATE - income_statement_report_date       AS days_since_last_report
+#     next_income_statement_report_date - CURRENT_DATE  AS days_to_next_report
+#     expected_report_date              - CURRENT_DATE  AS days_to_expected_report
+#     next_fy_end_date                  - CURRENT_DATE  AS days_to_next_fy_end
+#     fy_end_date                       - CURRENT_DATE  AS days_to_fy_end
+#
+# :meth:`KalmanFilterPriceTarget.forecast` projects to exactly these horizons,
+# so the triple (DATE column, day-count column, human label) is captured here
+# once and reused by every caller — rather than re-inlined, and re-mislabelled,
+# per call site.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FiscalHorizon:
+    """A single fiscal-calendar forecast horizon on ``pml.mv_pymc_kalman_pt``.
+
+    Attributes
+    ----------
+    date_col
+        Fiscal-calendar DATE column the horizon projects to
+        (e.g. ``"next_earnings"``).
+    day_count_col
+        Integer day-count column the MV derives from ``date_col``
+        (the SQL ``AS`` alias, e.g. ``"days_to_next_earnings"``).
+    label
+        Human-readable label for forecast tables / plot annotations
+        (e.g. ``"Next earnings"``).
+    """
+
+    date_col: str
+    day_count_col: str
+    label: str
+
+
+# Ordered fiscal-calendar horizons, mirroring the ``days_*`` aliases on
+# ``pml.mv_pymc_kalman_pt`` (and ``DAY_COUNT_COLS_ALL`` in
+# ``pymc_kalman_filter_pt.py``).
+FISCAL_HORIZONS: tuple[FiscalHorizon, ...] = (
+    FiscalHorizon("next_earnings", "days_to_next_earnings", "Next earnings"),
+    FiscalHorizon("income_statement_report_date", "days_since_last_report", "Last report"),
+    FiscalHorizon("next_income_statement_report_date", "days_to_next_report", "Next report"),
+    FiscalHorizon("expected_report_date", "days_to_expected_report", "Expected report"),
+    FiscalHorizon("next_fy_end_date", "days_to_next_fy_end", "Next FY end"),
+    FiscalHorizon("fy_end_date", "days_to_fy_end", "FY end"),
+)
+
+# DATE column -> human label, for callers holding a fiscal-calendar date column.
+FISCAL_HORIZON_LABELS: dict[str, str] = {fh.date_col: fh.label for fh in FISCAL_HORIZONS}
+# day-count column -> human label, for callers projecting from ``days_*`` values.
+DAY_COUNT_HORIZON_LABELS: dict[str, str] = {
+    fh.day_count_col: fh.label for fh in FISCAL_HORIZONS
+}
 
 
 class KalmanFilterPriceTarget:
@@ -972,10 +1035,11 @@ class KalmanFilterPriceTarget:
                 min_ess = float(az.ess(idata).to_array().min())
             except Exception:  # pragma: no cover - defensive
                 min_ess = float("nan")
-            if np.isfinite(min_ess) and min_ess < 100:
+            if np.isfinite(min_ess) and min_ess < 400:
                 logger.warning(
-                    "KalmanFilterPriceTarget[%s]: minimum ESS %.0f < 100; "
-                    "increase tune/draws for reliable r-hat / ESS.",
+                    "KalmanFilterPriceTarget[%s]: minimum ESS %.0f < 400 "
+                    "(project convergence gate); increase tune/draws for "
+                    "reliable r-hat / ESS.",
                     tag,
                     min_ess,
                 )
@@ -1302,6 +1366,66 @@ class KalmanFilterPriceTarget:
         self._fit_stochastic_volatility_ = bool(stochastic_volatility)
         return idata, model
 
+    @staticmethod
+    def build_forecast_specs(
+            df: pd.DataFrame,
+            last_obs: Any,
+            *,
+            horizons: Sequence[FiscalHorizon] = FISCAL_HORIZONS,
+            aggregate: Literal["first", "median"] = "first",
+    ) -> tuple[list[int], list[Timestamp], list[str]]:
+        """Resolve future fiscal events into :meth:`forecast` inputs + human labels.
+
+        Walks the canonical :data:`FISCAL_HORIZONS` mapping (the single source of
+        truth = the ``days_*`` aliases on ``pml.mv_pymc_kalman_pt``) and, for each
+        fiscal-calendar DATE column present in ``df`` whose (aggregated) value
+        falls strictly after ``last_obs``, emits the day-offset beyond
+        ``last_obs``, the absolute future date, and the **human label** — exactly
+        the ``horizons_days`` / ``fiscal_dates`` / ``labels`` triple
+        :meth:`forecast` consumes. This replaces the per-call-site, hand-built
+        ``(date_col, label)`` tuples (which historically drifted out of sync, e.g.
+        labelling ``next_income_statement_report_date`` as ``next_fy_end_date``).
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Snapshot frame (or single-row slice) carrying the fiscal-calendar
+            DATE columns. Use ``aggregate="first"`` for a single-ISIN row and
+            ``aggregate="median"`` for a cohort.
+        last_obs : pandas.Timestamp
+            Last observed as-of date; horizons are measured beyond it and any
+            event on/before it is dropped.
+        horizons : Sequence[FiscalHorizon]
+            Subset / ordering of :data:`FISCAL_HORIZONS` to consider. Defaults to
+            the full ordered set.
+        aggregate : {"first", "median"}
+            ``"first"`` takes the first non-null date per column (single ISIN);
+            ``"median"`` takes the cohort-median date.
+
+        Returns
+        -------
+        tuple[list[int], list[pandas.Timestamp], list[str]]
+            ``(horizons_days, fiscal_dates, labels)``, aligned 1:1 and ordered as
+            ``horizons``. All three are empty when no future event qualifies.
+        """
+        anchor = pd.Timestamp(last_obs)
+        horizons_days: list[int] = []
+        fiscal_dates: list[Timestamp] = []
+        labels: list[str] = []
+        for fh in horizons:
+            if fh.date_col not in df.columns:
+                continue
+            parsed = pd.to_datetime(df[fh.date_col], errors="coerce").dropna()
+            if parsed.empty:
+                continue
+            event = parsed.iloc[0] if aggregate == "first" else parsed.median()
+            if pd.isna(event) or event <= anchor:
+                continue
+            horizons_days.append(int((event - anchor).days))
+            fiscal_dates.append(event)
+            labels.append(fh.label)
+        return horizons_days, fiscal_dates, labels
+
     def forecast(
             self,
             horizons_days: Any,
@@ -1348,13 +1472,18 @@ class KalmanFilterPriceTarget:
         ----------
         horizons_days : array-like
             Strictly-positive, finite day-offsets **beyond the last observation**
-            (e.g. ``days_to_next_earnings`` re-based to the last observed date).
+            (e.g. the ``days_to_next_earnings`` horizon re-based to the last
+            observed date). Together with ``fiscal_dates`` / ``labels`` these are
+            most conveniently produced by :meth:`build_forecast_specs`, which
+            derives them from the canonical :data:`FISCAL_HORIZONS` map.
         fiscal_dates : array-like, optional
             Absolute future dates aligned 1:1 with ``horizons_days``; used as the
             ``time_future`` coordinate when supplied (else the day-offsets are).
         labels : list of str, optional
-            Optional human labels (e.g. ``["next_earnings", "next_fy_end_date"]``)
-            attached as a ``label`` coord along ``time_future``.
+            Optional human-readable horizon labels aligned 1:1 with
+            ``horizons_days`` (e.g. ``["Next earnings", "Next report"]`` from
+            :data:`FISCAL_HORIZON_LABELS`), attached as a ``label`` coord along
+            ``time_future`` for forecast tables / plot annotations.
         last_price : float, optional
             Spot price for ``implied_upside_future``. Defaults to the
             ``last_price`` supplied at :meth:`fit` time.
@@ -1583,18 +1712,27 @@ class KalmanFilterPriceTarget:
 # ===========================================================================
 
 # Group-effect coords (highest-signal, lowest-cardinality) that receive a
-# hierarchical non-centred Normal intercept in the fused MvGRW drift baseline.
+# fixed-scale ``ZeroSumNormal`` intercept in the fused MvGRW drift baseline.
 # Crossed group intercepts for the cross-sectional drift mean. ``industry`` is
-# deliberately excluded: it is near-nested under ``sector`` (their scales trade
+# deliberately excluded: it is near-nested under ``sector`` (their effects trade
 # off) and was the worst-mixing group effect (R-hat ≈ 3.4), so it is dropped to
-# reduce the variance-partition collinearity. All surviving effects share a
-# single ``sigma_group`` scale in ``build_fused_kalman_pt_model``.
+# reduce collinearity. All surviving effects share the single fixed
+# :data:`GROUP_EFFECT_SCALE` in ``build_fused_kalman_pt_model`` (the group SD is
+# fixed, not learned — see that builder's docstring for why).
 _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
     "region",
     "sector",
     "size_class",
     "style_class",
 )
+
+# Fixed (non-learned) scale for the crossed group-intercept ``ZeroSumNormal``
+# effects in ``build_fused_kalman_pt_model``. A learned hierarchical scale is
+# structurally non-identified on the collapsed T=1 cross-section (it stuck at
+# R-hat 1.5–4.5 / ESS 4–7), so the group SD is fixed here instead. 0.25 covers
+# the observed effect magnitudes (~0.01–0.17 on the standardised log-uplift
+# scale) at ≤ 2 prior sd.
+GROUP_EFFECT_SCALE: float = 0.25
 
 
 @dataclass(frozen=True)
@@ -1624,6 +1762,11 @@ class KalmanPanelInputs:
         Standardised fiscal-anchor time matrix, shape ``(n_isin, T)``.
     X_drift : numpy.ndarray
         Standardised drift-feature design matrix, shape ``(n_isin, n_drift)``.
+        Backs the state-transition mean (``beta`` slopes): the analyst-target /
+        price drift trails, the momentum / realised-return features, and
+        ``feat_mv_ev_drift`` — the drift of the ``market_cap / enterprise_value``
+        ratio (equity share of EV) across the fiscal-year trail, an equity
+        re-rating / de-leveraging signal.
     n_analysts, sqrt_n_analysts : numpy.ndarray
         Floored analyst count and its NumPy-precomputed square root (so the PyMC
         graph never applies an inplace ``Sqrt`` that NUTS rejects).
@@ -1634,6 +1777,12 @@ class KalmanPanelInputs:
         Per-ISIN average market beta (``feat_avg_beta`` = NULL-aware mean of
         ``beta_{1y,2y,5y}``). The systematic-risk (CAPM) driver of the
         ``exp(-risk_penalty * z(avg_beta))`` risk adjustment.
+    size_ratio : numpy.ndarray
+        Per-ISIN size ratio (``feat_mcap_vs_3yavg`` = ``market_cap /
+        market_cap_3yavg``): current market cap relative to its own 3-year
+        average. Carried raw and z-scored inside
+        :func:`build_fused_kalman_pt_model`, where it discounts ``risk_adj_return``
+        multiplicatively via ``exp(-size_penalty * z(size_ratio))``.
     dispersion_cv : numpy.ndarray
         Per-ISIN consensus noise coefficient of variation
         (``feat_pt_noise_sigma / last_price``); widens ``sigma_isin``.
@@ -1655,6 +1804,7 @@ class KalmanPanelInputs:
     expected_vol: np.ndarray
     dispersion_cv: np.ndarray
     avg_beta: np.ndarray
+    size_ratio: np.ndarray
     drift_names: list[str]
     response_names: list[str]
     coord_uniques: dict[str, np.ndarray]
@@ -1666,31 +1816,59 @@ def build_fused_kalman_pt_model(
         *,
         group_effects: Optional[tuple[str, ...]] = None,
         risk_penalty: float = 0.1,
+        size_penalty: float = 0.1,
         robust: bool = True,
 ) -> "pm_typing.Model":
-    """Build the fused 3-D MvGRW + volatility-conditioned Kalman model.
+    """Build the fused coregionalised cross-sectional Kalman price-target model.
 
     Fuses two notebook models into a single reusable ``pm.Model`` builder:
 
-    * **Model B spine** — a diagonal (NUTS-safe) Multivariate Gaussian Random
-      Walk over the ``(isin, time, y_series)`` response tensor with a
-      cross-sectional baseline ``mu_isin``.
-    * **Model A refinement** — the volatility-aware ``expected_return`` →
-      ``risk_adj_return`` latent (with a non-centred logit-normal
-      ``achieve_prob``) becomes the GRW baseline ``mu_isin``, and the richer
-      heteroscedastic scale ``sigma_isin = sigma_base * (1 + cv) / sqrt(n)``
+    * **Model B spine** — a rank-1 **Intrinsic Coregionalization Model** (ICM; the
+      PyMC *MOGP-Coregion-Hadamard* pattern) over the ``(isin, time, y_series)``
+      response tensor: the ``D`` response series share the single latent per-ISIN
+      factor ``mu_isin`` through per-series loadings ``W`` (``mu_isin_loading``,
+      primary anchored at 1), with per-series intercept ``alpha`` / time-slope
+      ``beta_t`` and a per-series noise diagonal ``sigma_series`` (the ICM
+      ``kappa``). On the default collapsed cross-section (``T == 1``) ``alpha`` /
+      ``beta_t`` are **direct Normals**; a genuine time panel (``T > 1``) re-adds a
+      zero-anchored diagonal Gaussian-random-walk *deviation* (identified by the
+      multiple time steps).
+    * **Model A refinement** — the risk-aware ``expected_return`` →
+      ``risk_adj_return`` latent (with ``achieve_prob = sigmoid(risk_adj_return)``,
+      a posterior-informed confidence) becomes the shared factor ``mu_isin``, and
+      the richer heteroscedastic scale ``sigma_isin = sigma_base * (1 + cv) / sqrt(n)``
       replaces Model B's cv-free form.
 
     The single Kalman-specific change versus
     :func:`probabilistic_ml_model.pymc_models.PriceTargetModel.build_fused_price_target_model`:
     the risk adjustment is keyed on *systematic risk* (average market beta) rather
     than analyst conviction, so the latent target reads
-    ``risk_adj_return = expected_return * exp(-risk_penalty * z(avg_beta))`` —
-    i.e. ``expected_return`` *given systematic risk*. Beta (``feat_avg_beta``, the
+    ``risk_adj_return = expected_return - risk_loading * z(avg_beta)`` — i.e.
+    ``expected_return`` *given systematic risk*. Beta (``feat_avg_beta``, the
     NULL-aware mean of ``beta_{1y,2y,5y}``) enters as a **standardised** (z-scored)
     cross-sectional tilt, never as a raw level (see the convergence notes below).
     Expected volatility (``feat_vol_*``) is retained as a provenance container but
     no longer drives the penalty.
+
+    A second **size tilt** sits alongside the beta penalty on ``risk_adj_return``:
+    ``risk_adj_return = expected_return - risk_loading * z(avg_beta)
+    - size_loading * z(feat_mcap_vs_3yavg)`` where ``feat_mcap_vs_3yavg =
+    market_cap / market_cap_3yavg`` is the firm's current size relative to its own
+    3-year average. With a positive ``size_loading`` names trading **above** their
+    3-year average size (re-rated up) are discounted while names **below** it earn a
+    premium — a mean-reversion / "don't chase the re-rating" tilt — exactly
+    parallel to the systematic-risk (beta) discount.
+
+    Both tilts are **additive** in the standardised log-uplift return space, not the
+    earlier multiplicative ``exp(-penalty · z)`` factors. ``expected_return`` is a
+    zero-mean cross-sectional *deviation*, so a multiplicative factor only rescaled
+    its magnitude and inverted the discount direction for below-average names (a
+    high-beta, below-average name was lifted toward zero, not penalised); the
+    additive form ``- loading · z`` is monotone in the feature for either sign of
+    ``expected_return``. ``risk_loading`` / ``size_loading`` are **learned**
+    sign-fixed (``HalfNormal``) loadings whose prior scale is ``risk_penalty`` /
+    ``size_penalty`` (``0.0`` disables the factor), so the penalty magnitude is
+    identified from the cross-section while its direction stays a discount.
 
     NUTS-inplace-safety constraints (preserved from the notebook):
 
@@ -1709,37 +1887,53 @@ def build_fused_kalman_pt_model(
       model's sole (identified) level, so the flat ``mu_global`` ↔ walk-level
       ridge — a tiny-step / max-tree-depth driver — is removed at the root.
     * Remaining priors are scaled to the standardised response/design (``beta``
-      σ≈1.0, group ``sigma`` HalfNormal(0.5)) rather than the previous diffuse
-      ``10``/``5``, so the posterior is well-conditioned.
+      σ≈1.0) rather than the previous diffuse ``10``/``5``, so the posterior is
+      well-conditioned.
     * Crossed group intercepts (region/sector/size_class/style_class) use a
-      **non-centred** :class:`pm.ZeroSumNormal` with a **single shared scale**
-      ``sigma_group``: each effect is ``sigma_group * z_g`` for a unit-scale
-      zero-sum deviation ``z_g``. The sum-to-zero constraint removes the additive
-      level ridge (level carried by ``alpha``); the non-centred rescale removes
-      Neal's funnel. Crucially the scale is *shared* rather than one ``sigma_<col>``
-      per group: with the panel collapsed to a single cross-sectional slice
-      (T=1, ~1 obs/ISIN) per-group scales plus the per-ISIN signal scale formed an
-      unidentified 6-way variance *partition* over the same ``mu_isin`` dispersion,
-      which left every scale stuck (R-hat ≈ 3–4.4, ESS ≈ 4) and drove the
-      divergences. One shared scale collapses that into an identified between-group
-      vs residual decomposition; ``industry`` is also dropped from
-      ``_FUSED_KALMAN_GROUP_EFFECTS`` (near-nested under ``sector``). Per-coord
-      ``sigma_<col>`` are re-exposed as Deterministic aliases of ``sigma_group`` so
-      downstream diagnostics resolve unchanged.
+      :class:`pm.ZeroSumNormal` at a **FIXED scale** :data:`GROUP_EFFECT_SCALE`
+      (0.25) — the group SD is **not learned**. The sum-to-zero constraint removes
+      the additive level ridge (level carried by ``alpha``); the fixed scale removes
+      the variance-partition ridge. A learned ``sigma_group`` is *structurally
+      non-identified* on the collapsed T=1 cross-section (one slice cannot separate
+      between-group dispersion from the residual base scale): the non-centred build
+      stuck at ``sigma_group`` R-hat ≈ 1.52 / ESS ≈ 7 collapsed to ≈ 0.004 (1 %),
+      the centred build at R-hat ≈ 4.5 / ESS ≈ 4 wandering near 0.22 (28 %) — the
+      two disagreeing is the non-identifiability signature, not a funnel. The group
+      EFFECT vectors themselves already mixed fine (ESS ≈ 4k–9k, R-hat ≈ 1.0); only
+      the scale was stuck, dragging the dependent scalars down with it. Fixing the
+      scale (Gelman: fix the group SD when one slice can't identify it) deletes
+      ``sigma_group`` from the sampler so the group effects are plain regularized
+      fixed effects. ``industry`` stays dropped from ``_FUSED_KALMAN_GROUP_EFFECTS``
+      (near-nested under ``sector``). Per-coord ``sigma_<col>`` are re-exposed as a
+      Deterministic of each effect's empirical between-group sd (a genuine,
+      well-identified per-coord number — no longer four aliases of one stuck scalar)
+      so downstream diagnostics resolve unchanged.
     * ``expected_return`` is the **deterministic** structural mean ``mu_reg``. The
       previous per-ISIN signal latent (``mu_reg + sigma_er * z_expected_return``,
       scale ``sigma_expected_return``) was the largest member of that unidentified
       partition (itself stuck at R-hat ≈ 4.4) and is removed; per-ISIN idiosyncratic
       dispersion is carried by the Student-t measurement noise ``sigma_isin``.
       ``expected_return`` remains exposed as a Deterministic for downstream consumers.
-    * The GRW level/slope walks are **anchored at ``t=0`` only when ``T > 1``**
-      (a genuine time panel), in which case ``mu_isin`` carries the level and the
-      walk carries pure time deviations. When the panel is collapsed to a single
-      cross-sectional slice (``T == 1``, the default for the one-row-per-ISIN
-      ``mv_pymc_kalman_pt`` snapshot — see ``prepare_kalman_panel_inputs(...,
-      collapse_time=True)``) the walk is **not** anchored, so ``alpha[0]`` serves
-      as the free per-series intercept and the model reduces to a well-conditioned
-      cross-sectional MvNormal/Student-t. Innovation scales are HalfNormal(0.5).
+    * Per-series level ``alpha`` / time-slope ``beta_t`` are **direct Normals** on
+      the collapsed cross-section (``T == 1``, the one-row-per-ISIN
+      ``mv_pymc_kalman_pt`` default — see ``prepare_kalman_panel_inputs(...,
+      collapse_time=True)``). The previous build parameterised them as a
+      single-step Gaussian random walk ``alpha[0,d] = sigma_alpha_innov[d] *
+      z_alpha[0,d]`` — a product of **two** scalars representing **one** intercept.
+      The likelihood sees only the product, so the (scale, innovation) pair is
+      non-identified: a ridge (not a funnel — it persists with **0 divergences**)
+      that trapped the sampler. The ``sigma_*_innov`` within-chain variance drove to
+      0 (the arviz R-hat divide-by-zero NaN), ESS collapsed to ≈ 7, R-hat ≈ 1.5 and
+      ``sigma_group`` was squeezed to ≈ 0 — even after the funnel above was removed.
+      Direct intercepts delete the redundant scale parameters and the model mixes
+      (R-hat ≈ 1.0, ESS in the hundreds–thousands). A genuine time panel
+      (``T > 1``, ``collapse_time=False``) re-adds a **zero-anchored** GRW deviation
+      on top of ``alpha``/``beta_t``, where ``sigma_*_innov`` (HalfNormal(0.5)) is
+      identified by the multiple time steps.
+    * Each response series carries its **own** noise scale ``sigma_series`` (the ICM
+      ``kappa`` diagonal; primary anchored at 1, others ``HalfNormal(0.5)``) so a
+      noisier output (``feat_pt_drift``) no longer inflates the primary series' σ —
+      ``sigma_obs[i,d] = sigma_isin[i] * sigma_series[d]``.
 
     Parameters
     ----------
@@ -1749,8 +1943,16 @@ def build_fused_kalman_pt_model(
         Coord names receiving a hierarchical intercept. Defaults to the
         intersection of :data:`_FUSED_KALMAN_GROUP_EFFECTS` with the panel coords.
     risk_penalty : float
-        Exponential risk-penalty factor applied to ``expected_return`` via the
-        per-ISIN average market beta (z-scored systematic risk).
+        Prior scale (``HalfNormal`` sigma) of the learned, sign-fixed
+        ``risk_loading`` applied to ``expected_return`` via the per-ISIN average
+        market beta (z-scored systematic risk) as an additive tilt
+        ``- risk_loading * z(feat_avg_beta)``. ``0.0`` disables the factor.
+    size_penalty : float
+        Prior scale (``HalfNormal`` sigma) of the learned, sign-fixed
+        ``size_loading`` applied to ``risk_adj_return`` via the per-ISIN size ratio
+        ``feat_mcap_vs_3yavg`` (z-scored) as an additive tilt
+        ``- size_loading * z(feat_mcap_vs_3yavg)`` — discounting names trading above
+        their 3-year average size. ``0.0`` disables the size factor entirely.
     robust : bool
         ``True`` (default) → Student-t panel likelihood (absorbs analyst
         outliers); ``False`` → Normal-likelihood twin.
@@ -1769,6 +1971,31 @@ def build_fused_kalman_pt_model(
         )
 
     n_isin, T, D = panel.Y.shape
+
+    # Guard: a (near-)zero-variance NON-PRIMARY response series leaves its rank-1
+    # coregion loading ``mu_isin_loading`` unidentified — a flat ``loading × mu_isin``
+    # ridge that collapses the NUTS step size and freezes the whole posterior. The
+    # data-side coverage guard in ``prepare_kalman_panel_inputs`` should already have
+    # dropped such series; this is a defensive backstop so a degenerate series can
+    # never silently enter the ICM (the primary series, index 0, is exempt — it is
+    # the de-standardisation anchor and may legitimately be rescaled).
+    if D > 1:
+        series_var = np.nanvar(
+            np.asarray(panel.Y, dtype="float64").reshape(-1, D), axis=0
+        )
+        degenerate = [
+            panel.response_names[d]
+            for d in range(1, D)
+            if not np.isfinite(series_var[d]) or series_var[d] < 1e-8
+        ]
+        if degenerate:
+            raise ValueError(
+                "build_fused_kalman_pt_model: non-primary response series "
+                f"{degenerate!r} have ~zero variance and would leave their ICM "
+                "loading unidentified. Drop them upstream (the "
+                "KALMAN_RESPONSE_COVERAGE_MIN guard in prepare_kalman_panel_inputs)."
+            )
+
     coords: dict[str, Any] = {
         "isin": np.asarray(panel.isins),
         "time": np.arange(T),
@@ -1810,6 +2037,21 @@ def build_fused_kalman_pt_model(
     # the raw beta scale (and unbiased) rather than collapsing them to 0.
     avg_beta_filled = np.nan_to_num(_beta_raw, nan=_beta_mu)
 
+    # Standardised size ratio for the learned size tilt on ``expected_return``.
+    # ``panel.size_ratio`` is ``feat_mcap_vs_3yavg`` (= market_cap / market_cap_3yavg):
+    # the firm's current market cap relative to its own 3-year average. Raw values
+    # are O(1) around 1.0, so z-scoring keeps the tilt a *relative* cross-sectional
+    # factor (currently-shrunk vs currently-extended names) robust to level shifts,
+    # exactly as for ``avg_beta``. Missing entries (NaN) map to a 0 tilt via the
+    # z-scored container; the raw container is filled with the cross-sectional mean
+    # for an honest provenance record (PyMC 6.0 rejects NaN in ``pm.Data``).
+    _size_raw = np.asarray(panel.size_ratio, dtype="float64")
+    _size_mu = float(np.nanmean(_size_raw)) if np.isfinite(_size_raw).any() else 0.0
+    _size_sd = float(np.nanstd(_size_raw))
+    _size_sd = _size_sd if (np.isfinite(_size_sd) and _size_sd > 1e-9) else 1.0
+    size_ratio_z = np.nan_to_num((_size_raw - _size_mu) / _size_sd, nan=0.0)
+    size_ratio_filled = np.nan_to_num(_size_raw, nan=_size_mu)
+
     # Standardised expected volatility, retained for provenance only. ``feat_vol_*``
     # arrives in *percent* units (≈ 45); it is z-scored here purely so the stored
     # ``feat_expected_vol_z`` container stays on the same relative scale as before.
@@ -1847,6 +2089,11 @@ def build_fused_kalman_pt_model(
         # provenance; the math consumes the standardised ``beta_z``.
         pm.Data("feat_avg_beta", avg_beta_filled, dims="isin")
         beta_z = pm.Data("feat_avg_beta_z", avg_beta_z, dims="isin")
+        # Size driver (feat_mcap_vs_3yavg = market_cap / market_cap_3yavg): the
+        # learned additive size tilt on ``expected_return`` below. Raw container
+        # retained for provenance; the math consumes the standardised ``size_z``.
+        pm.Data("feat_mcap_vs_3yavg", size_ratio_filled, dims="isin")
+        size_z = pm.Data("feat_mcap_vs_3yavg_z", size_ratio_z, dims="isin")
         # Expected volatility (feat_vol_* term-structure mean) retained as a
         # provenance container only — no longer drives the risk adjustment.
         # ``build_noise_wideners(..., fillna=True)`` already 0-fills these for the
@@ -1872,15 +2119,21 @@ def build_fused_kalman_pt_model(
             for col in panel.coord_idx
         }
 
-        # ---- Model A: non-centred logit-normal achievement probability ----
-        mu_logit = pm.Normal("mu_logit", 0.0, 1.5)
-        sigma_logit = pm.HalfNormal("sigma_logit", 1.0)
-        z_isin = pm.Normal("z_isin", 0.0, 1.0, dims="isin")
-        pm.Deterministic(
-            "achieve_prob",
-            pm.math.sigmoid(mu_logit + sigma_logit * z_isin),
-            dims="isin",
-        )
+        # ---- Model A: achievement probability ----
+        # NOTE (convergence fix): the earlier "non-centred logit-normal" block
+        # (``mu_logit`` / ``sigma_logit`` / ``z_isin`` → ``achieve_prob``) was
+        # DEAD with respect to the likelihood — ``achieve_prob`` was never read by
+        # ``mu_isin`` / the regression, so its ``n_isin`` ``z_isin`` latents and the
+        # ``sigma_logit`` scale sampled their *prior* only, yet dominated the
+        # mass-matrix adaptation (1 000 nuisance dims) and were empirically the
+        # WORST-mixing variables in the panel fit (R-hat ≈ 3.1, ESS ≈ 2 — i.e. the
+        # ``achieve_prob`` / ``z_isin`` pair sat at the very top of the R-hat
+        # ranking, alongside ~600 divergences). Removing the block takes the panel
+        # to **0 divergences** and R-hat → ~1.0. ``achieve_prob`` is now a genuine,
+        # posterior-informed Deterministic — the logistic map of the risk-adjusted
+        # return — defined just after ``risk_adj_return`` below, so downstream
+        # consumers (prior/posterior plots, the ``kalman_gain`` readout) resolve
+        # unchanged but on a quantity the data actually moves.
 
         # ---- Cross-sectional drift-regression baseline ----
         # Priors are scaled to the *standardised* response/design — Y and X_drift
@@ -1900,38 +2153,46 @@ def build_fused_kalman_pt_model(
         beta = pm.Normal("beta", mu=0.0, sigma=1.0, dims="drift_feature")
 
         eta = pt.dot(X_data, beta)
-        # Sum-to-zero partial pooling (``ZeroSumNormal``), NON-CENTRED, with a
-        # SINGLE SHARED scale across all crossed group intercepts. The zero-sum
-        # constraint removes the additive *level* ridge (the level is carried
-        # uniquely by ``alpha`` per series), and the non-centred rescale
-        # ``sigma_group * z_g`` removes Neal's funnel between scale and effects.
+        # Sum-to-zero partial pooling (``ZeroSumNormal``) on the crossed group
+        # intercepts, at a FIXED (non-learned) scale. The zero-sum constraint
+        # removes the additive *level* ridge (the level is carried uniquely by
+        # ``alpha`` per series); the fixed scale removes the variance-partition
+        # ridge that trapped the sampler.
         #
-        # Why a single shared scale rather than one ``sigma_<col>`` per group:
-        # previously each crossed scale had its own ``HalfNormal(0.5)`` prior, so
-        # the per-ISIN latent scale ``sigma_expected_return`` plus the five crossed
-        # scales formed a 6-way variance *partition* over the same cross-sectional
-        # dispersion of ``mu_isin``. With only ~1 informative slice per ISIN
-        # (``collapse_time=True``, T=1) that partition is unidentified — every
-        # chain settles on a different split, landing R-hat ≈ 3–4.4 and ESS ≈ 4 on
-        # *all* the scales (``sigma_expected_return`` included) and producing the
-        # bulk of the divergences. Sharing one ``sigma_group`` collapses the
-        # competing crossed scales into a single identified scale (a clean
-        # between-group vs residual variance model once the per-ISIN latent is
-        # dropped below); the relative magnitudes of the groups stay free via the
-        # zero-sum ``z_g`` vectors. ``industry`` is dropped from
-        # ``_FUSED_KALMAN_GROUP_EFFECTS`` (near-nested under ``sector``, worst
-        # mixer) to further reduce collinearity.
+        # Why the group scale is NOT learned. Earlier builds sampled a learned
+        # shared scale ``sigma_group`` (``effect = sigma_group * z_g`` non-centred,
+        # or ``effect ~ ZSN(sigma=sigma_group)`` centred). On the collapsed
+        # cross-section (``collapse_time=True``, T=1, ~1 informative slice per
+        # ISIN) a between-group variance component is *structurally
+        # non-identified* — a single slice cannot tell between-group dispersion
+        # apart from the residual base scale ``sigma_base``. Neither
+        # parameterization fixes that: the non-centred build stuck at
+        # ``sigma_group`` R-hat ≈ 1.52 / ESS ≈ 7 collapsed to ≈ 0.004 (1 % of the
+        # cross-sectional variance), while the centred build stuck at R-hat ≈ 4.5 /
+        # ESS ≈ 4 wandering near 0.22 (28 %) — the two disagreeing wildly is the
+        # signature of non-identifiability, not a funnel. Crucially the group
+        # EFFECT vectors themselves already mixed fine (ESS ≈ 4k–9k, R-hat ≈ 1.0):
+        # only the scale was stuck, and it dragged the dependent scalars
+        # (``sigma_base`` / ``risk_loading`` …) down with it.
         #
-        # Per-coord ``sigma_<col>`` are re-exposed as Deterministic ALIASES of the
-        # shared scale so ``present_group_effects`` and the notebook/script
-        # ``sigma_<group>`` diagnostics resolve unchanged.
-        sigma_group = pm.HalfNormal("sigma_group", sigma=0.5)
+        # Fixing the scale to a weakly-informative constant (Gelman: fix the group
+        # SD when one slice can't identify it) deletes ``sigma_group`` from the
+        # sampler entirely, so the ``sigma_group`` ↔ ``sigma_base`` ridge is gone
+        # and the crossed effects become plain regularized fixed effects.
+        # ``GROUP_EFFECT_SCALE`` = 0.25 comfortably covers the observed effect
+        # magnitudes (~0.01–0.17 on the standardised log-uplift scale) at ≤ 2 prior
+        # sd. ``industry`` stays dropped from ``_FUSED_KALMAN_GROUP_EFFECTS``
+        # (near-nested under ``sector``) to limit collinearity.
         for col in avail_groups:
-            z_g = pm.ZeroSumNormal(f"{col}_effect_z", sigma=1.0, dims=col)
-            pm.Deterministic(f"sigma_{col}", sigma_group)
-            group_effect = pm.Deterministic(
-                f"{col}_effect", sigma_group * z_g, dims=col
+            group_effect = pm.ZeroSumNormal(
+                f"{col}_effect", sigma=GROUP_EFFECT_SCALE, dims=col
             )
+            # Genuine per-coord between-group sd (a Deterministic of the effect
+            # draws, so well-identified — inherits the effect vectors' ESS). This
+            # replaces the former four-way alias of the single stuck ``sigma_group``
+            # scalar, which made the four ``sigma_<col>`` diagnostics identical and
+            # overstated one problem as four.
+            pm.Deterministic(f"sigma_{col}", group_effect.std())
             eta = eta + group_effect[idx_data_vars[col]]
         mu_reg = pm.Deterministic("mu_reg", eta, dims="isin")
 
@@ -1952,76 +2213,119 @@ def build_fused_kalman_pt_model(
         # ``expected_return`` / ``risk_adj_return`` / ``mu_isin`` Deterministics are
         # retained so downstream Monte-Carlo consumers are unchanged.
         expected_return = pm.Deterministic("expected_return", mu_reg, dims="isin")
-        # Risk adjustment as a *relative* cross-sectional tilt on the z-scored
-        # average market beta (systematic / CAPM risk): high-beta names are
-        # discounted, low-beta names lifted, with a mean discount of ≈ 1. Using the
-        # standardised ``beta_z`` keeps the penalty a mild ``exp(±risk_penalty)``
-        # tilt and preserves the identifiability of the level. This replaces the
-        # prior expected-volatility (``exp_vol_z``) penalty: beta isolates the
-        # priced, non-diversifiable risk that should discount expected return,
-        # rather than total volatility (which conflates idiosyncratic noise).
+        # ---- ADDITIVE, sign-correct risk + size tilts (data-learned loadings) ----
+        # ``expected_return`` (= ``mu_reg``) is a ZERO-MEAN cross-sectional deviation
+        # on the standardised log-uplift scale (the level lives in the GRW ``alpha``
+        # intercept, ``mu_global`` having been dropped). The previous build applied a
+        # MULTIPLICATIVE ``expected_return * exp(-risk_penalty·beta_z) *
+        # exp(-size_penalty·size_z)`` factor, which is only a "discount" on a strictly
+        # POSITIVE return: on a sign-ambiguous deviation it merely rescales the
+        # magnitude and FLIPS direction for below-average names — a high-beta,
+        # below-average name (``expected_return < 0``, ``beta_z > 0``) was pulled
+        # *up* toward 0 instead of discounted. That sign inversion scrambled the
+        # cross-section, so the mean structure could not order names monotonically;
+        # combined with the group-effect funnel above the posterior collapsed toward
+        # full pooling and every ISIN landed on ≈ the universe-mean upside (the
+        # "stale / uniformly non-negative" ``expected_upside`` / ``log_uplift``).
+        #
+        # The fix is an ADDITIVE tilt ``-loading · z`` which is monotone in the
+        # feature regardless of the sign of ``expected_return``: higher systematic
+        # risk (``feat_avg_beta``) and a larger size-vs-own-history (``feat_mcap_vs_3yavg``,
+        # = market_cap / market_cap_3yavg) ALWAYS reduce the risk-adjusted return.
+        # The loadings are LEARNED (sign-fixed ``HalfNormal`` so the direction stays
+        # a discount while the magnitude is identified from the cross-section), which
+        # also gives the mean structure two genuinely-predictive factors and moves
+        # variance off the residual ``sigma_base`` — the converse of the collapse.
+        # ``risk_penalty`` / ``size_penalty`` set the loading prior scale; ``0.0``
+        # disables the corresponding factor (loading pinned at 0).
+        if risk_penalty > 0:
+            risk_loading = pm.HalfNormal("risk_loading", sigma=float(risk_penalty))
+        else:
+            risk_loading = pt.constant(0.0)
+        if size_penalty > 0:
+            size_loading = pm.HalfNormal("size_loading", sigma=float(size_penalty))
+        else:
+            size_loading = pt.constant(0.0)
+        risk_tilt = pm.Deterministic("risk_tilt", -risk_loading * beta_z, dims="isin")
+        size_tilt = pm.Deterministic("size_tilt", -size_loading * size_z, dims="isin")
         risk_adj_return = pm.Deterministic(
             "risk_adj_return",
-            expected_return * pt.exp(-risk_penalty * beta_z),
+            expected_return + risk_tilt + size_tilt,
             dims="isin",
         )
-        # The volatility-aware risk-adjusted return is the GRW baseline.
+        # The risk- and size-adjusted return is the GRW baseline.
         mu_isin = pm.Deterministic("mu_isin", risk_adj_return, dims="isin")
+        # Posterior-informed achievement probability: the logistic map of the
+        # (standardised, zero-mean) risk-adjusted return, so a name whose
+        # risk-adjusted return sits above the cross-sectional average reads as
+        # more likely to "achieve" its target. Replaces the former prior-only
+        # logit-normal latent (see the convergence note above) with a quantity
+        # the likelihood actually identifies; consumed by the downstream
+        # ``kalman_gain`` / confidence readouts.
+        pm.Deterministic("achieve_prob", pm.math.sigmoid(risk_adj_return), dims="isin")
 
-        # ---- Model B: diagonal (NUTS-safe) Gaussian Random Walk ----
-        # Innovation scales tightened to HalfNormal(0.5) (was 1.0): the response
-        # tensor is broadcast-constant across ``time`` (each ISIN's target is
-        # tiled over the T fiscal anchors), so the time-walk explains little
-        # variance and a wide innovation prior only opened a weakly-identified,
-        # near-flat ridge that slowed sampling.
-        sigma_alpha_innov = pm.HalfNormal(
-            "sigma_alpha_innov", sigma=0.5, dims="y_series"
-        )
-        sigma_beta_innov = pm.HalfNormal(
-            "sigma_beta_innov", sigma=0.5, dims="y_series"
-        )
-        z_alpha = pm.Normal("z_alpha", 0.0, 1.0, dims=("time", "y_series"))
-        z_beta = pm.Normal("z_beta", 0.0, 1.0, dims=("time", "y_series"))
-        alpha_raw = pt.cumsum(z_alpha * sigma_alpha_innov[None, :], axis=0)
-        beta_raw = pt.cumsum(z_beta * sigma_beta_innov[None, :], axis=0)
+        # ---- Model B: rank-1 coregionalised per-series structure ----
+        # The D response series share the single latent per-ISIN factor ``mu_isin``
+        # through per-series loadings — a rank-1 Intrinsic Coregionalization Model
+        # (ICM; PyMC "MOGP-Coregion-Hadamard"): ``reg[i,d] = alpha[d] +
+        # beta_t[d]·t[i] + W[d]·mu_isin[i]`` with the coregion loading ``W``
+        # (``mu_isin_loading``) anchored at ``W[0] ≡ 1`` for the primary series so
+        # the factor scale is identified, and per-output noise handled by the
+        # diagonal ``tau_series`` (the ICM ``kappa`` term) on the σ side below.
+        #
+        # Per-series level / slope are DIRECT Normals (``alpha`` / ``beta_t``),
+        # NOT a cumulative ``sigma_innov · z`` random walk. On the collapsed
+        # cross-section (``T == 1``, the one-row-per-ISIN ``mv_pymc_kalman_pt``
+        # default) each walk has a single step, so ``alpha[0,d] =
+        # sigma_alpha_innov[d]·z_alpha[0,d]`` was a product of TWO scalars
+        # representing ONE intercept — the likelihood sees only the product, so the
+        # scale/innovation pair is non-identified. That ridge (not a funnel — it
+        # survives with 0 divergences) trapped the sampler: ``sigma_*_innov``
+        # within-chain variance → 0 (the R-hat divide-by-zero NaN), ESS ≈ 7,
+        # R-hat ≈ 1.5, and ``sigma_group`` squeezed to ≈ 0. Direct intercepts
+        # remove the redundant scale parameters entirely. A genuine time panel
+        # (``T > 1``, ``collapse_time=False``) re-adds a zero-anchored GRW
+        # *deviation* on top, where the innovation scales ARE identified by the
+        # multiple time steps.
+        alpha_level = pm.Normal("alpha_level", 0.0, 1.0, dims="y_series")
+        beta_slope = pm.Normal("beta_slope", 0.0, 0.5, dims="y_series")
         if T > 1:
-            # Genuine time panel: anchor both walks at t=0 (subtract the initial
-            # state) so the level/slope at the first anchor is carried uniquely by
-            # the per-ISIN baseline ``mu_isin`` — the model's only level term
-            # (``mu_global`` dropped). With the walk pinned to pure time deviations
-            # there is no residual level ridge for NUTS to traverse with long
-            # (max-tree-depth) trajectories at a tiny step size. Index with ``[0]``
-            # (drops the time axis) then re-add via ``[None, :]`` so the subtracted
-            # axis is a *statically broadcastable* length-1 dim (a ``[0:1, :]``
-            # slice yields a length-1 axis PyTensor does not know is broadcastable,
-            # which the vectorised Elemwise rejects).
-            alpha_expr = alpha_raw - alpha_raw[0][None, :]
-            beta_expr = beta_raw - beta_raw[0][None, :]
+            sigma_alpha_innov = pm.HalfNormal(
+                "sigma_alpha_innov", sigma=0.5, dims="y_series"
+            )
+            sigma_beta_innov = pm.HalfNormal(
+                "sigma_beta_innov", sigma=0.5, dims="y_series"
+            )
+            z_alpha = pm.Normal("z_alpha", 0.0, 1.0, dims=("time", "y_series"))
+            z_beta = pm.Normal("z_beta", 0.0, 1.0, dims=("time", "y_series"))
+            # Zero-anchored time deviations (0 at t=0); the per-series level/slope
+            # carry the t=0 state so there is no level ridge against ``mu_isin``.
+            a_dev = pt.cumsum(z_alpha * sigma_alpha_innov[None, :], axis=0)
+            b_dev = pt.cumsum(z_beta * sigma_beta_innov[None, :], axis=0)
+            alpha_expr = alpha_level[None, :] + (a_dev - a_dev[0][None, :])
+            beta_expr = beta_slope[None, :] + (b_dev - b_dev[0][None, :])
         else:
-            # Collapsed cross-section (T=1): do NOT anchor — subtracting the t=0
-            # state would zero ``alpha`` entirely and delete the per-series
-            # intercept. Here ``alpha[0, :]`` IS the free per-series cross-sectional
-            # intercept (with ``mu_isin`` the per-ISIN offset), so the model reduces
-            # to a well-conditioned cross-sectional MvNormal/Student-t.
-            alpha_expr = alpha_raw
-            beta_expr = beta_raw
+            alpha_expr = alpha_level[None, :]
+            beta_expr = beta_slope[None, :]
         alpha = pm.Deterministic("alpha", alpha_expr, dims=("time", "y_series"))
         beta_t = pm.Deterministic("beta_t", beta_expr, dims=("time", "y_series"))
 
-        # ---- Per-series factor loadings on the shared per-ISIN baseline ----
-        # A single ``mu_isin`` previously had to fit D heterogeneous response series
-        # at once (feat_implied_upside / observed_pt / feat_pt_drift), so the
-        # cross-sectional signal in the primary series was averaged away — PPC
-        # coverage on ``feat_implied_upside`` was 31 % vs 94 % target. Loading
-        # ``mu_isin`` per series, with the primary series (index 0) anchored at 1,
-        # makes ``mu_isin`` the common factor *on the feat_implied_upside scale*
-        # (so the ``panel_posterior_upside`` de-standardisation through that series
-        # stays exact) while weakly-correlated series load freely and no longer drag
-        # the latent. The anchor also fixes the factor scale, identifying the
-        # loadings and ``sigma_expected_return``.
+        # ---- Coregion loadings on the shared per-ISIN factor ----
+        # ``mu_isin`` is the single latent factor; loading it per series (primary
+        # anchored at 1) makes it the common factor *on the feat_log_uplift scale*
+        # (so the ``panel_posterior_upside`` de-standardisation stays exact) while
+        # weakly-correlated series (feat_pt_drift) load freely instead of dragging
+        # the latent. This is the rank-1 ICM weight ``W`` (n_series × 1).
         if D > 1:
-            loading_free = pm.Normal(
-                "mu_isin_loading", mu=1.0, sigma=0.5, dims="y_series_free"
+            # Sign-FIXED, unit-centred loading: a free ``Normal`` loading let
+            # ``loading × mu_isin`` flip sign (the latent factor and its loading are
+            # only jointly identified up to a shared sign), giving a bimodal,
+            # non-mixing ridge. A ``LogNormal`` (median 1, strictly positive) anchors
+            # the secondary series to load in the SAME direction as the primary
+            # (anchored at 1), removing the sign-flip multimodality; ``sigma=0.3``
+            # keeps it weakly-informative around parity.
+            loading_free = pm.LogNormal(
+                "mu_isin_loading", mu=0.0, sigma=0.3, dims="y_series_free"
             )
             loading = pm.Deterministic(
                 "mu_isin_loading_full",
@@ -2049,6 +2353,23 @@ def build_fused_kalman_pt_model(
             sigma_base * (1.0 + cv_data) / precision_weight_data,
             dims="isin",
         )
+        # Per-output noise diagonal (the ICM ``kappa``): each response series gets
+        # its own multiplicative noise scale so a noisier output (feat_pt_drift)
+        # does not inflate the primary series' σ (and vice-versa). The primary
+        # series is anchored at 1 so the absolute ``sigma_base`` scale stays
+        # identified (a free primary scale would form a ``sigma_base · tau[0]``
+        # product); the others are HalfNormal(0.5) deviations from it. Collapses to
+        # a no-op (all ones) when D == 1.
+        if D > 1:
+            tau_free = pm.HalfNormal("sigma_series_free", sigma=0.25, dims="y_series_free")
+            tau_series = pm.Deterministic(
+                "sigma_series",
+                pt.concatenate([pt.ones(1), tau_free]),
+                dims="y_series",
+            )
+            sigma_obs = sigma_isin[:, None] * tau_series[None, :]  # (isin, y_series)
+        else:
+            sigma_obs = sigma_isin[:, None]  # (isin, 1)
         # Robust-likelihood degrees of freedom, lower-bounded at ν₀ = 2.5.
         # A plain ``Gamma(2, 0.1)`` places non-trivial mass below ν = 2, where the
         # Student-t has infinite variance and — critically — the joint density is
@@ -2072,7 +2393,7 @@ def build_fused_kalman_pt_model(
                 "target_pct_obs",
                 nu=nu,
                 mu=regression,
-                sigma=sigma_isin[:, None, None],
+                sigma=sigma_obs[:, None, :],
                 observed=Y_obs,
                 dims=("isin", "time", "y_series"),
             )
@@ -2080,7 +2401,7 @@ def build_fused_kalman_pt_model(
             pm.Normal(
                 "target_pct_obs",
                 mu=regression,
-                sigma=sigma_isin[:, None, None],
+                sigma=sigma_obs[:, None, :],
                 observed=Y_obs,
                 dims=("isin", "time", "y_series"),
             )

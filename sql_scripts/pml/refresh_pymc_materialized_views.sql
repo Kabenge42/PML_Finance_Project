@@ -1,5 +1,4 @@
-CREATE PROCEDURE refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT TRUE,
-                                                 IN assert_coverage  boolean DEFAULT FALSE)
+CREATE PROCEDURE refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT true, IN assert_coverage boolean DEFAULT false)
 	LANGUAGE plpgsql AS
 $$
 DECLARE

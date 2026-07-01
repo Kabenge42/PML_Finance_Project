@@ -341,3 +341,105 @@ def test_sv_composes_with_trend():
     post = idata.posterior
     assert "beta_trend" in post
     assert "log_vol" in post
+
+
+# ---------------------------------------------------------------------------
+# Fused-panel coverage guard + ICM zero-variance assertion.
+#
+# Regression guard for the freeze (max R-hat 4.45, min ESS 4.3, 0 divergences):
+# a sparsely-populated second response series (feat_pt_drift, NULL whenever the
+# price_target_*_ago trail is empty) standardised to ~0 and left its rank-1 ICM
+# loading unidentified. The coverage guard drops such series upstream; the builder
+# asserts no zero-variance series can enter the ICM.
+# ---------------------------------------------------------------------------
+def _kalman_panel_frame(n=40, *, sparse_drift=True, seed=0):
+    rng = np.random.default_rng(seed)
+    df = pd.DataFrame(
+        {
+            "isin": [f"X{i:04d}" for i in range(n)],
+            "observed_pt": rng.uniform(10, 200, n),
+            "last_price": rng.uniform(10, 200, n),
+            "n_analysts": rng.integers(1, 20, n).astype(float),
+            "feat_implied_upside": rng.normal(0.1, 0.3, n),
+            "feat_avg_beta": rng.normal(1.0, 0.2, n),
+            "feat_mcap_vs_3yavg": rng.normal(1.0, 0.2, n),
+            "feat_pt_noise_sigma": rng.uniform(1, 5, n),
+            "sector": rng.choice(["Tech", "Energy"], n),
+            "region": rng.choice(["US", "EU"], n),
+        }
+    )
+    # feat_pt_drift: mostly-NULL (below the 0.60 coverage gate) vs fully dense.
+    df["feat_pt_drift"] = (
+        np.where(np.arange(n) < 4, rng.normal(0, 0.1, n), np.nan)
+        if sparse_drift
+        else rng.normal(0, 0.1, n)
+    )
+    return df
+
+
+# feat_pt_drift is no longer a DEFAULT response (it is a drift PREDICTOR, and its
+# rank-1 ICM loading on the single-snapshot MV was a divergence driver — see
+# KALMAN_PANEL_RESPONSE_COLS). These tests therefore exercise the coverage guard via
+# an EXPLICIT multi-response request, which is the supported way to add a genuine
+# second series (e.g. for a future collapse_time=False panel).
+_EXPLICIT_RESP = ("feat_log_uplift", "feat_pt_drift")
+
+
+def test_coverage_guard_drops_sparse_response_series():
+    import pymc_kalman_filter_pt as kf
+
+    panel = kf.prepare_kalman_panel_inputs(
+        _kalman_panel_frame(sparse_drift=True), drift_features=["feat_pt_drift"],
+        response_cols=_EXPLICIT_RESP,
+    )
+    assert panel.response_names == ["feat_log_uplift"]
+    assert panel.Y.shape[-1] == 1
+
+
+def test_coverage_guard_keeps_dense_response_series():
+    import pymc_kalman_filter_pt as kf
+
+    panel = kf.prepare_kalman_panel_inputs(
+        _kalman_panel_frame(sparse_drift=False), drift_features=["feat_pt_drift"],
+        response_cols=_EXPLICIT_RESP,
+    )
+    assert panel.response_names == ["feat_log_uplift", "feat_pt_drift"]
+    assert panel.Y.shape[-1] == 2
+
+
+def test_default_response_set_is_single_series():
+    """The default fused panel models the single primary log-uplift response.
+
+    Regression guard for the convergence fix: feat_pt_drift must NOT enter the
+    default response set (it is a drift predictor + a divergence-driving sparse
+    ICM series). The rank-1 ICM stays available via an explicit response_cols.
+    """
+    import pymc_kalman_filter_pt as kf
+
+    panel = kf.prepare_kalman_panel_inputs(
+        _kalman_panel_frame(sparse_drift=False), drift_features=["feat_pt_drift"],
+    )
+    assert panel.response_names == ["feat_log_uplift"]
+    assert panel.Y.shape[-1] == 1
+
+
+def test_builder_rejects_zero_variance_nonprimary_series():
+    import dataclasses
+
+    import pymc_kalman_filter_pt as kf
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        build_fused_kalman_pt_model,
+    )
+
+    panel = kf.prepare_kalman_panel_inputs(
+        _kalman_panel_frame(sparse_drift=False), drift_features=["feat_pt_drift"]
+    )
+    # Force a degenerate (all-zero) second series past the data guard.
+    y_primary = panel.Y[:, :, :1]
+    bad = dataclasses.replace(
+        panel,
+        Y=np.concatenate([y_primary, np.zeros_like(y_primary)], axis=-1),
+        response_names=["feat_log_uplift", "dead"],
+    )
+    with pytest.raises(ValueError, match="zero variance"):
+        build_fused_kalman_pt_model(bad)

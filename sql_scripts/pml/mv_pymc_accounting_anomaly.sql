@@ -26,7 +26,10 @@ SELECT isin,
                    NULLIF(market_cap, 0::double precision))                                         AS feat_issuance_intensity,
        calc_change_ratio(full_time_employees_fy, full_time_employees_neg1fy)                        AS feat_employee_growth_1y,
        calc_change_ratio(fcf_per_share_ltm, net_eps_basic_ltm)                                      AS feat_fcfps_vs_eps_gap,
-       peg_ntm                                                                                      AS feat_peg_ntm
+       peg_ntm                                                                                      AS feat_peg_ntm,
+       calc_change_ratio(market_cap, market_cap_neg1fy)                                             AS feat_mcap_trend_1y,
+       safe_divide(market_cap, market_cap_3yavg)                                                    AS feat_mcap_vs_3yavg,
+       safe_divide(enterprise_value, enterprise_value_3yavg)                                        AS feat_ev_vs_3yavg
 FROM pml_df;
 
 ALTER MATERIALIZED VIEW mv_pymc_accounting_anomaly OWNER TO postgres;

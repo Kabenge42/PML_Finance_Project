@@ -150,7 +150,10 @@ UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
     feature_role = 'predictor'
 WHERE column_name IN ('market_cap', 'enterprise_value', 'volume_shrs', 'rel_volume',
-                      'shrs_out', 'shrs_out_3yavg', 'shrs_out_5yavg');
+                      'shrs_out', 'shrs_out_3yavg', 'shrs_out_5yavg',
+                      'market_cap_3yavg', 'market_cap_5yavg',
+                      'enterprise_value_3yavg', 'enterprise_value_5yavg',
+                      'one_day_pct');
 
 UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
@@ -161,6 +164,7 @@ UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
     feature_role = 'historical'
 WHERE column_name LIKE 'enterprise_value_neg%'
+   OR column_name LIKE 'market_cap_neg%'
    OR column_name LIKE 'shrs_out_neg%'
    OR column_name = 'shrs_out_neg1fy';
 
@@ -188,7 +192,7 @@ SET category     = 'technical',
     feature_role = 'predictor'
 WHERE column_name IN ('w_52high_adj', 'w_52low_adj',
                       'ema_20d', 'ema_50d', 'ema_100d', 'ema_250d',
-                      'price_chg_pct_3m', 'one_day_pct');
+                      'price_chg_pct_3m');
 
 UPDATE pml.pml_df_metadata
 SET category     = 'volatility',
@@ -631,6 +635,24 @@ WHERE column_name LIKE 'enterprise_value_neg%';
 UPDATE pml.pml_df_metadata
 SET description = 'Lagged shares outstanding (prior period)'
 WHERE column_name LIKE 'shrs_out_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged market capitalization (prior fiscal quarter)'
+WHERE column_name SIMILAR TO 'market_cap_neg[0-9]+fq';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged market capitalization (prior fiscal year)'
+WHERE column_name SIMILAR TO 'market_cap_neg[0-9]+fy';
+UPDATE pml.pml_df_metadata
+SET description = 'Market capitalization 3-year average'
+WHERE column_name = 'market_cap_3yavg';
+UPDATE pml.pml_df_metadata
+SET description = 'Market capitalization 5-year average'
+WHERE column_name = 'market_cap_5yavg';
+UPDATE pml.pml_df_metadata
+SET description = 'Enterprise value 3-year average'
+WHERE column_name = 'enterprise_value_3yavg';
+UPDATE pml.pml_df_metadata
+SET description = 'Enterprise value 5-year average'
+WHERE column_name = 'enterprise_value_5yavg';
 
 -- Historical prices
 UPDATE pml.pml_df_metadata
@@ -663,7 +685,7 @@ UPDATE pml.pml_df_metadata
 SET description = '3-month price change percentage'
 WHERE column_name = 'price_chg_pct_3m';
 UPDATE pml.pml_df_metadata
-SET description = '1-day price change percentage'
+SET description = 'Last day''s price change'
 WHERE column_name = 'one_day_pct';
 
 -- Volatility / beta
@@ -1319,6 +1341,15 @@ WHERE column_name IN ('price_target_high',
                       'tot_return_pct_cagr_3y',
                       'tot_return_pct_cagr_10y');
 
+-- 7h.3b KalmanFilterPriceTarget: short-term momentum. one_day_pct (last day's
+--       price change) is emitted by mv_pymc_kalman_pt as feat_one_day_return, a
+--       drift / state-transition mutable_predictor. Extend its model_targets so it
+--       surfaces in vw_pymc_feature_catalogue for kalman_pt (the per-source alias
+--       is registered in pml.pml_df_feature_alias below).
+UPDATE pml.pml_df_metadata
+SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
+WHERE column_name = 'one_day_pct';
+
 -- 7h.3a KalmanFilterPriceTarget: fiscal-calendar anchors + derived day-count
 --       horizons (mirrors the price_target wiring in 7h.2). These give the
 --       marginalized GaussianRandomWalk a real, irregular time axis so the
@@ -1578,8 +1609,19 @@ VALUES
 	                            ('feat_pt_median_drift',               'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_median_drift',               ARRAY ['kalman_pt']                ),
 	                            ('feat_coverage_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_coverage_drift',                ARRAY ['kalman_pt']                ),
 	                            ('feat_pt_noise_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_noise_drift',                ARRAY ['kalman_pt']                ),
+	-- Valid-pair coverage counts for the drift trails (pml.target_drift_n):
+	-- constant_data the fused panel / coverage guard gate on so a sparse,
+	-- mostly-NULL trail cannot enter the ICM as a degenerate response.
+	('feat_pt_drift_n',    'analyst_targets', 'metadata',  'constant_data',     'feat_pt_drift_n',    ARRAY ['kalman_pt']),
+	('feat_price_drift_n', 'analyst_targets', 'metadata',  'constant_data',     'feat_price_drift_n', ARRAY ['kalman_pt']),
 	                            ('feat_pt_range_norm',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_norm',                 ARRAY ['kalman_pt']                ),
-	('feat_avg_beta', 'volatility', 'predictor', 'mutable_predictor', 'feat_avg_beta', ARRAY ['kalman_pt']),
+	-- Drift of the market_cap / enterprise_value ratio trail
+	-- (equity share of EV) across the fiscal-year lags. A
+	-- multi-source self-row (matched market_cap / EV lag pairs)
+	-- consumed by the fused panel as a state-transition (beta)
+	-- drift predictor — see feat_mv_ev_drift in mv_pymc_kalman_pt.
+	('feat_mv_ev_drift',   'market_data',     'predictor', 'mutable_predictor', 'feat_mv_ev_drift',   ARRAY ['kalman_pt']),
+	('feat_avg_beta',      'volatility',      'predictor', 'mutable_predictor', 'feat_avg_beta',      ARRAY ['kalman_pt']),
 	-- earnings_beat logit-beat-rate + revision-acceleration feats (mv_pymc_earnings_beat)
 	                            ('feat_logit_beat_rate',               'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate',               ARRAY ['earnings_beat']            ),
 	                            ('feat_logit_beat_rate_annual',        'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate_annual',        ARRAY ['earnings_beat']            ),
@@ -1607,7 +1649,13 @@ VALUES
 	                            ('feat_pt_accuracy_1y',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_accuracy_1y',                ARRAY ['price_target']             ),
 	                            ('feat_pt_optimism_bias',              'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_optimism_bias',              ARRAY ['price_target']             ),
 	                            ('feat_net_buy_sentiment',             'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_net_buy_sentiment',             ARRAY ['price_target']             ),
-	                            ('feat_conviction_ratio',              'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_conviction_ratio',              ARRAY ['price_target']             )
+	                            ('feat_conviction_ratio',              'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_conviction_ratio',              ARRAY ['price_target']             ),
+	-- Cross-cutting market-cap / EV size & trend feats. Each is multi-source
+	-- (raw level vs lag / average) so it cannot be a per-source alias row; it is
+	-- registered as its own self-row consumed by EVERY mv_pymc_* view.
+	                            ('feat_mcap_trend_1y',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_trend_1y',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
+	                            ('feat_mcap_vs_3yavg',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_vs_3yavg',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
+	                            ('feat_ev_vs_3yavg',                   'market_data',     'predictor',  'mutable_predictor', 'feat_ev_vs_3yavg',                   ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])
 ON CONFLICT (column_name) DO UPDATE SET pymc_role     = excluded.pymc_role,
                                         feature_alias = excluded.feature_alias,
                                         model_targets = (SELECT ARRAY(SELECT DISTINCT
@@ -1741,6 +1789,8 @@ VALUES
 	('total_return_10y',        'kalman_pt', 'feat_total_return_10y', 'mutable_predictor'),
 	('tot_return_pct_cagr_3y',  'kalman_pt', 'feat_tr_cagr_3y',       'mutable_predictor'),
 	('tot_return_pct_cagr_10y', 'kalman_pt', 'feat_tr_cagr_10y',      'mutable_predictor'),
+	-- Short-term momentum: one_day_pct (last day's price change) -> feat_one_day_return.
+	('one_day_pct', 'kalman_pt', 'feat_one_day_return', 'mutable_predictor'),
 	-- Raw beta windows: emitted un-prefixed by mv_pymc_kalman_pt as the
 	-- systematic-risk inputs to feat_avg_beta (the NULL-aware mean), which is the
 	-- model-facing risk-adjustment driver. Aliased == column name (present-check)

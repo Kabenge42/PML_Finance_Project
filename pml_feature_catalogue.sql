@@ -258,6 +258,62 @@ FROM generate_subscripts(arr, 1) AS i
 WHERE i < array_length(arr, 1);
 $$;
 
+-- -----------------------------------------------------------------------------
+-- target_drift COVERAGE + min-points GUARD.
+--
+-- ``target_drift`` averages ``calc_change_ratio(arr[i], arr[i+1])`` over
+-- consecutive pairs, and ``calc_change_ratio`` is NULL whenever the predecessor
+-- is NULL or 0 (NULLIF). A trail (e.g. ``price_target_*_ago``) where only the
+-- current value is populated therefore yields a drift from a SINGLE noisy pair,
+-- or NULL when the whole trail is empty. Downstream the fused Kalman panel z-scores
+-- + 0-fills those NULLs, producing a near-constant response column whose rank-1
+-- ICM loading is unidentified — the ridge that froze the sampler (max R-hat 4.45,
+-- min ESS 4.3). These helpers expose the valid-pair COUNT and a min-points-guarded
+-- drift so the MV and the model can gate on real data availability rather than the
+-- post-fill zero spike.
+-- -----------------------------------------------------------------------------
+
+-- Count of VALID consecutive pairs (both endpoints non-null, predecessor <> 0).
+CREATE OR REPLACE FUNCTION pml.target_drift_n(arr NUMERIC[]) RETURNS INT
+	IMMUTABLE PARALLEL SAFE
+	LANGUAGE sql AS
+$$
+SELECT COUNT(*)::INT
+FROM generate_subscripts(arr, 1) AS i
+WHERE i < array_length(arr, 1)
+  AND arr[i] IS NOT NULL
+  AND arr[i + 1] IS NOT NULL
+  AND arr[i + 1] <> 0;
+$$;
+
+CREATE OR REPLACE FUNCTION pml.target_drift_n(arr DOUBLE PRECISION[]) RETURNS INT
+	IMMUTABLE PARALLEL SAFE
+	LANGUAGE sql AS
+$$
+SELECT COUNT(*)::INT
+FROM generate_subscripts(arr, 1) AS i
+WHERE i < array_length(arr, 1)
+  AND arr[i] IS NOT NULL
+  AND arr[i + 1] IS NOT NULL
+  AND arr[i + 1] <> 0;
+$$;
+
+-- Min-points-guarded drift: NULL unless at least ``min_points`` valid pairs exist,
+-- so a single noisy pair no longer masquerades as a populated drift signal.
+CREATE OR REPLACE FUNCTION pml.target_drift(arr NUMERIC[], min_points INT) RETURNS NUMERIC
+	IMMUTABLE PARALLEL SAFE
+	LANGUAGE sql AS
+$$
+SELECT CASE WHEN pml.target_drift_n(arr) >= min_points THEN pml.target_drift(arr) END;
+$$;
+
+CREATE OR REPLACE FUNCTION pml.target_drift(arr DOUBLE PRECISION[], min_points INT) RETURNS DOUBLE PRECISION
+	IMMUTABLE PARALLEL SAFE
+	LANGUAGE sql AS
+$$
+SELECT CASE WHEN pml.target_drift_n(arr) >= min_points THEN pml.target_drift(arr) END;
+$$;
+
 CREATE OR REPLACE FUNCTION pml.coef_var(mu    DOUBLE PRECISION,
                                         sigma DOUBLE PRECISION) RETURNS DOUBLE PRECISION
 	IMMUTABLE PARALLEL SAFE
@@ -348,7 +404,13 @@ WITH beats AS (SELECT isin,
                       sales_neg0fysurprise_pct,
                       days_to_earnings,
                       earnings_report_recency,
-                      next_earnings_status
+                      next_earnings_status,
+                      -- ---- Market-cap / EV size & trend raw carriers ----
+                      market_cap,
+                      market_cap_neg1fy,
+                      market_cap_3yavg,
+                      enterprise_value,
+                      enterprise_value_3yavg
                FROM pml.pml_df
               )
 SELECT b.isin,
@@ -413,7 +475,11 @@ SELECT b.isin,
        b.sales_neg0fysurprise_pct                                                           AS feat_sales_last_y_surprise,
        b.days_to_earnings                                                                   AS feat_days_to_earnings,
        b.earnings_report_recency                                                            AS feat_report_recency,
-       b.next_earnings_status                                                               AS feat_next_earnings_status
+       b.next_earnings_status                                                               AS feat_next_earnings_status,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(b.market_cap, b.market_cap_neg1fy)                             AS feat_mcap_trend_1y,
+       pml.safe_divide(b.market_cap, b.market_cap_3yavg)                                    AS feat_mcap_vs_3yavg,
+       pml.safe_divide(b.enterprise_value, b.enterprise_value_3yavg)                        AS feat_ev_vs_3yavg
 FROM beats                                                       b,
      LATERAL pml.beat_counts(b.eps_surprises_q::NUMERIC[])    bc_q,
      LATERAL pml.beat_counts(b.eps_surprises_y::NUMERIC[])    bc_y,
@@ -548,7 +614,11 @@ SELECT isin,
                        price_target_median_1y_ago)                                                             AS feat_pt_high_low_convergence_1y,
        -- Current coverage vs its trailing 3m/6m/1y average (>1 = coverage rising).
        pml.safe_divide(price_target_num, (price_target_num_1y_ago + price_target_num_6m_ago + price_target_num_3m_ago) /
-                                         3.0)                                                                  AS feat_analyst_count_stability
+                                         3.0)                                                                  AS feat_analyst_count_stability,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                                                    AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                                                           AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                                               AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_price_target_isin ON pml.mv_pymc_price_target (isin);
@@ -604,6 +674,8 @@ SELECT isin,
        (next_income_statement_report_date - CURRENT_DATE)::INT                                                                                                                                                                                         AS days_to_next_report,
        (expected_report_date - CURRENT_DATE)::INT                                                                                                                                                                                                      AS days_to_expected_report,
        (fy_end_date - CURRENT_DATE)::INT                                                                                                                                                                                                               AS days_to_fy_end,
+       market_cap,
+       enterprise_value,
        price_target                                                                                                                                                                                                                                    AS observed_pt,
        last_price,
        price_target_median,
@@ -661,20 +733,50 @@ SELECT isin,
        price_target_num_1y_ago,
        calc_change_ratio(price_target::numeric, last_price::numeric)                                                                                                                                                                                   AS feat_implied_upside,
        -- ---- Per-step drift (mean log-uplift) across every price / target trail ----
-       pml.target_drift(ARRAY [price_target::NUMERIC, price_target_1w_ago::NUMERIC, price_target_1m_ago::NUMERIC, price_target_3m_ago::NUMERIC, price_target_6m_ago::NUMERIC, price_target_1y_ago::NUMERIC])                                           AS feat_pt_drift,
-       pml.target_drift(ARRAY [last_price::NUMERIC, price_1w_ago::NUMERIC, price_1m_ago::NUMERIC, price_3m_ago::NUMERIC, price_6m_ago::NUMERIC, price_1y_ago::NUMERIC])                                                                                AS feat_price_drift,
+       -- Each drift is min-points-guarded (>=2 valid consecutive pairs) so a single
+       -- noisy pair can't masquerade as signal, and winsorised to [-1, 1] to bound the
+       -- heavy ratio tails. A companion ``*_n`` valid-pair count is emitted so the
+       -- fused Kalman panel (and its coverage guard) can gate on real data
+       -- availability instead of the post-fill zero spike — see pml.target_drift_n /
+       -- the KALMAN_RESPONSE_COVERAGE_MIN guard in prepare_kalman_panel_inputs.
+       pml.winsorise(pml.target_drift(
+		                     ARRAY [price_target::NUMERIC, price_target_1w_ago::NUMERIC, price_target_1m_ago::NUMERIC, price_target_3m_ago::NUMERIC, price_target_6m_ago::NUMERIC, price_target_1y_ago::NUMERIC],
+		                     2), -1, 1)                                                                                                                                                                        AS feat_pt_drift,
+       pml.target_drift_n(ARRAY [price_target::NUMERIC, price_target_1w_ago::NUMERIC, price_target_1m_ago::NUMERIC, price_target_3m_ago::NUMERIC, price_target_6m_ago::NUMERIC, price_target_1y_ago::NUMERIC]) AS feat_pt_drift_n,
+       pml.winsorise(pml.target_drift(
+		                     ARRAY [last_price::NUMERIC, price_1w_ago::NUMERIC, price_1m_ago::NUMERIC, price_3m_ago::NUMERIC, price_6m_ago::NUMERIC, price_1y_ago::NUMERIC],
+		                     2), -1,
+                     1)                                                                                                                                                                                        AS feat_price_drift,
+       pml.target_drift_n(ARRAY [last_price::NUMERIC, price_1w_ago::NUMERIC, price_1m_ago::NUMERIC, price_3m_ago::NUMERIC, price_6m_ago::NUMERIC, price_1y_ago::NUMERIC])                                      AS feat_price_drift_n,
        -- High / low / median analyst-target trails — capture skew in target drift
-       pml.target_drift(ARRAY [price_target_high::NUMERIC, price_target_high_1w_ago::NUMERIC, price_target_high_1m_ago::NUMERIC, price_target_high_3m_ago::NUMERIC, price_target_high_6m_ago::NUMERIC, price_target_high_1y_ago::NUMERIC])             AS feat_pt_high_drift,
-       pml.target_drift(ARRAY [price_target_low::NUMERIC, price_target_low_1w_ago::NUMERIC, price_target_low_1m_ago::NUMERIC, price_target_low_3m_ago::NUMERIC, price_target_low_6m_ago::NUMERIC, price_target_low_1y_ago::NUMERIC])                   AS feat_pt_low_drift,
-       pml.target_drift(ARRAY [price_target_median::NUMERIC, price_target_median_1w_ago::NUMERIC, price_target_median_1m_ago::NUMERIC, price_target_median_3m_ago::NUMERIC, price_target_median_6m_ago::NUMERIC, price_target_median_1y_ago::NUMERIC]) AS feat_pt_median_drift,
+       pml.winsorise(pml.target_drift(
+		                     ARRAY [price_target_high::NUMERIC, price_target_high_1w_ago::NUMERIC, price_target_high_1m_ago::NUMERIC, price_target_high_3m_ago::NUMERIC, price_target_high_6m_ago::NUMERIC, price_target_high_1y_ago::NUMERIC],
+		                     2), -1,
+                     1)                                                                                                                                                                                        AS feat_pt_high_drift,
+       pml.winsorise(pml.target_drift(
+		                     ARRAY [price_target_low::NUMERIC, price_target_low_1w_ago::NUMERIC, price_target_low_1m_ago::NUMERIC, price_target_low_3m_ago::NUMERIC, price_target_low_6m_ago::NUMERIC, price_target_low_1y_ago::NUMERIC],
+		                     2), -1,
+                     1)                                                                                                                                                                                        AS feat_pt_low_drift,
+       pml.winsorise(pml.target_drift(
+		                     ARRAY [price_target_median::NUMERIC, price_target_median_1w_ago::NUMERIC, price_target_median_1m_ago::NUMERIC, price_target_median_3m_ago::NUMERIC, price_target_median_6m_ago::NUMERIC, price_target_median_1y_ago::NUMERIC],
+		                     2), -1,
+                     1)                                                                                                                                                                                        AS feat_pt_median_drift,
        -- Analyst-coverage drift: rising / falling participation is a state signal
-       pml.target_drift(ARRAY [price_target_num::NUMERIC, price_target_num_1w_ago::NUMERIC, price_target_num_1m_ago::NUMERIC, price_target_num_3m_ago::NUMERIC, price_target_num_6m_ago::NUMERIC, price_target_num_1y_ago::NUMERIC])                   AS feat_coverage_drift,
+       pml.winsorise(pml.target_drift(
+		                     ARRAY [price_target_num::NUMERIC, price_target_num_1w_ago::NUMERIC, price_target_num_1m_ago::NUMERIC, price_target_num_3m_ago::NUMERIC, price_target_num_6m_ago::NUMERIC, price_target_num_1y_ago::NUMERIC],
+		                     2), -1,
+                     1)                                                                                                                                                                                        AS feat_coverage_drift,
        -- Drift in analyst-stddev tells how noise itself is evolving (state-space Q)
-       pml.target_drift(ARRAY [price_target_stddev::NUMERIC, price_target_stddev_1w_ago::NUMERIC, price_target_stddev_1m_ago::NUMERIC, price_target_stddev_3m_ago::NUMERIC, price_target_stddev_6m_ago::NUMERIC, price_target_stddev_1y_ago::NUMERIC]) AS feat_pt_noise_drift,
+       pml.winsorise(pml.target_drift(
+		                     ARRAY [price_target_stddev::NUMERIC, price_target_stddev_1w_ago::NUMERIC, price_target_stddev_1m_ago::NUMERIC, price_target_stddev_3m_ago::NUMERIC, price_target_stddev_6m_ago::NUMERIC, price_target_stddev_1y_ago::NUMERIC],
+		                     2), -1,
+                     1)                                                                                                                                                                                        AS feat_pt_noise_drift,
        price_target_stddev                                                                                                                                                                                                                             AS feat_pt_noise_sigma,
        -- Inter-analyst range (high - low) normalised by mean target
        pml.safe_divide(price_target_high - price_target_low,
                        NULLIF(price_target, 0))                                                                                                                                                                                                        AS feat_pt_range_norm,
+       -- Short-term momentum: last day's price change (mutable_predictor).
+       one_day_pct AS feat_one_day_return,
        volatility_1m                                                                                                                                                                                                                                   AS feat_vol_1m,
        volatility_3m                                                                                                                                                                                                                                   AS feat_vol_3m,
        volatility_6m                                                                                                                                                                                                                                   AS feat_vol_6m,
@@ -695,7 +797,37 @@ SELECT isin,
        total_return_5y         AS feat_total_return_5y,
        total_return_10y        AS feat_total_return_10y,
        tot_return_pct_cagr_3y  AS feat_tr_cagr_3y,
-       tot_return_pct_cagr_10y AS feat_tr_cagr_10y
+       tot_return_pct_cagr_10y AS feat_tr_cagr_10y,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)        AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)               AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                                                                                                                                               AS feat_ev_vs_3yavg,
+       -- ---- Market-cap / EV ratio trail (equity share of enterprise value) ----
+       -- market_cap_ev = market_cap / enterprise_value: the equity fraction of EV
+       -- (rises as a name de-levers / its equity re-rates above its net debt). The
+       -- *_ago pairs reuse the matched market_cap / enterprise_value lag columns (FQ
+       -- + FY trail and the 3y/5y averages). enterprise_value carries a neg5fy lag
+       -- with no market_cap counterpart, so no neg5fy ratio is emitted.
+       pml.safe_divide(market_cap, enterprise_value)                                                                                                                                                           AS market_cap_ev,
+       pml.safe_divide(market_cap_neg1fq, enterprise_value_neg1fq)                                                                                                                                             AS market_cap_ev_neg1fq,
+       pml.safe_divide(market_cap_neg2fq, enterprise_value_neg2fq)                                                                                                                                             AS market_cap_ev_neg2fq,
+       pml.safe_divide(market_cap_neg3fq, enterprise_value_neg3fq)                                                                                                                                             AS market_cap_ev_neg3fq,
+       pml.safe_divide(market_cap_neg4fq, enterprise_value_neg4fq)                                                                                                                                             AS market_cap_ev_neg4fq,
+       pml.safe_divide(market_cap_neg1fy, enterprise_value_neg1fy)                                                                                                                                             AS market_cap_ev_neg1fy,
+       pml.safe_divide(market_cap_neg2fy, enterprise_value_neg2fy)                                                                                                                                             AS market_cap_ev_neg2fy,
+       pml.safe_divide(market_cap_neg3fy, enterprise_value_neg3fy)                                                                                                                                             AS market_cap_ev_neg3fy,
+       pml.safe_divide(market_cap_neg4fy, enterprise_value_neg4fy)                                                                                                                                             AS market_cap_ev_neg4fy,
+       pml.safe_divide(market_cap_3yavg, enterprise_value_3yavg)                                                                                                                                               AS market_cap_ev_3yavg,
+       pml.safe_divide(market_cap_5yavg, enterprise_value_5yavg)                                                                                                                                               AS market_cap_ev_5yavg,
+       -- feat_mv_ev_drift: per-step drift of market_cap_ev across the fiscal-year
+       -- trail (current -> neg4fy), min-points-guarded (>=2 valid pairs) and
+       -- winsorised to [-1, 1] like the analyst-target drifts. Positive drift flags
+       -- equity re-rating / de-leveraging vs enterprise value; a kalman_pt
+       -- mutable_predictor (state-transition mean / beta).
+       pml.winsorise(pml.target_drift(
+		                     ARRAY [pml.safe_divide(market_cap, enterprise_value), pml.safe_divide(market_cap_neg1fy, enterprise_value_neg1fy), pml.safe_divide(market_cap_neg2fy, enterprise_value_neg2fy), pml.safe_divide(market_cap_neg3fy, enterprise_value_neg3fy), pml.safe_divide(market_cap_neg4fy, enterprise_value_neg4fy)],
+		                     2), -1,
+                     1)                                                                                                                                                                                        AS feat_mv_ev_drift
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_kalman_pt_isin ON pml.mv_pymc_kalman_pt (isin);
@@ -740,7 +872,11 @@ SELECT isin,
        ev_ebitda_ntm                                                               AS feat_ev_ebitda_ntm,
        return_on_assets_roa_pct_ltm                                                AS feat_roa_ltm,
        gross_profit_margin_pct_ltm                                                 AS feat_gpm_ltm,
-       beta_5y                                                                     AS feat_beta_5y
+       beta_5y                                                                     AS feat_beta_5y,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                        AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                               AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                   AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_dcf_pt_isin ON pml.mv_pymc_dcf_pt (isin);
@@ -777,7 +913,11 @@ SELECT isin,
        repurchase_common_stock_ltm                                                                AS feat_repurchases_ltm,
        altman_z_score_ltm                                                                         AS feat_altman_z,
        return_on_assets_roa_pct_ltm                                                               AS feat_roa_ltm,
-       div_yield_ltm - div_yield_5yavgltm                                                         AS feat_yield_spread_vs_5y
+       div_yield_ltm - div_yield_5yavgltm                                                         AS feat_yield_spread_vs_5y,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                                        AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                                               AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                                   AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_dividend_safety_isin ON pml.mv_pymc_dividend_safety (isin);
@@ -813,7 +953,11 @@ SELECT isin,
        p_b_ltm                                                                                         AS feat_pb_ltm,
        beta_2y                                                                                         AS feat_beta_2y,
        volatility_6m                                                                                   AS feat_vol_6m,
-       volatility_1y                                                                                   AS feat_vol_1y
+       volatility_1y                                                                                   AS feat_vol_1y,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                                            AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                                                   AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                                       AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_credit_risk_isin ON pml.mv_pymc_credit_risk (isin);
@@ -849,7 +993,11 @@ SELECT isin,
        pml.calc_change_ratio(full_time_employees_fy, full_time_employees_neg1fy)          AS feat_employee_growth_1y,
        -- FCF-per-share divergence from EPS – classic earnings-quality red flag
        pml.calc_change_ratio(fcf_per_share_ltm, net_eps_basic_ltm)                        AS feat_fcfps_vs_eps_gap,
-       peg_ntm                                                                            AS feat_peg_ntm
+       peg_ntm                                                                            AS feat_peg_ntm,
+       -- ---- Cross-cutting market-cap / EV size & trend feats ----
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                               AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                                      AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                          AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_accounting_anomaly_isin ON pml.mv_pymc_accounting_anomaly (isin);
