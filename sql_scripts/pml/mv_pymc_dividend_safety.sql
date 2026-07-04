@@ -1,6 +1,7 @@
 CREATE MATERIALIZED VIEW mv_pymc_dividend_safety AS
 SELECT isin,
        ticker,
+       trading_region,
        region,
        country,
        trading_country,

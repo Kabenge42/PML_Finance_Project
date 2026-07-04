@@ -1,7 +1,7 @@
 CREATE MATERIALIZED VIEW mv_pymc_price_target AS
 SELECT isin,
        ticker,
-       region,
+       trading_region,
        country,
        trading_country,
        exchange,

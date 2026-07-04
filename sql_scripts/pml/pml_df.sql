@@ -1,15 +1,16 @@
 CREATE TABLE pml_df
 (
 	ticker                            text,
-	isin text NOT NULL
+	isin                   text NOT NULL
 		CONSTRAINT pml_isin_pk PRIMARY KEY,
 	name                              text,
 	description                       text,
-	region                            text,
-	country                           text,
+	trading_region         text,
 	trading_country                   text,
 	exchange                          text,
 	unit                              text,
+	region                 text,
+	country                text,
 	sector                            text,
 	industry                          text,
 	style_class                       text,
@@ -588,7 +589,24 @@ CREATE TABLE pml_df
 	market_cap_3yavg                  double precision,
 	market_cap_5yavg                  double precision,
 	enterprise_value_3yavg            double precision,
-	enterprise_value_5yavg            double precision
+	enterprise_value_5yavg double precision,
+	tot_return_pct_cagr_5y double precision,
+	tot_return_pct_cagr_1y double precision,
+	total_return_1d        double precision,
+	total_return_5d        double precision,
+	total_return_1w        double precision,
+	total_return_1m        double precision,
+	total_return_3m        double precision,
+	total_return_6m        double precision,
+	total_return_1y        double precision,
+	total_return_3y        double precision,
+	total_return_mtd       double precision,
+	total_return_qtd       double precision,
+	total_return_2025      double precision,
+	total_return_2024      double precision,
+	total_return_2023      double precision,
+	total_return_2022      double precision,
+	total_return_2021      double precision
 );
 
 ALTER TABLE pml_df

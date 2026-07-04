@@ -1,6 +1,7 @@
 CREATE MATERIALIZED VIEW mv_pymc_earnings_beat AS
 WITH beats AS (SELECT pml_df.isin,
                       pml_df.ticker,
+                      pml_df.trading_region,
                       pml_df.region,
                       pml_df.country,
                       pml_df.trading_country,
@@ -49,6 +50,7 @@ WITH beats AS (SELECT pml_df.isin,
               )
 SELECT b.isin,
        b.ticker,
+       b.trading_region,
        b.region,
        b.country,
        b.trading_country,

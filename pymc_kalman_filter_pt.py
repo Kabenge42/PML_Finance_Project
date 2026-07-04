@@ -134,7 +134,16 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
                   # Short-term momentum: last day's price change (one_day_pct).
                   'feat_one_day_return',
                   'feat_total_return_ytd', 'feat_total_return_5y', 'feat_total_return_10y',
-                  'feat_tr_cagr_3y',
+                  'feat_tr_cagr_3y', 'feat_tr_cagr_10y', 'feat_tr_cagr_5y', 'feat_tr_cagr_1y',
+                  # Short/medium-horizon realised total returns (rolling windows,
+                  # period-to-date, and calendar-year buckets) emitted by
+                  # mv_pymc_kalman_pt as momentum / drift predictors.
+                  'feat_total_return_1d', 'feat_total_return_5d', 'feat_total_return_1w',
+                  'feat_total_return_1m', 'feat_total_return_3m', 'feat_total_return_6m',
+                  'feat_total_return_1y', 'feat_total_return_3y',
+                  'feat_total_return_mtd', 'feat_total_return_qtd',
+                  'feat_total_return_2025', 'feat_total_return_2024', 'feat_total_return_2023',
+                  'feat_total_return_2022', 'feat_total_return_2021',
                   # Drift of the market_cap / enterprise_value ratio trail (equity share
                   # of EV) across the fiscal-year lags — a state-transition drift predictor.
                   'feat_mv_ev_drift',
@@ -147,12 +156,12 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
 # define the single-security time axis (sections 11–13) and must NOT be treated as
 # categorical effects in the cross-sectional model.
 CLASSIFICATION_COORDS_ALL = (
-    'region', 'country', 'trading_country',
+    'region', 'trading_region', 'country', 'trading_country',
     'exchange', 'unit', 'sector', 'industry', 'style_class', 'size_class'
 
 )
 FISCAL_CALENDAR_COLS_ALL = (
-    'income_statement_report_date', 'next_earnings', 'fy_end_date',
+    'income_statement_report_date', 'next_earnings', 'fy_end_date', 'last_updated',
     'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date',
 )
 DAY_COUNT_COLS_ALL = (
@@ -161,7 +170,7 @@ DAY_COUNT_COLS_ALL = (
 )
 
 # Candidate categorical group-effect coords for the hierarchical drift mean (section 5).
-_CANDIDATE_GROUPS = ('region', 'style_class', 'size_class', 'sector')
+_CANDIDATE_GROUPS = ('region', 'trading_region', 'style_class', 'size_class', 'sector')
 
 # *_ago price-target history column pattern shared by sections 11–13.
 HIST_COL_PATTERN = (r"^(price_target(_high|_low|_median)?|price)"
@@ -1191,7 +1200,11 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
                              'feat_coverage_drift', 'feat_pt_noise_drift',
                              'feat_one_day_return',
                              'feat_total_return_ytd', 'feat_total_return_5y',
-                             'feat_total_return_10y', 'feat_tr_cagr_3y'
+                             'feat_total_return_10y', 'feat_tr_cagr_3y',
+                             # Curated momentum ladder (mirrors the drift-predictor set).
+                             'feat_total_return_1m', 'feat_total_return_3m',
+                             'feat_total_return_6m', 'feat_total_return_1y',
+                             'feat_tr_cagr_5y'
                              )
                  if c in kalman_df.columns]
     eda_noise = [c for c in ('feat_pt_range_norm', 'feat_pt_noise_sigma',
@@ -1319,7 +1332,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     # 2.4f Empirical per-group implied-upside forest (EDA preview of §5 group effects).
     _fe = kalman_df[(kalman_df['observed_pt'] > 0) & (kalman_df['last_price'] > 0)].copy()
     _fe['upside_pct'] = ((_fe['observed_pt'] / _fe['last_price'] - 1.0) * 100.0).clip(-100, 200)
-    _group_preview = [c for c in ('region', 'sector', 'industry', 'size_class',
+    _group_preview = [c for c in ('region', 'trading_region', 'sector', 'industry', 'size_class',
                                   'style_class', 'unit', 'exchange') if c in _fe.columns]
     _min_per_level = 5
     _boot_draws = 4000
@@ -1386,6 +1399,16 @@ def map_state_space_features(kalman_df: pd.DataFrame) -> tuple[list[str], pd.Dat
                                   'feat_one_day_return',
                                   'feat_total_return_ytd', 'feat_total_return_5y',
                                   'feat_total_return_10y', 'feat_tr_cagr_3y',
+                                  # Curated momentum ladder from the new realised-return
+                                  # features: rolling 1m/3m/6m/1y returns + the 5y CAGR.
+                                  # The remaining mv_pymc_kalman_pt return columns
+                                  # (1d/5d/1w, 3y, mtd/qtd, cagr_1y/10y, and the calendar-
+                                  # year buckets) stay available in the MV / catalogue but
+                                  # are intentionally excluded here to avoid piling
+                                  # collinear momentum inputs onto the state-transition mean.
+                                  'feat_total_return_1m', 'feat_total_return_3m',
+                                  'feat_total_return_6m', 'feat_total_return_1y',
+                                  'feat_tr_cagr_5y',
                                   # Market-cap / EV ratio (equity share of EV) drift
                                   # across the fiscal-year trail — a size/leverage
                                   # re-rating signal on the state-transition mean.
@@ -2099,7 +2122,6 @@ def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs):
                  color='#2ca02c', alpha=0.7)
     axes[2].set_title('Prior sigma_isin  (heteroscedastic scale)')
     axes[2].set_xlabel('sigma_isin')
-    plt.tight_layout()
     plt.show()
 
     print(f'Prior expected_upside: median={np.nanmedian(prior_up):.3f}, '
@@ -2228,7 +2250,6 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
     ax.set_ylabel('ECDF')
     ax.set_title('Posterior-predictive ECDF overlay — fused MvGRW panel')
     ax.legend(fontsize=8, framealpha=0.25)
-    plt.tight_layout()
     plt.show()
 
     # (c) Per-y_series 94% predictive-interval coverage.
@@ -2545,6 +2566,7 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
         'isin': np.asarray(panel.isins),
         'ticker': frame.get('ticker'),
         'name': frame.get('name'),
+        'trading_region': frame.get('trading_region'),
         'region': frame.get('region'),
         'country': frame.get('country'),
         'unit': frame.get('unit'),
@@ -2607,7 +2629,6 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
     ax.set_xlabel('consensus observed_pt')
     ax.set_ylabel('fused-panel expected_pt')
     ax.set_title('Fused-panel expected target vs raw consensus')
-    plt.tight_layout()
     plt.show()
 
     # Per-industry expected_upside posterior — arviz_plots forest with HDIs.
@@ -2724,7 +2745,6 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
     ax.set_ylabel('Kalman-smoothed expected upside (%)')
     ax.set_title('Posterior shrinkage of analyst-implied upside')
     ax.legend(fontsize=8, framealpha=0.25)
-    plt.tight_layout()
     plt.show()
 
     # (2) arviz_plots KDE of the posterior cross-sectional-average expected upside.
@@ -2754,7 +2774,6 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
     ax.set_xlabel('return / upside (%)')
     ax.set_title('Expected vs implied vs realised returns - distributional comparison')
     ax.legend(fontsize=8, framealpha=0.25)
-    plt.tight_layout()
     plt.show()
 
     # (3) Per-sector forest-style comparison.
@@ -2858,7 +2877,7 @@ def _cap_normalize_weights(w: np.ndarray, cap: float) -> np.ndarray:
 
 def compute_cvar_aware_book(
         idata, panel: KalmanPanelInputs, screen: ScreenContext, results: pd.DataFrame,
-        *, alpha: float = 0.05, cap: float = 0.08, k_book: int = 100,
+        *, alpha: float = 0.05, cap: float = 0.08, k_book: int = 25,
         p_long: float = 0.80,
 ) -> RiskBook:
     """Build the CVaR-aware long book and per-name risk analytics (SSOT).
@@ -3067,6 +3086,7 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
         'isin': np.asarray(panel.isins),
         'ticker': _idcol('ticker'),
         'name': _idcol('name'),
+        'trading_region': _idcol('trading_region'),
         'region': _idcol('region'),
         'country': _idcol('country'),
         'unit': _idcol('unit'),
@@ -3136,7 +3156,7 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     _date_cols = [c for c in (*FISCAL_CALENDAR_COLS_ALL, 'next_earnings_when',
                               'next_earnings_status', *DAY_COUNT_COLS_ALL)
                   if c in kalman_results.columns]
-    _id_cols = [c for c in ('isin', 'ticker', 'name', 'region', 'country', 'unit', 'exchange',
+    _id_cols = [c for c in ('isin', 'ticker', 'name', 'trading_region', 'region', 'country', 'unit', 'exchange',
                             'sector', 'industry','size_class','style_class') if c in kalman_results.columns]
     _other_cols = [c for c in kalman_results.columns
                    if c not in (*_id_cols, *_date_cols)]
@@ -3379,7 +3399,8 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
     """
     model_df = frame
     try:
-        keep = ('isin', 'ticker', 'last_price', 'price_target', 'next_earnings',
+        keep = ('isin', 'name', 'ticker', 'last_price', 'price_target', 'market_cap', 'enterprise_value',
+                'last_updated', 'next_earnings',
                 'income_statement_report_date', 'expected_report_date')
         hist_cols, col_sql = fetch_history_columns(engine, keep)
         with engine.connect() as conn:
@@ -3388,8 +3409,10 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
                     SELECT {col_sql}
                     FROM pml.pml_df
                     WHERE next_earnings >= '2026-01-01'
-                      AND next_earnings >= current_date - INTERVAL '10 days'
-                      AND next_earnings <= current_date + INTERVAL '10 days'
+                      AND last_updated >= '2026-01-01'
+                      AND next_earnings >= current_date - INTERVAL '5 days'
+                      AND next_earnings <= current_date + INTERVAL '30 days'
+                    ORDER BY market_cap DESC 
                 """),
                 conn,
             )
@@ -3603,7 +3626,8 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
     ``cohort_meta`` ...) for §13.1 / §14.
     """
     try:
-        keep_cols_tuple = ('isin', 'ticker', 'name', 'description', 'region', 'country', 'exchange', 'unit', 'sector',
+        keep_cols_tuple = ('isin', 'ticker', 'name', 'description', 'trading_region', 'region', 'country', 'exchange',
+                           'unit', 'sector',
                            'industry', 'market_cap', 'enterprise_value', 'last_price', 'price_target', 'next_earnings',
                            'days_to_earnings',
                            'income_statement_report_date', 'next_income_statement_report_date', 'next_fy_end_date_date')
@@ -3614,8 +3638,8 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
                     SELECT {col_sql}
                     FROM pml.pml_df
                     WHERE next_earnings >= '2026-01-01'
-                      AND next_earnings >= current_date - INTERVAL '10 days'
-                      AND next_earnings <= current_date + INTERVAL '10 days'
+                      AND next_earnings >= current_date - INTERVAL '5 days'
+                      AND next_earnings <= current_date + INTERVAL '30 days'
                 """),
                 conn,
             )
@@ -3688,7 +3712,8 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
               f'50% HDI band: ({band50[0]:.2f}, {band50[1]:.2f});  '
               f'cohort last_price ref = {cohort_last_price:.2f}.')
 
-        _cols = ['isin', 'ticker', 'name', 'description', 'region', 'country', 'exchange', 'unit', 'sector', 'industry',
+        _cols = ['isin', 'ticker', 'name', 'description', 'trading_region', 'region', 'country', 'exchange', 'unit',
+                 'sector', 'industry',
                  'market_cap', 'enterprise_value', 'last_price', 'observed_pt',
                  'expected_pt', 'expected_pt_hdi_lo', 'expected_pt_hdi_hi',
                  'expected_upside_pct']
@@ -3846,7 +3871,7 @@ def run_summary(results: pd.DataFrame, screen: ScreenContext,
             return 'n/a'
 
     def _label(row):
-        t = row.get('ticker')
+        t = row.get('name')
         return t if isinstance(t, str) and t.strip() else str(row['isin'])
 
     def _band_width_pct(df):
@@ -4066,7 +4091,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
           f'UNDERWEIGHT if < universe{UW_PP:.0f}pp or P(>0)<={P_LO:.0%}.')
 
     # 4. Group allocation signals (hierarchical coords).
-    _coords = [c for c in ('region', 'sector', 'size_class', 'style_class')
+    _coords = [c for c in ('region', 'trading_region', 'sector', 'size_class', 'style_class')
                if c in model_df.columns]
     for col in _coords:
         lab = model_df[col].fillna('Unknown').astype(str).to_numpy()
@@ -4106,7 +4131,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     _wide = float(np.nanpercentile(nm['band_width_pct'], 80)) if len(nm) else float('inf')
 
     def _nm_label(r):
-        t = r.get('ticker')
+        t = r.get('name')
         return t if isinstance(t, str) and t.strip() else str(r['isin'])
 
     longs = nm[(nm['expected_upside_pct'] > 0) & (nm['p_upside_pos'] >= 0.80)] \

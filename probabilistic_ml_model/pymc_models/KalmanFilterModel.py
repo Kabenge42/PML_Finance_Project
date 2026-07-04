@@ -1720,6 +1720,7 @@ class KalmanFilterPriceTarget:
 # :data:`GROUP_EFFECT_SCALE` in ``build_fused_kalman_pt_model`` (the group SD is
 # fixed, not learned — see that builder's docstring for why).
 _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
+    "trading_region",
     "region",
     "sector",
     "size_class",
@@ -1889,7 +1890,7 @@ def build_fused_kalman_pt_model(
     * Remaining priors are scaled to the standardised response/design (``beta``
       σ≈1.0) rather than the previous diffuse ``10``/``5``, so the posterior is
       well-conditioned.
-    * Crossed group intercepts (region/sector/size_class/style_class) use a
+    * Crossed group intercepts (trading_region/region/sector/size_class/style_class) use a
       :class:`pm.ZeroSumNormal` at a **FIXED scale** :data:`GROUP_EFFECT_SCALE`
       (0.25) — the group SD is **not learned**. The sum-to-zero constraint removes
       the additive level ridge (level carried by ``alpha``); the fixed scale removes

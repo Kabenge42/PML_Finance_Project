@@ -39,6 +39,7 @@ from ..theme import CONTROLS_ROW_STYLE, control
 # categorical global filters; everything else (inputs, defaults, reset, the
 # applied filtering) is derived from it.
 COORD_FILTERS: tuple[tuple[str, str], ...] = (
+    ("trading_region", "Trading Region"),
     ("region", "Region"),
     ("country", "Country"),
     ("exchange", "Exchange"),

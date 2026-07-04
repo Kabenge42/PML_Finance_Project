@@ -77,7 +77,7 @@ WHERE column_name IN ('name', 'description');
 UPDATE pml.pml_df_metadata
 SET category     = 'classification',
     feature_role = 'categorical'
-WHERE column_name IN ('region', 'country', 'trading_country', 'exchange',
+WHERE column_name IN ('region', 'trading_region', 'country', 'trading_country', 'exchange',
                       'unit', 'sector', 'industry', 'style_class', 'size_class');
 
 -- =========================================================================
@@ -207,7 +207,13 @@ UPDATE pml.pml_df_metadata
 SET category     = 'total_return',
     feature_role = 'target'
 WHERE column_name IN ('total_return_ytd', 'total_return_5y', 'total_return_10y',
-                      'tot_return_pct_cagr_3y', 'tot_return_pct_cagr_10y');
+                      'tot_return_pct_cagr_3y', 'tot_return_pct_cagr_10y',
+                      'tot_return_pct_cagr_5y', 'tot_return_pct_cagr_1y',
+                      'total_return_1d', 'total_return_5d', 'total_return_1w',
+                      'total_return_1m', 'total_return_3m', 'total_return_6m',
+                      'total_return_1y', 'total_return_3y', 'total_return_mtd',
+                      'total_return_qtd', 'total_return_2025', 'total_return_2024',
+                      'total_return_2023', 'total_return_2022', 'total_return_2021');
 
 -- =========================================================================
 -- ANALYST PRICE TARGETS  (model labels for PriceTargetModel / DCF)
@@ -480,6 +486,9 @@ UPDATE pml.pml_df_metadata
 SET description = 'Country where stock is traded'
 WHERE column_name = 'trading_country';
 UPDATE pml.pml_df_metadata
+SET description = 'Region where stock is traded'
+WHERE column_name = 'trading_region';
+UPDATE pml.pml_df_metadata
 SET description = 'Stock exchange'
 WHERE column_name = 'exchange';
 UPDATE pml.pml_df_metadata
@@ -727,6 +736,57 @@ WHERE column_name = 'tot_return_pct_cagr_3y';
 UPDATE pml.pml_df_metadata
 SET description = 'Total return CAGR 10 years'
 WHERE column_name = 'tot_return_pct_cagr_10y';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return CAGR 5 years'
+WHERE column_name = 'tot_return_pct_cagr_5y';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return CAGR 1 year'
+WHERE column_name = 'tot_return_pct_cagr_1y';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return 1 day'
+WHERE column_name = 'total_return_1d';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return 5 days'
+WHERE column_name = 'total_return_5d';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return 1 week'
+WHERE column_name = 'total_return_1w';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return 1 month'
+WHERE column_name = 'total_return_1m';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return 3 months'
+WHERE column_name = 'total_return_3m';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return 6 months'
+WHERE column_name = 'total_return_6m';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return 1 year'
+WHERE column_name = 'total_return_1y';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return 3 years'
+WHERE column_name = 'total_return_3y';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return month-to-date'
+WHERE column_name = 'total_return_mtd';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return quarter-to-date'
+WHERE column_name = 'total_return_qtd';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return calendar year 2025'
+WHERE column_name = 'total_return_2025';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return calendar year 2024'
+WHERE column_name = 'total_return_2024';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return calendar year 2023'
+WHERE column_name = 'total_return_2023';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return calendar year 2022'
+WHERE column_name = 'total_return_2022';
+UPDATE pml.pml_df_metadata
+SET description = 'Total return calendar year 2021'
+WHERE column_name = 'total_return_2021';
 
 -- Analyst price targets
 UPDATE pml.pml_df_metadata
@@ -1117,7 +1177,7 @@ WHERE pymc_role IS NULL
 UPDATE pml.pml_df_metadata
 SET pymc_role = 'coord'
 WHERE column_name IN ('isin', 'ticker',
-                      'region', 'country', 'trading_country', 'exchange',
+                      'region', 'country', 'trading_region', 'trading_country', 'exchange',
                       'unit', 'sector', 'industry', 'style_class', 'size_class');
 
 -- 4. Observed likelihood inputs (model labels / targets).
@@ -1129,7 +1189,13 @@ WHERE column_name IN ('price_target', 'price_target_median', 'price_target_low',
                       'price_target_high', 'price_target_stddev',
                       'target_pct_avg', 'target_pct_med', 'target_pct_low', 'target_pct_high',
                       'total_return_ytd', 'total_return_5y', 'total_return_10y',
-                      'tot_return_pct_cagr_3y', 'tot_return_pct_cagr_10y');
+                      'tot_return_pct_cagr_3y', 'tot_return_pct_cagr_10y',
+                      'tot_return_pct_cagr_5y', 'tot_return_pct_cagr_1y',
+                      'total_return_1d', 'total_return_5d', 'total_return_1w',
+                      'total_return_1m', 'total_return_3m', 'total_return_6m',
+                      'total_return_1y', 'total_return_3y', 'total_return_mtd',
+                      'total_return_qtd', 'total_return_2025', 'total_return_2024',
+                      'total_return_2023', 'total_return_2022', 'total_return_2021');
 
 -- 5. `n_total` / `n_beats` style discrete inputs and analyst counts stay as
 --    constant_data (not predictors but carried into idata.constant_data).
@@ -1316,7 +1382,7 @@ WHERE column_name IN ('price_target_1y_ago',
                       'price_target_median_1y_ago',
                       'price_target_median',
                       'price_target'
-                      );
+	);
 
 -- 7h.3 KalmanFilterPriceTarget: full stddev-trail snapshots and analyst-range
 --      bounds used in feat_pt_noise_drift / feat_pt_range_norm. The high / low /
@@ -1339,7 +1405,24 @@ WHERE column_name IN ('price_target_high',
                       'total_return_5y',
                       'total_return_10y',
                       'tot_return_pct_cagr_3y',
-                      'tot_return_pct_cagr_10y');
+                      'tot_return_pct_cagr_10y',
+                      'tot_return_pct_cagr_5y',
+                      'tot_return_pct_cagr_1y',
+                      'total_return_1d',
+                      'total_return_5d',
+                      'total_return_1w',
+                      'total_return_1m',
+                      'total_return_3m',
+                      'total_return_6m',
+                      'total_return_1y',
+                      'total_return_3y',
+                      'total_return_mtd',
+                      'total_return_qtd',
+                      'total_return_2025',
+                      'total_return_2024',
+                      'total_return_2023',
+                      'total_return_2022',
+                      'total_return_2021');
 
 -- 7h.3b KalmanFilterPriceTarget: short-term momentum. one_day_pct (last day's
 --       price change) is emitted by mv_pymc_kalman_pt as feat_one_day_return, a
@@ -1500,7 +1583,7 @@ SET model_targets = (SELECT ARRAY(SELECT DISTINCT
                                          unnest(model_targets ||
                                                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']))
                     )
-WHERE column_name IN ('region', 'country', 'trading_country', 'exchange',
+WHERE column_name IN ('region', 'country', 'trading_region', 'trading_country', 'exchange',
                       'unit', 'style_class', 'size_class', 'sector', 'industry');
 
 -- =============================================================================
@@ -1509,7 +1592,7 @@ WHERE column_name IN ('region', 'country', 'trading_country', 'exchange',
 UPDATE pml.pml_df_metadata
 SET feature_alias = column_name
 WHERE column_name IN ('isin', 'ticker',
-                      'region', 'country', 'trading_country', 'exchange',
+                      'region', 'country', 'trading_region', 'trading_country', 'exchange',
                       'unit', 'style_class', 'size_class', 'sector', 'industry');
 
 -- =============================================================================
@@ -1539,8 +1622,7 @@ ON CONFLICT (column_name) DO NOTHING;
 -- model_targets here, after the seed, so the columns surface in
 -- vw_pymc_feature_catalogue for BOTH consuming models.
 UPDATE pml.pml_df_metadata
-SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(
-		model_targets || ARRAY ['price_target', 'kalman_pt'])))
+SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['price_target', 'kalman_pt'])))
 WHERE column_name IN ('days_to_next_earnings',
                       'days_since_last_report',
                       'days_to_next_fy_end',
@@ -1612,16 +1694,16 @@ VALUES
 	-- Valid-pair coverage counts for the drift trails (pml.target_drift_n):
 	-- constant_data the fused panel / coverage guard gate on so a sparse,
 	-- mostly-NULL trail cannot enter the ICM as a degenerate response.
-	('feat_pt_drift_n',    'analyst_targets', 'metadata',  'constant_data',     'feat_pt_drift_n',    ARRAY ['kalman_pt']),
-	('feat_price_drift_n', 'analyst_targets', 'metadata',  'constant_data',     'feat_price_drift_n', ARRAY ['kalman_pt']),
+	                            ('feat_pt_drift_n',                    'analyst_targets', 'metadata',   'constant_data',     'feat_pt_drift_n',                    ARRAY ['kalman_pt']                ),
+	                            ('feat_price_drift_n',                 'analyst_targets', 'metadata',   'constant_data',     'feat_price_drift_n',                 ARRAY ['kalman_pt']                ),
 	                            ('feat_pt_range_norm',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_norm',                 ARRAY ['kalman_pt']                ),
 	-- Drift of the market_cap / enterprise_value ratio trail
 	-- (equity share of EV) across the fiscal-year lags. A
 	-- multi-source self-row (matched market_cap / EV lag pairs)
 	-- consumed by the fused panel as a state-transition (beta)
 	-- drift predictor — see feat_mv_ev_drift in mv_pymc_kalman_pt.
-	('feat_mv_ev_drift',   'market_data',     'predictor', 'mutable_predictor', 'feat_mv_ev_drift',   ARRAY ['kalman_pt']),
-	('feat_avg_beta',      'volatility',      'predictor', 'mutable_predictor', 'feat_avg_beta',      ARRAY ['kalman_pt']),
+	                            ('feat_mv_ev_drift',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mv_ev_drift',                   ARRAY ['kalman_pt']                ),
+	                            ('feat_avg_beta',                      'volatility',      'predictor',  'mutable_predictor', 'feat_avg_beta',                      ARRAY ['kalman_pt']                ),
 	-- earnings_beat logit-beat-rate + revision-acceleration feats (mv_pymc_earnings_beat)
 	                            ('feat_logit_beat_rate',               'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate',               ARRAY ['earnings_beat']            ),
 	                            ('feat_logit_beat_rate_annual',        'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate_annual',        ARRAY ['earnings_beat']            ),
@@ -1694,22 +1776,22 @@ VALUES
 	                                 ('eps_gaap_est_avg_rev_pct_fy1e_3m',  'earnings_beat',      'feat_rev_gaap_gap_3m',              'mutable_predictor'),
 	                                 ('eps_neg0fqsurprise_pct',            'earnings_beat',      'feat_last_q_surprise',              'mutable_predictor'),
 	                                 ('eps_neg0fysurprise_pct',            'earnings_beat',      'feat_last_y_surprise',              'mutable_predictor'),
-		-- Most-recent single-period EBIT / EBITDA / Sales surprises. The full
-		-- quarterly / annual surprise trails feed pml.beat_counts -> n_*_total /
-		-- n_*_beats / feat_*_logit_beat_rate in mv_pymc_earnings_beat; those are
-		-- array-derived (multi-column) so, like the EPS n_total / n_beats /
-		-- feat_logit_beat_rate columns, they are intentionally NOT aliased here
-		-- (the alias table is keyed PRIMARY KEY (column_name, model_target)).
-		-- Only the neg0-period carriers below get an alias.
-		                             ('ebit_neg0fqsurprise_pct',           'earnings_beat',      'feat_ebit_last_q_surprise',         'mutable_predictor'),
-		                             ('ebit_neg0fysurprise_pct',           'earnings_beat',      'feat_ebit_last_y_surprise',         'mutable_predictor'),
-		                             ('ebitda_neg0fqsurprise_pct',         'earnings_beat',      'feat_ebitda_last_q_surprise',       'mutable_predictor'),
-		                             ('ebitda_neg0fysurprise_pct',         'earnings_beat',      'feat_ebitda_last_y_surprise',       'mutable_predictor'),
-		                             ('sales_neg0fqsurprise_pct',          'earnings_beat',      'feat_sales_last_q_surprise',        'mutable_predictor'),
-		                             ('sales_neg0fysurprise_pct',          'earnings_beat',      'feat_sales_last_y_surprise',        'mutable_predictor'),
-		                             ('days_to_earnings',                  'earnings_beat',      'feat_days_to_earnings',             'mutable_predictor'),
-		                             ('earnings_report_recency',           'earnings_beat',      'feat_report_recency',               'mutable_predictor'),
-		                             ('next_earnings_status',              'earnings_beat',      'feat_next_earnings_status',         'mutable_predictor'),
+	-- Most-recent single-period EBIT / EBITDA / Sales surprises. The full
+	-- quarterly / annual surprise trails feed pml.beat_counts -> n_*_total /
+	-- n_*_beats / feat_*_logit_beat_rate in mv_pymc_earnings_beat; those are
+	-- array-derived (multi-column) so, like the EPS n_total / n_beats /
+	-- feat_logit_beat_rate columns, they are intentionally NOT aliased here
+	-- (the alias table is keyed PRIMARY KEY (column_name, model_target)).
+	-- Only the neg0-period carriers below get an alias.
+	('ebit_neg0fqsurprise_pct',   'earnings_beat', 'feat_ebit_last_q_surprise',   'mutable_predictor'),
+	('ebit_neg0fysurprise_pct',   'earnings_beat', 'feat_ebit_last_y_surprise',   'mutable_predictor'),
+	('ebitda_neg0fqsurprise_pct', 'earnings_beat', 'feat_ebitda_last_q_surprise', 'mutable_predictor'),
+	('ebitda_neg0fysurprise_pct', 'earnings_beat', 'feat_ebitda_last_y_surprise', 'mutable_predictor'),
+	('sales_neg0fqsurprise_pct',  'earnings_beat', 'feat_sales_last_q_surprise',  'mutable_predictor'),
+	('sales_neg0fysurprise_pct',  'earnings_beat', 'feat_sales_last_y_surprise',  'mutable_predictor'),
+	('days_to_earnings',          'earnings_beat', 'feat_days_to_earnings',       'mutable_predictor'),
+	('earnings_report_recency',   'earnings_beat', 'feat_report_recency',         'mutable_predictor'),
+	('next_earnings_status',      'earnings_beat', 'feat_next_earnings_status',   'mutable_predictor'),
 
 	-- ---- price_target aliases (from mv_pymc_price_target) ----
 	                                 ('target_pct_avg',                    'price_target',       'observed_target_pct',               'observed'         ),
@@ -1785,19 +1867,36 @@ VALUES
 	                                 ('volatility_6m',                     'kalman_pt',          'feat_vol_6m',                       'mutable_predictor'),
 	                                 ('volatility_1y',                     'kalman_pt',          'feat_vol_1y',                       'mutable_predictor'),
 	                                 ('total_return_ytd',                  'kalman_pt',          'feat_total_return_ytd',             'mutable_predictor'),
-	('total_return_5y',         'kalman_pt', 'feat_total_return_5y',  'mutable_predictor'),
-	('total_return_10y',        'kalman_pt', 'feat_total_return_10y', 'mutable_predictor'),
-	('tot_return_pct_cagr_3y',  'kalman_pt', 'feat_tr_cagr_3y',       'mutable_predictor'),
-	('tot_return_pct_cagr_10y', 'kalman_pt', 'feat_tr_cagr_10y',      'mutable_predictor'),
+	('total_return_5y',           'kalman_pt',     'feat_total_return_5y',        'mutable_predictor'),
+	('total_return_10y',          'kalman_pt',     'feat_total_return_10y',       'mutable_predictor'),
+	('tot_return_pct_cagr_3y',    'kalman_pt',     'feat_tr_cagr_3y',             'mutable_predictor'),
+	('tot_return_pct_cagr_10y',   'kalman_pt',     'feat_tr_cagr_10y',            'mutable_predictor'),
+	('tot_return_pct_cagr_5y',    'kalman_pt',     'feat_tr_cagr_5y',             'mutable_predictor'),
+	('tot_return_pct_cagr_1y',    'kalman_pt',     'feat_tr_cagr_1y',             'mutable_predictor'),
+	('total_return_1d',           'kalman_pt',     'feat_total_return_1d',        'mutable_predictor'),
+	('total_return_5d',           'kalman_pt',     'feat_total_return_5d',        'mutable_predictor'),
+	('total_return_1w',           'kalman_pt',     'feat_total_return_1w',        'mutable_predictor'),
+	('total_return_1m',           'kalman_pt',     'feat_total_return_1m',        'mutable_predictor'),
+	('total_return_3m',           'kalman_pt',     'feat_total_return_3m',        'mutable_predictor'),
+	('total_return_6m',           'kalman_pt',     'feat_total_return_6m',        'mutable_predictor'),
+	('total_return_1y',           'kalman_pt',     'feat_total_return_1y',        'mutable_predictor'),
+	('total_return_3y',           'kalman_pt',     'feat_total_return_3y',        'mutable_predictor'),
+	('total_return_mtd',          'kalman_pt',     'feat_total_return_mtd',       'mutable_predictor'),
+	('total_return_qtd',          'kalman_pt',     'feat_total_return_qtd',       'mutable_predictor'),
+	('total_return_2025',         'kalman_pt',     'feat_total_return_2025',      'mutable_predictor'),
+	('total_return_2024',         'kalman_pt',     'feat_total_return_2024',      'mutable_predictor'),
+	('total_return_2023',         'kalman_pt',     'feat_total_return_2023',      'mutable_predictor'),
+	('total_return_2022',         'kalman_pt',     'feat_total_return_2022',      'mutable_predictor'),
+	('total_return_2021',         'kalman_pt',     'feat_total_return_2021',      'mutable_predictor'),
 	-- Short-term momentum: one_day_pct (last day's price change) -> feat_one_day_return.
-	('one_day_pct', 'kalman_pt', 'feat_one_day_return', 'mutable_predictor'),
+	('one_day_pct',               'kalman_pt',     'feat_one_day_return',         'mutable_predictor'),
 	-- Raw beta windows: emitted un-prefixed by mv_pymc_kalman_pt as the
 	-- systematic-risk inputs to feat_avg_beta (the NULL-aware mean), which is the
 	-- model-facing risk-adjustment driver. Aliased == column name (present-check)
 	-- and kept 'derived_input' since the panel consumes feat_avg_beta, not these.
-	('beta_1y',                 'kalman_pt', 'beta_1y',               'derived_input'    ),
-	('beta_2y',                 'kalman_pt', 'beta_2y',               'derived_input'    ),
-	('beta_5y',                 'kalman_pt', 'beta_5y',               'derived_input'    ),
+	('beta_1y',                   'kalman_pt',     'beta_1y',                     'derived_input'    ),
+	('beta_2y',                   'kalman_pt',     'beta_2y',                     'derived_input'    ),
+	('beta_5y',                   'kalman_pt',     'beta_5y',                     'derived_input'    ),
 	-- NOTE: mv_pymc_kalman_pt also emits `feat_implied_upside`
 	--       (= calc_change_ratio(price_target, last_price)). It derives from BOTH
 	--       `price_target` and `last_price`, so it cannot be an alias row here
@@ -1916,8 +2015,8 @@ ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.f
 -- pymc model_target.
 INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias)
 SELECT col, m, col
-FROM unnest(ARRAY ['isin', 'ticker', 'region', 'country', 'trading_country', 'exchange', 'unit', 'style_class', 'size_class', 'sector', 'industry']) col
-	     CROSS JOIN unnest(ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])   m
+FROM unnest(ARRAY ['isin', 'ticker', 'region', 'country', 'trading_region','trading_country', 'exchange', 'unit', 'style_class', 'size_class', 'sector', 'industry']) col
+	     CROSS JOIN unnest(ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])                    m
 ON CONFLICT (column_name, model_target) DO NOTHING;
 
 -- =============================================================================

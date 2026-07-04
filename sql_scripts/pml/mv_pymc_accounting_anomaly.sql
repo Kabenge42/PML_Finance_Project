@@ -1,6 +1,7 @@
 CREATE MATERIALIZED VIEW mv_pymc_accounting_anomaly AS
 SELECT isin,
        ticker,
+       trading_region,
        region,
        country,
        trading_country,
