@@ -15,13 +15,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
+from ._common import coalesce, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import annualized_return_pct, quantile_volatility_pct
 from ..theme import GRAPH_STYLE, control
 from ..theme import card as theme_card
-from ._common import coalesce, empty_figure, sector_values
 
 component_id = "sharpe_ratio_risk_adjusted_return"
 
@@ -249,6 +249,8 @@ def _annualized_risk_metrics(df: pd.DataFrame, risk_free_rate: float) -> pd.Data
         Output(f"{component_id}_error_1", "children"),
         Output(f"{component_id}_graph_2", "figure"),
         Output(f"{component_id}_error_2", "children"),
+        Output(sector_filter_id, "options"),
+        Output(sector_filter_id, "value"),
     ],
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
@@ -260,12 +262,18 @@ def _annualized_risk_metrics(df: pd.DataFrame, risk_free_rate: float) -> pd.Data
         **FILTER_CALLBACK_INPUTS,
     },
 )
-def update(**kwargs) -> Tuple[go.Figure, str, go.Figure, str]:
+def update(**kwargs) -> Tuple[go.Figure, str, go.Figure, str, list, list]:
+    # Scope the local Sector filter to the globally-filtered universe.
+    df_all = filter_data(get_data(), **kwargs)
+    sector_opts, sector_val = scoped_filter(
+        df_all, "sector", kwargs.get(sector_filter_id), multi=True
+    )
+    kwargs[sector_filter_id] = sector_val
     try:
         fig1, fig2 = _update_logic(**kwargs)
-        return fig1, "", fig2, ""
+        return fig1, "", fig2, "", sector_opts, sector_val
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
         empty = empty_figure("An error occurred")
-        return empty, msg, empty, msg
+        return empty, msg, empty, msg, sector_opts, sector_val

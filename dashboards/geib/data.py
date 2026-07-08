@@ -69,25 +69,48 @@ NUMERIC_COLUMNS: list[str] = [
     "reward_to_cvar",
 ]
 
-ALL_COLUMNS: list[str] = IDENTIFIER_COLUMNS + NUMERIC_COLUMNS
+# Raw date coords carried through ``SELECT *`` from the analytics DDL. Declared
+# here so they survive the empty-frame fallback with a datetime dtype and are
+# coerced from whatever pandas / the driver infers. Consumed by the Kalman
+# structural-forecast chart (event lines) and available to any future
+# date-aware panel.
+DATE_COLUMNS: list[str] = [
+    "next_earnings",
+    "fy_end_date",
+    "income_statement_report_date",
+    "next_income_statement_report_date",
+    "next_fy_end_date",
+    "expected_report_date",
+]
+
+ALL_COLUMNS: list[str] = IDENTIFIER_COLUMNS + NUMERIC_COLUMNS + DATE_COLUMNS
 
 _CACHE: Optional[pd.DataFrame] = None
 
 
+def _empty_dtype(col: str) -> str:
+    """Return the empty-frame dtype for *col* (numeric / datetime / object)."""
+    if col in NUMERIC_COLUMNS:
+        return "float64"
+    if col in DATE_COLUMNS:
+        return "datetime64[ns]"
+    return "object"
+
+
 def _empty_frame() -> pd.DataFrame:
     """Return an empty frame carrying every expected column with a sane dtype."""
-    data = {
-        col: pd.Series(dtype="float64" if col in NUMERIC_COLUMNS else "object")
-        for col in ALL_COLUMNS
-    }
+    data = {col: pd.Series(dtype=_empty_dtype(col)) for col in ALL_COLUMNS}
     return pd.DataFrame(data)
 
 
 def _coerce_dtypes(df: pd.DataFrame) -> pd.DataFrame:
-    """Coerce numeric columns to float; leave identifiers as object strings."""
+    """Coerce numeric columns to float, date coords to datetime, identifiers to str."""
     for col in NUMERIC_COLUMNS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in DATE_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
     for col in IDENTIFIER_COLUMNS:
         if col in df.columns:
             df[col] = df[col].astype("object")

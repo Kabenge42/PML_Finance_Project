@@ -12,12 +12,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
+from ._common import empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..theme import GRAPH_STYLE, control
 from ..theme import card as theme_card
-from ._common import empty_figure
 
 component_id = "return_vs_risk_scatter_plot"
 
@@ -39,21 +39,6 @@ size_by_options = [
 size_by_default = "signal_strength"
 
 sector_filter_id = f"{component_id}_sector_filter"
-sector_options = [
-    {"label": s, "value": s}
-    for s in [
-        "Industrials",
-        "Information Technology",
-        "Consumer Discretionary",
-        "Health Care",
-        "Materials",
-        "Communication Services",
-        "Consumer Staples",
-        "Energy",
-        "Utilities",
-    ]
-]
-sector_default = [opt["value"] for opt in sector_options]
 
 title = "Expected Return vs. Risk-Adjusted Return"
 description = (
@@ -67,6 +52,8 @@ def component() -> "object":
     graph_id = f"{component_id}_graph"
     error_id = f"{component_id}_error"
     loading_id = f"{component_id}_loading"
+
+    sector_opts = [{"label": s, "value": s} for s in sector_values(get_data())]
 
     return theme_card(
         title,
@@ -100,8 +87,8 @@ def component() -> "object":
                         "Filter by Sector:",
                         dcc.Dropdown(
                             id=sector_filter_id,
-                            options=sector_options,
-                            value=sector_default,
+                            options=sector_opts,
+                            value=[],
                             multi=True,
                             style={"minWidth": "250px"},
                         ),
@@ -138,9 +125,10 @@ def _update_logic(**kwargs) -> go.Figure:
 
     color_by = kwargs.get(color_by_id) or color_by_default
     size_by = kwargs.get(size_by_id) or size_by_default
-    sector_filter = kwargs.get(sector_filter_id) or sector_default
+    sector_filter = kwargs.get(sector_filter_id)
 
-    df = df[df["sector"].isin(sector_filter)]
+    if sector_filter:
+        df = df[df["sector"].isin(sector_filter)]
     if len(df) == 0:
         return empty_figure("No data matches the selected filters")
     logger.debug(tbl(df))
@@ -163,7 +151,12 @@ def _update_logic(**kwargs) -> go.Figure:
 
 
 @callback(
-    output=[Output(f"{component_id}_graph", "figure"), Output(f"{component_id}_error", "children")],
+    output=[
+        Output(f"{component_id}_graph", "figure"),
+        Output(f"{component_id}_error", "children"),
+        Output(sector_filter_id, "options"),
+        Output(sector_filter_id, "value"),
+    ],
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
         color_by_id: Input(color_by_id, "value"),
@@ -172,10 +165,16 @@ def _update_logic(**kwargs) -> go.Figure:
         **FILTER_CALLBACK_INPUTS,
     },
 )
-def update(**kwargs) -> Tuple[go.Figure, str]:
+def update(**kwargs) -> Tuple[go.Figure, str, list, list]:
+    # Scope the local Sector filter to the globally-filtered universe.
+    df_all = filter_data(get_data(), **kwargs)
+    sector_opts, sector_val = scoped_filter(
+        df_all, "sector", kwargs.get(sector_filter_id), multi=True
+    )
+    kwargs[sector_filter_id] = sector_val
     try:
-        return _update_logic(**kwargs), ""
+        return _update_logic(**kwargs), "", sector_opts, sector_val
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return empty_figure("An error occurred"), msg
+        return empty_figure("An error occurred"), msg, sector_opts, sector_val

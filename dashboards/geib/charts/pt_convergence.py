@@ -12,12 +12,12 @@ from typing import Tuple
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
+from ._common import empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..theme import GRAPH_STYLE, control
 from ..theme import card as theme_card
-from ._common import empty_figure, sector_values
 
 component_id = "price_target_convergence"
 
@@ -166,7 +166,12 @@ def _update_logic(**kwargs) -> go.Figure:
 
 
 @callback(
-    output=[Output(f"{component_id}_graph", "figure"), Output(f"{component_id}_error", "children")],
+    output=[
+        Output(f"{component_id}_graph", "figure"),
+        Output(f"{component_id}_error", "children"),
+        Output(sector_control_id, "options"),
+        Output(sector_control_id, "value"),
+    ],
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
         metric_control_id: Input(metric_control_id, "value"),
@@ -175,10 +180,17 @@ def _update_logic(**kwargs) -> go.Figure:
         **FILTER_CALLBACK_INPUTS,
     },
 )
-def update(**kwargs) -> Tuple[go.Figure, str]:
+def update(**kwargs) -> Tuple[go.Figure, str, list, str]:
+    # Scope the local Sector filter (with its "All" sentinel) to the
+    # globally-filtered universe.
+    df_all = filter_data(get_data(), **kwargs)
+    sector_opts, sector_val = scoped_filter(
+        df_all, "sector", kwargs.get(sector_control_id), include_all=True, all_label="All"
+    )
+    kwargs[sector_control_id] = sector_val
     try:
-        return _update_logic(**kwargs), ""
+        return _update_logic(**kwargs), "", sector_opts, sector_val
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return empty_figure("An error occurred"), msg
+        return empty_figure("An error occurred"), msg, sector_opts, sector_val

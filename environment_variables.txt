@@ -61,7 +61,13 @@ MODEL_VERSION=v9_11
 #   Install:  pacman -S mingw-w64-x86_64-gcc
 #   Path:     C:\msys64\mingw64\bin\g++.exe
 # Fallback (pure-Python VM, no nutpie): cxx=
-PYTENSOR_FLAGS=device=cpu,floatX=float64,cxx=C:\msys64\ucrt64\bin\g++.exe
+#
+# IMPORTANT: use FORWARD slashes in the cxx path. PyTensor parses PYTENSOR_FLAGS
+# with posix shlex, which treats '\' as an escape char and strips it, mangling
+# C:\msys64\ucrt64\bin\g++.exe into the non-existent C:msys64ucrt64bing++.exe
+# (cxx exists: False). Forward slashes survive the parser and g++/Windows accept
+# them. 'device' is also dropped: PyTensor does not recognise it (defaults to CPU).
+PYTENSOR_FLAGS=floatX=float64,cxx=C:/msys64/ucrt64/bin/g++.exe
 
 # -----------------------------------------------------------------------------
 # Performance Settings

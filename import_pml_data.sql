@@ -300,8 +300,6 @@ BEGIN
 	interval_months := CASE UPPER(TRIM(earnings_report_frequency))
 		                   WHEN 'QUARTERLY' THEN fy_range_months / 4
 		                   WHEN 'SEMI-ANNUALLY' THEN fy_range_months / 2
-		                   WHEN 'SEMI-ANNUAL' THEN fy_range_months / 2
-		                   WHEN 'ANNUALLY' THEN fy_range_months
 		                   WHEN 'ANNUAL' THEN fy_range_months
 		                   ELSE fy_range_months / 4 END;
 

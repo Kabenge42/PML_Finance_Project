@@ -1,28 +1,35 @@
-/* GEIB dashboard theme — navy/gold dark scheme.
+/* GEIB dashboard theme — navy/cyan dark scheme.
    Auto-loaded by Dash from the app's assets/ folder.
    Tokens mirror THEME in dashboards/geib/theme.py (single source of truth). */
 
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+
 :root {
-    --geib-gold: #D4AF37; /* accent */
+    --geib-accent: #00D9FF; /* accent — cyan */
+    --geib-teal: #0891B2; /* buttons / tags / card-header accent / dbc primary */
+    --geib-info: #06B6D4; /* light cyan — tag border / dbc info */
     --geib-green: #10B981; /* accent positive */
     --geib-red: #EF4444; /* accent negative */
-    --geib-navy: #0F172A; /* background page */
-    --geib-bg-content: #1A2332; /* background content (cards / header) */
+    --geib-page: #0A0E27; /* background page (body, hero, footer) */
+    --geib-bg-content: #0F172A; /* background content (plot area, table-even) */
+    --geib-card-bg: #1E293B; /* cards, header, controls, card header/desc/menu, table-odd */
     --geib-control-bg: #1E293B; /* control / input fill */
-    --geib-dark-blue: #1E3A8A; /* buttons / tags / dbc primary */
     --geib-body: #E2E8F0; /* body text */
     --geib-subtle: #CBD5E1; /* subtle / description text */
-    --geib-border: #334155; /* borders */
-    --geib-control-border: #475569; /* control borders */
-    /* Back-compat alias retained for any selectors still using the old name. */
-    --geib-slate-dark: #1E293B;
+    --geib-border: #334155; /* outlines, table/control/header borders, grid */
+    --geib-control-border: #334155; /* control borders */
+    /* Back-compat aliases retained for any selectors still using the old names. */
+    --geib-gold: var(--geib-accent);
+    --geib-navy: var(--geib-page);
+    --geib-slate-dark: var(--geib-control-bg);
+    --geib-dark-blue: var(--geib-teal);
 }
 
 body,
 .geib-page {
-    background-color: var(--geib-navy);
+    background-color: var(--geib-page);
     color: var(--geib-body);
-    font-family: "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    font-family: Roboto, "Segoe UI", "Helvetica Neue", sans-serif;
     font-size: 14px;
 }
 
@@ -39,10 +46,10 @@ body,
 
 /* --- Hero / header --- */
 .geib-header {
-    background-color: var(--geib-navy);
-    border-bottom: 2px solid var(--geib-gold);
+    background-color: var(--geib-page);
+    border-bottom: 2px solid var(--geib-accent);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-    padding: 20px 24px;
+    padding: 32px;
     margin-bottom: 32px;
 }
 
@@ -61,7 +68,7 @@ body,
 
 /* --- Cards --- */
 .geib-card {
-    background-color: var(--geib-bg-content) !important;
+    background-color: var(--geib-card-bg) !important;
     border: none !important;
     border-radius: 8px !important;
     outline: 1px solid var(--geib-border);
@@ -73,15 +80,16 @@ body,
 
 /* Breathing room around card contents so graphs never sit flush to the edge. */
 .geib-card > .card-body {
-    padding: 16px;
+    padding: 8px;
 }
 
 .geib-card-header {
-    background-color: var(--geib-bg-content) !important;
-    border-bottom: 2px solid var(--geib-gold) !important;
+    background-color: var(--geib-card-bg) !important;
+    border-bottom: 2px solid var(--geib-teal) !important;
     /* Spec: 12px vertical; keep 16px horizontal so the title aligns with the
        card body padding rather than sitting flush against the card edge. */
     padding: 12px 16px !important;
+    margin: 0 0 16px 0 !important;
 }
 
 .geib-card-title {
@@ -91,7 +99,7 @@ body,
 }
 
 .geib-card-desc {
-    background-color: var(--geib-bg-content) !important;
+    background-color: var(--geib-card-bg) !important;
     color: var(--geib-subtle) !important;
     font-size: 14px;
     border-top: 1px solid var(--geib-border) !important;
@@ -99,7 +107,7 @@ body,
 
 /* --- KPI cards --- */
 .geib-kpi-card {
-    background-color: var(--geib-bg-content) !important;
+    background-color: var(--geib-card-bg) !important;
     border: 1px solid var(--geib-border) !important;
     border-radius: 8px !important;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
@@ -114,7 +122,7 @@ body,
 }
 
 .geib-kpi-value {
-    color: var(--geib-gold);
+    color: var(--geib-accent);
     font-size: 26px;
     font-weight: 700;
     margin: 0;
@@ -155,38 +163,50 @@ body,
     display: block;
 }
 
-/* Dropdown theming (react-select inside dcc.Dropdown). */
-.geib-page .Select-control,
-.geib-page .is-focused:not(.is-open) > .Select-control {
-    background-color: var(--geib-control-bg);
-    border: 1px solid var(--geib-control-border);
-    border-radius: 6px;
-    color: var(--geib-body);
+/* --- dcc control theming (Dash 4 design system) ---------------------------
+   Dash 4's dcc.Dropdown / dcc.Slider / dcc.Checklist are Radix components
+   styled entirely through a global "--Dash-*" design-system variable set that
+   Dash defines on :root with LIGHT defaults (e.g. --Dash-Fill-Inverse-Strong:
+   #fff is the field background — the white filter boxes). The legacy
+   react-select ".Select-*" classes no longer exist, so those rules matched
+   nothing. We re-map the design-system variables to the navy/cyan palette here.
+
+   These are declared on `body` (not :root) on purpose: `body` is a nearer
+   ancestor than the `html` element Dash targets with :root, so our values win
+   by inheritance proximity regardless of stylesheet load order, and Radix
+   popovers/menus portalled to <body> inherit them too. */
+body {
+    --Dash-Spacing: 4px;
+    --Dash-Stroke-Strong: var(--geib-border); /* #334155 — field / menu borders */
+    --Dash-Stroke-Weak: var(--geib-card-bg); /* #1E293B */
+    --Dash-Fill-Inverse-Strong: var(--geib-control-bg); /* #1E293B — field + menu background */
+    --Dash-Fill-Interactive-Strong: var(--geib-accent); /* #00D9FF — focus ring, slider track/handle, checkbox */
+    --Dash-Fill-Interactive-Weak: var(--geib-teal); /* #0891B2 — "N selected" count pill */
+    --Dash-Text-Primary: var(--geib-body);
+    --Dash-Text-Strong: var(--geib-body); /* #E2E8F0 — selected value text */
+    --Dash-Text-Weak: var(--geib-subtle); /* #CBD5E1 */
+    --Dash-Text-Disabled: #94A3B8; /* placeholder text (muted but legible on dark) */
+    --Dash-Fill-Primary-Hover: rgba(0, 217, 255, 0.10); /* option row hover */
+    --Dash-Fill-Primary-Active: rgba(0, 217, 255, 0.16);
+    --Dash-Fill-Disabled: var(--geib-border);
+    --Dash-Shading-Strong: rgba(0, 0, 0, 0.5); /* menu drop-shadow */
+    --Dash-Shading-Weak: rgba(0, 0, 0, 0.35);
 }
 
-.geib-page .Select-menu-outer {
-    background-color: var(--geib-control-bg);
-    border: 1px solid var(--geib-control-border);
-    color: var(--geib-body);
-    /* Float the open menu above the chart that follows the controls row. */
+/* Targeted refinements on top of the variable mapping. */
+.geib-page .dash-dropdown {
+    border-radius: 6px;
+}
+
+/* The "N selected" count pill: teal fill from --Dash-Fill-Interactive-Weak,
+   forced white text for crispness (the expected design). */
+.geib-page .dash-dropdown-value-count {
+    color: #ffffff;
+}
+
+/* Float an open dropdown menu above the chart that follows the controls row. */
+.dash-dropdown-content {
     z-index: 1200;
-}
-
-.geib-page .Select-value-label,
-.geib-page .Select-placeholder,
-.geib-page .Select--single > .Select-control .Select-value {
-    color: var(--geib-body) !important;
-}
-
-.geib-page .Select--multi .Select-value {
-    background-color: #1E40AF;
-    border: 1px solid #3B82F6;
-    color: #93C5FD;
-    border-radius: 6px;
-}
-
-.geib-page .VirtualizedSelectFocusedOption {
-    background-color: #1E40AF;
 }
 
 /* --- Charts / graph panes --- */
@@ -236,67 +256,22 @@ body,
 }
 
 .geib-results {
-    color: var(--geib-gold);
+    color: var(--geib-accent);
     font-weight: bold;
     font-size: 14px;
     align-self: center;
     margin-left: auto;
 }
 
-/* Global filter dropdowns: dark-blue fields with white text.
-   The global COORD + Market-Cap filters sit on the content panel; rendering them
-   as dark-blue input fields with white text makes the active (white) selections
-   read clearly against the panel (scoped to the filter panel so the per-chart
-   slate dropdowns are unaffected). Selectors are nested under
-   .geib-page .geib-filter-panel so they out-specify the .geib-page .Select-*
-   theme above regardless of source order. */
-.geib-page .geib-filter-panel .Select-control,
-.geib-page .geib-filter-panel .is-focused:not(.is-open) > .Select-control {
-    background-color: var(--geib-dark-blue);
-    border: 1px solid var(--geib-control-border);
-    color: #ffffff;
-}
-
-.geib-page .geib-filter-panel .Select-menu-outer {
-    background-color: var(--geib-dark-blue);
-    border: 1px solid var(--geib-control-border);
-    color: #ffffff;
-    z-index: 1200;
-}
-
-.geib-page .geib-filter-panel .Select-value-label,
-.geib-page .geib-filter-panel .Select-placeholder,
-.geib-page .geib-filter-panel .Select--single > .Select-control .Select-value,
-.geib-page .geib-filter-panel .Select-input > input {
-    color: #ffffff !important;
-}
-
-.geib-page .geib-filter-panel .Select--multi .Select-value {
-    background-color: #2563EB;
-    border: 1px solid #60A5FA;
-    color: #ffffff;
-}
-
-.geib-page .geib-filter-panel .Select--multi .Select-value-icon {
-    border-right: 1px solid #60A5FA;
-    color: #ffffff;
-}
-
-.geib-page .geib-filter-panel .Select-option {
-    background-color: var(--geib-dark-blue);
-    color: #ffffff;
-}
-
-.geib-page .geib-filter-panel .VirtualizedSelectFocusedOption,
-.geib-page .geib-filter-panel .Select-option.is-focused {
-    background-color: #2563EB;
-    color: #ffffff;
-}
+/* The global filter dropdowns share the same Dash-4 design-system theming as
+   the per-chart dropdowns (see the `body { --Dash-* }` block above), so they no
+   longer need their own overrides — they render as dark-slate fields with cyan
+   focus rings and teal count pills, matching the rest of the board. */
 
 /* --- Buttons --- */
 .geib-btn,
 .geib-page .btn-primary {
-    background-color: var(--geib-dark-blue) !important;
+    background-color: var(--geib-teal) !important;
     border: none !important;
     color: #ffffff !important;
     border-radius: 6px !important;
@@ -313,7 +288,7 @@ body,
 .geib-table th {
     padding: 8px;
     text-align: left;
-    border-bottom: 2px solid var(--geib-gold);
+    border-bottom: 2px solid var(--geib-teal);
     color: #ffffff;
 }
 
@@ -327,12 +302,12 @@ body,
 }
 
 .geib-table tr:nth-child(odd) {
-    background-color: var(--geib-navy);
+    background-color: var(--geib-card-bg);
 }
 
 /* --- Footer --- */
 .geib-footer {
-    background-color: var(--geib-navy);
+    background-color: var(--geib-page);
     color: #ffffff;
     font-size: 16px;
     text-align: center;

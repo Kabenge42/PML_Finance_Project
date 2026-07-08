@@ -12,6 +12,7 @@ from typing import Tuple
 from dash import Input, Output, callback, dash_table, dcc, html
 from dash.dash_table.Format import Format, Scheme
 
+from ._common import column_values, scoped_filter
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger
@@ -21,10 +22,6 @@ from ..theme import card as theme_card
 component_id = "high_conviction_opportunities"
 
 country_id = f"{component_id}_country"
-country_options = [
-    {"label": c, "value": c}
-    for c in ["All", "US", "CN", "JP", "GB", "IN", "DE", "FR", "CA", "AU"]
-]
 country_default = "US"
 
 sort_by_id = f"{component_id}_sort_by"
@@ -78,6 +75,9 @@ def _table_columns() -> list[dict]:
 
 
 def component() -> "object":
+    country_opts = [{"label": "All", "value": "All"}]
+    country_opts += [{"label": c, "value": c} for c in column_values(get_data(), "country")]
+
     return theme_card(
         title,
         description,
@@ -87,8 +87,8 @@ def component() -> "object":
                 className="geib-controls-row",
                 children=[
                     control("Country:", dcc.Dropdown(
-                        id=country_id, options=country_options, value=country_default,
-                        searchable=False, style={"minWidth": "150px"})),
+                        id=country_id, options=country_opts, value=country_default,
+                        searchable=True, style={"minWidth": "150px"})),
                     control("Sort By:", dcc.Dropdown(
                         id=sort_by_id, options=sort_by_options, value=sort_by_default,
                         multi=True, style={"minWidth": "300px"})),
@@ -171,6 +171,8 @@ def _update_logic(**kwargs) -> list[dict]:
     output=[
         Output(f"{component_id}_table", "data"),
         Output(f"{component_id}_error", "children"),
+        Output(country_id, "options"),
+        Output(country_id, "value"),
     ],
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
@@ -180,10 +182,17 @@ def _update_logic(**kwargs) -> list[dict]:
         **FILTER_CALLBACK_INPUTS,
     },
 )
-def update(**kwargs) -> Tuple[list, str]:
+def update(**kwargs) -> Tuple[list, str, list, str]:
+    # Scope the local Country filter (with its "All" sentinel) to the
+    # globally-filtered universe.
+    df_all = filter_data(get_data(), **kwargs)
+    country_opts, country_val = scoped_filter(
+        df_all, "country", kwargs.get(country_id), include_all=True, all_label="All"
+    )
+    kwargs[country_id] = country_val
     try:
-        return _update_logic(**kwargs), ""
+        return _update_logic(**kwargs), "", country_opts, country_val
     except Exception as exc:
         msg = f"Error updating table: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return [], msg
+        return [], msg, country_opts, country_val

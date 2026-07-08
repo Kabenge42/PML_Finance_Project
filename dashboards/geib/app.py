@@ -11,17 +11,11 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import Dash, Input, Output, callback, dcc, html
 
-from .data import get_data
-from .components import data_cards
-from .components.filter_component import (
-    FILTER_CALLBACK_INPUTS,
-    RESULTS_ID,
-    build_filter_panel,
-    filter_data,
-)
 from .charts import (
+    beta_capm,
     efficient_frontier,
     high_conviction,
+    kalman_structural_forecast,
     kelly,
     monte_carlo,
     monte_carlo_forecast,
@@ -30,20 +24,30 @@ from .charts import (
     sharpe_ratio,
     var_cvar,
 )
+from .components import data_cards
+from .components.filter_component import (
+    FILTER_CALLBACK_INPUTS,
+    RESULTS_ID,
+    build_filter_panel,
+    filter_data,
+)
+from .data import get_data
 
 app = Dash(
     __name__,
     external_stylesheets=[dbc.themes.DARKLY],
     suppress_callback_exceptions=True,
-    title="Global Equity Investment Board",
+    title="Global Equity Investment Dashboard",
     update_title=None,
 )
 server = app.server
 
 # Order of analytic cards down the page.
 _CHART_MODULES = [
+    kalman_structural_forecast,
     pt_convergence,
     risk_adj_return,
+    beta_capm,
     efficient_frontier,
     sharpe_ratio,
     var_cvar,

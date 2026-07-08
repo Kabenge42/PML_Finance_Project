@@ -26,13 +26,13 @@ import numpy as np
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
+from ._common import coalesce, empty_figure, scoped_filter, top_label
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
 from ..metrics import PRICE_TARGET_HORIZON_YEARS, return_volatility
 from ..theme import GOLD, GREEN, RED, control
 from ..theme import card as theme_card
-from ._common import coalesce, empty_figure
 
 component_id = "monte_carlo_return_distribution_forecast"
 
@@ -86,7 +86,9 @@ def component() -> "object":
     except Exception:  # pragma: no cover - defensive
         names = []
     name_opts = [{"label": str(t), "value": str(t)} for t in names]
-    name_default = "NVIDIA Corporation" if "NVIDIA Corporation" in names else (names[0] if names else None)
+    # Default to the largest-market-cap name; the callback reconciles this to the
+    # highest-cap name still present under the active global filters.
+    name_default = top_label(df, "market_cap") or (names[0] if names else None)
 
     return theme_card(
         title,
@@ -196,8 +198,8 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=bin_centers * 100, y=counts, mode="lines", name="Simulated Distribution",
-        line=dict(color="#0EA5E9", width=2), fill="tozeroy",
-        fillcolor="rgba(14, 165, 233, 0.3)",
+        line=dict(color="#06B6D4", width=2), fill="tozeroy",
+        fillcolor="rgba(6, 182, 212, 0.3)",
     ))
     if distribution_type == "normal":
         x_range = np.linspace(terminal.min(), terminal.max(), 200)
@@ -212,7 +214,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
                   annotation_text="5th %ile", annotation_position="top left")
     fig.add_vline(x=er_p50 * 100, line_dash="solid", line_color=GREEN,
                   annotation_text="Median", annotation_position="top right")
-    fig.add_vline(x=er_p95 * 100, line_dash="dash", line_color="#0EA5E9",
+    fig.add_vline(x=er_p95 * 100, line_dash="dash", line_color="#06B6D4",
                   annotation_text="95th %ile", annotation_position="bottom right")
     # Median of the actual simulated distribution (distinct from the posterior
     # er_p50 median above), drawn in a contrasting colour/style.
@@ -286,6 +288,8 @@ def _build_table(row, terminal, num_simulations, horizon_days, initial_price) ->
         Output(f"{component_id}_graph", "figure"),
         Output(f"{component_id}_table", "children"),
         Output(f"{component_id}_error", "children"),
+        Output(name_id, "options"),
+        Output(name_id, "value"),
     ],
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
@@ -296,11 +300,18 @@ def _build_table(row, terminal, num_simulations, horizon_days, initial_price) ->
         **FILTER_CALLBACK_INPUTS,
     },
 )
-def update(**kwargs) -> Tuple[go.Figure, html.Div, str]:
+def update(**kwargs) -> Tuple[go.Figure, html.Div, str, list, str]:
+    # Scope the Name dropdown to the globally-filtered universe, defaulting to the
+    # highest-market-cap name whenever the current pick is filtered out.
+    df_all = filter_data(get_data(), **kwargs)
+    name_opts, name_val = scoped_filter(
+        df_all, "name", kwargs.get(name_id), fallback=top_label(df_all, "market_cap")
+    )
+    kwargs[name_id] = name_val
     try:
         fig, table = _update_logic(**kwargs)
-        return fig, table, ""
+        return fig, table, "", name_opts, name_val
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return empty_figure("An error occurred"), html.Div(), msg
+        return empty_figure("An error occurred"), html.Div(), msg, name_opts, name_val

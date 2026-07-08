@@ -20,13 +20,13 @@ import numpy as np
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
+from ._common import coalesce, column_values, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import PRICE_TARGET_HORIZON_YEARS, quantile_return_volatility
-from ..theme import GOLD, GREEN, RED, control
+from ..theme import GOLD, RED, control
 from ..theme import card as theme_card
-from ._common import coalesce, column_values, empty_figure, sector_values
 
 component_id = "efficient_frontier_optimization"
 
@@ -393,6 +393,10 @@ def _build_table(mu, cov, rets, vols, sharpe, weights, tickers, names,
         Output(f"{component_id}_graph", "figure"),
         Output(f"{component_id}_table", "children"),
         Output(f"{component_id}_error", "children"),
+        Output(sector_filter_id, "options"),
+        Output(sector_filter_id, "value"),
+        Output(currency_id, "options"),
+        Output(currency_id, "value"),
     ],
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
@@ -407,11 +411,20 @@ def _build_table(mu, cov, rets, vols, sharpe, weights, tickers, names,
         **FILTER_CALLBACK_INPUTS,
     },
 )
-def update(**kwargs) -> Tuple[go.Figure, html.Div, str]:
+def update(**kwargs) -> Tuple[go.Figure, html.Div, str, list, list, list, str]:
+    # Scope the local Sector + Currency pickers to the globally-filtered universe.
+    df_all = filter_data(get_data(), **kwargs)
+    sector_opts, sector_val = scoped_filter(
+        df_all, "sector", kwargs.get(sector_filter_id), multi=True
+    )
+    currency_opts, currency_val = scoped_filter(df_all, "unit", kwargs.get(currency_id))
+    kwargs[sector_filter_id] = sector_val
+    kwargs[currency_id] = currency_val
     try:
         fig, table = _update_logic(**kwargs)
-        return fig, table, ""
+        return fig, table, "", sector_opts, sector_val, currency_opts, currency_val
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return empty_figure("An error occurred"), html.Div(), msg
+        return (empty_figure("An error occurred"), html.Div(), msg,
+                sector_opts, sector_val, currency_opts, currency_val)

@@ -50,7 +50,7 @@ import os
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 # ArviZ 1.0 split-package imports: arviz-plots owns ``style`` + plotting, arviz-stats
 # owns ``summary`` / ``rhat`` / ``ess``. Address each submodule directly.
@@ -110,8 +110,9 @@ KALMAN_DF_QUERY = """
                   FROM pml.mv_pymc_kalman_pt mpkp
                   WHERE observed_pt IS NOT NULL
                     AND next_earnings >= '2026-01-01'
-                    AND income_statement_report_date IS NOT NULL 
-                    AND size_class <> 'n/a' \
+                    AND income_statement_report_date >= '2026-01-01'
+                    AND income_statement_report_date NOTNULL
+                    AND sector <> 'Financials'
                   """
 
 # Per-model feature catalogue (pymc_role / feature_role / alias) for kalman_pt.
@@ -170,7 +171,7 @@ DAY_COUNT_COLS_ALL = (
 )
 
 # Candidate categorical group-effect coords for the hierarchical drift mean (section 5).
-_CANDIDATE_GROUPS = ('region', 'trading_region', 'style_class', 'size_class', 'sector')
+_CANDIDATE_GROUPS = ('region', 'trading_region', 'style_class', 'size_class', 'sector', 'unit')
 
 # *_ago price-target history column pattern shared by sections 11–13.
 HIST_COL_PATTERN = (r"^(price_target(_high|_low|_median)?|price)"
@@ -557,7 +558,20 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
     fpt = pg['forecast_pt']
     tf = np.asarray(pg['time_future'].values)
     if np.issubdtype(tf.dtype, np.datetime64):
-        fx = mdates.date2num(tf)
+        # The forecast horizons are datetimes. They must be placed in the SAME
+        # coordinate space as the history axis ``hx``; otherwise the unclipped
+        # horizon annotations land far off-canvas and blow up ``bbox_inches='tight'``
+        # PNG exports (matplotlib's "Image size ... too large" ValueError). When the
+        # history axis is on ``date2num`` we can use the datetimes directly; when it
+        # fell back to an integer index (``len(dates) != n_time``) we project the
+        # datetimes onto that index as day-offsets from the last observation.
+        fx_dates = mdates.date2num(tf)
+        if use_dates:
+            fx = fx_dates
+        else:
+            anchor = (mdates.date2num(np.asarray(dates)[-1])
+                      if dates is not None and len(dates) else fx_dates[0])
+            fx = hx[-1] + (fx_dates - anchor)
     else:
         fx = hx[-1] + np.asarray(tf, dtype=float)
     f_med = fpt.median(('chain', 'draw')).values
@@ -628,6 +642,20 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
         ax_vol.set_ylabel(r'$\sigma_{obs}$')
         ax_vol.set_title('Posterior observation volatility', fontsize=9)
         ax_vol.legend(fontsize=7, framealpha=0.25, loc='best')
+
+    # Pin the x-limits to the intended finite history + forecast span. The horizon
+    # annotations are drawn unclipped in ('data', 'axes fraction') coords, so an
+    # out-of-range or non-finite forecast coordinate would otherwise leak into the
+    # autoscaled view and explode a ``bbox_inches='tight'`` PNG export to millions of
+    # pixels ("Image size ... too large" ValueError). An explicit finite window keeps
+    # the saved figure bounded no matter what the forecast coordinates carry.
+    x_all = np.concatenate([np.asarray(hx, dtype=float).ravel(),
+                            np.asarray(fx, dtype=float).ravel()])
+    x_all = x_all[np.isfinite(x_all)]
+    if x_all.size:
+        x_lo, x_hi = float(x_all.min()), float(x_all.max())
+        pad = (x_hi - x_lo) * 0.02 or 1.0
+        ax.set_xlim(x_lo - pad, x_hi + pad)
 
     axis_ax = ax_vol if show_vol else ax
     if use_dates:
@@ -1332,8 +1360,8 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     # 2.4f Empirical per-group implied-upside forest (EDA preview of §5 group effects).
     _fe = kalman_df[(kalman_df['observed_pt'] > 0) & (kalman_df['last_price'] > 0)].copy()
     _fe['upside_pct'] = ((_fe['observed_pt'] / _fe['last_price'] - 1.0) * 100.0).clip(-100, 200)
-    _group_preview = [c for c in ('region', 'trading_region', 'sector', 'industry', 'size_class',
-                                  'style_class', 'unit', 'exchange') if c in _fe.columns]
+    _group_preview = [c for c in ('region', 'trading_region', 'sector', 'size_class',
+                                  'style_class', 'unit') if c in _fe.columns]
     _min_per_level = 5
     _boot_draws = 4000
     for _coord in _group_preview:
@@ -3095,6 +3123,7 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
         'industry': _idcol('industry'),
         'style_class': _idcol('style_class'),
         'size_class': _idcol('size_class'),
+        'last_updated': _idcol('last_updated'),
         'next_earnings': _idcol('next_earnings'),
         'next_earnings_when': _idcol('next_earnings_when'),
         'next_earnings_status': _idcol('next_earnings_status'),
@@ -3176,6 +3205,223 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
 
 
 # =============================================================================
+# 10d. Shared single-series fit + forecast driver
+# =============================================================================
+# Canonical wrapper around ``KalmanFilterModel.KalmanFilterPriceTarget.fit`` /
+# ``.forecast`` so every time-series section (§11 single-ISIN, §12 mingled cohort,
+# and their §11b/§12b stochastic-volatility twins) shares one instantiate -> fit ->
+# build_forecast_specs -> forecast chain rather than re-inlining it per call site.
+@dataclass
+class KalmanFitResult:
+    """Bundle returned by :func:`fit_kalman_model`.
+
+    Carries the fitted :class:`KalmanFilterPriceTarget`, its inference object and
+    PyMC model, and — when a fiscal-calendar ``forecast_df`` was supplied and at
+    least one future event qualified — the forward structural forecast plus the
+    resolved ``(horizons_days, fiscal_dates, labels)`` triple.
+
+    Attributes
+    ----------
+    kf
+        The fitted model instance (retains fit context for further forecasts).
+    idata
+        Inference data / DataTree from :meth:`KalmanFilterPriceTarget.fit`.
+    model
+        The PyMC model object.
+    pred
+        The ``forecast`` ``predictions`` group (``None`` when no forecast ran).
+    horizons_days, fiscal_dates, labels
+        The resolved forecast-horizon triple (empty when no forecast ran).
+    last_obs
+        As-of anchor the forecast horizons were measured beyond.
+    last_price
+        Spot price forwarded to both ``fit`` and ``forecast`` (spot anchoring).
+    """
+
+    kf: KalmanFilterPriceTarget
+    idata: Any
+    model: Any
+    pred: Optional[Any] = None
+    horizons_days: list[int] = field(default_factory=list)
+    fiscal_dates: list = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
+    last_obs: Optional[pd.Timestamp] = None
+    last_price: Optional[float] = None
+
+    @property
+    def n_divergences(self) -> int:
+        """Post-tuning divergence count (0 when ``sample_stats`` is unavailable)."""
+        ss = getattr(self.idata, 'sample_stats', None)
+        if ss is None or 'diverging' not in getattr(ss, 'data_vars', {}):
+            return 0
+        try:
+            return int(ss['diverging'].sum())
+        except Exception:  # pragma: no cover - defensive
+            return 0
+
+    @property
+    def fit_kind(self) -> str:
+        """Human label for the parameterization actually fitted."""
+        return _kf_fit_kind(self.idata)
+
+    @property
+    def has_forecast(self) -> bool:
+        """Whether a structural forecast was produced."""
+        return self.pred is not None
+
+
+def _resolve_forecast_anchor(
+        forecast_df: Optional[pd.DataFrame],
+        dates: Optional[pd.DatetimeIndex],
+        anchor_col: Optional[str],
+        aggregate: str,
+) -> Optional[pd.Timestamp]:
+    """Resolve the as-of anchor the forecast horizons are measured beyond.
+
+    Prefers the ``anchor_col`` snapshot timestamp (``last_updated`` on
+    ``pml.mv_pymc_kalman_pt`` by default) so the projection starts from the
+    freshest as-of date the MV was refreshed at rather than from the last
+    ``*_ago`` observation. Falls back to ``dates.max()`` when the column is
+    absent / unparseable, and never returns an anchor *earlier* than the last
+    observation (a horizon must land in the future).
+
+    Parameters
+    ----------
+    forecast_df
+        Frame carrying ``anchor_col`` (and the fiscal-calendar DATE coords).
+    dates
+        Observation timestamps of the fitted series.
+    anchor_col
+        Snapshot timestamp column (``"last_updated"`` by default). ``None``
+        disables the snapshot anchor.
+    aggregate
+        ``"first"`` (single ISIN) takes the first non-null anchor; anything else
+        (``"median"`` cohort) takes the freshest (``max``) anchor.
+    """
+    last_obs = (pd.Timestamp(pd.DatetimeIndex(dates).max())
+                if dates is not None and len(dates) else None)
+    if forecast_df is not None and anchor_col and anchor_col in forecast_df.columns:
+        parsed = pd.to_datetime(forecast_df[anchor_col], errors='coerce').dropna()
+        if not parsed.empty:
+            anchor = pd.Timestamp(parsed.iloc[0] if aggregate == 'first' else parsed.max())
+            last_obs = anchor if last_obs is None else max(last_obs, anchor)
+    return last_obs
+
+
+def fit_kalman_model(
+        price_targets: np.ndarray,
+        isin: Optional[str] = None,
+        dates: Optional[pd.DatetimeIndex] = None,
+        last_price: Optional[float] = None,
+        sectors: Optional[np.ndarray] = None,
+        categories_df: Optional[pd.DataFrame] = None,
+        hierarchy_levels: Optional[list[str]] = None,
+        samples: int = 2000,
+        tune: int = 1000,
+        chains: int = 4,
+        target_accept: float = 0.95,
+        random_seed: int = RANDOM_SEED,
+        trend: bool = False,
+        trend_sigma: float = 0.5,
+        stochastic_volatility: bool = False,
+        realized_vol: Optional[np.ndarray] = None,
+        parameterization: str = 'auto',
+        nuts_sampler: Optional[str] = None,
+        *,
+        forecast_df: Optional[pd.DataFrame] = None,
+        forecast_aggregate: Literal['first', 'median'] = 'first',
+        forecast_anchor_col: Optional[str] = 'last_updated',
+        forecast_horizons: Optional[Sequence] = None,
+        **sample_kwargs: Any,
+) -> KalmanFitResult:
+    """Fit the single-series GRW filter and project it to future fiscal events.
+
+    Thin orchestration wrapper around :meth:`KalmanFilterPriceTarget.fit` and
+    :meth:`KalmanFilterPriceTarget.forecast` (both from
+    ``probabilistic_ml_model.pymc_models.KalmanFilterModel``) so every time-series
+    section of this workflow shares one canonical fit + forecast driver instead of
+    re-inlining the instantiate -> fit -> :meth:`build_forecast_specs` -> forecast
+    chain.
+
+    Spot anchoring is **adopted**: ``last_price`` is forwarded to ``fit`` (anchoring
+    the latent log-level prior at ``log(last_price)`` and exposing
+    ``implied_upside``) *and* reused by ``forecast``. The forecast as-of anchor is
+    resolved from ``forecast_anchor_col`` (``last_updated`` on
+    ``pml.mv_pymc_kalman_pt`` by default) together with the fiscal-calendar DATE
+    coords walked by :meth:`build_forecast_specs`.
+
+    Parameters
+    ----------
+    price_targets, isin, dates, last_price, sectors, categories_df, hierarchy_levels, samples, tune, chains, target_accept, random_seed, trend, trend_sigma, stochastic_volatility, realized_vol, parameterization, nuts_sampler, **sample_kwargs
+        Forwarded verbatim to :meth:`KalmanFilterPriceTarget.fit` (see that method
+        for the full contract).
+    forecast_df : pandas.DataFrame, optional
+        Frame carrying the fiscal-calendar DATE columns (and ``forecast_anchor_col``)
+        consumed by :meth:`build_forecast_specs`. When ``None`` no forecast is run
+        and the returned :class:`KalmanFitResult` has ``pred=None``.
+    forecast_aggregate : {"first", "median"}
+        ``"first"`` for a single-ISIN row; ``"median"`` for a cohort frame.
+    forecast_anchor_col : str, optional
+        Snapshot timestamp column used as the as-of anchor (default
+        ``"last_updated"``). Falls back to ``dates.max()`` when absent / unparseable.
+    forecast_horizons : Sequence, optional
+        Subset / ordering of :data:`FISCAL_HORIZONS` to consider. ``None`` uses the
+        full canonical set.
+
+    Returns
+    -------
+    KalmanFitResult
+        The fitted model, inference object, PyMC model, and (optional) forecast.
+    """
+    kf = KalmanFilterPriceTarget()
+    idata, model = kf.fit(
+        price_targets=price_targets,
+        isin=isin,
+        dates=dates,
+        last_price=last_price,
+        sectors=sectors,
+        categories_df=categories_df,
+        hierarchy_levels=hierarchy_levels,
+        samples=samples,
+        tune=tune,
+        chains=chains,
+        target_accept=target_accept,
+        random_seed=random_seed,
+        trend=trend,
+        trend_sigma=trend_sigma,
+        stochastic_volatility=stochastic_volatility,
+        realized_vol=realized_vol,
+        parameterization=parameterization,
+        nuts_sampler=nuts_sampler,
+        **sample_kwargs,
+    )
+
+    result = KalmanFitResult(kf=kf, idata=idata, model=model, last_price=last_price)
+    if forecast_df is None:
+        return result
+
+    last_obs = _resolve_forecast_anchor(
+        forecast_df, dates, forecast_anchor_col, forecast_aggregate)
+    if last_obs is None:
+        return result
+    result.last_obs = last_obs
+
+    spec_kwargs = {} if forecast_horizons is None else {'horizons': forecast_horizons}
+    horizons_days, fiscal_dates, labels = KalmanFilterPriceTarget.build_forecast_specs(
+        forecast_df, last_obs, aggregate=forecast_aggregate, **spec_kwargs)
+    if not horizons_days:
+        return result
+
+    result.horizons_days = horizons_days
+    result.fiscal_dates = fiscal_dates
+    result.labels = labels
+    result.pred = kf.forecast(
+        horizons_days, fiscal_dates=fiscal_dates, labels=labels,
+        last_price=last_price, random_seed=random_seed)
+    return result
+
+
+# =============================================================================
 # 11. Single-ISIN time-series Kalman filter (+ 11b stochastic volatility)
 # =============================================================================
 def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
@@ -3243,17 +3489,21 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
               f'on {len(observed)} observations spanning '
               f'{dates.min():%Y-%m-%d} – {dates.max():%Y-%m-%d}.')
 
-        kf = KalmanFilterPriceTarget()
-        kf_idata, kf_model = kf.fit(
-            price_targets=observed, isin=str(chosen), dates=dates,
+        # Fit + structural forecast via the shared driver. Spot anchoring is adopted
+        # (last_price flows into fit and forecast); the forecast as-of anchor is the
+        # snapshot ``last_updated`` (fused-panel row) plus the fiscal-calendar DATE
+        # coords resolved by build_forecast_specs.
+        res = fit_kalman_model(
+            price_targets=observed, isin=str(chosen), dates=dates, last_price=last_price,
             samples=1000, tune=1000, chains=4,
             random_seed=RANDOM_SEED, parameterization='marginalized', trend=True,
             target_accept=0.9, nuts_sampler='nutpie',
+            forecast_df=_row, forecast_aggregate='first',
         )
+        kf, kf_idata = res.kf, res.idata
 
-        n_div = int(kf_idata.sample_stats['diverging'].sum())
-        print(f'{_kf_fit_kind(kf_idata)} fit: {len(observed)} obs, '
-              f'{dates.max().year - dates.min().year}y span, divergences={n_div}.')
+        print(f'{res.fit_kind} fit: {len(observed)} obs, '
+              f'{dates.max().year - dates.min().year}y span, divergences={res.n_divergences}.')
         display(azs.summary(
             kf_idata,
             var_names=_present_vars(kf_idata, ['sigma_state', 'sigma_obs', 'beta_trend',
@@ -3270,12 +3520,9 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         # human labels are resolved from the canonical FISCAL_HORIZONS map (SSOT =
         # the days_* aliases on pml.mv_pymc_kalman_pt), so every label matches its
         # own date column instead of the previously mislabelled hand-built tuples.
-        last_obs = dates.max()
-        _horizons, _fdates, _labels = KalmanFilterPriceTarget.build_forecast_specs(
-            _row, last_obs, aggregate='first')
-        if _horizons:
-            pred = kf.forecast(_horizons, fiscal_dates=_fdates, labels=_labels,
-                               last_price=last_price)
+        if res.has_forecast:
+            _horizons, _fdates, _labels = res.horizons_days, res.fiscal_dates, res.labels
+            pred = res.pred
             fig_fc, _ = plot_kalman_forecast(
                 kf_idata, pred, observed=observed, dates=dates,
                 last_price=last_price, ticker=ticker)
@@ -3326,16 +3573,17 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
         print('SV realized-vol anchor (per-time):',
               np.round(rv_path, 2) if rv_path is not None else 'unavailable -> log(scale)')
 
-        kf_sv = KalmanFilterPriceTarget()
-        kf_sv_idata, _ = kf_sv.fit(
-            price_targets=observed, isin=str(chosen), dates=dates,
+        # Fit + forecast via the shared driver (SV path; spot anchoring adopted).
+        res_sv = fit_kalman_model(
+            price_targets=observed, isin=str(chosen), dates=dates, last_price=last_price,
             samples=2500, tune=2500, chains=4, random_seed=RANDOM_SEED,
             stochastic_volatility=True, realized_vol=rv_path,
             parameterization='non_centered', trend=True, nuts_sampler='nutpie',
+            forecast_df=_row, forecast_aggregate='first',
         )
+        kf_sv, kf_sv_idata = res_sv.kf, res_sv.idata
 
-        n_div = int(kf_sv_idata.sample_stats['diverging'].sum())
-        print(f'Stochastic-volatility fit: {len(observed)} obs, divergences={n_div}.')
+        print(f'Stochastic-volatility fit: {len(observed)} obs, divergences={res_sv.n_divergences}.')
         _sv_vars = [v for v in ('sigma_state', 'vol_step_size', 'nu_obs',
                                 'vol_anchor_offset', 'beta_trend')
                     if v in kf_sv_idata.posterior]
@@ -3347,12 +3595,8 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
         # sigma_obs(t) path beneath the state + posterior-predictive forecast,
         # mirroring the reference SV example (returns + posterior predictive above,
         # posterior volatility below).
-        last_obs = dates.max()
-        _h, _fd, _lbl = KalmanFilterPriceTarget.build_forecast_specs(
-            _row, last_obs, aggregate='first')
-        if _h:
-            pred_sv = kf_sv.forecast(_h, fiscal_dates=_fd, labels=_lbl,
-                                     last_price=last_price)
+        if res_sv.has_forecast:
+            pred_sv = res_sv.pred
             fig_sv, _ = plot_kalman_forecast(
                 kf_sv_idata, pred_sv, observed=observed, dates=dates,
                 last_price=last_price, ticker=f'{ticker} (SV)')
@@ -3411,7 +3655,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
                     WHERE next_earnings >= '2026-01-01'
                       AND last_updated >= '2026-01-01'
                       AND next_earnings >= current_date - INTERVAL '5 days'
-                      AND next_earnings <= current_date + INTERVAL '30 days'
+                      AND next_earnings <= current_date + INTERVAL '5 days'
                     ORDER BY market_cap DESC 
                 """),
                 conn,
@@ -3449,17 +3693,19 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         print(f'Fitting mingled-cohort Kalman filter on {len(observed)} consensus '
               f'observations spanning {dates.min():%Y-%m-%d} ... {dates.max():%Y-%m-%d}.')
 
-        kf = KalmanFilterPriceTarget()
-        kf_idata, kf_model = kf.fit(
-            price_targets=observed, isin=label, dates=dates,
+        # Fit + cohort structural forecast via the shared driver (spot anchoring
+        # adopted; cohort-median fiscal dates + last_updated anchor).
+        res = fit_kalman_model(
+            price_targets=observed, isin=label, dates=dates, last_price=last_price,
             samples=2500, tune=2500, chains=4,
             random_seed=RANDOM_SEED, parameterization='marginalized', trend=True,
             target_accept=0.9, nuts_sampler='nutpie',
+            forecast_df=snap, forecast_aggregate='median',
         )
+        kf, kf_idata = res.kf, res.idata
 
-        n_div = int(kf_idata.sample_stats['diverging'].sum())
-        print(f'{_kf_fit_kind(kf_idata)} fit: {len(observed)} obs, '
-              f'{(dates.max() - dates.min()).days}d span, divergences={n_div}.')
+        print(f'{res.fit_kind} fit: {len(observed)} obs, '
+              f'{(dates.max() - dates.min()).days}d span, divergences={res.n_divergences}.')
         display(azs.summary(
             kf_idata,
             var_names=_present_vars(kf_idata, ['sigma_state', 'sigma_obs', 'beta_trend',
@@ -3477,12 +3723,9 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         # dates, day-offsets and human labels come from the canonical FISCAL_HORIZONS
         # map (SSOT = the days_* aliases on pml.mv_pymc_kalman_pt), so each label
         # tracks its own date column rather than the old mislabelled tuples.
-        last_obs = dates.max()
-        _horizons, _fdates, _labels = KalmanFilterPriceTarget.build_forecast_specs(
-            snap, last_obs, aggregate='median')
-        if _horizons:
-            pred = kf.forecast(_horizons, fiscal_dates=_fdates, labels=_labels,
-                               last_price=last_price)
+        if res.has_forecast:
+            _horizons, _fdates, _labels = res.horizons_days, res.fiscal_dates, res.labels
+            pred = res.pred
             fig_fc, _ = plot_kalman_forecast(
                 kf_idata, pred, observed=observed, dates=dates,
                 last_price=last_price, ticker=label)
@@ -3572,17 +3815,18 @@ def run_mingled_cohort_stochastic_vol(frame: pd.DataFrame, ctx: Optional[dict]) 
         print('Cohort SV realized-vol anchor (per-time):',
               np.round(rv_path, 2) if rv_path is not None else 'unavailable -> log(scale)')
 
-        kf_sv = KalmanFilterPriceTarget()
-        kf_sv_idata, _ = kf_sv.fit(
-            price_targets=_observed_sv, isin=label, dates=_dates_sv,
+        # Fit via the shared driver (SV path; no forward forecast in this section,
+        # so ``forecast_df`` is omitted). Spot anchoring adopted.
+        res_sv = fit_kalman_model(
+            price_targets=_observed_sv, isin=label, dates=_dates_sv, last_price=last_price,
             samples=2500, tune=2500, chains=4, random_seed=RANDOM_SEED,
             stochastic_volatility=True, realized_vol=rv_path,
             parameterization='non_centered', trend=True, nuts_sampler='nutpie',
         )
+        kf_sv, kf_sv_idata = res_sv.kf, res_sv.idata
 
-        n_div = int(kf_sv_idata.sample_stats['diverging'].sum())
         print(f'Mingled-cohort stochastic-volatility fit: {len(_observed_sv)} obs, '
-              f'divergences={n_div}.')
+              f'divergences={res_sv.n_divergences}.')
         _sv_vars = [v for v in ('sigma_state', 'vol_step_size', 'nu_obs',
                                 'vol_anchor_offset', 'beta_trend')
                     if v in kf_sv_idata.posterior]
@@ -3632,19 +3876,26 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
                            'days_to_earnings',
                            'income_statement_report_date', 'next_income_statement_report_date', 'next_fy_end_date_date')
         _hist_cols, col_sql = fetch_history_columns(engine, keep_cols_tuple)
+        # Earnings-window bounds (single source of truth for both the SQL filter and
+        # the print label): names whose next_earnings lands within -PAST_DAYS ..
+        # +FUTURE_DAYS of today.
+        earnings_past_days = 5
+        earnings_future_days = 15
         with engine.connect() as conn:
             cohort_meta = pd.read_sql(
                 text(f"""
-                    SELECT {col_sql}
-                    FROM pml.pml_df
-                    WHERE next_earnings >= '2026-01-01'
-                      AND next_earnings >= current_date - INTERVAL '5 days'
-                      AND next_earnings <= current_date + INTERVAL '30 days'
-                """),
+                        SELECT {col_sql}
+                        FROM pml.pml_df
+                        WHERE next_earnings >= '2026-01-01'
+                          AND next_earnings >= current_date - INTERVAL ':past_days days'
+                          AND next_earnings <= current_date + INTERVAL ':future_days days'
+                    """.replace(':past_days', str(earnings_past_days))
+                     .replace(':future_days', str(earnings_future_days))),
                 conn,
             )
         cohort_isins_all = cohort_meta['isin'].astype(str).unique().tolist()
-        print(f'Recent-earnings cohort (next_earnings +/-10d): {len(cohort_isins_all)} ISINs.')
+        print(f'Recent-earnings cohort (next_earnings +{earnings_future_days}/-{earnings_past_days}d): '
+              f'{len(cohort_isins_all)} ISINs.')
 
         ept = screen.ept
         modelled = set(np.asarray(ept.coords['isin'].values).astype(str).tolist())
@@ -4030,8 +4281,8 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     eu = screen.eu * 100.0
     isin_dim = eu.coords['isin']
     univ_mean = float(eu.mean(('chain', 'draw', 'isin')))
-    OW_PP, UW_PP = 2.0, -2.0
-    P_HI, P_LO = 0.60, 0.40
+    OW_PP, UW_PP = 5.0, -5.0
+    P_HI, P_LO = 0.8, 0.20
 
     # Shared CVaR-aware analytics + sized book (SSOT with the §10c export).
     rb = risk_book if risk_book is not None else compute_cvar_aware_book(idata, panel, screen, results)
@@ -4091,7 +4342,9 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
           f'UNDERWEIGHT if < universe{UW_PP:.0f}pp or P(>0)<={P_LO:.0%}.')
 
     # 4. Group allocation signals (hierarchical coords).
-    _coords = [c for c in ('region', 'trading_region', 'sector', 'size_class', 'style_class')
+    _coords = [c for c in
+               ('region', 'trading_region', 'exchange', 'unit', 'country', 'sector', 'industry', 'size_class',
+                'style_class')
                if c in model_df.columns]
     for col in _coords:
         lab = model_df[col].fillna('Unknown').astype(str).to_numpy()
