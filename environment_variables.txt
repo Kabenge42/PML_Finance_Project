@@ -51,22 +51,40 @@ MODEL_VERSION=v9_11
 # -----------------------------------------------------------------------------
 # Enable the C backend via MSYS2 MinGW g++ so the nutpie Rust NUTS sampler and
 # C-backed PyTensor graph compilation work on Windows + Python 3.14.
-# Requires: MSYS2 installed at C:\msys64 with the mingw64 toolchain
-# (pacman -S mingw-w64-x86_64-gcc) and C:\msys64\mingw64\bin on PATH so the
-# libstdc++ / libgcc runtime DLLs resolve.
-# Active toolchain: UCRT64 (modern UCRT C runtime, matches MSVC-built Python).
+# Active toolchain: UCRT64 (modern UCRT C runtime, matches MSVC-built Python —
+# this IS the "matching official" toolchain for python.org CPython builds).
 #   Install:  pacman -S mingw-w64-ucrt-x86_64-gcc
-#   Path:     C:\msys64\ucrt64\bin\g++.exe
-# Alternate (classic msvcrt-based):
+#   Driver:   C:\msys64\ucrt64\bin\g++.exe
+# Alternate (classic msvcrt-based, NOT runtime-matched to modern CPython):
 #   Install:  pacman -S mingw-w64-x86_64-gcc
-#   Path:     C:\msys64\mingw64\bin\g++.exe
-# Fallback (pure-Python VM, no nutpie): cxx=
+#   Driver:   C:\msys64\mingw64\bin\g++.exe
+# Fallback (pure-Python VM, no C backend): cxx=
 #
-# IMPORTANT: use FORWARD slashes in the cxx path. PyTensor parses PYTENSOR_FLAGS
-# with posix shlex, which treats '\' as an escape char and strips it, mangling
-# C:\msys64\ucrt64\bin\g++.exe into the non-existent C:msys64ucrt64bing++.exe
-# (cxx exists: False). Forward slashes survive the parser and g++/Windows accept
-# them. 'device' is also dropped: PyTensor does not recognise it (defaults to CPU).
+# REQUIREMENT 1 — PATH must contain the DIRECTORY C:\msys64\ucrt64\bin.
+# The g++.exe driver finds its own DLLs next to itself, but the real compiler
+# cc1plus.exe lives in ucrt64\lib\gcc\... and resolves its DLLs (libgmp,
+# libmpfr, libwinpthread, zstd, ...) through PATH. Without the bin DIRECTORY on
+# PATH, cc1plus dies on startup with STATUS_DLL_NOT_FOUND (0xC0000135) and NO
+# output: PyTensor then reports "Compilation failed (return status=1)" with an
+# empty stderr, while `g++ --version` (driver only) still works. Root cause of
+# the 2026-07 CompileError: the *System* PATH contained the FILE path
+# C:\msys64\ucrt64\bin\g++.exe instead of the directory. Fixed by adding
+# C:\msys64\ucrt64\bin to the User PATH; the stale System-PATH file entry is
+# inert and can be removed (as admin) via sysdm.cpl > Environment Variables.
+# Verified working: Python 3.14.6 + UCRT64 g++ 15.2.0, fresh compile cache.
+#
+# REQUIREMENT 2 — use FORWARD slashes in the cxx path. PyTensor parses
+# PYTENSOR_FLAGS with posix shlex, which treats '\' as an escape char and
+# strips it, mangling C:\msys64\ucrt64\bin\g++.exe into the non-existent
+# C:msys64ucrt64bing++.exe (cxx exists: False). Forward slashes survive the
+# parser and g++/Windows accept them. 'device' is also dropped: PyTensor does
+# not recognise it (defaults to CPU).
+#
+# NOTE: importing probabilistic_ml_model still strips cxx= unless
+# PML_ENABLE_PYTENSOR_C=1 is set BEFORE import (see _pytensor_env.py).
+# set_env.ps1 honours the same flag and sanity-compiles a probe before
+# enabling the C backend.
+PML_ENABLE_PYTENSOR_C=1
 PYTENSOR_FLAGS=floatX=float64,cxx=C:/msys64/ucrt64/bin/g++.exe
 
 # -----------------------------------------------------------------------------

@@ -1342,7 +1342,7 @@ WHERE column_name IN ('w_52high_adj',
                       'days_to_next_fy_end',
                       'days_to_next_report',
                       'days_to_expected_report',
-                      'days_to_fy_end');
+                      'days_since_fy_end');
 
 -- Day-count horizons are ready-to-use numeric predictors -> mutable_predictor.
 UPDATE pml.pml_df_metadata
@@ -1354,7 +1354,7 @@ WHERE column_name IN ('days_to_next_earnings',
                       'days_to_next_fy_end',
                       'days_to_next_report',
                       'days_to_expected_report',
-                      'days_to_fy_end');
+                      'days_since_fy_end');
 
 -- Raw DATE columns: promote pymc_role from 'excluded' to 'coord' so the
 -- notebook can register them as the `time` dimension for the MvGRW panel
@@ -1454,7 +1454,7 @@ WHERE column_name IN ('income_statement_report_date',
                       'days_to_next_fy_end',
                       'days_to_next_report',
                       'days_to_expected_report',
-                      'days_to_fy_end');
+                      'days_since_fy_end');
 
 -- 7h.4 DCFPriceTarget: terminal FCF estimates, historical CAGRs, PEG / EV-sales
 --      / ROA / beta anchors used in feat_fcf_terminal_growth / feat_tr_cagr_* /
@@ -1613,7 +1613,7 @@ WHERE column_name IN ('isin', 'ticker',
 -- ---------------------------------------------------------------------------
 INSERT INTO pml.pml_df_metadata (column_name, category, feature_role, pymc_role)
 SELECT col, 'fiscal_calendar', 'predictor', 'mutable_predictor'
-FROM unnest(ARRAY [ 'days_to_next_earnings', 'days_since_last_report', 'days_to_next_fy_end', 'days_to_next_report', 'days_to_expected_report', 'days_to_fy_end' ]) AS col
+FROM unnest(ARRAY [ 'days_to_next_earnings', 'days_since_last_report', 'days_to_next_fy_end', 'days_to_next_report', 'days_to_expected_report', 'days_since_fy_end' ]) AS col
 ON CONFLICT (column_name) DO NOTHING;
 
 -- The derived day-count horizons are created by the FK-safety seed above, which
@@ -1628,7 +1628,7 @@ WHERE column_name IN ('days_to_next_earnings',
                       'days_to_next_fy_end',
                       'days_to_next_report',
                       'days_to_expected_report',
-                      'days_to_fy_end');
+                      'days_since_fy_end');
 
 -- ---------------------------------------------------------------------------
 -- TASK 5 / FINDING 4: trim the mutable_predictor surface to what each MV emits.
@@ -1844,7 +1844,7 @@ VALUES
 	                                 ('days_to_next_fy_end',               'price_target',       'feat_days_to_next_fy_end',          'mutable_predictor'),
 	                                 ('days_to_next_report',               'price_target',       'feat_days_to_next_report',          'mutable_predictor'),
 	                                 ('days_to_expected_report',           'price_target',       'feat_days_to_expected_report',      'mutable_predictor'),
-	                                 ('days_to_fy_end',                    'price_target',       'feat_days_to_fy_end',               'mutable_predictor'),
+	('days_since_fy_end', 'price_target', 'feat_days_to_fy_end', 'mutable_predictor'),
 	-- ---- price_target achievement / accuracy (realised vs 1Y-ago targets) ----
 	                                 ('price_target_1y_ago',               'price_target',       'feat_pt_achievement_1y',            'mutable_predictor'),
 	-- Task 6: feat_pt_range_hit_rate (low_1y_ago + high_1y_ago),
@@ -1923,7 +1923,7 @@ VALUES
 	                                 ('days_to_next_fy_end',               'kalman_pt',          'days_to_next_fy_end',               'mutable_predictor'),
 	                                 ('days_to_next_report',               'kalman_pt',          'days_to_next_report',               'mutable_predictor'),
 	                                 ('days_to_expected_report',           'kalman_pt',          'days_to_expected_report',           'mutable_predictor'),
-	                                 ('days_to_fy_end',                    'kalman_pt',          'days_to_fy_end',                    'mutable_predictor'),
+	('days_since_fy_end', 'kalman_pt',    'days_since_fy_end',   'mutable_predictor'),
 
 	-- ---- dcf_pt aliases (from mv_pymc_dcf_pt) ----
 	                                 ('price_target',                      'dcf_pt',             'observed_pt',                       'observed'         ),

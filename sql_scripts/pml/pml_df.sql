@@ -27,6 +27,7 @@ CREATE TABLE pml_df
 	days_to_earnings                  integer,
 	earnings_report_recency           integer,
 	expected_report_date              date,
+	earnings_report_frequency text,
 	dividend_record_currency          text,
 	dividend_record_amount            double precision,
 	dividend_record_frequency         text,

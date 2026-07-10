@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="Black">
-    <option name="sdkName" value="Python 3.14 (PML_Finance_Project)" />
+    <option name="sdkName" value="Python 3.14 (PML_Finance_Project) (3)" />
   </component>
   <component name="CMakePythonSetting">
     <option name="pythonIntegrationState" value="YES" />
   </component>
-  <component name="ProjectRootManager" version="2" languageLevel="JDK_25" project-jdk-name="Python 3.14 (PML_Finance_Project) (3)" project-jdk-type="Python SDK">
+  <component name="ProjectRootManager" version="2" languageLevel="JDK_25" default="true" project-jdk-name="Python 3.14 (PML_Finance_Project) (3)" project-jdk-type="Python SDK">
     <output url="file://$PROJECT_DIR$/sdk_ouputs" />
   </component>
   <component name="PyCharmDSProjectLayout">

@@ -38,6 +38,7 @@ component_id = "beta_capm_return_calculator"
 risk_free_rate_id = f"{component_id}_risk_free_rate"
 risk_free_rate_options = [
     {"label": "0%", "value": 0.0},
+    {"label": "1%", "value": 0.01},
     {"label": "2%", "value": 0.02},
     {"label": "3%", "value": 0.03},
     {"label": "4%", "value": 0.04},
@@ -76,6 +77,10 @@ size_by_id = f"{component_id}_size_by"
 size_by_options = [
     {"label": "None", "value": "none"},
     {"label": "Market Cap", "value": "market_cap"},
+    {"label": "Enterprise Value", "value": "enterprise_value"},
+    {"label": "Signal Strength", "value": "signal_strength"},
+    {"label": "Reward to cVAR", "value": "reward_to_cvar"},
+
 ]
 size_by_default = "none"
 
@@ -172,13 +177,13 @@ def _calculate_beta_and_capm(**kwargs) -> Tuple[pd.DataFrame, float, float]:
     df["beta"] = df["signal_strength"] / mean_signal
 
     if market_proxy == "sector":
-        sector_ret = df.groupby("sector")["expected_return_kalman"].transform("mean")
+        sector_ret = df.groupby("sector")["risk_adj_return"].transform("mean")
         market_return = float(sector_ret.mean())
     elif market_proxy == "region" and "region" in df.columns:
-        region_ret = df.groupby("region")["expected_return_kalman"].transform("mean")
+        region_ret = df.groupby("region")["risk_adj_return"].transform("mean")
         market_return = float(region_ret.mean())
     else:
-        market_return = float(df["expected_return_kalman"].mean())
+        market_return = float(df["risk_adj_return"].mean())
 
     market_risk_premium = market_return - risk_free_rate
     df["capm_expected_return"] = risk_free_rate + df["beta"] * market_risk_premium

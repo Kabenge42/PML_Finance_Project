@@ -10,6 +10,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\data\playground\currencies.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\data\playground\eu_data.csv">
           <value>
             <Attribute>
@@ -157,7 +164,21 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\outputs\kalman_filtered_price_targets.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\outputs\probability_analytics_summary.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\outputs\results.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />
@@ -172,6 +193,13 @@
           </value>
         </entry>
         <entry key="\sdk_ouputs\production\PML_Finance_Project\playground\screening_etf.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\sdk_ouputs\production\PML_Finance_Project\playground\screening_etf_transformed.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

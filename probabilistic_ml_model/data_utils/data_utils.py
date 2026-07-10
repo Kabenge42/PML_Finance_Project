@@ -2167,7 +2167,7 @@ def _get_fallback_view_category_mapping() -> dict[str, dict[str, str | list[str]
                 "fiscal_year_progress",
                 # calc_fiscal_calendar_features
                 "days_since_last_report",
-                "days_to_fy_end",
+                "days_since_fy_end",
                 "is_quarter_end_month",
                 "is_fy_end_month",
                 "earnings_season_flag",

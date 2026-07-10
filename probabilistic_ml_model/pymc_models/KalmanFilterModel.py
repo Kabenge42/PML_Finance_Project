@@ -118,7 +118,7 @@ def _build_ago_offset_map() -> dict[str, Any]:
 #     next_income_statement_report_date - CURRENT_DATE  AS days_to_next_report
 #     expected_report_date              - CURRENT_DATE  AS days_to_expected_report
 #     next_fy_end_date                  - CURRENT_DATE  AS days_to_next_fy_end
-#     fy_end_date                       - CURRENT_DATE  AS days_to_fy_end
+#     fy_end_date                       - CURRENT_DATE  AS days_since_fy_end
 #
 # :meth:`KalmanFilterPriceTarget.forecast` projects to exactly these horizons,
 # so the triple (DATE column, day-count column, human label) is captured here
@@ -158,7 +158,7 @@ FISCAL_HORIZONS: tuple[FiscalHorizon, ...] = (
     FiscalHorizon("next_income_statement_report_date", "days_to_next_report", "Next report"),
     FiscalHorizon("expected_report_date", "days_to_expected_report", "Expected report"),
     FiscalHorizon("next_fy_end_date", "days_to_next_fy_end", "Next FY end"),
-    FiscalHorizon("fy_end_date", "days_to_fy_end", "FY end"),
+    FiscalHorizon("fy_end_date", "days_since_fy_end", "FY end"),
 )
 
 # DATE column -> human label, for callers holding a fiscal-calendar date column.

@@ -764,6 +764,26 @@ pytest --cov=probabilistic_ml_model --cov-report=term-missing tests/
 PyMC 6.0 + PyTensor 3.0 uses **numba** as the default backend (via nutpie). C++ compilation (`cxx`) is no longer the
 primary backend and is not required for normal operation.
 
+**The C backend is disabled project-wide by default.** Importing `probabilistic_ml_model` runs
+`probabilistic_ml_model/_pytensor_env.py` (`force_python_vm()`), which normalises `PYTENSOR_FLAGS` to `cxx=` **before
+any
+`pytensor` import** — *stripping* any inherited `cxx=<g++ path>` (a naive `"cxx=" in flags` check is defeated by a
+persistent `PYTENSOR_FLAGS=...,cxx=<g++>` User env var). The silent failure mode (**empty stderr, `status=1`** on a
+fresh compile) was root-caused 2026-07-10: the `g++.exe` driver loads its DLLs from its own directory, but the actual
+compiler `cc1plus.exe` lives in `ucrt64\lib\gcc\...` and resolves its DLLs (libgmp, libmpfr, libwinpthread, zstd, …)
+via `PATH`. If `PATH` lacks the `C:\msys64\ucrt64\bin` **directory** (the System PATH had the g++.exe **file** path as
+an entry instead), `cc1plus` dies on startup with `STATUS_DLL_NOT_FOUND` (0xC0000135) and zero output — while
+`g++ --version` (driver only) still works. Symptoms are `CompileError: Compilation failed (return status=1)` with no
+diagnostics and NUTS samplers failing at "Compiling new CVM". Earlier apparent successes were served from PyTensor's
+compile **cache**. With `C:\msys64\ucrt64\bin` on `PATH`, the UCRT64 toolchain (runtime-matched to MSVC-built CPython)
+is verified working on Python 3.14.6 + g++ 15.2.0 against a fresh compile cache.
+
+Opt back into the C backend by setting `PML_ENABLE_PYTENSOR_C=1` **before** import, and ensure
+`C:\msys64\ucrt64\bin` is first on `PATH` (`set_env.ps1` does both and sanity-compiles a probe before enabling).
+`set_env.ps1` honours the same flag (default: pure-Python/numba VM). Model
+`fit()` / sampling paths should also pass `compile_kwargs=get_pytensor_compile_kwargs()` (from
+`probabilistic_ml_model.pymc_models._pytensor_compat`), which forces the `Mode(linker="py")` VM at the call site.
+
 If you see `FileNotFoundError: cxx not found` from a legacy code path:
 
 ```powershell

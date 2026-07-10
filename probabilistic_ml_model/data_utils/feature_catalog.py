@@ -982,7 +982,7 @@ FALLBACK_FEATURE_CATEGORIES: dict[str, list[str]] = {
         "reporting_lag",
         "fiscal_year_progress",
         "days_since_last_report",
-        "days_to_fy_end",
+        "days_since_fy_end",
         "earnings_season_flag",
         "fiscal_quarter_progress",
         "is_fy_end_month",

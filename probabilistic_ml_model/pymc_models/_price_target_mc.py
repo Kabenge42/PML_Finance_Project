@@ -244,7 +244,7 @@ PANEL_DAY_COUNT_COLS: tuple[str, ...] = (
     "days_to_next_fy_end",
     "days_to_next_report",
     "days_to_expected_report",
-    "days_to_fy_end",
+    "days_since_fy_end",
 )
 
 # D-dimensional joint response series (D=8) broadcast across the T anchors.

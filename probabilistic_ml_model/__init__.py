@@ -1,6 +1,12 @@
 import importlib as _importlib
 import warnings as _warnings
 
+# ── Force the pure-Python / numba PyTensor VM (disable fragile MinGW C backend) ─
+# MUST run before any ``pytensor`` import. Normalises ``PYTENSOR_FLAGS`` to
+# ``cxx=`` (stripping any inherited ``cxx=<g++ path>``); opt back in with
+# ``PML_ENABLE_PYTENSOR_C=1``. See :mod:`probabilistic_ml_model._pytensor_env`.
+from probabilistic_ml_model import _pytensor_env as _pytensor_env  # noqa: F401
+
 # ── Suppress ArviZ 1.0 MigrationWarning for ``arviz.InferenceData`` ─────────
 # ArviZ 1.0 migrated ``InferenceData`` to ``xarray.DataTree``.  PyMC 5.x and
 # legacy downstream code may still reference ``arviz.InferenceData`` (e.g.

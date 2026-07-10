@@ -24,15 +24,15 @@ Reference: PyMC_overview.md linear regression example;
 from __future__ import annotations
 
 import logging
-import os
 from typing import Optional, Sequence
 
-# Ensure C backend is disabled before any pytensor import
-# (guards against cases where PYTENSOR_FLAGS wasn't set early enough)
-if not os.environ.get("PYTENSOR_FLAGS"):
-    os.environ["PYTENSOR_FLAGS"] = "device=cpu,floatX=float64,cxx="
-elif "cxx=" not in os.environ["PYTENSOR_FLAGS"]:
-    os.environ["PYTENSOR_FLAGS"] += ",cxx="
+# Ensure the C backend is disabled before any pytensor import. Delegates to the
+# shared, launch-independent helper, which *strips* any inherited ``cxx=<path>``
+# (a naive ``"cxx=" in flags`` check is defeated by a persistent
+# ``PYTENSOR_FLAGS=...,cxx=<g++>`` env var). Opt in via ``PML_ENABLE_PYTENSOR_C=1``.
+from probabilistic_ml_model._pytensor_env import force_python_vm as _force_python_vm
+
+_force_python_vm()
 
 from probabilistic_ml_model._pymc_arviz_compat import InferenceLike  # noqa: F401
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs

@@ -33,6 +33,7 @@ component_id = "efficient_frontier_optimization"
 risk_free_rate_id = f"{component_id}_risk_free_rate"
 risk_free_rate_options = [
     {"label": "0%", "value": 0.0},
+    {"label": "1%", "value": 0.01},
     {"label": "2%", "value": 0.02},
     {"label": "3%", "value": 0.03},
     {"label": "4%", "value": 0.04},
