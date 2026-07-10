@@ -3,7 +3,6 @@
   <component name="SqlDialectMappings">
     <file url="file://$PROJECT_DIR$/sql_scripts" dialect="PostgreSQL" />
     <file url="file://$PROJECT_DIR$/sql_scripts/public/equities_schema_metadata.sql" dialect="PostgreSQL" />
-    <file url="file://$PROJECT_DIR$/sql_scripts/public/mv_exp_returns_df.sql" dialect="PostgreSQL" />
     <file url="PROJECT" dialect="PostgreSQL" />
   </component>
   <component name="SqlResolveMappings">

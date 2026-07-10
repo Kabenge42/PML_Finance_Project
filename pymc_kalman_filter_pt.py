@@ -53,6 +53,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
+# ── PyTensor backend guard — MUST precede the first ``pymc``/``pytensor`` import.
+# ``pytensor.config`` freezes ``PYTENSOR_FLAGS`` at import time, so an inherited
+# ``cxx=<g++ path>`` (e.g. left in the shell by an earlier PML_ENABLE_PYTENSOR_C=1
+# session) re-arms the fragile MinGW C backend unless stripped first. The package
+# ``__init__`` runs the same guard, but the third-party ``import pymc`` below would
+# otherwise execute before it. Opt back in with ``PML_ENABLE_PYTENSOR_C=1``.
+import probabilistic_ml_model._pytensor_env  # noqa: F401  isort: skip
+
 # ArviZ 1.0 split-package imports: arviz-plots owns ``style`` + plotting, arviz-stats
 # owns ``summary`` / ``rhat`` / ``ess``. Address each submodule directly.
 import arviz_plots as azp
