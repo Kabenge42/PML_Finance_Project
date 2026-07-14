@@ -33,11 +33,16 @@ IDENTIFIER_COLUMNS: list[str] = [
     "isin",
     "ticker",
     "name",
+    "region",
+    "trading_region",
     "country",
+    "trading_country",
     "unit",
     "exchange",
     "sector",
     "industry",
+    "style_class",
+    "size_class",
     # Categorical earnings-timing coords the global filter panel exposes. The
     # live table also carries the raw date coords (income_statement_report_date,
     # next_earnings, fy_end_date, …) via ``SELECT *``; they are not declared
@@ -67,16 +72,50 @@ NUMERIC_COLUMNS: list[str] = [
     "cvar_book_weight",
     "cvar_5pct_kalman",
     "reward_to_cvar",
+    # CAPM market sensitivity / analyst-consensus target levels.
+    "beta",
+    "price_target_median",
+    "price_target_high",
+    "price_target_low",
+    # Price-target history ladder (consensus target as of the suffix lookback).
+    "price_target_1w_ago",
+    "price_target_mtd_ago",
+    "price_target_1m_ago",
+    "price_target_qtd_ago",
+    "price_target_3m_ago",
+    "price_target_6m_ago",
+    "price_target_ytd_ago",
+    "price_target_1y_ago",
+    # Price history ladder (spot as of the suffix lookback).
+    "price_5d_ago",
+    "price_1w_ago",
+    "price_1m_ago",
+    "price_qtd_ago",
+    "price_3m_ago",
+    "price_6m_ago",
+    "price_1y_ago",
+    "price_3y_ago",
+    "price_5y_ago",
+    # Earnings-calendar distances (bigint / double in the DDL; float64 here so
+    # the empty-frame fallback carries NaN support).
+    "days_to_next_earnings",
+    "days_since_last_report",
+    "days_to_next_fy_end",
+    "days_to_next_report",
+    "days_to_expected_report",
+    "days_since_fy_end",
 ]
 
 # Raw date coords carried through ``SELECT *`` from the analytics DDL. Declared
 # here so they survive the empty-frame fallback with a datetime dtype and are
 # coerced from whatever pandas / the driver infers. Consumed by the Kalman
-# structural-forecast chart (event lines) and available to any future
-# date-aware panel.
+# structural-forecast chart (event lines), the KPI data-as-of stamp
+# (``last_updated``) and available to any future date-aware panel.
 DATE_COLUMNS: list[str] = [
+    "last_updated",
     "next_earnings",
     "fy_end_date",
+    "next_fiscal_quarter",
     "income_statement_report_date",
     "next_income_statement_report_date",
     "next_fy_end_date",

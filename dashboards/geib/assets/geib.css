@@ -215,6 +215,14 @@ body {
     margin-bottom: 24px;
 }
 
+/* Data-freshness stamp tucked under the KPI row (max last_updated). */
+.geib-kpi-asof {
+    color: var(--geib-subtle);
+    font-size: 12px;
+    text-align: right;
+    margin: -16px 4px 24px 0;
+}
+
 /* Two graphs side by side: wrap (instead of squashing into each other) once
    there isn't room, and min-width:0 keeps wide figures from overflowing. */
 .geib-dual-graph {

@@ -1,10 +1,14 @@
 """Kalman State & Structural Forecast (single name).
 
-Renders one name's Kalman-filtered price-target forecast as a fan chart: a mean
-forecast line drifting from today's price toward the Kalman price target over the
-selected horizon, a widening HDI confidence band, an optional cloud of posterior
-predictive draws, the observed analyst target, the current price, and vertical
-markers for the upcoming earnings / fiscal events.
+Renders one name's Kalman-filtered price-target forecast as a fan chart: the
+real price history from the ``price_*_ago`` lookback ladder anchoring the fan at
+today's spot, a mean forecast line drifting toward the Kalman price target over
+the selected horizon, a widening HDI confidence band, an optional cloud of
+posterior predictive draws, the observed analyst target with its real
+consensus band (``price_target_low`` / ``price_target_median`` /
+``price_target_high``), the current price, and vertical markers for the
+upcoming earnings / fiscal events. Names with an all-NaN price ladder fall back
+to a flat anchor segment at spot.
 
 Unlike :mod:`dashboards.geib.charts.monte_carlo_forecast` (which collapses the
 simulation to a terminal-return *distribution*), this panel keeps the *time*
@@ -24,7 +28,7 @@ from __future__ import annotations
 
 import traceback
 from datetime import timedelta
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -36,7 +40,9 @@ from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
 from ..metrics import (
+    PRICE_SUFFIXES,
     PRICE_TARGET_HORIZON_YEARS,
+    history_ladder,
     quantile_return_volatility,
     return_volatility,
 )
@@ -75,8 +81,14 @@ confidence_default = "94"
 # Two-sided normal z-multiplier for each HDI level (z for the (1+level)/2 quantile).
 _CONFIDENCE_Z = {"90": 1.6448536269514722, "94": 1.8807936081512509, "99": 2.5758293035489004}
 
-# History shown before "today" so the forecast fan has an anchor (spec: 180 days).
-_HISTORY_DAYS = 180
+# History window before "today" anchoring the forecast fan. 183 days so the 6m
+# ladder point (today - 182d) fits inside the window.
+_HISTORY_DAYS = 183
+# Analyst price targets are next-twelve-month: the consensus band spans <= 1y.
+_TARGET_BAND_DAYS = 365
+# Real analyst consensus band fill (green at low alpha, distinct from the blue
+# model-HDI _BAND_FILL).
+_TARGET_BAND_FILL = "rgba(16,185,129,0.10)"
 # Trading days per year — the frequency the daily posterior draws compound over.
 _TRADING_DAYS = 252
 # Number of posterior predictive paths drawn when "Show" is selected.
@@ -175,12 +187,13 @@ def component() -> "object":
 
 
 def _forecast_mean(spot: float, annual_return: float, days_forward: np.ndarray) -> np.ndarray:
-    """Mean forecast level: flat at *spot* through today, then drifting forward.
+    """Mean forecast level drifting forward from *spot* at today.
 
     Compounds the (annualised) expected return over the forward horizon so the
     line reaches ``spot * (1 + annual_return)`` at one year — i.e. the Kalman
-    price-target level implied by ``expected_return_kalman``. The pre-today
-    segment is held flat at the current price as the fan's anchor.
+    price-target level implied by ``expected_return_kalman``. *days_forward* is
+    expected to be non-negative (the axis starts at today); any negative values
+    are clipped to the spot anchor.
     """
     fwd_years = np.clip(days_forward, 0, None) / 365.0
     return spot * np.power(1.0 + annual_return, fwd_years)
@@ -192,7 +205,7 @@ def _posterior_draws(
         annual_sigma: float,
         days_forward: np.ndarray,
 ) -> np.ndarray:
-    """Return ``_NUM_DRAWS`` forward price paths, held flat before today.
+    """Return ``_NUM_DRAWS`` forward price paths from *spot* at today.
 
     Daily normal return draws (drift/scale de-annualised over ``_TRADING_DAYS``)
     are compounded from *spot*; steps at or before today are zeroed so every path
@@ -249,9 +262,10 @@ def _update_logic(**kwargs) -> go.Figure:
 
     today = pd.Timestamp.now().normalize()
     forecast_end = today + timedelta(days=_HORIZON_DAYS.get(horizon, 365))
-    time_points = pd.date_range(
-        start=today - timedelta(days=_HISTORY_DAYS), end=forecast_end, freq="D"
-    )
+    history_start = today - timedelta(days=_HISTORY_DAYS)
+    # The simulated fan spans today -> horizon; the pre-today segment is the
+    # real price ladder (below), so the fan no longer carries a flat prefix.
+    time_points = pd.date_range(start=today, end=forecast_end, freq="D")
     days_forward = (time_points - today).days.to_numpy()
 
     logger.debug("Building forecast for %s: %d points, sigma=%.4f", name, len(time_points), sigma)
@@ -259,6 +273,25 @@ def _update_logic(**kwargs) -> go.Figure:
     mean_price = _forecast_mean(spot, annual_return, days_forward)
 
     fig = go.Figure()
+
+    # --- Real price history (lookback ladder), anchored at today's spot -----
+    hist = history_ladder(row, "price", PRICE_SUFFIXES, today_value=spot, asof=today)
+    hist = hist[hist["date"] >= history_start]
+    if len(hist) < 2:
+        # All ladder columns NaN inside the window: fall back to the flat
+        # anchor segment the panel drew before the history columns existed.
+        hist = pd.DataFrame({"date": [history_start, today], "value": [spot, spot]})
+    fig.add_trace(
+        go.Scatter(
+            x=hist["date"],
+            y=hist["value"],
+            mode="lines+markers",
+            name="Price History",
+            line=dict(color=_PRICE_COLOR, width=2),
+            marker=dict(size=6),
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Price: %{y:.2f}<extra></extra>",
+        )
+    )
 
     # --- HDI confidence band (widens with sqrt(time) from today) ------------
     fwd_years = np.clip(days_forward, 0, None) / 365.0
@@ -317,6 +350,40 @@ def _update_logic(**kwargs) -> go.Figure:
         )
     )
 
+    # --- Real analyst consensus band (low / median / high, NTM) -------------
+    def _finite(column: str) -> Optional[float]:
+        value = row.get(column)
+        return float(value) if value is not None and pd.notna(value) else None
+
+    target_low = _finite("price_target_low")
+    target_high = _finite("price_target_high")
+    target_median = _finite("price_target_median")
+    band_end = min(forecast_end, today + timedelta(days=_TARGET_BAND_DAYS))
+    if target_low is not None and target_high is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=[today, band_end], y=[target_high, target_high], mode="lines",
+                line=dict(color="rgba(0,0,0,0)"), showlegend=False, hoverinfo="skip",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[today, band_end], y=[target_low, target_low], mode="lines",
+                line=dict(color="rgba(0,0,0,0)"), fill="tonexty",
+                fillcolor=_TARGET_BAND_FILL, name="Analyst Target Range",
+                hoverinfo="skip",
+            )
+        )
+    if target_median is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=[today, band_end], y=[target_median, target_median], mode="lines",
+                name="Analyst Median Target",
+                line=dict(color=_TARGET_COLOR, dash="dash", width=1.5),
+                hovertemplate="Median Target: %{y:.2f}<extra></extra>",
+            )
+        )
+
     # --- Observed analyst target (today) ------------------------------------
     if original_target is not None:
         fig.add_trace(
@@ -346,6 +413,7 @@ def _update_logic(**kwargs) -> go.Figure:
     for column, label in (
             ("expected_report_date", "Expected Report"),
             ("next_income_statement_report_date", "Next Income Statement Report"),
+            ("next_fiscal_quarter", "Next Fiscal Quarter"),
             ("next_earnings", "Next Earnings"),
             ("next_fy_end_date", "FY End"),
     ):
@@ -375,6 +443,9 @@ def _update_logic(**kwargs) -> go.Figure:
         height=600,
         legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="left", x=0.01),
     )
+    # Fixed window so the layout is stable whether the ladder is dense or the
+    # flat fallback is drawn.
+    fig.update_xaxes(range=[history_start, forecast_end])
     logger.debug("Done building forecast for %s", name)
     return fig
 

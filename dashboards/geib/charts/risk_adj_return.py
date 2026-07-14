@@ -27,6 +27,7 @@ color_by_options = [
     {"label": "Sector", "value": "sector"},
     {"label": "Industry", "value": "industry"},
     {"label": "Country", "value": "country"},
+    {"label": "Beta", "value": "beta"},
 ]
 color_by_default = "sector"
 
@@ -119,6 +120,8 @@ def _update_logic(**kwargs) -> go.Figure:
             "country",
             "signal_strength",
             "market_cap",
+            "beta",
+            "price_target_median",
         ]
     ].copy()
     logger.debug(schema(df))
@@ -133,7 +136,11 @@ def _update_logic(**kwargs) -> go.Figure:
         return empty_figure("No data matches the selected filters")
     logger.debug(tbl(df))
 
-    scatter_kwargs = dict(x="expected_return_kalman", y="risk_adj_return")
+    scatter_kwargs = dict(
+        x="expected_return_kalman",
+        y="risk_adj_return",
+        hover_data={"beta": ":.3f", "price_target_median": ":.2f"},
+    )
     if color_by != "none":
         scatter_kwargs["color"] = color_by
     if size_by != "none":

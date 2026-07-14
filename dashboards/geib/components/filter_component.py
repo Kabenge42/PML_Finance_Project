@@ -42,6 +42,7 @@ COORD_FILTERS: tuple[tuple[str, str], ...] = (
     ("trading_region", "Trading Region"),
     ("region", "Region"),
     ("country", "Country"),
+    ("trading_country", "Trading Country"),
     ("exchange", "Exchange"),
     ("unit", "Unit"),
     ("sector", "Sector"),

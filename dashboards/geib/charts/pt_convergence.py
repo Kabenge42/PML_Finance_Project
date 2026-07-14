@@ -1,7 +1,17 @@
 """Price Target Convergence Over Time.
 
-Per-ticker scatter comparing original price, original target and the
-Kalman-filtered price target. Ported from ``feature_factory/pt_convergence.pyi``.
+A real dated timeline built from the ``price_*_ago`` / ``price_target_*_ago``
+lookback ladders in ``analytics.kalman_filtered_price_targets``: the realized
+price track and the analyst consensus target track converge to today's spot
+(``original_price``), the current consensus (``original_target``) and the
+Kalman-filtered target (``price_target_kalman``), with the analyst
+low / median / high dispersion drawn at the snapshot.
+
+Two views:
+
+* **Single Name** — the raw price / target ladders for one stock.
+* **Universe Average** — every name indexed to spot = 100 first (raw prices are
+  not cross-sectionally comparable), then averaged per ladder column.
 """
 
 from __future__ import annotations
@@ -9,41 +19,43 @@ from __future__ import annotations
 import traceback
 from typing import Tuple
 
+import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
-from ._common import empty_figure, scoped_filter, sector_values
+from ._common import coalesce, empty_figure, scoped_filter, sector_values, top_label
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
-from ..theme import GRAPH_STYLE, control
+from ..metrics import PRICE_SUFFIXES, PRICE_TARGET_SUFFIXES, history_ladder
+from ..theme import GOLD, GRAPH_STYLE, SUBTLE_TEXT, control
 from ..theme import card as theme_card
 
 component_id = "price_target_convergence"
 
-metric_control_id = f"{component_id}_metric"
-metric_options = [
-    {"label": "All Three", "value": "all_three"},
-    {"label": "Original vs Target", "value": "original_vs_target"},
-    {"label": "Kalman Filtered", "value": "kalman_filtered"},
+view_control_id = f"{component_id}_view"
+view_options = [
+    {"label": "Single Name", "value": "single"},
+    {"label": "Universe Average", "value": "aggregate"},
 ]
-metric_default = "all_three"
+view_default = "single"
+
+name_control_id = f"{component_id}_name"
 
 sector_control_id = f"{component_id}_sector"
 sector_default = "All"
 
-top_n_control_id = f"{component_id}_top_n"
-top_n_options = [
-    {"label": "Top 10", "value": 10},
-    {"label": "Top 20", "value": 20},
-    {"label": "Top 50", "value": 50},
-]
-top_n_default = 20
+# Trace palette (semantic, shared with the structural-forecast panel).
+_PRICE_COLOR = "#FACC15"  # yellow realized price
+_TARGET_COLOR = "#10B981"  # green analyst consensus target
+_KALMAN_COLOR = GOLD  # cyan accent Kalman target
 
 title = "Price Target Convergence Over Time"
 description = (
-    "Comparison of original price, original target, and Kalman-filtered price "
-    "targets by ticker"
+    "Real price and analyst price-target history from the lookback ladders, "
+    "converging to today's spot, the current consensus and the Kalman-filtered "
+    "target"
 )
 
 
@@ -55,6 +67,12 @@ def component() -> "object":
     df = get_data()
     sector_options = [{"label": "All", "value": "All"}]
     sector_options.extend({"label": str(s), "value": s} for s in sector_values(df))
+    try:
+        names = sorted(t for t in df["name"].dropna().unique().tolist() if str(t).strip())
+    except Exception:  # pragma: no cover - defensive
+        names = []
+    name_opts = [{"label": str(t), "value": str(t)} for t in names]
+    name_default = top_label(df, "market_cap") or (names[0] if names else None)
 
     return theme_card(
         title,
@@ -65,12 +83,24 @@ def component() -> "object":
                 className="geib-controls-row",
                 children=[
                     control(
-                        "Metric Comparison:",
+                        "View:",
                         dcc.Dropdown(
-                            id=metric_control_id,
-                            options=metric_options,
-                            value=metric_default,
-                            style={"minWidth": "200px"},
+                            id=view_control_id,
+                            options=view_options,
+                            value=view_default,
+                            searchable=False,
+                            clearable=False,
+                            style={"minWidth": "170px"},
+                        ),
+                    ),
+                    control(
+                        "Stock:",
+                        dcc.Dropdown(
+                            id=name_control_id,
+                            options=name_opts,
+                            value=name_default,
+                            searchable=True,
+                            style={"minWidth": "220px"},
                         ),
                     ),
                     control(
@@ -79,16 +109,6 @@ def component() -> "object":
                             id=sector_control_id,
                             options=sector_options,
                             value=sector_default,
-                            style={"minWidth": "200px"},
-                        ),
-                    ),
-                    control(
-                        "Top N Tickers:",
-                        dcc.Dropdown(
-                            id=top_n_control_id,
-                            options=top_n_options,
-                            value=top_n_default,
-                            searchable=False,
                             style={"minWidth": "200px"},
                         ),
                     ),
@@ -104,65 +124,178 @@ def component() -> "object":
     )
 
 
+def _ladder_trace(ladder: pd.DataFrame, name: str, color: str) -> go.Scatter:
+    """Dated ladder polyline; a single surviving point still renders a marker."""
+    return go.Scatter(
+        x=ladder["date"],
+        y=ladder["value"],
+        mode="lines+markers",
+        name=name,
+        line=dict(color=color, width=2),
+        marker=dict(size=7),
+        hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.2f}<extra>" + name + "</extra>",
+    )
+
+
+def _indexed_mean_row(df: pd.DataFrame, columns: list[str]) -> pd.Series:
+    """Cross-sectional mean of each ladder column, indexed to spot = 100.
+
+    Raw prices are not comparable across names, so each column is divided by
+    the name's ``original_price`` first; the resulting Series keeps the original
+    column names so it feeds straight into
+    :func:`~dashboards.geib.metrics.history_ladder`.
+    """
+    values = {
+        col: (df[col] / df["original_price"] * 100.0).mean(skipna=True)
+        for col in columns
+        if col in df.columns
+    }
+    return pd.Series(values)
+
+
+def _single_figure(df: pd.DataFrame, name: str, today: pd.Timestamp) -> go.Figure:
+    df = df[df["name"] == name]
+    if len(df) == 0:
+        return empty_figure(f"No data available for {name}")
+    if "income_statement_report_date" in df.columns:
+        df = df.sort_values("income_statement_report_date")
+    row = df.iloc[-1]
+
+    spot = float(row["original_price"]) if pd.notna(row["original_price"]) else np.nan
+    target = float(row["original_target"]) if pd.notna(row["original_target"]) else np.nan
+
+    price_hist = history_ladder(
+        row, "price", PRICE_SUFFIXES,
+        today_value=spot if np.isfinite(spot) else None, asof=today,
+    )
+    pt_hist = history_ladder(
+        row, "price_target", PRICE_TARGET_SUFFIXES,
+        today_value=target if np.isfinite(target) else None, asof=today,
+    )
+    if len(price_hist) == 0 and len(pt_hist) == 0:
+        return empty_figure(f"No price/target history available for {name}")
+    logger.debug(tbl(price_hist))
+
+    fig = go.Figure()
+    if len(price_hist):
+        fig.add_trace(_ladder_trace(price_hist, "Price", _PRICE_COLOR))
+    if len(pt_hist):
+        fig.add_trace(_ladder_trace(pt_hist, "Analyst Target", _TARGET_COLOR))
+
+    # Analyst dispersion at the snapshot (low - high segment + median marker).
+    low = float(row["price_target_low"]) if pd.notna(row.get("price_target_low")) else np.nan
+    high = float(row["price_target_high"]) if pd.notna(row.get("price_target_high")) else np.nan
+    median = (
+        float(row["price_target_median"])
+        if pd.notna(row.get("price_target_median")) else np.nan
+    )
+    if np.isfinite(low) and np.isfinite(high):
+        fig.add_trace(go.Scatter(
+            x=[today, today], y=[low, high], mode="lines",
+            name="Analyst Target Range",
+            line=dict(color=_TARGET_COLOR, width=4), opacity=0.4,
+            hovertemplate="Range: %{y:,.2f}<extra>Analyst Target Range</extra>",
+        ))
+    if np.isfinite(median):
+        fig.add_trace(go.Scatter(
+            x=[today], y=[median], mode="markers", name="Median Target",
+            marker=dict(size=9, color=_TARGET_COLOR, symbol="line-ew-open",
+                        line=dict(width=2)),
+            hovertemplate="Median Target: %{y:,.2f}<extra></extra>",
+        ))
+
+    kalman = float(row["price_target_kalman"]) if pd.notna(row["price_target_kalman"]) else np.nan
+    if np.isfinite(kalman):
+        if np.isfinite(spot):
+            # Dotted connector making the spot -> Kalman-target gap explicit.
+            fig.add_trace(go.Scatter(
+                x=[today, today], y=[spot, kalman], mode="lines",
+                line=dict(color=SUBTLE_TEXT, dash="dot", width=1),
+                showlegend=False, hoverinfo="skip",
+            ))
+        fig.add_trace(go.Scatter(
+            x=[today], y=[kalman], mode="markers", name="Kalman Target (today)",
+            marker=dict(size=11, color=_KALMAN_COLOR, symbol="diamond"),
+            hovertemplate="Kalman Target: %{y:,.2f}<extra></extra>",
+        ))
+
+    fig.update_layout(
+        title=f"{name} - Price vs Analyst Target Convergence",
+        yaxis_title="Price",
+        xaxis_title="Date",
+        hovermode="x unified",
+        height=550,
+    )
+    return fig
+
+
+def _aggregate_figure(df: pd.DataFrame, today: pd.Timestamp) -> go.Figure:
+    usable = df[df["original_price"] > 0]
+    if len(usable) == 0:
+        return empty_figure("No price/target history available for the current selection")
+
+    price_row = _indexed_mean_row(usable, [f"price_{s}_ago" for s in PRICE_SUFFIXES])
+    pt_row = _indexed_mean_row(
+        usable, [f"price_target_{s}_ago" for s in PRICE_TARGET_SUFFIXES]
+    )
+    target_today = (usable["original_target"] / usable["original_price"] * 100.0).mean(skipna=True)
+    kalman_today = (
+        usable["price_target_kalman"] / usable["original_price"] * 100.0
+    ).mean(skipna=True)
+
+    price_hist = history_ladder(price_row, "price", PRICE_SUFFIXES,
+                                today_value=100.0, asof=today)
+    pt_hist = history_ladder(
+        pt_row, "price_target", PRICE_TARGET_SUFFIXES,
+        today_value=float(target_today) if np.isfinite(target_today) else None,
+        asof=today,
+    )
+    if len(price_hist) == 0 and len(pt_hist) == 0:
+        return empty_figure("No price/target history available for the current selection")
+
+    fig = go.Figure()
+    if len(price_hist):
+        fig.add_trace(_ladder_trace(price_hist, "Avg Price (Indexed)", _PRICE_COLOR))
+    if len(pt_hist):
+        fig.add_trace(_ladder_trace(pt_hist, "Avg Analyst Target (Indexed)", _TARGET_COLOR))
+    if np.isfinite(kalman_today):
+        fig.add_trace(go.Scatter(
+            x=[today], y=[float(kalman_today)], mode="markers",
+            name="Avg Kalman Target (today)",
+            marker=dict(size=11, color=_KALMAN_COLOR, symbol="diamond"),
+            hovertemplate="Avg Kalman Target: %{y:,.2f}<extra></extra>",
+        ))
+
+    fig.update_layout(
+        title=f"Universe Average ({len(usable):,} names) - Convergence, Indexed to Spot = 100",
+        yaxis_title="Indexed (Spot = 100)",
+        xaxis_title="Date",
+        hovermode="x unified",
+        height=550,
+    )
+    return fig
+
+
 def _update_logic(**kwargs) -> go.Figure:
     df = filter_data(get_data(), **kwargs)
-
     if df is None or len(df) == 0:
         return empty_figure("No data is available to display")
-
-    df = df[
-        ["ticker", "sector", "market_cap", "original_price", "original_target", "price_target_kalman"]
-    ].copy()
     logger.debug(schema(df))
 
-    metric_value = kwargs.get(metric_control_id) or metric_default
+    view = coalesce(kwargs.get(view_control_id), view_default)
     sector_value = kwargs.get(sector_control_id) or sector_default
-    top_n_value = kwargs.get(top_n_control_id) or top_n_default
-
     if sector_value != "All":
         df = df[df["sector"] == sector_value]
     if len(df) == 0:
         return empty_figure("No data is available for the selected sector")
 
-    top_tickers = df.nlargest(top_n_value, "market_cap")["ticker"].unique()
-    df = df[df["ticker"].isin(top_tickers)]
-    if len(df) == 0:
-        return empty_figure("No data is available to display")
-
-    df["gap_percentage"] = (
-        (df["price_target_kalman"] - df["original_price"]) / df["original_price"] * 100
-    ).round(2)
-    logger.debug(tbl(df))
-
-    fig = go.Figure()
-    tickers = sorted(df["ticker"].unique())
-    first = tickers[0] if tickers else None
-
-    def _add(series_key: str, name: str, group: str) -> None:
-        for ticker in tickers:
-            row = df[df["ticker"] == ticker].iloc[0]
-            fig.add_trace(
-                go.Scatter(
-                    x=[ticker],
-                    y=[row[series_key]],
-                    mode="markers",
-                    name=name,
-                    marker=dict(size=8),
-                    legendgroup=group,
-                    showlegend=(ticker == first),
-                )
-            )
-
-    if metric_value in ("all_three", "original_vs_target"):
-        _add("original_price", "Original Price", "original_price")
-        _add("original_target", "Original Target", "original_target")
-    if metric_value in ("all_three", "kalman_filtered"):
-        _add("price_target_kalman", "Kalman Filtered Target", "kalman_filtered")
-
-    fig.update_layout(
-        xaxis_title="Ticker", yaxis_title="Price", hovermode="closest", height=550
-    )
-    return fig
+    today = pd.Timestamp.now().normalize()
+    if view == "aggregate":
+        return _aggregate_figure(df, today)
+    name = kwargs.get(name_control_id)
+    if not name:
+        return empty_figure("Select a stock to display its convergence history")
+    return _single_figure(df, name, today)
 
 
 @callback(
@@ -171,26 +304,37 @@ def _update_logic(**kwargs) -> go.Figure:
         Output(f"{component_id}_error", "children"),
         Output(sector_control_id, "options"),
         Output(sector_control_id, "value"),
+        Output(name_control_id, "options"),
+        Output(name_control_id, "value"),
     ],
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
-        metric_control_id: Input(metric_control_id, "value"),
+        view_control_id: Input(view_control_id, "value"),
+        name_control_id: Input(name_control_id, "value"),
         sector_control_id: Input(sector_control_id, "value"),
-        top_n_control_id: Input(top_n_control_id, "value"),
         **FILTER_CALLBACK_INPUTS,
     },
 )
-def update(**kwargs) -> Tuple[go.Figure, str, list, str]:
+def update(**kwargs) -> Tuple[go.Figure, str, list, str, list, str]:
     # Scope the local Sector filter (with its "All" sentinel) to the
-    # globally-filtered universe.
+    # globally-filtered universe, then the Stock picker to the sector-narrowed
+    # frame so it only offers names the chart can actually draw.
     df_all = filter_data(get_data(), **kwargs)
     sector_opts, sector_val = scoped_filter(
         df_all, "sector", kwargs.get(sector_control_id), include_all=True, all_label="All"
     )
     kwargs[sector_control_id] = sector_val
+    df_scoped = df_all
+    if sector_val != "All" and df_all is not None and "sector" in df_all.columns:
+        df_scoped = df_all[df_all["sector"] == sector_val]
+    name_opts, name_val = scoped_filter(
+        df_scoped, "name", kwargs.get(name_control_id),
+        fallback=top_label(df_scoped, "market_cap"),
+    )
+    kwargs[name_control_id] = name_val
     try:
-        return _update_logic(**kwargs), "", sector_opts, sector_val
+        return _update_logic(**kwargs), "", sector_opts, sector_val, name_opts, name_val
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        return empty_figure("An error occurred"), msg, sector_opts, sector_val
+        return empty_figure("An error occurred"), msg, sector_opts, sector_val, name_opts, name_val

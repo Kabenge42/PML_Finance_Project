@@ -31,6 +31,7 @@ sort_by_options = [
     {"label": "Signal Strength", "value": "signal_strength"},
     {"label": "Reward to CVaR", "value": "reward_to_cvar"},
     {"label": "Price Target (Kalman)", "value": "price_target_kalman"},
+    {"label": "Beta", "value": "beta"},
 ]
 sort_by_default = ["expected_return_kalman"]
 
@@ -50,8 +51,10 @@ _COLUMNS = [
     ("industry", "Industry", None),
     ("original_price", "Original Price", 2),
     ("price_target_kalman", "Price Target Kalman", 2),
+    ("price_target_median", "Price Target Median", 2),
     ("expected_return_kalman", "Expected Return Kalman", 2),
     ("mc_prob_pos", "Mc Prob Pos", 2),
+    ("beta", "Beta", 2),
     ("signal_strength", "Signal Strength", 2),
     ("reward_to_cvar", "Reward To Cvar", 2),
 ]
