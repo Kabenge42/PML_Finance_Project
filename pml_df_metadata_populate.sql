@@ -90,6 +90,7 @@ WHERE column_name IN ('last_updated',
                       'income_statement_report_date',
                       'next_earnings',
                       'fy_end_date',
+                      'next_fiscal_quarter',
                       'next_income_statement_report_date',
                       'next_fy_end_date',
                       'expected_report_date');
@@ -153,7 +154,7 @@ WHERE column_name IN ('market_cap', 'enterprise_value', 'volume_shrs', 'rel_volu
                       'shrs_out', 'shrs_out_3yavg', 'shrs_out_5yavg',
                       'market_cap_3yavg', 'market_cap_5yavg',
                       'enterprise_value_3yavg', 'enterprise_value_5yavg',
-                      'one_day_pct');
+                      'one_day_pct','price_chg_pct_3m');
 
 UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
@@ -532,6 +533,9 @@ WHERE column_name = 'fy_end_date';
 UPDATE pml.pml_df_metadata
 SET description = 'Next fiscal year end date'
 WHERE column_name = 'next_fy_end_date';
+UPDATE pml.pml_df_metadata
+SET description = 'Next fiscal quarter'
+WHERE column_name = 'next_fiscal_quarter';
 UPDATE pml.pml_df_metadata
 SET description = 'Next income statement report date'
 WHERE column_name = 'next_income_statement_report_date';
@@ -1333,6 +1337,7 @@ WHERE column_name IN ('w_52high_adj',
                       'income_statement_report_date',
                       'next_earnings',
                       'fy_end_date',
+                      'next_fiscal_quarter',
                       'next_income_statement_report_date',
                       'next_fy_end_date',
                       'expected_report_date',
@@ -1340,6 +1345,7 @@ WHERE column_name IN ('w_52high_adj',
                       'days_to_next_earnings',
                       'days_since_last_report',
                       'days_to_next_fy_end',
+                      'days_to_next_fiscal_quarter',
                       'days_to_next_report',
                       'days_to_expected_report',
                       'days_since_fy_end');
@@ -1364,6 +1370,7 @@ SET pymc_role = 'coord'
 WHERE column_name IN ('income_statement_report_date',
                       'next_earnings',
                       'fy_end_date',
+                      'next_fiscal_quarter',
                       'next_income_statement_report_date',
                       'next_fy_end_date',
                       'expected_report_date');
@@ -1446,6 +1453,7 @@ SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY 
 WHERE column_name IN ('income_statement_report_date',
                       'next_earnings',
                       'fy_end_date',
+                      'next_fiscal_quarter',
                       'next_income_statement_report_date',
                       'next_fy_end_date',
                       'expected_report_date',
@@ -1613,7 +1621,7 @@ WHERE column_name IN ('isin', 'ticker',
 -- ---------------------------------------------------------------------------
 INSERT INTO pml.pml_df_metadata (column_name, category, feature_role, pymc_role)
 SELECT col, 'fiscal_calendar', 'predictor', 'mutable_predictor'
-FROM unnest(ARRAY [ 'days_to_next_earnings', 'days_since_last_report', 'days_to_next_fy_end', 'days_to_next_report', 'days_to_expected_report', 'days_since_fy_end' ]) AS col
+FROM unnest(ARRAY [ 'days_to_next_earnings', 'days_since_last_report', 'days_to_next_fy_end','days_to_next_fiscal_quarter', 'days_to_next_report', 'days_to_expected_report', 'days_since_fy_end' ]) AS col
 ON CONFLICT (column_name) DO NOTHING;
 
 -- The derived day-count horizons are created by the FK-safety seed above, which
@@ -1626,6 +1634,7 @@ SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY 
 WHERE column_name IN ('days_to_next_earnings',
                       'days_since_last_report',
                       'days_to_next_fy_end',
+                      'days_to_next_fiscal_quarter',
                       'days_to_next_report',
                       'days_to_expected_report',
                       'days_since_fy_end');
@@ -1680,64 +1689,65 @@ WHERE 'dcf_pt' = ANY (model_targets)
 -- ---------------------------------------------------------------------------
 INSERT INTO pml.pml_df_metadata (column_name,                          category,          feature_role, pymc_role,
 	                                                                                                                         feature_alias,
-	                                                                                                                                                               model_targets                      )
+	                                                                                                                                                               model_targets                                                                                                         )
 VALUES
 	-- kalman_pt drift / range engineered feats (mv_pymc_kalman_pt)
-	                            ('feat_implied_upside',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_implied_upside',                ARRAY ['kalman_pt', 'price_target']),
-	                            ('feat_pt_drift',                      'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_drift',                      ARRAY ['kalman_pt']                ),
-	                            ('feat_price_drift',                   'analyst_targets', 'predictor',  'mutable_predictor', 'feat_price_drift',                   ARRAY ['kalman_pt']                ),
-	                            ('feat_pt_high_drift',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_high_drift',                 ARRAY ['kalman_pt']                ),
-	                            ('feat_pt_low_drift',                  'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_low_drift',                  ARRAY ['kalman_pt']                ),
-	                            ('feat_pt_median_drift',               'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_median_drift',               ARRAY ['kalman_pt']                ),
-	                            ('feat_coverage_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_coverage_drift',                ARRAY ['kalman_pt']                ),
-	                            ('feat_pt_noise_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_noise_drift',                ARRAY ['kalman_pt']                ),
+	                            ('feat_implied_upside',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_implied_upside',                ARRAY ['kalman_pt', 'price_target']                                                                                   ),
+	                            ('feat_pt_drift',                      'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_drift',                      ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_price_drift',                   'analyst_targets', 'predictor',  'mutable_predictor', 'feat_price_drift',                   ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_pt_high_drift',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_high_drift',                 ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_pt_low_drift',                  'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_low_drift',                  ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_pt_median_drift',               'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_median_drift',               ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_coverage_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_coverage_drift',                ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_pt_noise_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_noise_drift',                ARRAY ['kalman_pt']                                                                                                   ),
 	-- Valid-pair coverage counts for the drift trails (pml.target_drift_n):
 	-- constant_data the fused panel / coverage guard gate on so a sparse,
 	-- mostly-NULL trail cannot enter the ICM as a degenerate response.
-	                            ('feat_pt_drift_n',                    'analyst_targets', 'metadata',   'constant_data',     'feat_pt_drift_n',                    ARRAY ['kalman_pt']                ),
-	                            ('feat_price_drift_n',                 'analyst_targets', 'metadata',   'constant_data',     'feat_price_drift_n',                 ARRAY ['kalman_pt']                ),
-	                            ('feat_pt_range_norm',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_norm',                 ARRAY ['kalman_pt']                ),
+	                            ('feat_pt_drift_n',                    'analyst_targets', 'metadata',   'constant_data',     'feat_pt_drift_n',                    ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_price_drift_n',                 'analyst_targets', 'metadata',   'constant_data',     'feat_price_drift_n',                 ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_pt_range_norm',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_norm',                 ARRAY ['kalman_pt']                                                                                                   ),
 	-- Drift of the market_cap / enterprise_value ratio trail
 	-- (equity share of EV) across the fiscal-year lags. A
 	-- multi-source self-row (matched market_cap / EV lag pairs)
 	-- consumed by the fused panel as a state-transition (beta)
 	-- drift predictor — see feat_mv_ev_drift in mv_pymc_kalman_pt.
-	                            ('feat_mv_ev_drift',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mv_ev_drift',                   ARRAY ['kalman_pt']                ),
-	                            ('feat_avg_beta',                      'volatility',      'predictor',  'mutable_predictor', 'feat_avg_beta',                      ARRAY ['kalman_pt']                ),
+	                            ('feat_mv_ev_drift',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mv_ev_drift',                   ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_avg_beta',                      'volatility',      'predictor',  'mutable_predictor', 'feat_avg_beta',                      ARRAY ['kalman_pt']                                                                                                   ),
 	-- earnings_beat logit-beat-rate + revision-acceleration feats (mv_pymc_earnings_beat)
-	                            ('feat_logit_beat_rate',               'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate',               ARRAY ['earnings_beat']            ),
-	                            ('feat_logit_beat_rate_annual',        'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate_annual',        ARRAY ['earnings_beat']            ),
-	                            ('feat_ebit_logit_beat_rate',          'ebit',            'predictor',  'mutable_predictor', 'feat_ebit_logit_beat_rate',          ARRAY ['earnings_beat']            ),
-	                            ('feat_ebit_logit_beat_rate_annual',   'ebit',            'predictor',  'mutable_predictor', 'feat_ebit_logit_beat_rate_annual',   ARRAY ['earnings_beat']            ),
-	                            ('feat_ebitda_logit_beat_rate',        'ebitda',          'predictor',  'mutable_predictor', 'feat_ebitda_logit_beat_rate',        ARRAY ['earnings_beat']            ),
-	                            ('feat_ebitda_logit_beat_rate_annual', 'ebitda',          'predictor',  'mutable_predictor', 'feat_ebitda_logit_beat_rate_annual', ARRAY ['earnings_beat']            ),
-	                            ('feat_sales_logit_beat_rate',         'sales',           'predictor',  'mutable_predictor', 'feat_sales_logit_beat_rate',         ARRAY ['earnings_beat']            ),
-	                            ('feat_sales_logit_beat_rate_annual',  'sales',           'predictor',  'mutable_predictor', 'feat_sales_logit_beat_rate_annual',  ARRAY ['earnings_beat']            ),
-	                            ('feat_rev_accel_1m_6m',               'eps',             'predictor',  'mutable_predictor', 'feat_rev_accel_1m_6m',               ARRAY ['earnings_beat']            ),
+	                            ('feat_logit_beat_rate',               'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate',               ARRAY ['earnings_beat']                                                                                               ),
+	                            ('feat_logit_beat_rate_annual',        'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate_annual',        ARRAY ['earnings_beat']                                                                                               ),
+	                            ('feat_ebit_logit_beat_rate',          'ebit',            'predictor',  'mutable_predictor', 'feat_ebit_logit_beat_rate',          ARRAY ['earnings_beat']                                                                                               ),
+	                            ('feat_ebit_logit_beat_rate_annual',   'ebit',            'predictor',  'mutable_predictor', 'feat_ebit_logit_beat_rate_annual',   ARRAY ['earnings_beat']                                                                                               ),
+	                            ('feat_ebitda_logit_beat_rate',        'ebitda',          'predictor',  'mutable_predictor', 'feat_ebitda_logit_beat_rate',        ARRAY ['earnings_beat']                                                                                               ),
+	                            ('feat_ebitda_logit_beat_rate_annual', 'ebitda',          'predictor',  'mutable_predictor', 'feat_ebitda_logit_beat_rate_annual', ARRAY ['earnings_beat']                                                                                               ),
+	                            ('feat_sales_logit_beat_rate',         'sales',           'predictor',  'mutable_predictor', 'feat_sales_logit_beat_rate',         ARRAY ['earnings_beat']                                                                                               ),
+	                            ('feat_sales_logit_beat_rate_annual',  'sales',           'predictor',  'mutable_predictor', 'feat_sales_logit_beat_rate_annual',  ARRAY ['earnings_beat']                                                                                               ),
+	                            ('feat_rev_accel_1m_6m',               'eps',             'predictor',  'mutable_predictor', 'feat_rev_accel_1m_6m',               ARRAY ['earnings_beat']                                                                                               ),
 	-- dcf_pt FCF-growth engineered feats (mv_pymc_dcf_pt)
-	                            ('feat_fcf_growth_1y',                 'cash_flow',       'predictor',  'mutable_predictor', 'feat_fcf_growth_1y',                 ARRAY ['dcf_pt']                   ),
-	                            ('feat_fcf_growth_2y',                 'cash_flow',       'predictor',  'mutable_predictor', 'feat_fcf_growth_2y',                 ARRAY ['dcf_pt']                   ),
-	                            ('feat_fcf_terminal_growth',           'cash_flow',       'predictor',  'mutable_predictor', 'feat_fcf_terminal_growth',           ARRAY ['dcf_pt']                   ),
-	                            ('feat_reinvest_rate',                 'cash_flow',       'predictor',  'mutable_predictor', 'feat_reinvest_rate',                 ARRAY ['dcf_pt']                   ),
+	                            ('feat_fcf_growth_1y',                 'cash_flow',       'predictor',  'mutable_predictor', 'feat_fcf_growth_1y',                 ARRAY ['dcf_pt']                                                                                                      ),
+	                            ('feat_fcf_growth_2y',                 'cash_flow',       'predictor',  'mutable_predictor', 'feat_fcf_growth_2y',                 ARRAY ['dcf_pt']                                                                                                      ),
+	                            ('feat_fcf_terminal_growth',           'cash_flow',       'predictor',  'mutable_predictor', 'feat_fcf_terminal_growth',           ARRAY ['dcf_pt']                                                                                                      ),
+	                            ('feat_reinvest_rate',                 'cash_flow',       'predictor',  'mutable_predictor', 'feat_reinvest_rate',                 ARRAY ['dcf_pt']                                                                                                      ),
 	-- price_target multi-source engineered feats (mv_pymc_price_target). Task 6:
 	-- these previously had MISNAMED aliases overloaded on raw carriers
 	-- (feat_*_high/_low/_lag/_1y/_6m). Register them as self-rows so the alias
 	-- equals the MV column name exactly, and drop the bad carrier aliases below.
-	                            ('feat_target_range_width',            'analyst_targets', 'predictor',  'mutable_predictor', 'feat_target_range_width',            ARRAY ['price_target']             ),
-	                            ('feat_52w_range_position',            'technical',       'predictor',  'mutable_predictor', 'feat_52w_range_position',            ARRAY ['price_target']             ),
-	                            ('feat_pt_range_hit_rate',             'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_hit_rate',             ARRAY ['price_target']             ),
-	                            ('feat_pt_high_low_convergence_1y',    'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_high_low_convergence_1y',    ARRAY ['price_target']             ),
-	                            ('feat_analyst_count_stability',       'analyst_targets', 'predictor',  'mutable_predictor', 'feat_analyst_count_stability',       ARRAY ['price_target']             ),
-	                            ('feat_pt_accuracy_1y',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_accuracy_1y',                ARRAY ['price_target']             ),
-	                            ('feat_pt_optimism_bias',              'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_optimism_bias',              ARRAY ['price_target']             ),
-	                            ('feat_net_buy_sentiment',             'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_net_buy_sentiment',             ARRAY ['price_target']             ),
-	                            ('feat_conviction_ratio',              'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_conviction_ratio',              ARRAY ['price_target']             ),
+	                            ('feat_target_range_width',            'analyst_targets', 'predictor',  'mutable_predictor', 'feat_target_range_width',            ARRAY ['price_target']                                                                                                ),
+	                            ('feat_52w_range_position',            'technical',       'predictor',  'mutable_predictor', 'feat_52w_range_position',            ARRAY ['price_target']                                                                                                ),
+	                            ('feat_pt_range_hit_rate',             'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_hit_rate',             ARRAY ['price_target']                                                                                                ),
+	                            ('feat_pt_high_low_convergence_1y',    'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_high_low_convergence_1y',    ARRAY ['price_target']                                                                                                ),
+	                            ('feat_analyst_count_stability',       'analyst_targets', 'predictor',  'mutable_predictor', 'feat_analyst_count_stability',       ARRAY ['price_target']                                                                                                ),
+	                            ('feat_pt_accuracy_1y',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_accuracy_1y',                ARRAY ['price_target']                                                                                                ),
+	                            ('feat_pt_optimism_bias',              'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_optimism_bias',              ARRAY ['price_target']                                                                                                ),
+	                            ('feat_net_buy_sentiment',             'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_net_buy_sentiment',             ARRAY ['price_target']                                                                                                ),
+	                            ('feat_conviction_ratio',              'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_conviction_ratio',              ARRAY ['price_target']                                                                                                ),
 	-- Cross-cutting market-cap / EV size & trend feats. Each is multi-source
 	-- (raw level vs lag / average) so it cannot be a per-source alias row; it is
 	-- registered as its own self-row consumed by EVERY mv_pymc_* view.
 	                            ('feat_mcap_trend_1y',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_trend_1y',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
 	                            ('feat_mcap_vs_3yavg',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_vs_3yavg',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
-	                            ('feat_ev_vs_3yavg',                   'market_data',     'predictor',  'mutable_predictor', 'feat_ev_vs_3yavg',                   ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])
+	                            ('feat_ev_vs_3yavg',                   'market_data',     'predictor',  'mutable_predictor', 'feat_ev_vs_3yavg',                   ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
+	                            ('feat_mcap_country_r',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_country_r',                   ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])
 ON CONFLICT (column_name) DO UPDATE SET pymc_role     = excluded.pymc_role,
                                         feature_alias = excluded.feature_alias,
                                         model_targets = (SELECT ARRAY(SELECT DISTINCT
@@ -1783,15 +1793,15 @@ VALUES
 	-- feat_logit_beat_rate columns, they are intentionally NOT aliased here
 	-- (the alias table is keyed PRIMARY KEY (column_name, model_target)).
 	-- Only the neg0-period carriers below get an alias.
-	('ebit_neg0fqsurprise_pct',   'earnings_beat', 'feat_ebit_last_q_surprise',   'mutable_predictor'),
-	('ebit_neg0fysurprise_pct',   'earnings_beat', 'feat_ebit_last_y_surprise',   'mutable_predictor'),
-	('ebitda_neg0fqsurprise_pct', 'earnings_beat', 'feat_ebitda_last_q_surprise', 'mutable_predictor'),
-	('ebitda_neg0fysurprise_pct', 'earnings_beat', 'feat_ebitda_last_y_surprise', 'mutable_predictor'),
-	('sales_neg0fqsurprise_pct',  'earnings_beat', 'feat_sales_last_q_surprise',  'mutable_predictor'),
-	('sales_neg0fysurprise_pct',  'earnings_beat', 'feat_sales_last_y_surprise',  'mutable_predictor'),
-	('days_to_earnings',          'earnings_beat', 'feat_days_to_earnings',       'mutable_predictor'),
-	('earnings_report_recency',   'earnings_beat', 'feat_report_recency',         'mutable_predictor'),
-	('next_earnings_status',      'earnings_beat', 'feat_next_earnings_status',   'mutable_predictor'),
+	                                 ('ebit_neg0fqsurprise_pct',           'earnings_beat',      'feat_ebit_last_q_surprise',         'mutable_predictor'),
+	                                 ('ebit_neg0fysurprise_pct',           'earnings_beat',      'feat_ebit_last_y_surprise',         'mutable_predictor'),
+	                                 ('ebitda_neg0fqsurprise_pct',         'earnings_beat',      'feat_ebitda_last_q_surprise',       'mutable_predictor'),
+	                                 ('ebitda_neg0fysurprise_pct',         'earnings_beat',      'feat_ebitda_last_y_surprise',       'mutable_predictor'),
+	                                 ('sales_neg0fqsurprise_pct',          'earnings_beat',      'feat_sales_last_q_surprise',        'mutable_predictor'),
+	                                 ('sales_neg0fysurprise_pct',          'earnings_beat',      'feat_sales_last_y_surprise',        'mutable_predictor'),
+	                                 ('days_to_earnings',                  'earnings_beat',      'feat_days_to_earnings',             'mutable_predictor'),
+	                                 ('earnings_report_recency',           'earnings_beat',      'feat_report_recency',               'mutable_predictor'),
+	                                 ('next_earnings_status',              'earnings_beat',      'feat_next_earnings_status',         'mutable_predictor'),
 
 	-- ---- price_target aliases (from mv_pymc_price_target) ----
 	                                 ('target_pct_avg',                    'price_target',       'observed_target_pct',               'observed'         ),
@@ -1842,9 +1852,10 @@ VALUES
 	                                 ('days_to_next_earnings',             'price_target',       'feat_days_to_next_earnings',        'mutable_predictor'),
 	                                 ('days_since_last_report',            'price_target',       'feat_days_since_last_report',       'mutable_predictor'),
 	                                 ('days_to_next_fy_end',               'price_target',       'feat_days_to_next_fy_end',          'mutable_predictor'),
+	                                 ('days_to_next_fiscal_quarter',       'price_target',       'feat_days_to_next_fiscal_quarter',  'mutable_predictor'),
 	                                 ('days_to_next_report',               'price_target',       'feat_days_to_next_report',          'mutable_predictor'),
 	                                 ('days_to_expected_report',           'price_target',       'feat_days_to_expected_report',      'mutable_predictor'),
-	('days_since_fy_end', 'price_target', 'feat_days_to_fy_end', 'mutable_predictor'),
+	                                 ('days_since_fy_end',                 'price_target',       'feat_days_to_fy_end',               'mutable_predictor'),
 	-- ---- price_target achievement / accuracy (realised vs 1Y-ago targets) ----
 	                                 ('price_target_1y_ago',               'price_target',       'feat_pt_achievement_1y',            'mutable_predictor'),
 	-- Task 6: feat_pt_range_hit_rate (low_1y_ago + high_1y_ago),
@@ -1867,36 +1878,37 @@ VALUES
 	                                 ('volatility_6m',                     'kalman_pt',          'feat_vol_6m',                       'mutable_predictor'),
 	                                 ('volatility_1y',                     'kalman_pt',          'feat_vol_1y',                       'mutable_predictor'),
 	                                 ('total_return_ytd',                  'kalman_pt',          'feat_total_return_ytd',             'mutable_predictor'),
-	('total_return_5y',           'kalman_pt',     'feat_total_return_5y',        'mutable_predictor'),
-	('total_return_10y',          'kalman_pt',     'feat_total_return_10y',       'mutable_predictor'),
-	('tot_return_pct_cagr_3y',    'kalman_pt',     'feat_tr_cagr_3y',             'mutable_predictor'),
-	('tot_return_pct_cagr_10y',   'kalman_pt',     'feat_tr_cagr_10y',            'mutable_predictor'),
-	('tot_return_pct_cagr_5y',    'kalman_pt',     'feat_tr_cagr_5y',             'mutable_predictor'),
-	('tot_return_pct_cagr_1y',    'kalman_pt',     'feat_tr_cagr_1y',             'mutable_predictor'),
-	('total_return_1d',           'kalman_pt',     'feat_total_return_1d',        'mutable_predictor'),
-	('total_return_5d',           'kalman_pt',     'feat_total_return_5d',        'mutable_predictor'),
-	('total_return_1w',           'kalman_pt',     'feat_total_return_1w',        'mutable_predictor'),
-	('total_return_1m',           'kalman_pt',     'feat_total_return_1m',        'mutable_predictor'),
-	('total_return_3m',           'kalman_pt',     'feat_total_return_3m',        'mutable_predictor'),
-	('total_return_6m',           'kalman_pt',     'feat_total_return_6m',        'mutable_predictor'),
-	('total_return_1y',           'kalman_pt',     'feat_total_return_1y',        'mutable_predictor'),
-	('total_return_3y',           'kalman_pt',     'feat_total_return_3y',        'mutable_predictor'),
-	('total_return_mtd',          'kalman_pt',     'feat_total_return_mtd',       'mutable_predictor'),
-	('total_return_qtd',          'kalman_pt',     'feat_total_return_qtd',       'mutable_predictor'),
-	('total_return_2025',         'kalman_pt',     'feat_total_return_2025',      'mutable_predictor'),
-	('total_return_2024',         'kalman_pt',     'feat_total_return_2024',      'mutable_predictor'),
-	('total_return_2023',         'kalman_pt',     'feat_total_return_2023',      'mutable_predictor'),
-	('total_return_2022',         'kalman_pt',     'feat_total_return_2022',      'mutable_predictor'),
-	('total_return_2021',         'kalman_pt',     'feat_total_return_2021',      'mutable_predictor'),
+	                                 ('total_return_5y',                   'kalman_pt',          'feat_total_return_5y',              'mutable_predictor'),
+	                                 ('total_return_10y',                  'kalman_pt',          'feat_total_return_10y',             'mutable_predictor'),
+	                                 ('tot_return_pct_cagr_3y',            'kalman_pt',          'feat_tr_cagr_3y',                   'mutable_predictor'),
+	                                 ('tot_return_pct_cagr_10y',           'kalman_pt',          'feat_tr_cagr_10y',                  'mutable_predictor'),
+	                                 ('tot_return_pct_cagr_5y',            'kalman_pt',          'feat_tr_cagr_5y',                   'mutable_predictor'),
+	                                 ('tot_return_pct_cagr_1y',            'kalman_pt',          'feat_tr_cagr_1y',                   'mutable_predictor'),
+	                                 ('total_return_1d',                   'kalman_pt',          'feat_total_return_1d',              'mutable_predictor'),
+	                                 ('total_return_5d',                   'kalman_pt',          'feat_total_return_5d',              'mutable_predictor'),
+	                                 ('total_return_1w',                   'kalman_pt',          'feat_total_return_1w',              'mutable_predictor'),
+	                                 ('total_return_1m',                   'kalman_pt',          'feat_total_return_1m',              'mutable_predictor'),
+	                                 ('total_return_3m',                   'kalman_pt',          'feat_total_return_3m',              'mutable_predictor'),
+	                                 ('total_return_6m',                   'kalman_pt',          'feat_total_return_6m',              'mutable_predictor'),
+	                                 ('total_return_1y',                   'kalman_pt',          'feat_total_return_1y',              'mutable_predictor'),
+	                                 ('total_return_3y',                   'kalman_pt',          'feat_total_return_3y',              'mutable_predictor'),
+	                                 ('total_return_mtd',                  'kalman_pt',          'feat_total_return_mtd',             'mutable_predictor'),
+	                                 ('total_return_qtd',                  'kalman_pt',          'feat_total_return_qtd',             'mutable_predictor'),
+	                                 ('total_return_2025',                 'kalman_pt',          'feat_total_return_2025',            'mutable_predictor'),
+	                                 ('total_return_2024',                 'kalman_pt',          'feat_total_return_2024',            'mutable_predictor'),
+	                                 ('total_return_2023',                 'kalman_pt',          'feat_total_return_2023',            'mutable_predictor'),
+	                                 ('total_return_2022',                 'kalman_pt',          'feat_total_return_2022',            'mutable_predictor'),
+	                                 ('total_return_2021',                 'kalman_pt',          'feat_total_return_2021',            'mutable_predictor'),
 	-- Short-term momentum: one_day_pct (last day's price change) -> feat_one_day_return.
-	('one_day_pct',               'kalman_pt',     'feat_one_day_return',         'mutable_predictor'),
+	                                 ('one_day_pct',                       'kalman_pt',          'feat_one_day_return',               'mutable_predictor'),
+	                                 ('price_chg_pct_3m',                       'kalman_pt',          'feat_price_chg_pct_3m',               'mutable_predictor'),
 	-- Raw beta windows: emitted un-prefixed by mv_pymc_kalman_pt as the
 	-- systematic-risk inputs to feat_avg_beta (the NULL-aware mean), which is the
 	-- model-facing risk-adjustment driver. Aliased == column name (present-check)
 	-- and kept 'derived_input' since the panel consumes feat_avg_beta, not these.
-	('beta_1y',                   'kalman_pt',     'beta_1y',                     'derived_input'    ),
-	('beta_2y',                   'kalman_pt',     'beta_2y',                     'derived_input'    ),
-	('beta_5y',                   'kalman_pt',     'beta_5y',                     'derived_input'    ),
+	                                 ('beta_1y',                           'kalman_pt',          'beta_1y',                           'derived_input'    ),
+	                                 ('beta_2y',                           'kalman_pt',          'beta_2y',                           'derived_input'    ),
+	                                 ('beta_5y',                           'kalman_pt',          'beta_5y',                           'derived_input'    ),
 	-- NOTE: mv_pymc_kalman_pt also emits `feat_implied_upside`
 	--       (= calc_change_ratio(price_target, last_price)). It derives from BOTH
 	--       `price_target` and `last_price`, so it cannot be an alias row here
@@ -1911,6 +1923,7 @@ VALUES
 	                                 ('income_statement_report_date',      'kalman_pt',          'income_statement_report_date',      'coord'            ),
 	                                 ('next_earnings',                     'kalman_pt',          'next_earnings',                     'coord'            ),
 	                                 ('fy_end_date',                       'kalman_pt',          'fy_end_date',                       'coord'            ),
+	                                 ('next_fiscal_quarter',               'kalman_pt',          'next_fiscal_quarter',               'coord'            ),
 	                                 ('next_income_statement_report_date', 'kalman_pt',          'next_income_statement_report_date', 'coord'            ),
 	                                 ('next_fy_end_date',                  'kalman_pt',          'next_fy_end_date',                  'coord'            ),
 	                                 ('expected_report_date',              'kalman_pt',          'expected_report_date',              'coord'            ),
@@ -1921,9 +1934,10 @@ VALUES
 	                                 ('days_to_next_earnings',             'kalman_pt',          'days_to_next_earnings',             'mutable_predictor'),
 	                                 ('days_since_last_report',            'kalman_pt',          'days_since_last_report',            'mutable_predictor'),
 	                                 ('days_to_next_fy_end',               'kalman_pt',          'days_to_next_fy_end',               'mutable_predictor'),
+	                                 ('days_to_next_fiscal_quarter',       'kalman_pt',          'days_to_next_fiscal_quarter',       'mutable_predictor'),
 	                                 ('days_to_next_report',               'kalman_pt',          'days_to_next_report',               'mutable_predictor'),
 	                                 ('days_to_expected_report',           'kalman_pt',          'days_to_expected_report',           'mutable_predictor'),
-	('days_since_fy_end', 'kalman_pt',    'days_since_fy_end',   'mutable_predictor'),
+	                                 ('days_since_fy_end',                 'kalman_pt',          'days_since_fy_end',                 'mutable_predictor'),
 
 	-- ---- dcf_pt aliases (from mv_pymc_dcf_pt) ----
 	                                 ('price_target',                      'dcf_pt',             'observed_pt',                       'observed'         ),
@@ -2026,7 +2040,8 @@ ON CONFLICT (column_name, model_target) DO NOTHING;
 -- Section 7c wired the price_target_%_ago / price_%_ago lags into
 -- kalman_pt.model_targets but left their GLOBAL pml_df_metadata.pymc_role at the
 -- 'derived_input' default (feature_role='historical'). The Kalman panel, however,
--- *observes* the full analyst-target trail (level / low / high / median) as the
+-- *observes* the full analyst-target trail (level / low / high / median) plus the
+-- raw spot-price trail (price_*_ago — see the dedicated INSERT below) as the
 -- latent price-target state sequence, and conditions on the analyst-count trail
 -- as fixed per-step scale (constant_data).
 --
@@ -2050,6 +2065,21 @@ ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.f
 INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
 SELECT col, 'kalman_pt', col, 'constant_data'
 FROM unnest(ARRAY [ 'price_target_num_1w_ago', 'price_target_num_mtd_ago', 'price_target_num_1m_ago', 'price_target_num_qtd_ago', 'price_target_num_3m_ago', 'price_target_num_ytd_ago', 'price_target_num_1y_ago' ]) AS col
+ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias,
+                                                      pymc_role     = excluded.pymc_role;
+
+-- Spot-price trail: raw historical price snapshots now emitted un-prefixed by
+-- mv_pymc_kalman_pt (price_{5d,1w,1m,3m,6m,1y,3y,5y,qtd}_ago). The Kalman unpivot
+-- (KalmanFilterPriceTarget.build_price_target_history via _AGO_HISTORY_RE) pools
+-- the spot-price trail with the analyst-target trail into the observed fair-value
+-- state sequence, so the alias rows carry pymc_role 'observed' like the target
+-- trail above. The columns' GLOBAL pml_df_metadata.pymc_role stays 'derived_input'
+-- (feature_role='historical') so models reading the lags as engineered inputs
+-- (e.g. feat_price_drift) are unaffected. feature_alias == raw column name so the
+-- notebook's `feature_alias IN kalman_df.columns` present-check resolves.
+INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
+SELECT col, 'kalman_pt', col, 'observed'
+FROM unnest(ARRAY [ 'price_5d_ago', 'price_1w_ago', 'price_1m_ago', 'price_3m_ago', 'price_6m_ago', 'price_1y_ago', 'price_3y_ago', 'price_5y_ago', 'price_qtd_ago' ]) AS col
 ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias,
                                                       pymc_role     = excluded.pymc_role;
 

@@ -156,7 +156,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
 
     df = df[[
         "name", "sector", "market_cap",
-        "expected_return_kalman", "er_p05", "er_p95", "mc_prob_pos",
+        "expected_return_kalman", "er_p05", "er_p95", "p_upside_pos_cond",
     ]].copy()
     logger.debug(schema(df))
 
@@ -172,7 +172,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
 
     df = _annualized_risk_metrics(df, risk_free_rate)
 
-    df = df[df["mc_prob_pos"] >= prob_pos_threshold]
+    df = df[df["p_upside_pos_cond"] >= prob_pos_threshold]
     df = df[df["market_cap"] >= min_market_cap]
     if len(sector_filter) > 0:
         df = df[df["sector"].isin(sector_filter)]
@@ -234,8 +234,8 @@ def _annualized_risk_metrics(df: pd.DataFrame, risk_free_rate: float) -> pd.Data
         out["er_p05"], out["er_p95"]
     )
     out["sharpe_ratio"] = (
-                                  out["annualized_return"] - risk_free_rate * 100.0
-                          ) / out["annualized_volatility"]
+        out["annualized_return"] - risk_free_rate * 100.0
+    ) / out["annualized_volatility"]
 
     out = out.replace([np.inf, -np.inf], np.nan)
     return out.dropna(

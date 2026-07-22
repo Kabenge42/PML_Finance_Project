@@ -27,11 +27,12 @@ country_default = "US"
 sort_by_id = f"{component_id}_sort_by"
 sort_by_options = [
     {"label": "Expected Return (Kalman)", "value": "expected_return_kalman"},
-    {"label": "Probability of Positive Return", "value": "mc_prob_pos"},
+    {"label": "Probability of Positive Return", "value": "p_upside_pos_cond"},
     {"label": "Signal Strength", "value": "signal_strength"},
     {"label": "Reward to CVaR", "value": "reward_to_cvar"},
     {"label": "Price Target (Kalman)", "value": "price_target_kalman"},
     {"label": "Beta", "value": "beta"},
+    {"label": "Expected Sharpe Ratio", "value": "expected_sharpe_ratio"},
 ]
 sort_by_default = ["expected_return_kalman"]
 
@@ -49,12 +50,16 @@ _COLUMNS = [
     ("name", "Name", None),
     ("country", "Country", None),
     ("industry", "Industry", None),
+    ("sector", "Sector", None),
+    ("exchange", "Exchange", None),
+    ("unit", "Currency", None),
     ("original_price", "Original Price", 2),
     ("price_target_kalman", "Price Target Kalman", 2),
     ("price_target_median", "Price Target Median", 2),
     ("expected_return_kalman", "Expected Return Kalman", 2),
-    ("mc_prob_pos", "Mc Prob Pos", 2),
+    ("p_upside_pos_cond", "Cond Prob Pos", 2),
     ("beta", "Beta", 2),
+    ("expected_sharpe_ratio", "Expected Sharpe Ratio", 2),
     ("signal_strength", "Signal Strength", 2),
     ("reward_to_cvar", "Reward To Cvar", 2),
 ]
@@ -62,7 +67,7 @@ _COLUMNS = [
 title = "High Conviction Opportunities"
 description = (
     "Securities with expected return > 30% and probability of positive return "
-    "> 95%, ranked by Kalman-filtered metrics"
+    "> 67%, ranked by Kalman-filtered metrics"
 )
 
 
@@ -154,7 +159,7 @@ def _update_logic(**kwargs) -> list[dict]:
         sort_by = [sort_by]
     row_limit = kwargs.get(row_limit_id, row_limit_default)
 
-    df = df[(df["expected_return_kalman"] > 0.3) & (df["mc_prob_pos"] > 0.95)]
+    df = df[(df["expected_return_kalman"] > 0.3) & (df["p_upside_pos_cond"] > 0.67)]
     if country != "All":
         df = df[df["country"] == country]
     if len(df) == 0:

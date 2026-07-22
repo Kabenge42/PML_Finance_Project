@@ -58,6 +58,7 @@ portfolio_size_options = [
     {"label": "10", "value": 10},
     {"label": "15", "value": 15},
     {"label": "20", "value": 20},
+    {"label": "25", "value": 25},
     {"label": "30", "value": 30},
 ]
 portfolio_size_default = 10
@@ -218,7 +219,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if df is None or len(df) == 0:
         return empty_figure("No data is available to display"), html.Div()
 
-    df = df[["ticker", "name", "sector", "unit", "market_cap", "mc_prob_pos",
+    df = df[["ticker", "name", "sector", "unit", "market_cap", "p_upside_pos_cond",
              "expected_return_kalman", "er_p05", "er_p95"]].copy()
     logger.debug(schema(df))
 
@@ -231,7 +232,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     investment_amount = float(coalesce(kwargs.get(investment_amount_id), investment_amount_default))
     currency = coalesce(kwargs.get(currency_id), currency_default)
 
-    df = df[df["mc_prob_pos"] >= min_prob]
+    df = df[df["p_upside_pos_cond"] >= min_prob]
     df = df[df["market_cap"] >= min_market_cap]
     if sector_filter:
         df = df[df["sector"].isin(sector_filter)]

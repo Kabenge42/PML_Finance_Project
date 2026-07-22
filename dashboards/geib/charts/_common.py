@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -33,6 +34,42 @@ def coalesce(value: Any, default: Any) -> Any:
     chart's documented default without the ``x if x is not None else d`` noise.
     """
     return default if value is None else value
+
+
+def cell(row: pd.Series, column: str) -> Any:
+    """Return ``row[column]`` as a guaranteed scalar, or ``None`` when missing/NaN.
+
+    Reading a value off a row and testing it directly (``if pd.isna(row[col])``,
+    ``pd.notna(value) and ...``) is only safe while the value is a scalar: with
+    duplicate column labels ``row[col]`` yields a :class:`pandas.Series`, whose
+    ``pd.isna`` result is an *array* and whose boolean context raises
+    ``ValueError: The truth value of a Series is ambiguous``. Collapsing to the
+    first scalar here makes every downstream truthiness test unambiguous.
+    """
+    value = row.get(column)
+    if isinstance(value, pd.Series):
+        value = value.iloc[0] if len(value) else None
+    if value is None or pd.isna(value):
+        return None
+    return value
+
+
+def finite_cell(row: pd.Series, column: str, default: Any = None) -> Any:
+    """Return ``row[column]`` as a finite ``float``, else *default*.
+
+    Scalar-safe (see :func:`cell`) and strict about usability: ``None``, NaN,
+    ``±inf`` and non-numeric values all collapse to *default* (``None`` by
+    default, so ``is not None`` reads as "usable"; pass ``np.nan`` where the
+    caller works in NaN space, e.g. :func:`numpy.isfinite` guards).
+    """
+    value = cell(row, column)
+    if value is None:
+        return default
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return default
+    return value if np.isfinite(value) else default
 
 
 def column_values(df: Optional[pd.DataFrame], column: str) -> list[str]:
@@ -74,6 +111,24 @@ def top_label(
         return subset.loc[subset[value_column].idxmax(), label_column]
     except Exception:  # pragma: no cover - defensive (missing column / bad dtype)
         return None
+
+
+def name_options(df: Optional[pd.DataFrame]) -> tuple[list[dict], Optional[str]]:
+    """Return ``(options, default)`` for a searchable Stock/Name dropdown.
+
+    Options cover every non-blank ``name`` in *df* (the full universe — the
+    dropdowns are searchable, so no cap is applied). The default is the
+    highest-``market_cap`` name, falling back to the first name, so a panel
+    renders something meaningful before the user picks; callbacks reconcile it
+    against the active global filters via :func:`scoped_filter`.
+    """
+    try:
+        names = sorted(t for t in df["name"].dropna().unique().tolist() if str(t).strip())
+    except Exception:  # pragma: no cover - defensive (missing column / bad dtype)
+        names = []
+    options = [{"label": str(t), "value": str(t)} for t in names]
+    default = top_label(df, "market_cap") or (names[0] if names else None)
+    return options, default
 
 
 def scoped_filter(

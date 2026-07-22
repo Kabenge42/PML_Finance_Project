@@ -26,7 +26,7 @@ import numpy as np
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
-from ._common import coalesce, empty_figure, scoped_filter, top_label
+from ._common import coalesce, empty_figure, finite_cell, name_options, scoped_filter, top_label
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
@@ -80,15 +80,7 @@ description = (
 
 
 def component() -> "object":
-    df = get_data()
-    try:
-        names = sorted(t for t in df["name"].dropna().unique().tolist() if str(t).strip())
-    except Exception:  # pragma: no cover - defensive
-        names = []
-    name_opts = [{"label": str(t), "value": str(t)} for t in names]
-    # Default to the largest-market-cap name; the callback reconciles this to the
-    # highest-cap name still present under the active global filters.
-    name_default = top_label(df, "market_cap") or (names[0] if names else None)
+    name_opts, name_default = name_options(get_data())
 
     return theme_card(
         title,
@@ -173,7 +165,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     logger.debug(schema(df))
 
     row = df.iloc[0]
-    initial_price = float(row["original_price"])
+    initial_price = finite_cell(row, "original_price", np.nan)
     if not np.isfinite(initial_price) or initial_price <= 0:
         return empty_figure(f"No usable price for {name}"), html.Div()
 
@@ -182,8 +174,13 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     distribution_type = coalesce(kwargs.get(distribution_id), distribution_default)
 
     # Horizon-correct annualised drift and return volatility (see metrics module).
-    annual_mean = float(row["expected_return_kalman"]) / PRICE_TARGET_HORIZON_YEARS
-    annual_sigma = float(return_volatility(row["kalman_variance"], initial_price))
+    expected_return = finite_cell(row, "expected_return_kalman")
+    if expected_return is None:
+        return empty_figure(f"No Kalman expected return for {name}"), html.Div()
+    annual_mean = expected_return / PRICE_TARGET_HORIZON_YEARS
+    annual_sigma = float(
+        return_volatility(finite_cell(row, "kalman_variance", np.nan), initial_price)
+    )
     if not np.isfinite(annual_sigma) or annual_sigma <= 0:
         annual_sigma = 0.01
 
@@ -208,14 +205,18 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
             mode="lines", name="Normal Fit", line=dict(color=GOLD, width=2, dash="dash"),
         ))
 
-    er_p05, er_p50, er_p95 = float(row["er_p05"]), float(row["er_p50"]), float(row["er_p95"])
     sim_median = float(np.median(terminal))
-    fig.add_vline(x=er_p05 * 100, line_dash="dash", line_color=RED,
-                  annotation_text="5th %ile", annotation_position="top left")
-    fig.add_vline(x=er_p50 * 100, line_dash="solid", line_color=GREEN,
-                  annotation_text="Median", annotation_position="top right")
-    fig.add_vline(x=er_p95 * 100, line_dash="dash", line_color="#06B6D4",
-                  annotation_text="95th %ile", annotation_position="bottom right")
+    # Posterior percentile markers; a name missing a percentile simply skips
+    # that line instead of drawing an add_vline at NaN.
+    for column, dash, color, text, position in (
+            ("er_p05", "dash", RED, "5th %ile", "top left"),
+            ("er_p50", "solid", GREEN, "Median", "top right"),
+            ("er_p95", "dash", "#06B6D4", "95th %ile", "bottom right"),
+    ):
+        value = finite_cell(row, column)
+        if value is not None:
+            fig.add_vline(x=value * 100, line_dash=dash, line_color=color,
+                          annotation_text=text, annotation_position=position)
     # Median of the actual simulated distribution (distinct from the posterior
     # er_p50 median above), drawn in a contrasting colour/style.
     fig.add_vline(x=sim_median * 100, line_dash="dot", line_color="#A855F7",
@@ -230,44 +231,51 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     return fig, table
 
 
+def _fmt_pct(value: "float | None") -> str:
+    """Render a decimal return as a percent string, ``"n/a"`` when missing."""
+    return f"{value * 100:.2f}%" if value is not None else "n/a"
+
+
+def _fmt_num(value: "float | None", suffix: str = "") -> str:
+    """Render a numeric level to 2dp, ``"n/a"`` when missing."""
+    return f"{value:.2f}{suffix}" if value is not None else "n/a"
+
+
 def _build_table(row, terminal, num_simulations, horizon_days, initial_price) -> html.Div:
     # Median of the actual simulated terminal-return distribution (distinct from
     # the posterior er_p50). The simulated price target is that median return
     # applied to the path's starting price, i.e. the median terminal price level.
     sim_median_return = float(np.median(terminal))
     sim_price_target = initial_price * (1.0 + sim_median_return)
-    # Kalman-filtered posterior-mean price target level (analytics row column).
-    kalman_price_target = float(row["price_target_kalman"])
 
     rows = [
-        ("Expected Return", f"{float(row['expected_return_kalman']) * 100:.2f}%",
+        ("Expected Return", _fmt_pct(finite_cell(row, "expected_return_kalman")),
          "Mean implied upside from the Kalman filter"),
-        ("Simulated Expected Return", f"{sim_median_return * 100:.2f}%",
+        ("Simulated Expected Return", _fmt_pct(sim_median_return),
          "Median simulated return based on the simulated distribution"),
-        ("Initial Price", f"{initial_price:.2f}", "Current price the paths start from"),
-        ("Expected Price Target", f"{kalman_price_target:.2f}",
+        ("Initial Price", _fmt_num(initial_price), "Current price the paths start from"),
+        ("Expected Price Target", _fmt_num(finite_cell(row, "price_target_kalman")),
          "Expected price target from the Kalman filter"),
-        ("Simulated Price Target", f"{sim_price_target:.2f}",
+        ("Simulated Price Target", _fmt_num(sim_price_target),
          "Median simulated terminal price target path"),
-        ("Median Return (50th %ile)", f"{float(row['er_p50']) * 100:.2f}%",
+        ("Median Return (50th %ile)", _fmt_pct(finite_cell(row, "er_p50")),
          "Median posterior outcome"),
-        ("5th Percentile (VaR)", f"{float(row['er_p05']) * 100:.2f}%",
+        ("5th Percentile (VaR)", _fmt_pct(finite_cell(row, "er_p05")),
          "Worst 5% of outcomes"),
-        ("95th Percentile", f"{float(row['er_p95']) * 100:.2f}%",
+        ("95th Percentile", _fmt_pct(finite_cell(row, "er_p95")),
          "Best 5% of outcomes"),
-        ("Probability of Positive Return", f"{float(row['mc_prob_pos']) * 100:.2f}%",
+        ("Probability of Positive Return", _fmt_pct(finite_cell(row, "p_upside_pos_cond")),
          "Posterior likelihood of a gain"),
-        ("Simulated Std Dev", f"{terminal.std() * 100:.2f}%",
+        ("Simulated Std Dev", _fmt_pct(float(terminal.std())),
          "Dispersion of the simulated terminal returns"),
         # cvar_5pct_kalman is stored on a percent scale already (unlike the
         # decimal er_p* / expected_return_kalman columns), so it is NOT * 100.
-        ("CVaR (5%)", f"{float(row['cvar_5pct_kalman']):.2f}%",
+        ("CVaR (5%)", _fmt_num(finite_cell(row, "cvar_5pct_kalman"), "%"),
          "Expected loss in the worst 5% tail"),
-        ("Reward-to-CVaR", f"{float(row['reward_to_cvar']):.2f}",
+        ("Reward-to-CVaR", _fmt_num(finite_cell(row, "reward_to_cvar")),
          "Risk-adjusted return vs tail loss"),
         ("Simulations Run", f"{num_simulations:,}", "Number of price paths simulated"),
-        ("Forecast Horizon (days)", f"{horizon_days}", "Time horizon for the forecast")
-
+        ("Forecast Horizon (days)", f"{horizon_days}", "Time horizon for the forecast"),
     ]
     headers = ["Metric", "Value", "Interpretation"]
     body = [

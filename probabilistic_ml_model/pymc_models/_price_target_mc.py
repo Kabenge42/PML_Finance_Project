@@ -242,6 +242,7 @@ PANEL_DAY_COUNT_COLS: tuple[str, ...] = (
     "days_to_next_earnings",
     "days_since_last_report",
     "days_to_next_fy_end",
+    "days_to_next_fiscal_quarter",
     "days_to_next_report",
     "days_to_expected_report",
     "days_since_fy_end",

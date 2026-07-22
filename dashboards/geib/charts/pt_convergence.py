@@ -24,7 +24,15 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
-from ._common import coalesce, empty_figure, scoped_filter, sector_values, top_label
+from ._common import (
+    coalesce,
+    empty_figure,
+    finite_cell,
+    name_options,
+    scoped_filter,
+    sector_values,
+    top_label,
+)
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
@@ -67,12 +75,7 @@ def component() -> "object":
     df = get_data()
     sector_options = [{"label": "All", "value": "All"}]
     sector_options.extend({"label": str(s), "value": s} for s in sector_values(df))
-    try:
-        names = sorted(t for t in df["name"].dropna().unique().tolist() if str(t).strip())
-    except Exception:  # pragma: no cover - defensive
-        names = []
-    name_opts = [{"label": str(t), "value": str(t)} for t in names]
-    name_default = top_label(df, "market_cap") or (names[0] if names else None)
+    name_opts, name_default = name_options(df)
 
     return theme_card(
         title,
@@ -161,8 +164,9 @@ def _single_figure(df: pd.DataFrame, name: str, today: pd.Timestamp) -> go.Figur
         df = df.sort_values("income_statement_report_date")
     row = df.iloc[-1]
 
-    spot = float(row["original_price"]) if pd.notna(row["original_price"]) else np.nan
-    target = float(row["original_target"]) if pd.notna(row["original_target"]) else np.nan
+    # Scalar-safe row reads: NaN default keeps the np.isfinite guards below.
+    spot = finite_cell(row, "original_price", np.nan)
+    target = finite_cell(row, "original_target", np.nan)
 
     price_hist = history_ladder(
         row, "price", PRICE_SUFFIXES,
@@ -183,12 +187,9 @@ def _single_figure(df: pd.DataFrame, name: str, today: pd.Timestamp) -> go.Figur
         fig.add_trace(_ladder_trace(pt_hist, "Analyst Target", _TARGET_COLOR))
 
     # Analyst dispersion at the snapshot (low - high segment + median marker).
-    low = float(row["price_target_low"]) if pd.notna(row.get("price_target_low")) else np.nan
-    high = float(row["price_target_high"]) if pd.notna(row.get("price_target_high")) else np.nan
-    median = (
-        float(row["price_target_median"])
-        if pd.notna(row.get("price_target_median")) else np.nan
-    )
+    low = finite_cell(row, "price_target_low", np.nan)
+    high = finite_cell(row, "price_target_high", np.nan)
+    median = finite_cell(row, "price_target_median", np.nan)
     if np.isfinite(low) and np.isfinite(high):
         fig.add_trace(go.Scatter(
             x=[today, today], y=[low, high], mode="lines",
@@ -204,7 +205,7 @@ def _single_figure(df: pd.DataFrame, name: str, today: pd.Timestamp) -> go.Figur
             hovertemplate="Median Target: %{y:,.2f}<extra></extra>",
         ))
 
-    kalman = float(row["price_target_kalman"]) if pd.notna(row["price_target_kalman"]) else np.nan
+    kalman = finite_cell(row, "price_target_kalman", np.nan)
     if np.isfinite(kalman):
         if np.isfinite(spot):
             # Dotted connector making the spot -> Kalman-target gap explicit.

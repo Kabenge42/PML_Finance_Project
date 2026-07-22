@@ -380,12 +380,22 @@ $$
 	LANGUAGE sql IMMUTABLE
 	             STRICT
 	             PARALLEL SAFE;
+-- ===================================================================
+-- HELPER FUNCTION: Calculate Next Fiscal Quarter Date
+-- ===================================================================
+CREATE OR REPLACE FUNCTION calculate_next_fiscal_quarter_date(income_statement_report_date DATE) RETURNS DATE AS
+$$
+SELECT (income_statement_report_date + make_interval(months => 3))::DATE
+$$
+	LANGUAGE sql IMMUTABLE
+	             STRICT
+	             PARALLEL SAFE;
 
 -- ===================================================================
 -- HELPER FUNCTION: Calculate Next Fiscal Quarter
 -- ===================================================================
 CREATE OR REPLACE FUNCTION calculate_next_fiscal_quarter(
-	next_earnings_date           DATE,
+	next_earnings           DATE,
 	income_statement_report_date DATE,
 	fy_end_date                  DATE,
 	earnings_report_frequency    TEXT DEFAULT 'Quarterly'
@@ -405,8 +415,8 @@ BEGIN
 	-- Choose reference date
 	IF income_statement_report_date IS NOT NULL THEN
 		reference_date := income_statement_report_date;
-		ELSIF next_earnings_date IS NOT NULL THEN
-			reference_date := next_earnings_date;
+		ELSIF next_earnings IS NOT NULL THEN
+			reference_date := next_earnings;
 		ELSE
 			RETURN NULL;
 	END IF;
@@ -628,7 +638,7 @@ FROM staging_header_buf;
 TRUNCATE TABLE pml_df CASCADE;
 INSERT INTO pml_df (ticker, isin, name, description, trading_region, trading_country, exchange, unit, region, country,
                     sector, industry, style_class, size_class, last_updated, income_statement_report_date, fy_end,
-                    next_earnings, next_earnings_when, next_earnings_status, fy_end_date,
+                    next_earnings, next_earnings_when, next_earnings_status, fy_end_date, next_fiscal_quarter,
                     next_income_statement_report_date, next_fy_end_date, days_to_earnings, earnings_report_recency,
                     expected_report_date, earnings_report_frequency, dividend_record_currency, dividend_record_amount,
                     dividend_record_frequency,
@@ -782,12 +792,13 @@ SELECT NULLIF(TRIM(s."Ticker"), '')                                             
        COALESCE(NULLIF(TRIM(s."Style Class"), ''), 'n/a')                                           AS style_class,
        COALESCE(NULLIF(TRIM(s."Size Class"), ''), 'n/a')                                            AS size_class,
        text_to_date_safe(s."Last Updated")                                                          AS last_updated,
-       text_to_date_safe(s."Income Statement Report Date")                                          AS income_statement_report_date,
+       COALESCE(text_to_date_safe(s."Income Statement Report Date"),'2026-03-31')                                          AS income_statement_report_date,
        COALESCE(NULLIF(TRIM(s."FY End"), ''), 'Dec 2025')                       AS fy_end,
        text_to_date_safe(s."Next Earnings")                                                         AS next_earnings,
        COALESCE(NULLIF(TRIM(s."Next Earnings (When)"), ''), 'n/a')                                  AS next_earnings_when,
        COALESCE(NULLIF(TRIM(s."Next Earnings (Status)"), ''), 'n/a')                                AS next_earnings_status,
-       COALESCE(parse_fiscal_year_end_date(s."FY End"), '2025-12-30')           AS fy_end_date,
+       COALESCE(parse_fiscal_year_end_date(s."FY End"), '2025-12-31')           AS fy_end_date,
+       calculate_next_fiscal_quarter_date(text_to_date_safe(s."Income Statement Report Date")) AS next_fiscal_quarter,
        calculate_next_income_statement_report_date(text_to_date_safe(s."Income Statement Report Date"),
                                                    derive_earnings_report_frequency(
 		                                                   text_to_date_safe(s."Income Statement Report Date"),

@@ -1,4 +1,4 @@
-CREATE FUNCTION calculate_next_fiscal_quarter(next_earnings_date date, income_statement_report_date date, fy_end_date date, earnings_report_frequency text DEFAULT 'Quarterly'::text) RETURNS integer
+CREATE FUNCTION calculate_next_fiscal_quarter(next_earnings date, income_statement_report_date date, fy_end_date date, earnings_report_frequency text DEFAULT 'Quarterly'::text) RETURNS integer
 	IMMUTABLE
 	LANGUAGE plpgsql AS
 $$
@@ -16,8 +16,8 @@ BEGIN
 	-- Choose reference date
 	IF income_statement_report_date IS NOT NULL THEN
 		reference_date := income_statement_report_date;
-		ELSIF next_earnings_date IS NOT NULL THEN
-			reference_date := next_earnings_date;
+		ELSIF next_earnings IS NOT NULL THEN
+			reference_date := next_earnings;
 		ELSE
 			RETURN NULL;
 	END IF;

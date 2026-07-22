@@ -26,6 +26,7 @@ CREATE TABLE analytics.kalman_filtered_price_targets
 	days_to_next_earnings             bigint,
 	days_since_last_report            bigint,
 	days_to_next_fy_end               double precision,
+	days_to_next_fiscal_quarter       double precision,
 	days_to_next_report               double precision,
 	days_to_expected_report           double precision,
 	days_since_fy_end                 bigint,
@@ -69,7 +70,10 @@ CREATE TABLE analytics.kalman_filtered_price_targets
 	mc_prob_pos                       double precision,
 	cvar_book_weight                  double precision,
 	cvar_5pct_kalman                  double precision,
-	reward_to_cvar                    double precision
+	reward_to_cvar                    double precision,
+	expected_vol_kalman               double precision,
+	expected_sharpe_ratio             double precision,
+	p_upside_pos_cond                 double precision
 );
 
 ALTER TABLE analytics.kalman_filtered_price_targets

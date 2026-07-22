@@ -28,14 +28,22 @@ from __future__ import annotations
 
 import traceback
 from datetime import timedelta
-from typing import Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
-from ._common import coalesce, empty_figure, scoped_filter, top_label
+from ._common import (
+    cell,
+    coalesce,
+    empty_figure,
+    finite_cell,
+    name_options,
+    scoped_filter,
+    top_label,
+)
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
@@ -110,17 +118,7 @@ description = (
 
 
 def component() -> "object":
-    df = get_data()
-    try:
-        names = sorted(t for t in df["name"].dropna().unique().tolist() if str(t).strip())
-    except Exception:  # pragma: no cover - defensive
-        names = []
-    # Offer the full name universe (the dropdown is searchable) — no cap, so
-    # every stock in analytics.kalman_filtered_price_targets is selectable.
-    name_opts = [{"label": str(t), "value": str(t)} for t in names]
-    # Default to the largest-market-cap name; the callback reconciles this to the
-    # highest-cap name still present under the active global filters.
-    name_default = top_label(df, "market_cap") or (names[0] if names else None)
+    name_opts, name_default = name_options(get_data())
 
     return theme_card(
         title,
@@ -240,12 +238,14 @@ def _update_logic(**kwargs) -> go.Figure:
         df = df.sort_values("income_statement_report_date")
     row = df.iloc[-1]
 
-    spot = float(row["original_price"]) if pd.notna(row["original_price"]) else np.nan
-    if not np.isfinite(spot) or spot <= 0:
+    # Scalar-safe row reads (``finite_cell``/``cell``): a raw ``row[column]``
+    # inside a boolean test raises "The truth value of a Series is ambiguous"
+    # as soon as the value is not the scalar the test assumes.
+    spot = finite_cell(row, "original_price")
+    if spot is None or spot <= 0:
         return empty_figure(f"No usable price for {name}")
 
-    original_target = float(row["original_target"]) if pd.notna(row["original_target"]) else None
-    original_price = float(row["original_price"]) if pd.notna(row["original_price"]) else None
+    original_target = finite_cell(row, "original_target")
 
     horizon = coalesce(kwargs.get(horizon_id), horizon_default)
     show_draws = coalesce(kwargs.get(draws_id), draws_default) == "show"
@@ -253,10 +253,15 @@ def _update_logic(**kwargs) -> go.Figure:
     z = _CONFIDENCE_Z.get(confidence, _CONFIDENCE_Z[confidence_default])
 
     # Horizon-correct drift and return dispersion (see metrics module docstring).
-    annual_return = float(row["expected_return_kalman"]) / PRICE_TARGET_HORIZON_YEARS
-    sigma = float(quantile_return_volatility(row["er_p05"], row["er_p95"]))
+    expected_return = finite_cell(row, "expected_return_kalman")
+    if expected_return is None:
+        return empty_figure(f"No Kalman expected return for {name}")
+    annual_return = expected_return / PRICE_TARGET_HORIZON_YEARS
+    sigma = float(quantile_return_volatility(
+        finite_cell(row, "er_p05", np.nan), finite_cell(row, "er_p95", np.nan)
+    ))
     if not np.isfinite(sigma) or sigma <= 0:
-        sigma = float(return_volatility(row["kalman_variance"], spot))
+        sigma = float(return_volatility(finite_cell(row, "kalman_variance", np.nan), spot))
     if not np.isfinite(sigma) or sigma <= 0:
         sigma = 0.01
 
@@ -351,13 +356,9 @@ def _update_logic(**kwargs) -> go.Figure:
     )
 
     # --- Real analyst consensus band (low / median / high, NTM) -------------
-    def _finite(column: str) -> Optional[float]:
-        value = row.get(column)
-        return float(value) if value is not None and pd.notna(value) else None
-
-    target_low = _finite("price_target_low")
-    target_high = _finite("price_target_high")
-    target_median = _finite("price_target_median")
+    target_low = finite_cell(row, "price_target_low")
+    target_high = finite_cell(row, "price_target_high")
+    target_median = finite_cell(row, "price_target_median")
     band_end = min(forecast_end, today + timedelta(days=_TARGET_BAND_DAYS))
     if target_low is not None and target_high is not None:
         fig.add_trace(
@@ -398,16 +399,16 @@ def _update_logic(**kwargs) -> go.Figure:
         )
 
     # --- Current price (today) ---------------------------------------
-    if original_price is not None:
-        fig.add_trace(
-            go.Scatter(x=[today],
-                       y=[original_price],
-                       mode="markers",
-                       name="Observed Price",
-                       marker=dict(size=9, color=_PRICE_COLOR),
-                       hovertemplate="Date: %{x|%Y-%m-%d}<br>Target: %{y:.2f}<extra></extra>",
-                       )
+    fig.add_trace(
+        go.Scatter(
+            x=[today],
+            y=[spot],
+            mode="markers",
+            name="Observed Price",
+            marker=dict(size=9, color=_PRICE_COLOR),
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Price: %{y:.2f}<extra></extra>",
         )
+    )
 
     # --- Upcoming event markers ---------------------------------------------
     for column, label in (
@@ -417,9 +418,10 @@ def _update_logic(**kwargs) -> go.Figure:
             ("next_earnings", "Next Earnings"),
             ("next_fy_end_date", "FY End"),
     ):
-        if column not in df.columns or pd.isna(row[column]):
+        raw_date = cell(row, column)
+        if raw_date is None:
             continue
-        event_date = pd.to_datetime(row[column])
+        event_date = pd.to_datetime(raw_date)
         if today <= event_date <= forecast_end:
             # Draw the event marker as an explicit shape + annotation rather than
             # ``add_vline(..., annotation_text=...)``: on this plotly/pandas build

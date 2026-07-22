@@ -69,6 +69,7 @@ NUMERIC_COLUMNS: list[str] = [
     "er_p50",
     "er_p95",
     "mc_prob_pos",
+    "p_upside_pos_cond",
     "cvar_book_weight",
     "cvar_5pct_kalman",
     "reward_to_cvar",

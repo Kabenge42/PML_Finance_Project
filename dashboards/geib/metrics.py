@@ -267,6 +267,10 @@ def history_ladder(
     records: list[tuple[pd.Timestamp, float]] = []
     for suffix in suffixes:
         raw = row.get(f"{prefix}_{suffix}_ago")
+        if isinstance(raw, pd.Series):
+            # Duplicate labels make ``row.get`` return a Series, whose
+            # ``pd.isna`` result has an ambiguous truth value — collapse first.
+            raw = raw.iloc[0] if len(raw) else None
         if raw is None or pd.isna(raw):
             continue
         records.append((lookback_date(suffix, anchor), float(raw)))

@@ -259,7 +259,7 @@ Console-script entry points declared in `pyproject.toml` `[project.scripts]`:
 
 - `pymc_expected_returns_model.ipynb` — End-to-end PyMC + ArviZ
 - `pymc_earnings_beat.ipynb` / `pymc_price_target_v3.ipynb` / `pymc_dcf.ipynb` — per-model PyMC workflows
-- `pymc_kalman_filter_pt.ipynb` — Kalman price-target panel model
+- `pymc_kalman_filter_pt_v2.ipynb` — Kalman price-target panel model
 - `pml_workflow_v4.ipynb` — v4 pipeline
 - `pml_model_analysis.ipynb` — Diagnostics
 

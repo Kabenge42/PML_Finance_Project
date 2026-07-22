@@ -46,7 +46,7 @@ max_position_size_options = [
 max_position_size_default = 0.10
 
 min_prob_id = f"{component_id}_min_prob"
-# "No Limit" == 0% floor; ``mc_prob_pos >= 0`` admits every name (rows with a
+# "No Limit" == 0% floor; ``p_upside_pos_cond >= 0`` admits every name (rows with a
 # zero/NaN probability still drop out at the positive-Kelly-fraction filter).
 min_prob_options = [
     {"label": "60%", "value": 0.6},
@@ -149,11 +149,12 @@ def component() -> "object":
 
 
 def _calculate_kelly_fraction(row) -> float:
-    p = row["mc_prob_pos"]
+    p = row["p_upside_pos_cond"]
     q = 1 - p
     if p <= 0 or p >= 1:
         return 0.0
-    cvar = row["cvar_5pct_kalman"]
+    # cvar_5pct_kalman is stored on a percent scale; Kelly needs the decimal.
+    cvar = row["cvar_5pct_kalman"] / 100.0
     expected_return = row["expected_return_kalman"]
     if cvar == 0 or expected_return <= 0:
         return 0.0
@@ -164,11 +165,14 @@ def _calculate_kelly_fraction(row) -> float:
 
 
 def _create_table(df: pd.DataFrame) -> html.Div:
-    cols = ["ticker", "name", "allocation_pct", "expected_return_kalman", "mc_prob_pos"]
-    headers = ["Ticker", "Name", "Allocation (%)", "Expected Return (%)", "Win Probability"]
+    cols = ["ticker", "name", "allocation_pct", "expected_return_kalman",
+            "cvar_5pct_kalman", "p_upside_pos_cond"]
+    headers = ["Ticker", "Name", "Allocation (%)", "Expected Return (%)",
+               "CVaR 5% (%)", "Win Probability"]
     view = df[cols].copy()
     view["expected_return_kalman"] = (view["expected_return_kalman"] * 100).round(2)
-    view["mc_prob_pos"] = (view["mc_prob_pos"] * 100).round(2)
+    view["cvar_5pct_kalman"] = view["cvar_5pct_kalman"].round(2)
+    view["p_upside_pos_cond"] = (view["p_upside_pos_cond"] * 100).round(2)
     view["allocation_pct"] = view["allocation_pct"].round(2)
 
     body = [
@@ -189,7 +193,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if df is None or len(df) == 0:
         return empty_figure("No data is available to display"), html.Div()
 
-    df = df[["ticker", "name", "sector", "market_cap", "mc_prob_pos",
+    df = df[["ticker", "name", "sector", "market_cap", "p_upside_pos_cond",
              "expected_return_kalman", "cvar_5pct_kalman",
              "cvar_book_weight", "reward_to_cvar"]].copy()
     logger.debug(schema(df))
@@ -217,7 +221,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
 
     df = df[df["sector"].isin(sector_filter)]
     df = df[df["market_cap"] >= min_market_cap]
-    df = df[df["mc_prob_pos"] >= min_prob]
+    df = df[df["p_upside_pos_cond"] >= min_prob]
     if len(df) == 0:
         return empty_figure("No stocks meet the filtering criteria"), html.Div()
 

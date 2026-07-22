@@ -372,17 +372,17 @@ WITH beats AS (SELECT isin,
                       sector,
                       industry,
                       -- ---- EPS surprise trails (quarterly: neg0fq..neg4fq, annual: neg0fy..neg4fy) ----
-                      ARRAY [eps_neg0fqsurprise_pct, eps_neg1fqsurprise_pct, eps_neg2fqsurprise_pct, eps_neg3fqsurprise_pct, eps_neg4fqsurprise_pct]                                     AS eps_surprises_q,
-                      ARRAY [eps_neg0fysurprise_pct, eps_neg1fysurprise_pct, eps_neg2fysurprise_pct, eps_neg3fysurprise_pct, eps_neg4fysurprise_pct]                                     AS eps_surprises_y,
+                      ARRAY [eps_neg0fqsurprise_pct, eps_neg1fqsurprise_pct, eps_neg2fqsurprise_pct, eps_neg3fqsurprise_pct, eps_neg4fqsurprise_pct]                                           AS eps_surprises_q,
+                      ARRAY [eps_neg0fysurprise_pct, eps_neg1fysurprise_pct, eps_neg2fysurprise_pct, eps_neg3fysurprise_pct, eps_neg4fysurprise_pct]                                           AS eps_surprises_y,
                       -- ---- EBIT surprise trails (quarterly: neg0fq..neg4fq, annual: neg0fy..neg5fy) ----
-                      ARRAY [ebit_neg0fqsurprise_pct, ebit_neg1fqsurprise_pct, ebit_neg2fqsurprise_pct, ebit_neg3fqsurprise_pct, ebit_neg4fqsurprise_pct]                                AS ebit_surprises_q,
-                      ARRAY [ebit_neg0fysurprise_pct, ebit_neg1fysurprise_pct, ebit_neg2fysurprise_pct, ebit_neg3fysurprise_pct, ebit_neg4fysurprise_pct, ebit_neg5fysurprise_pct]       AS ebit_surprises_y,
+                      ARRAY [ebit_neg0fqsurprise_pct, ebit_neg1fqsurprise_pct, ebit_neg2fqsurprise_pct, ebit_neg3fqsurprise_pct, ebit_neg4fqsurprise_pct]                                      AS ebit_surprises_q,
+                      ARRAY [ebit_neg0fysurprise_pct, ebit_neg1fysurprise_pct, ebit_neg2fysurprise_pct, ebit_neg3fysurprise_pct, ebit_neg4fysurprise_pct, ebit_neg5fysurprise_pct]             AS ebit_surprises_y,
                       -- ---- EBITDA surprise trails (quarterly: neg0fq..neg4fq, annual: neg0fy..neg5fy) ----
-                      ARRAY [ebitda_neg0fqsurprise_pct, ebitda_neg1fqsurprise_pct, ebitda_neg2fqsurprise_pct, ebitda_neg3fqsurprise_pct, ebitda_neg4fqsurprise_pct]                      AS ebitda_surprises_q,
+                      ARRAY [ebitda_neg0fqsurprise_pct, ebitda_neg1fqsurprise_pct, ebitda_neg2fqsurprise_pct, ebitda_neg3fqsurprise_pct, ebitda_neg4fqsurprise_pct]                            AS ebitda_surprises_q,
                       ARRAY [ebitda_neg0fysurprise_pct, ebitda_neg1fysurprise_pct, ebitda_neg2fysurprise_pct, ebitda_neg3fysurprise_pct, ebitda_neg4fysurprise_pct, ebitda_neg5fysurprise_pct] AS ebitda_surprises_y,
                       -- ---- Sales surprise trails (quarterly: neg0fq..neg4fq, annual: neg0fy..neg5fy) ----
-                      ARRAY [sales_neg0fqsurprise_pct, sales_neg1fqsurprise_pct, sales_neg2fqsurprise_pct, sales_neg3fqsurprise_pct, sales_neg4fqsurprise_pct]                           AS sales_surprises_q,
-                      ARRAY [sales_neg0fysurprise_pct, sales_neg1fysurprise_pct, sales_neg2fysurprise_pct, sales_neg3fysurprise_pct, sales_neg4fysurprise_pct, sales_neg5fysurprise_pct] AS sales_surprises_y,
+                      ARRAY [sales_neg0fqsurprise_pct, sales_neg1fqsurprise_pct, sales_neg2fqsurprise_pct, sales_neg3fqsurprise_pct, sales_neg4fqsurprise_pct]                                 AS sales_surprises_q,
+                      ARRAY [sales_neg0fysurprise_pct, sales_neg1fysurprise_pct, sales_neg2fysurprise_pct, sales_neg3fysurprise_pct, sales_neg4fysurprise_pct, sales_neg5fysurprise_pct]       AS sales_surprises_y,
                       eps_norm_est_avg_fy1e,
                       eps_norm_est_avg_fq1e,
                       eps_norm_est_num_fy1e,
@@ -482,7 +482,7 @@ SELECT b.isin,
        pml.calc_change_ratio(b.market_cap, b.market_cap_neg1fy)                           AS feat_mcap_trend_1y,
        pml.safe_divide(b.market_cap, b.market_cap_3yavg)                                  AS feat_mcap_vs_3yavg,
        pml.safe_divide(b.enterprise_value, b.enterprise_value_3yavg)                      AS feat_ev_vs_3yavg
-FROM beats b,
+FROM beats                                                    b,
      LATERAL pml.beat_counts(b.eps_surprises_q::NUMERIC[])    bc_q,
      LATERAL pml.beat_counts(b.eps_surprises_y::NUMERIC[])    bc_y,
      LATERAL pml.beat_counts(b.ebit_surprises_q::NUMERIC[])   bc_ebit_q,
@@ -529,7 +529,7 @@ SELECT isin,
        (next_fy_end_date - CURRENT_DATE)::INT                                                                  AS days_to_next_fy_end,
        (next_income_statement_report_date - CURRENT_DATE)::INT                                                 AS days_to_next_report,
        (expected_report_date - CURRENT_DATE)::INT                                                              AS days_to_expected_report,
-       (fy_end_date - CURRENT_DATE)::INT AS days_since_fy_end,
+       (fy_end_date - CURRENT_DATE)::INT                                                                       AS days_since_fy_end,
        target_pct_avg                                                                                          AS observed_target_pct,
        target_pct_med                                                                                          AS observed_target_pct_med,
        price_target,
@@ -559,20 +559,24 @@ SELECT isin,
        -- Bullish sentiment: strong-buy + buy share of all opinions (%)
        pml.safe_divide((num_strong_buys_ratings + num_buys_ratings)::NUMERIC,
                        (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_no_opinion_ratings +
-                        num_sell_ratings + num_strong_sell_ratings)::NUMERIC) AS feat_analyst_bullish_pct,
+                        num_sell_ratings +
+                        num_strong_sell_ratings)::NUMERIC)                                                     AS feat_analyst_bullish_pct,
        -- Bearish sentiment: sell + strong-sell share of all opinions (%)
        pml.safe_divide((num_sell_ratings + num_strong_sell_ratings)::NUMERIC,
                        (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_no_opinion_ratings +
-                        num_sell_ratings + num_strong_sell_ratings)::NUMERIC) AS feat_analyst_bearish_pct,
+                        num_sell_ratings +
+                        num_strong_sell_ratings)::NUMERIC)                                                     AS feat_analyst_bearish_pct,
        -- Neutral sentiment: hold share of all opinions (%)
        pml.safe_divide(num_hold_ratings::NUMERIC,
                        (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_no_opinion_ratings +
-                        num_sell_ratings + num_strong_sell_ratings)::NUMERIC) AS feat_analyst_neutral_pct,
+                        num_sell_ratings +
+                        num_strong_sell_ratings)::NUMERIC)                                                     AS feat_analyst_neutral_pct,
        -- Conviction: absolute net directional-consensus magnitude (%)
        ABS(pml.safe_divide(
 		       ((num_strong_buys_ratings + num_buys_ratings) - (num_sell_ratings + num_strong_sell_ratings))::NUMERIC,
 		       (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_no_opinion_ratings +
-		        num_sell_ratings + num_strong_sell_ratings)::NUMERIC))        AS feat_analyst_conviction,
+		        num_sell_ratings +
+		        num_strong_sell_ratings)::NUMERIC))                                                            AS feat_analyst_conviction,
        pml.calc_change_ratio(price_target::NUMERIC, last_price::NUMERIC)                                       AS feat_implied_upside,
        -- Asymmetry of the target distribution (skew of analyst optimism)
        pml.calc_change_ratio(target_pct_high::NUMERIC,
@@ -667,25 +671,28 @@ SELECT isin,
        next_earnings_when,
        next_earnings_status,
        fy_end_date,
+       next_fiscal_quarter,
        next_income_statement_report_date,
        next_fy_end_date,
        expected_report_date,
        -- Pre-computed numeric horizons (days). Feed pm.Data as the time-step
        -- deltas the marginalized GaussianRandomWalk scales innovations by.
-       (next_earnings - CURRENT_DATE)::INT                                                               AS days_to_next_earnings,
-       (CURRENT_DATE - income_statement_report_date)::INT                                                AS days_since_last_report,
-       (next_fy_end_date - CURRENT_DATE)::INT                                                            AS days_to_next_fy_end,
-       (next_income_statement_report_date - CURRENT_DATE)::INT                                           AS days_to_next_report,
-       (expected_report_date - CURRENT_DATE)::INT                                                        AS days_to_expected_report,
-       (fy_end_date - CURRENT_DATE)::INT AS days_since_fy_end,
+       (next_earnings - CURRENT_DATE)::INT                                                                                                                                                                     AS days_to_next_earnings,
+       (CURRENT_DATE - income_statement_report_date)::INT                                                                                                                                                      AS days_since_last_report,
+       (next_fy_end_date - CURRENT_DATE)::INT                                                                                                                                                                  AS days_to_next_fy_end,
+       (next_fiscal_quarter - CURRENT_DATE)::INT                                                                                                                                                                  AS days_to_next_fiscal_quarter,
+       (next_income_statement_report_date - CURRENT_DATE)::INT                                                                                                                                                 AS days_to_next_report,
+       (expected_report_date - CURRENT_DATE)::INT                                                                                                                                                              AS days_to_expected_report,
+       (fy_end_date - CURRENT_DATE)::INT                                                                                                                                                                       AS days_since_fy_end,
        market_cap,
        enterprise_value,
-       price_target                                                                                      AS observed_pt,
+       market_cap_country_r,
+       price_target                                                                                                                                                                                            AS observed_pt,
        last_price,
        price_target_median,
        price_target_high,
        price_target_low,
-       price_target_num                                                                                  AS n_analysts,
+       price_target_num                                                                                                                                                                                        AS n_analysts,
        -- ---- Lagged analyst-target trail (kalman_pt observed state sequence) -----
        -- Full multi-horizon *_ago snapshots the Kalman panel observes as the latent
        -- price-target state sequence (level / low / high / median). pymc_role
@@ -735,7 +742,26 @@ SELECT isin,
        price_target_num_3m_ago,
        price_target_num_ytd_ago,
        price_target_num_1y_ago,
-       calc_change_ratio(price_target::numeric, last_price::numeric)                                     AS feat_implied_upside,
+       -- ---- Lagged spot-price trail (kalman_pt observed state sequence) ---------
+       -- Raw historical price snapshots pooled with the analyst-target trail by
+       -- KalmanFilterPriceTarget.build_price_target_history (the _AGO_HISTORY_RE
+       -- unpivot already matches the bare price_* family), so the GRW filter's
+       -- observed fair-value sequence gains the realised price path alongside the
+       -- target path. pymc_role 'observed' for kalman_pt in
+       -- pml.vw_pymc_feature_catalogue; emitted un-prefixed so feature_alias
+       -- (== column_name) resolves against kalman_df.columns in the notebook
+       -- present-check. Horizons mirror the feat_price_drift inputs plus the long
+       -- 3y/5y anchors and the qtd period-to-date snapshot.
+       price_5d_ago,
+       price_1w_ago,
+       price_1m_ago,
+       price_3m_ago,
+       price_6m_ago,
+       price_1y_ago,
+       price_3y_ago,
+       price_5y_ago,
+       price_qtd_ago,
+       calc_change_ratio(price_target::numeric, last_price::numeric)                                                                                                                                           AS feat_implied_upside,
        -- ---- Per-step drift (mean log-uplift) across every price / target trail ----
        -- Each drift is min-points-guarded (>=2 valid consecutive pairs) so a single
        -- noisy pair can't masquerade as signal, and winsorised to [-1, 1] to bound the
@@ -746,7 +772,7 @@ SELECT isin,
        pml.winsorise(pml.target_drift(
 		                     ARRAY [price_target::NUMERIC, price_target_1w_ago::NUMERIC, price_target_1m_ago::NUMERIC, price_target_3m_ago::NUMERIC, price_target_6m_ago::NUMERIC, price_target_1y_ago::NUMERIC],
 		                     2), -1,
-                     1)                                                                                  AS feat_pt_drift,
+                     1)                                                                                                                                                                                        AS feat_pt_drift,
        pml.target_drift_n(ARRAY [price_target::NUMERIC, price_target_1w_ago::NUMERIC, price_target_1m_ago::NUMERIC, price_target_3m_ago::NUMERIC, price_target_6m_ago::NUMERIC, price_target_1y_ago::NUMERIC]) AS feat_pt_drift_n,
        pml.winsorise(pml.target_drift(
 		                     ARRAY [last_price::NUMERIC, price_1w_ago::NUMERIC, price_1m_ago::NUMERIC, price_3m_ago::NUMERIC, price_6m_ago::NUMERIC, price_1y_ago::NUMERIC],
@@ -776,16 +802,17 @@ SELECT isin,
 		                     ARRAY [price_target_stddev::NUMERIC, price_target_stddev_1w_ago::NUMERIC, price_target_stddev_1m_ago::NUMERIC, price_target_stddev_3m_ago::NUMERIC, price_target_stddev_6m_ago::NUMERIC, price_target_stddev_1y_ago::NUMERIC],
 		                     2), -1,
                      1)                                                                                                                                                                                        AS feat_pt_noise_drift,
-       price_target_stddev                                                                               AS feat_pt_noise_sigma,
+       price_target_stddev                                                                                                                                                                                     AS feat_pt_noise_sigma,
        -- Inter-analyst range (high - low) normalised by mean target
        pml.safe_divide(price_target_high - price_target_low,
-                       NULLIF(price_target, 0))                                                          AS feat_pt_range_norm,
+                       NULLIF(price_target, 0))                                                                                                                                                                AS feat_pt_range_norm,
        -- Short-term momentum: last day's price change (mutable_predictor).
-       one_day_pct                                                                                       AS feat_one_day_return,
-       volatility_1m                                                                                     AS feat_vol_1m,
-       volatility_3m                                                                                     AS feat_vol_3m,
-       volatility_6m                                                                                     AS feat_vol_6m,
-       volatility_1y                                                                                     AS feat_vol_1y,
+       one_day_pct                                                                                                                                                                                             AS feat_one_day_return,
+       price_chg_pct_3m                                                                                                                                                                                             AS feat_price_chg_pct_3m,
+       volatility_1m                                                                                                                                                                                           AS feat_vol_1m,
+       volatility_3m                                                                                                                                                                                           AS feat_vol_3m,
+       volatility_6m                                                                                                                                                                                           AS feat_vol_6m,
+       volatility_1y                                                                                                                                                                                           AS feat_vol_1y,
        -- Raw beta windows (systematic-risk inputs to feat_avg_beta below).
        beta_1y,
        beta_2y,
@@ -797,32 +824,33 @@ SELECT isin,
        ((COALESCE(beta_1y, 0::double precision) + COALESCE(beta_2y, 0::double precision) +
          COALESCE(beta_5y, 0::double precision)) /
         NULLIF((beta_1y IS NOT NULL)::int + (beta_2y IS NOT NULL)::int + (beta_5y IS NOT NULL)::int,
-               0))                                                                                       AS feat_avg_beta,
-       total_return_ytd                                                                                  AS feat_total_return_ytd,
-       total_return_5y                                                                                   AS feat_total_return_5y,
-       total_return_10y                                                                                  AS feat_total_return_10y,
-       tot_return_pct_cagr_3y                                                                            AS feat_tr_cagr_3y,
-       tot_return_pct_cagr_10y                                                                           AS feat_tr_cagr_10y,
-       tot_return_pct_cagr_5y                                                                            AS feat_tr_cagr_5y,
-       tot_return_pct_cagr_1y                                                                            AS feat_tr_cagr_1y,
-       total_return_1d                                                                                   AS feat_total_return_1d,
-       total_return_5d                                                                                   AS feat_total_return_5d,
-       total_return_1w                                                                                   AS feat_total_return_1w,
-       total_return_1m                                                                                   AS feat_total_return_1m,
-       total_return_3m                                                                                   AS feat_total_return_3m,
-       total_return_6m                                                                                   AS feat_total_return_6m,
-       total_return_1y                                                                                   AS feat_total_return_1y,
-       total_return_3y                                                                                   AS feat_total_return_3y,
-       total_return_mtd                                                                                  AS feat_total_return_mtd,
-       total_return_qtd                                                                                  AS feat_total_return_qtd,
-       total_return_2025                                                                                 AS feat_total_return_2025,
-       total_return_2024                                                                                 AS feat_total_return_2024,
-       total_return_2023                                                                                 AS feat_total_return_2023,
-       total_return_2022                                                                                 AS feat_total_return_2022,
-       total_return_2021                                                                                 AS feat_total_return_2021,
+               0))                                                                                                                                                                                             AS feat_avg_beta,
+       total_return_ytd                                                                                                                                                                                        AS feat_total_return_ytd,
+       total_return_5y                                                                                                                                                                                         AS feat_total_return_5y,
+       total_return_10y                                                                                                                                                                                        AS feat_total_return_10y,
+       tot_return_pct_cagr_3y                                                                                                                                                                                  AS feat_tr_cagr_3y,
+       tot_return_pct_cagr_10y                                                                                                                                                                                 AS feat_tr_cagr_10y,
+       tot_return_pct_cagr_5y                                                                                                                                                                                  AS feat_tr_cagr_5y,
+       tot_return_pct_cagr_1y                                                                                                                                                                                  AS feat_tr_cagr_1y,
+       total_return_1d                                                                                                                                                                                         AS feat_total_return_1d,
+       total_return_5d                                                                                                                                                                                         AS feat_total_return_5d,
+       total_return_1w                                                                                                                                                                                         AS feat_total_return_1w,
+       total_return_1m                                                                                                                                                                                         AS feat_total_return_1m,
+       total_return_3m                                                                                                                                                                                         AS feat_total_return_3m,
+       total_return_6m                                                                                                                                                                                         AS feat_total_return_6m,
+       total_return_1y                                                                                                                                                                                         AS feat_total_return_1y,
+       total_return_3y                                                                                                                                                                                         AS feat_total_return_3y,
+       total_return_mtd                                                                                                                                                                                        AS feat_total_return_mtd,
+       total_return_qtd                                                                                                                                                                                        AS feat_total_return_qtd,
+       total_return_2025                                                                                                                                                                                       AS feat_total_return_2025,
+       total_return_2024                                                                                                                                                                                       AS feat_total_return_2024,
+       total_return_2023                                                                                                                                                                                       AS feat_total_return_2023,
+       total_return_2022                                                                                                                                                                                       AS feat_total_return_2022,
+       total_return_2021                                                                                                                                                                                       AS feat_total_return_2021,
        -- ---- Cross-cutting market-cap / EV size & trend feats ----
-       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                                              AS feat_mcap_trend_1y,
-       pml.safe_divide(market_cap, market_cap_3yavg)                                                     AS feat_mcap_vs_3yavg,
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                                                                                                                                                    AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg) AS feat_mcap_vs_3yavg,
+       pml.safe_divide(100-market_cap_country_r, 100)                                                                                                                                                           AS feat_mcap_country_r,
        pml.safe_divide(enterprise_value, enterprise_value_3yavg)                                                                                                                                               AS feat_ev_vs_3yavg,
        -- ---- Market-cap / EV ratio trail (equity share of enterprise value) ----
        -- market_cap_ev = market_cap / enterprise_value: the equity fraction of EV
@@ -939,9 +967,9 @@ SELECT isin,
        return_on_assets_roa_pct_ltm                                                               AS feat_roa_ltm,
        div_yield_ltm - div_yield_5yavgltm                                                         AS feat_yield_spread_vs_5y,
        -- ---- Cross-cutting market-cap / EV size & trend feats ----
-       pml.calc_change_ratio(market_cap, market_cap_neg1fy)      AS feat_mcap_trend_1y,
-       pml.safe_divide(market_cap, market_cap_3yavg)             AS feat_mcap_vs_3yavg,
-       pml.safe_divide(enterprise_value, enterprise_value_3yavg) AS feat_ev_vs_3yavg
+       pml.calc_change_ratio(market_cap, market_cap_neg1fy)                                       AS feat_mcap_trend_1y,
+       pml.safe_divide(market_cap, market_cap_3yavg)                                              AS feat_mcap_vs_3yavg,
+       pml.safe_divide(enterprise_value, enterprise_value_3yavg)                                  AS feat_ev_vs_3yavg
 FROM pml.pml_df;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_dividend_safety_isin ON pml.mv_pymc_dividend_safety (isin);
@@ -1036,7 +1064,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_accounting_anomaly_isin ON pml.mv_
 -- gets its coords/observed/mutable_predictor/constant_data lists from SQL.
 CREATE OR REPLACE VIEW pml.vw_pymc_feature_catalogue AS
 SELECT m.model_name                                                 AS model_target,
-       COALESCE(fa.pymc_role, md.pymc_role) AS pymc_role,
+       COALESCE(fa.pymc_role, md.pymc_role)                         AS pymc_role,
        md.column_name,
        md.category,
        md.feature_role,

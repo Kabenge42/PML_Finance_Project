@@ -17,6 +17,7 @@ from ._common import empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
+from ..metrics import quantile_return_volatility
 from ..theme import DUAL_GRAPH_STYLE, control
 from ..theme import card as theme_card
 
@@ -31,10 +32,22 @@ confidence_level_options = [
 ]
 confidence_level_default = "5"
 
+# Expected-shortfall multipliers ``phi(Phi^-1(a)) / a`` of a standard normal at
+# each selectable tail probability *a*, so ``CVaR_a = mu - factor * sigma`` (the
+# mean return conditional on landing in the worst a% of outcomes). The pipeline
+# does not export return-space CVaR at any level, so every level is derived
+# under this normal approximation of the MC return distribution.
+_ES_FACTORS = {
+    "5": 2.0627128,
+    "10": 1.7550151,
+    "25": 1.2711055,
+    "50": 0.7978846,
+}
+
 sort_metric_id = f"{component_id}_sort_metric"
 sort_metric_options = [
     {"label": "Highest Reward-to-CVaR", "value": "reward_to_cvar"},
-    {"label": "Lowest CVaR", "value": "cvar_lowest"},
+    {"label": "Least Tail Risk (CVaR)", "value": "cvar_lowest"},
     {"label": "Highest Expected Return", "value": "expected_return"},
 ]
 sort_metric_default = "reward_to_cvar"
@@ -70,9 +83,9 @@ sector_filter_id = f"{component_id}_sector_filter"
 
 title = "Value at Risk (VaR): Downside Risk Assessment"
 description = (
-    "Calculates the maximum expected loss at different confidence levels using "
-    "Conditional Value at Risk (CVaR). Lower CVaR values indicate less downside "
-    "risk."
+    "Calculates the expected loss in the worst outcomes at different tail "
+    "probabilities using Conditional Value at Risk (CVaR), expressed as a "
+    "signed return — less negative means less downside risk."
 )
 
 
@@ -135,8 +148,8 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         empty = empty_figure("No data is available to display")
         return empty, empty
 
-    df = df[["name", "sector", "market_cap", "mc_prob_pos", "cvar_5pct_kalman",
-             "expected_return_kalman", "reward_to_cvar", "er_p05", "er_p50", "er_p95"]].copy()
+    df = df[["name", "sector", "market_cap", "p_upside_pos_cond",
+             "expected_return_kalman", "reward_to_cvar", "er_p05", "er_p95"]].copy()
     logger.debug(schema(df))
 
     confidence_level = str(kwargs.get(confidence_level_id) or confidence_level_default)
@@ -146,7 +159,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     num_stocks = str(kwargs.get(num_stocks_id) or num_stocks_default)
     sector_filter = kwargs.get(sector_filter_id) or []
 
-    df = df[(df["market_cap"] >= min_market_cap) & (df["mc_prob_pos"] >= min_prob_positive)]
+    df = df[(df["market_cap"] >= min_market_cap) & (df["p_upside_pos_cond"] >= min_prob_positive)]
     if len(df) == 0:
         empty = empty_figure("No stocks match the selected criteria")
         return empty, empty
@@ -156,19 +169,23 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         empty = empty_figure("No stocks match the selected sectors")
         return empty, empty
 
-    if confidence_level == "5":
-        df["cvar_value"] = df["er_p05"]
-    elif confidence_level == "10":
-        df["cvar_value"] = (df["er_p05"] + df["er_p50"]) / 2
-    elif confidence_level == "25":
-        df["cvar_value"] = df["er_p50"]
-    elif confidence_level == "50":
-        df["cvar_value"] = df["er_p95"]
-    else:
-        df["cvar_value"] = df["cvar_5pct_kalman"]
+    # --- CVaR at the selected tail probability (decimal return space) -------
+    # Expected shortfall under a normal approximation of the MC *return*
+    # distribution: ``CVaR_a = mu - factor * sigma`` with ``mu`` the Kalman
+    # expected return and ``sigma`` implied by the ``er_p05``/``er_p95``
+    # posterior return spread (see ``quantile_return_volatility``).
+    # NOTE: ``cvar_5pct_kalman`` is NOT this quantity — it is the tail mean of
+    # the posterior *upside* draws (estimation uncertainty of the mean, the
+    # STARR denominator input), so it is frequently positive and cannot be
+    # charted as a return-space CVaR.
+    sigma = quantile_return_volatility(df["er_p05"], df["er_p95"])
+    factor = _ES_FACTORS.get(confidence_level, _ES_FACTORS[confidence_level_default])
+    df["cvar_value"] = df["expected_return_kalman"] - factor * sigma
 
     if sort_metric == "cvar_lowest":
-        df = df.sort_values("cvar_value", ascending=True)
+        # ``cvar_value`` is a signed return (loss = negative): least tail risk
+        # first means the highest (least negative) values lead.
+        df = df.sort_values("cvar_value", ascending=False)
     elif sort_metric == "expected_return":
         df = df.sort_values("expected_return_kalman", ascending=False)
     else:
@@ -180,9 +197,9 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
 
     fig1 = px.bar(
         df, x="name", y="cvar_value", color="sector",
-        title=f"CVaR at {confidence_level}% Confidence Level",
+        title=f"CVaR — Expected Return in the Worst {confidence_level}% of Outcomes",
         labels={"name": "Stock", "cvar_value": f"CVaR ({confidence_level}%)", "sector": "Sector"},
-        hover_data={"name": True, "sector": True, "cvar_value": ":.2f", "market_cap": ":.0f"},
+        hover_data={"name": True, "sector": True, "cvar_value": ":.2%", "market_cap": ":.0f"},
     )
     fig1.update_xaxes(tickangle=-45)
     fig1.update_layout(hovermode="closest")
@@ -190,7 +207,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     fig2 = px.scatter(
         df, x="expected_return_kalman", y="cvar_value", size="market_cap", color="reward_to_cvar",
         hover_data={"name": True, "sector": True, "expected_return_kalman": ":.3f",
-                    "cvar_value": ":.2f", "reward_to_cvar": ":.2f", "market_cap": ":.0f"},
+                    "cvar_value": ":.2%", "reward_to_cvar": ":.2f", "market_cap": ":.0f"},
         labels={"expected_return_kalman": "Expected Return (Kalman)",
                 "cvar_value": f"CVaR ({confidence_level}%)", "reward_to_cvar": "Reward-to-CVaR",
                 "market_cap": "Market Cap (M)"},

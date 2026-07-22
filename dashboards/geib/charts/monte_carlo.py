@@ -189,7 +189,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         return empty, empty
 
     df = df[["name", "sector", "market_cap", "expected_return_kalman", "kalman_variance",
-             "original_price", "mc_prob_pos", "er_p05", "er_p50", "er_p95"]].copy()
+             "original_price", "p_upside_pos_cond", "er_p05", "er_p50", "er_p95"]].copy()
     logger.debug(schema(df))
 
     num_simulations = int(coalesce(kwargs.get(num_simulations_id), num_simulations_default))

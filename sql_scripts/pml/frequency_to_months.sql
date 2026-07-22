@@ -13,9 +13,7 @@ BEGIN
 
 	RETURN CASE UPPER(TRIM(COALESCE(earnings_report_frequency, 'QUARTERLY')))
 		       WHEN 'QUARTERLY' THEN fy_range_months / 4
-		       WHEN 'SEMI-ANNUAL' THEN fy_range_months / 2
 		       WHEN 'SEMI-ANNUALLY' THEN fy_range_months / 2
-		       WHEN 'ANNUAL' THEN fy_range_months
 		       WHEN 'ANNUALLY' THEN fy_range_months
 		       ELSE fy_range_months / 4 END;
 END;

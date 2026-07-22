@@ -77,6 +77,12 @@ _SHORT_SERIES_THRESHOLD = 25
 # from the suffix — exactly what the GaussianRandomWalk state-space model
 # in :class:`KalmanFilterPriceTarget` needs.
 #
+# ``pml.mv_pymc_kalman_pt`` emits the raw spot-price trail
+# (``price_{5d,1w,1m,3m,6m,1y,3y,5y,qtd}_ago``) un-prefixed alongside the
+# analyst-target trail, so snapshots loaded from the MV (not just ``pml_df``)
+# carry the full price + target ``*_ago`` cohort that
+# :data:`_AGO_HISTORY_RE` unpivots.
+#
 # This logic lives on the model class so the notebook (Section 7.1 of
 # ``pymc_expected_returns_model.ipynb``) and any future batch scorer can
 # call a single canonical helper instead of inlining the unpivot.
@@ -119,6 +125,7 @@ def _build_ago_offset_map() -> dict[str, Any]:
 #     expected_report_date              - CURRENT_DATE  AS days_to_expected_report
 #     next_fy_end_date                  - CURRENT_DATE  AS days_to_next_fy_end
 #     fy_end_date                       - CURRENT_DATE  AS days_since_fy_end
+#     next_fiscal_quarter               - CURRENT_DATE  AS days_to_next_fiscal_quarter
 #
 # :meth:`KalmanFilterPriceTarget.forecast` projects to exactly these horizons,
 # so the triple (DATE column, day-count column, human label) is captured here
@@ -159,6 +166,7 @@ FISCAL_HORIZONS: tuple[FiscalHorizon, ...] = (
     FiscalHorizon("expected_report_date", "days_to_expected_report", "Expected report"),
     FiscalHorizon("next_fy_end_date", "days_to_next_fy_end", "Next FY end"),
     FiscalHorizon("fy_end_date", "days_since_fy_end", "FY end"),
+    FiscalHorizon("next_fiscal_quarter","days_to_next_fiscal_quarter","Next fiscal quarter"),
 )
 
 # DATE column -> human label, for callers holding a fiscal-calendar date column.
@@ -1779,7 +1787,7 @@ class KalmanPanelInputs:
         ``beta_{1y,2y,5y}``). The systematic-risk (CAPM) driver of the
         ``exp(-risk_penalty * z(avg_beta))`` risk adjustment.
     size_ratio : numpy.ndarray
-        Per-ISIN size ratio (``feat_mcap_vs_3yavg`` = ``market_cap /
+        Per-ISIN size ratio (``feat_mcap_country_r`` = ``market_cap /
         market_cap_3yavg``): current market cap relative to its own 3-year
         average. Carried raw and z-scored inside
         :func:`build_fused_kalman_pt_model`, where it discounts ``risk_adj_return``
@@ -1853,7 +1861,7 @@ def build_fused_kalman_pt_model(
 
     A second **size tilt** sits alongside the beta penalty on ``risk_adj_return``:
     ``risk_adj_return = expected_return - risk_loading * z(avg_beta)
-    - size_loading * z(feat_mcap_vs_3yavg)`` where ``feat_mcap_vs_3yavg =
+    - size_loading * z(feat_mcap_country_r)`` where ``feat_mcap_country_r =
     market_cap / market_cap_3yavg`` is the firm's current size relative to its own
     3-year average. With a positive ``size_loading`` names trading **above** their
     3-year average size (re-rated up) are discounted while names **below** it earn a
@@ -1951,8 +1959,8 @@ def build_fused_kalman_pt_model(
     size_penalty : float
         Prior scale (``HalfNormal`` sigma) of the learned, sign-fixed
         ``size_loading`` applied to ``risk_adj_return`` via the per-ISIN size ratio
-        ``feat_mcap_vs_3yavg`` (z-scored) as an additive tilt
-        ``- size_loading * z(feat_mcap_vs_3yavg)`` — discounting names trading above
+        ``feat_mcap_country_r`` (z-scored) as an additive tilt
+        ``- size_loading * z(feat_mcap_country_r)`` — discounting names trading above
         their 3-year average size. ``0.0`` disables the size factor entirely.
     robust : bool
         ``True`` (default) → Student-t panel likelihood (absorbs analyst
@@ -2039,7 +2047,7 @@ def build_fused_kalman_pt_model(
     avg_beta_filled = np.nan_to_num(_beta_raw, nan=_beta_mu)
 
     # Standardised size ratio for the learned size tilt on ``expected_return``.
-    # ``panel.size_ratio`` is ``feat_mcap_vs_3yavg`` (= market_cap / market_cap_3yavg):
+    # ``panel.size_ratio`` is ``feat_mcap_country_r`` (= market_cap / market_cap_3yavg):
     # the firm's current market cap relative to its own 3-year average. Raw values
     # are O(1) around 1.0, so z-scoring keeps the tilt a *relative* cross-sectional
     # factor (currently-shrunk vs currently-extended names) robust to level shifts,
@@ -2090,11 +2098,11 @@ def build_fused_kalman_pt_model(
         # provenance; the math consumes the standardised ``beta_z``.
         pm.Data("feat_avg_beta", avg_beta_filled, dims="isin")
         beta_z = pm.Data("feat_avg_beta_z", avg_beta_z, dims="isin")
-        # Size driver (feat_mcap_vs_3yavg = market_cap / market_cap_3yavg): the
+        # Size driver (feat_mcap_country_r = market_cap / market_cap_3yavg): the
         # learned additive size tilt on ``expected_return`` below. Raw container
         # retained for provenance; the math consumes the standardised ``size_z``.
-        pm.Data("feat_mcap_vs_3yavg", size_ratio_filled, dims="isin")
-        size_z = pm.Data("feat_mcap_vs_3yavg_z", size_ratio_z, dims="isin")
+        pm.Data("feat_mcap_country_r", size_ratio_filled, dims="isin")
+        size_z = pm.Data("feat_mcap_country_r_z", size_ratio_z, dims="isin")
         # Expected volatility (feat_vol_* term-structure mean) retained as a
         # provenance container only — no longer drives the risk adjustment.
         # ``build_noise_wideners(..., fillna=True)`` already 0-fills these for the
@@ -2231,7 +2239,7 @@ def build_fused_kalman_pt_model(
         #
         # The fix is an ADDITIVE tilt ``-loading · z`` which is monotone in the
         # feature regardless of the sign of ``expected_return``: higher systematic
-        # risk (``feat_avg_beta``) and a larger size-vs-own-history (``feat_mcap_vs_3yavg``,
+        # risk (``feat_avg_beta``) and a larger size-vs-own-history (``feat_mcap_country_r``,
         # = market_cap / market_cap_3yavg) ALWAYS reduce the risk-adjusted return.
         # The loadings are LEARNED (sign-fixed ``HalfNormal`` so the direction stays
         # a discount while the magnitude is identified from the cross-section), which
