@@ -5,6 +5,140 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.8] - 2026-07-26
+
+### Changed
+
+- **Dependency refresh (Bayesian stack)** — bumped the locked versions and the
+  matching floors in `Pipfile`, `requirements.txt` and `pyproject.toml`:
+  - `pymc` 6.1.0 → **6.2.0** and `pytensor` 3.1.2 → **3.2.3** (coupled pair:
+    pymc 6.1 caps pytensor `<3.2`; pymc 6.2 requires pytensor `>=3.2.2,<3.3`).
+  - `jax` / `jaxlib` 0.10.2 → **0.11.0** (mutually pinned pair; numpyro 0.21,
+    blackjax and optax all accept it).
+  - `bambi` 0.18.0 → **0.19.0**, `blackjax` 1.5 → **1.6.2**,
+    `pandas` 3.0.3 → **3.0.5**, `tqdm` 4.68.4 → **4.69.1**.
+  - Full `pipenv lock` re-resolve also refreshed in-range transitive pins
+    (certifi, dash 4.4.1, lightgbm 4.7.0, matplotlib 3.11.1, pyarrow 25.0.0,
+    filelock, tzdata, xarray-einstats 0.11.0, …) and dropped the miniKanren
+    deps (`cons`, `etuples`, `logical-unification`, `minikanren`, `toolz`)
+    that pytensor 3.2.3 moved out of its core requirements.
+- **Deferred (blocked) updates** — documented in-line in the three dependency
+  files:
+  - `numpy` stays **2.4.6** (not 2.5.1): numba 0.65.1 *and* 0.66.0 both
+    require `numpy<2.5`, and numba is the project's default PyTensor backend.
+  - `numba` stays **0.65.1** (not 0.66.0): pytensor 3.2.x requires
+    `numba<=0.65.1` (0.66 also needs llvmlite 0.48; lock has 0.47).
+
+> Follow-up note (recurring): `pyproject.toml` `version` and the README badge
+> still lag at 0.9.9.5 pending the next packaging bump.
+
+## [0.9.9.7] - 2026-07-25
+
+### Changed
+
+- **Decimal-unit consistency across the Kalman price-target pipeline** — all
+  persistent frames (`screen.results`, `RiskBook.analytics` / `.book`, the
+  `kalman_results` export row-set) and `analytics.kalman_filtered_price_targets`
+  now store raw decimal returns (0.25 = +25%); percent scaling is applied only
+  at visualization / print boundaries.
+  - `summarize_panel_screen` columns renamed: `expected_upside_pct` →
+    `expected_upside`, `implied_upside_pct` → `implied_upside`,
+    `total_return_{ytd,5y,10y}_pct` → `total_return_{ytd,5y,10y}`,
+    `tr_cagr_3y_pct` → `tr_cagr_3y` (values now decimal).
+  - `compute_cvar_aware_book` columns renamed: `band_width_pct` → `band_width`,
+    `cvar05_pct` → `cvar05`, `exp_vol_pct` → `exp_vol`, `tail_risk_pct` →
+    `tail_risk` (values now decimal; the tail-risk floor is 0.01 = 1pp).
+    `RiskBook.summary` return metrics (`port_up`, `port_cvar`, `wavg_cvar`,
+    `port_vol`) are decimal. `reward_to_cvar` (STARR) is numerically unchanged
+    (ratio of same-unit terms).
+  - **BREAKING (DB consumers):** `cvar_5pct_kalman` and `expected_vol_kalman`
+    in `analytics.kalman_filtered_price_targets` changed from percent to
+    decimal units. Re-run the export (`export_analytics(write=True)`) together
+    with deploying the updated GEIB dashboard.
+- **`expected_sharpe_ratio` redefined** — previously
+  `expected_upside / posterior-draw dispersion` (a parameter-uncertainty ratio
+  that produced unrealistically large values); now `er_mean / er_sd` of the
+  structural-TS Monte-Carlo forward-return distribution. The old
+  posterior-dispersion ratio survives internally as
+  `RiskBook.analytics['ret_vol_ratio']` (§14b risk-adjusted screen) but is no
+  longer exported. Dashboard sorts on `expected_sharpe_ratio` will re-rank.
+- **GEIB dashboard aligned with decimal storage** — `kelly.py` no longer
+  divides `cvar_5pct_kalman` by 100 (and scales it ×100 for display);
+  `monte_carlo_forecast.py` formats CVaR with the shared percent renderer.
+
+### Added
+
+- **`er_sd`** — new column in `summarize_mc_returns` output, the §10 screen and
+  the analytics export: pooled std of the MC forward-return draws (denominator
+  of `expected_sharpe_ratio`).
+- **Unit documentation in the analytics DDL** —
+  `sql_scripts/analytics/kalman_filtered_price_targets.sql` now carries a
+  unit-convention header and `COMMENT ON COLUMN` statements for every
+  return/risk/probability column.
+
+### Fixed
+
+- **Double-scaling in `plot_kalman_results_overview`** — `expected_vol_kalman`
+  and `cvar_5pct_kalman` (already percent under the old convention) were
+  multiplied by 100 again, rendering panels (a)/(d) 100× off, and the
+  dimensionless `reward_to_cvar` STARR colourbar was scaled ×100. All four
+  series now scale correctly from decimal storage.
+- **GEIB `data.py` column inventory** — added the missing
+  `expected_vol_kalman` / `expected_sharpe_ratio` (and new `er_sd`) to
+  `NUMERIC_COLUMNS` and fixed the `exchange_name_name` typo, so the
+  empty-frame fallback no longer drops columns `high_conviction.py` requests.
+
+> Follow-up (recurring): `pyproject.toml` / README badge still lag the
+> CHANGELOG version pending the next packaging bump.
+
+## [0.9.9.6] - 2026-07-24
+
+### Added
+
+- **`feat_vol_drift` / `feat_vol_drift_n`** — `pml.mv_pymc_kalman_pt` now emits
+  the winsorised drift across the realized-vol term structure
+  (`volatility_{1m,3m,6m,1y}`, mirroring `feat_pt_noise_drift`) plus its
+  `pml.target_drift_n` valid-pair counter, registered as engineered self-rows
+  (`mutable_predictor`, `kalman_pt`) with descriptions in
+  `pml_df_metadata_populate.sql`.
+- **Analyst rating-mix / achievement features on `mv_pymc_kalman_pt`** — copied
+  from `mv_pymc_price_target`: `feat_holds`, `feat_buys`, `feat_sells`,
+  `feat_no_opinion`, `feat_analyst_{bullish,bearish,neutral}_pct`,
+  `feat_analyst_conviction`, `feat_analyst_rating`, `feat_pt_achievement_1y`,
+  `feat_pt_accuracy_1y`, `feat_pt_range_hit_rate`; carrier aliases and
+  self-rows wired for `kalman_pt` (all `mutable_predictor`). Registering
+  `feat_buys` / `feat_sells` self-rows also fixes the pre-existing
+  `assert_pymc_catalogue_coverage()` failure for `price_target`.
+- **Raw observed trails on `mv_pymc_kalman_pt`** — `price_{1d,mtd,ytd}_ago`,
+  the eight-horizon `price_target_stddev_*_ago` dispersion trail, and
+  `price_target_num_6m_ago` are now emitted so their catalogue roles are live.
+- **TASK 4b metadata backfill** — `data_type` + `description` for all
+  previously-NULL engineered self-rows (`feat_pt_drift`, `feat_avg_beta`,
+  `feat_mv_ev_drift`, `feat_mcap_*`, drift `*_n` counters, …).
+
+### Changed
+
+- **`feat_vol_{1m,3m,6m,1y}` removed from `mv_pymc_kalman_pt`** — replaced by
+  `feat_vol_drift(_n)`; the raw `volatility_*` columns no longer target
+  `kalman_pt` (their `price_target` / `credit_risk` aliases are unchanged).
+- **kalman_pt catalogue role flips** (per-model overrides in
+  `pml.pml_df_feature_alias`): `last_price` and `price_target_stddev`
+  (`feat_pt_noise_sigma`) → `observed`; all 22 `total_return_*` /
+  `tot_return_pct_cagr_*` aliases → `observed`; `price_target_stddev_*_ago`
+  and `price_{1d,mtd,ytd}_ago` trails → `observed`; `price_target_num_6m_ago`
+  → `constant_data`; `feat_pt_drift_n` / `feat_price_drift_n` →
+  `mutable_predictor`. (The requested `SET column_name = 'observed'` clauses
+  were not implementable — `column_name` is the catalogue join key.)
+- **`pymc_kalman_filter_pt.py`** — σ_obs widener is now
+  `sigma_obs_base * (1 + range + cv + 0.5 * max(feat_vol_drift, 0)) /
+  sqrt(n_analysts)`; the stochastic-volatility re-fits drop the
+  `feat_vol_*`-derived `realized_vol` anchor (constant `log(scale)` anchor;
+  the `fit(realized_vol=…)` API is unchanged); the CVaR book's
+  `expected_vol_kalman` export is now the posterior upside-draw dispersion.
+- **`KalmanFilterModel.py`** — `KalmanPanelInputs.expected_vol` renamed to
+  `vol_drift`; provenance containers `feat_expected_vol(_z)` renamed to
+  `feat_vol_drift(_z)`.
+
 ## [0.9.9.5] - 2026-06-08
 
 ### Added

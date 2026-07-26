@@ -25,6 +25,8 @@ classifiers = [
 
 dependencies = [
     # --- Numerical Computing & Data Structures ---
+    # numpy 2.5.x is blocked: numba (0.65.1 and 0.66.0) requires numpy<2.5,
+    # and numba is the default PyTensor backend for this project.
     "numpy>=2.1.0,<3.0.0",
     "cython>=3.0.0",
     "pandas>=2.2.0,<4.0.0",
@@ -62,19 +64,21 @@ dependencies = [
     # Bambi 0.16+ depends on PyMC >=6.0. nutpie 0.14+ pairs with PyMC 6.0
     # and is now PyMC's default sampler when numba (the new default
     # PyTensor backend) is available.
-    "pymc>=6.0.0,<7.0.0",
-    "pytensor>=3.0.0,<4.0.0",
+    # pymc 6.2 <-> pytensor 3.2 are mutually required (pymc 6.1 caps
+    # pytensor<3.2, pymc 6.2 requires pytensor>=3.2.2,<3.3) — bump together.
+    "pymc>=6.2.0,<7.0.0",
+    "pytensor>=3.2.2,<4.0.0",
     "arviz>=1.1.0,<2.0.0",
     "arviz-base>=1.1.0,<2.0.0",
     "arviz-stats>=1.1.0,<2.0.0",
     "arviz-plots>=1.1.0,<2.0.0",
-    "bambi>=0.18.0,<1.0.0",
+    "bambi>=0.19.0,<1.0.0",
     "nutpie>=0.16.0,<1.0.0",
     "xarray>=2026.1.0,<2027.0.0",
-    "jax>=0.6.0,<1.0.0",
-    "jaxlib>=0.6.0,<1.0.0",
+    "jax>=0.11.0,<1.0.0",
+    "jaxlib>=0.11.0,<1.0.0",
     "numpyro>=0.18.0,<1.0.0",
-    "blackjax>=1.5.0,<2.0.0",
+    "blackjax>=1.6.0,<2.0.0",
     # --- Hyperparameter Optimization ---
     "optuna>=4.5.0,<5.0.0",
     # --- Networking ---
@@ -112,7 +116,8 @@ tensorflow = [
     "scikeras>=0.13.0,<1.0.0; python_version < '3.14'",
 ]
 
-# Performance optimizations (numba 0.65.0+ supports Python 3.14)
+# Performance optimizations (numba 0.65.0+ supports Python 3.14).
+# numba 0.66 is blocked: pytensor 3.2.x requires numba<=0.65.1.
 performance = [
     "numba>=0.65.0,<1.0.0",
 ]

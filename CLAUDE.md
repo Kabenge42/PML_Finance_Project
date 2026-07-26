@@ -57,6 +57,8 @@ Key environment variables (full list in `environment_variables.txt`):
 | `MODEL_VERSION` / `RANDOM_SEED`                         | Model run identifier / RNG seed                                  |
 | `N_JOBS`                                                | Parallel job count (`-1` = all cores)                            |
 | `PML_STRICT_STREAK_MERGE`                               | Fail-fast on missing EPS streak-merge columns (CI/regression)    |
+| `PML_ENABLE_PYTENSOR_C`                                 | `1` opts back into the PyTensor C backend (default: numba/py VM) |
+| `PML_FIG_WIDTH_PX`                                      | Target Plotly/mpl figure width (px) for the Kalman notebook panels |
 
 ### Code Quality & Testing
 
@@ -275,6 +277,17 @@ self-registers its Dash `@callback` on import. Cards include efficient frontier,
 CVaR-aware Kelly sizing, Monte Carlo (+ return forecast by name), Sharpe / VaR-CVaR,
 PT convergence, and high-conviction picks.
 
+**Unit convention (since 0.9.9.7):** all persistent Kalman-pipeline frames
+(`screen.results`, `RiskBook.analytics` / `.book`, the `kalman_results` export)
+and `analytics.kalman_filtered_price_targets` store **raw decimal returns**
+(0.25 = +25%) — including `cvar_5pct_kalman` and `expected_vol_kalman`; percent
+scaling happens only at visualization / print boundaries. Per-column units are
+documented via `COMMENT ON COLUMN` in the analytics DDL.
+`expected_sharpe_ratio` = `er_mean / er_sd` (pooled std of the structural-TS
+Monte-Carlo forward-return draws; `er_sd` is itself an exported column). Unit or
+schema changes to the export must ship as a pair: re-run
+`export_analytics(write=True)` **and** deploy the updated GEIB dashboard.
+
 ```powershell
 . .\set_env.ps1   # sets DB_URL / DB_ANALYTICS_SCHEMA
 python dashboards/global_equity_investment_dashboard.py
@@ -415,11 +428,22 @@ All seven MVs additionally carry a shared market-cap/EV size-&-trend trio:
 `market_cap_neg{1..4}f{q,y}` lags and `market_cap`/`enterprise_value` `_{3,5}yavg`
 columns added to `pml_df`). `mv_pymc_kalman_pt` is a single time-slice snapshot.
 
+Since 0.9.9.6 `mv_pymc_kalman_pt` replaces the raw `feat_vol_{1m,3m,6m,1y}`
+columns with the winsorised realized-vol term-structure drift
+`feat_vol_drift` (+ `feat_vol_drift_n` valid-pair counter), adds the analyst
+rating-mix / PT-achievement features copied from `mv_pymc_price_target`, and
+emits the raw observed trails (`price_{1d,mtd,ytd}_ago`,
+`price_target_stddev_*_ago`, `price_target_num_6m_ago`). Several `kalman_pt`
+catalogue roles are flipped via per-model overrides in
+`pml.pml_df_feature_alias` (e.g. `last_price`, `feat_pt_noise_sigma` and the
+`total_return_*` aliases → `observed`) — check
+`pml.vw_pymc_feature_catalogue` rather than assuming the base-row role.
+
 | MV                           | Observed column                                                                | Key `feat_` columns                                                                                                                                       |
 |------------------------------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `mv_pymc_earnings_beat`      | `n_total`, `n_beats`, `n_total_annual`, `n_beats_annual`                       | `feat_logit_beat_rate`, `feat_eps_fy1e`, `feat_rev_{1w,1m,3m,6m,1y}`, `feat_rev_accel_1m_6m`, `feat_last_q_surprise`                                      |
 | `mv_pymc_price_target`       | `observed_target_pct`, `observed_target_pct_med`, `price_target`, `n_analysts` | `feat_net_buy_sentiment`, `feat_implied_upside`, `feat_target_range_width`, `feat_pt_momentum_3m`, `feat_target_dispersion_cv`, `feat_52w_range_position` |
-| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_pt_drift`, `feat_price_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_{1m,3m,6m,1y}`                                                |
+| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_pt_drift`, `feat_price_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_pt_achievement_1y` |
 | `mv_pymc_dcf_pt`             | `observed_pt`                                                                  | `feat_fcf_growth_{1y,2y}`, `feat_fcf_terminal_growth`, `feat_reinvest_rate`, `feat_capex_to_fcf`, `feat_tr_cagr_{3y,10y}`                                 |
 | `mv_pymc_dividend_safety`    | `observed_div_yield`                                                           | `feat_fcf_coverage`, `feat_cfo_coverage`, `feat_eps_payout_ratio`, `feat_dps_growth_{1y,3y,5y}`, `feat_yield_spread_vs_5y`                                |
 | `mv_pymc_credit_risk`        | `observed_altman_z`                                                            | `feat_distress_zone`, `feat_z_trend_{1y,3y}`, `feat_cfo_capex_cov`, `feat_fcf_yield`, `feat_beta_2y`                                                      |
@@ -437,6 +461,7 @@ columns added to `pml_df`). `mv_pymc_kalman_pt` is a single time-slice snapshot.
 | `vw_pymc_feature_catalogue` | Master 1-row-per `(model_target, pymc_role, column_name)` with alias fallback chain |
 | `vw_pymc_feature_aliases`   | Aggregated alias arrays per model                                                   |
 | `vw_pymc_feature_coverage`  | Diagnostic: count of columns per `(model_target, pymc_role)`                        |
+| `vw_pymc_catalogue_coverage_check` | Diagnostic: per `(model_target, feat_name)` catalogue-row status (backs `assert_pymc_catalogue_coverage()`) |
 
 ### SQL Helper Functions (pml schema)
 
@@ -448,6 +473,7 @@ pml.safe_divide(numerator, denominator)            -- NULLIF-safe division
 pml.pct_change(current_val, previous_val)          -- (cur - prev) / prev * 100
 pml.calc_change_ratio(current_val, previous_val)   -- (cur - prev) / prev
 pml.target_drift(arr DOUBLE PRECISION[])           -- AVG of consecutive calc_change_ratio
+pml.target_drift_n(arr DOUBLE PRECISION[]) → INT   -- count of valid consecutive pairs in target_drift
 
 -- Transforms
 pml.clamp_score(val, min DEFAULT 0, max DEFAULT 100)
@@ -829,6 +855,6 @@ catalog = get_feature_catalog(force_reload=True)
 
 ---
 
-**Version:** 0.9.9.5 (CHANGELOG; `pyproject.toml` lags at 0.9.9.2 pending the next packaging bump) | **Python:**
-3.12–3.14 | **PyMC:** >=6.0,<7 | **PyTensor:** >=3.0,<4 | **ArviZ:** >=1.0,<2 (arviz-base + arviz-stats + arviz-plots) |
-**JAX:** >=0.4.30 | **License:** MIT | **DB:** PostgreSQL
+**Version:** 0.9.9.8 (CHANGELOG; `pyproject.toml` lags at 0.9.9.5 pending the next packaging bump) | **Python:**
+3.12–3.14 | **PyMC:** >=6.2,<7 | **PyTensor:** >=3.2.2,<4 | **ArviZ:** >=1.0,<2 (arviz-base + arviz-stats + arviz-plots) |
+**JAX:** >=0.11,<1 | **License:** MIT | **DB:** PostgreSQL
