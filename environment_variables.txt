@@ -19,6 +19,10 @@ DATA_DIR=data
 MODEL_DIR=models
 CACHE_DIR=.cache
 OUTPUT_DIR=outputs
+# Kalman price-target workflow artifact exports (figures/CSV/JSON/NetCDF);
+# consumed by pymc_kalman_filter_pt.py (KALMAN_PT_EXPORT_DRAWS=1 additionally
+# exports the raw eu/ept posterior draws as NetCDF).
+KALMAN_PT_RESULTS_DIR=C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt_results
 
 # -----------------------------------------------------------------------------
 # Database Configuration

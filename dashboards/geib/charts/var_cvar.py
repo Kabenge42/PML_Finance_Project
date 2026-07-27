@@ -176,8 +176,8 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
     # posterior return spread (see ``quantile_return_volatility``).
     # NOTE: ``cvar_5pct_kalman`` is NOT this quantity — it is the tail mean of
     # the posterior *upside* draws (estimation uncertainty of the mean, the
-    # STARR denominator input), so it is frequently positive and cannot be
-    # charted as a return-space CVaR.
+    # STARR denominator input; stored in decimal return units), so it is
+    # frequently positive and cannot be charted as a return-space CVaR.
     sigma = quantile_return_volatility(df["er_p05"], df["er_p95"])
     factor = _ES_FACTORS.get(confidence_level, _ES_FACTORS[confidence_level_default])
     df["cvar_value"] = df["expected_return_kalman"] - factor * sigma

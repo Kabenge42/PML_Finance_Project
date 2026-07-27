@@ -171,6 +171,27 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\outputs\kalman_filtered_price_targets_2.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\outputs\kalman_filtered_price_targets_3.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\outputs\kalman_filtered_price_targets_v2.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\outputs\probability_analytics_summary.csv">
           <value>
             <Attribute>
@@ -179,6 +200,153 @@
           </value>
         </entry>
         <entry key="\outputs\results.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\01_data_01_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\02_eda_01_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\02_eda_03_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\02_eda_04_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\02_eda_05_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\02_eda_17_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\03_features_01_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\04_panel_frame.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\09_diagnostics_01_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\10_screen_01_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\10_screen_mc_summary.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\10_screen_results.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\10b_risk_analytics.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\10b_risk_book.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\10c_analytics_02_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\12_mingled_ctx_snap.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\12b_mingled_sv_01_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\13_forest_ctx_cohort_meta.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\13_forest_ctx_keep.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\14_summary_01_table.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\pymc_kalman_filter_pt_results\14_summary_02_table.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

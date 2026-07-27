@@ -1248,22 +1248,29 @@ WHERE category IN ('analyst_targets', 'analyst_ratings', 'valuation')
 -- FUSED MvGRW PANEL (build_fused_kalman_pt_model / prepare_kalman_panel_inputs):
 -- the cross-sectional Kalman model now also fuses the price-target "Model A +
 -- Model B" parameters. The kalman_pt columns play these fused state-space roles:
---   * volatility_{1m,3m,6m,1y} (-> feat_vol_*): EXPECTED VOLATILITY. Their
---     term-structure mean conditions the latent target
---     `risk_adj_return = expected_return * exp(-risk_penalty * expected_vol)`
---     and sets the `expected_return` prior scale (expected_return GIVEN volatility).
+--   * feat_vol_drift (engineered self-row over volatility_{1m,3m,6m,1y}): drift
+--     across the realized-vol term structure — how price volatility itself is
+--     evolving (the sigma_obs widener analogue of feat_pt_noise_drift's
+--     state-space Q). The absolute feat_vol_* levels are no longer emitted; the
+--     raw volatility_* columns therefore no longer target kalman_pt.
 --   * price_target_stddev (-> feat_pt_noise_sigma): the consensus dispersion that
 --     forms cv = feat_pt_noise_sigma / last_price, widening the heteroscedastic
 --     `sigma_isin = sigma_base * (1 + cv) / sqrt(n_analysts)`.
 --   * price_target_num (-> n_analysts): the precision count behind sqrt(n).
--- No new MV columns are required: the fused panel reuses the existing kalman_pt
--- mutable_predictor / constant_data / observed roles below.
 UPDATE pml.pml_df_metadata
 SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
 WHERE column_name LIKE 'price_target_%_ago'
    OR column_name LIKE 'price_%_ago'
-   OR column_name IN ('price_target', 'price_target_stddev', 'last_price',
-                      'volatility_1m', 'volatility_3m', 'volatility_6m', 'volatility_1y');
+   OR column_name IN ('price_target', 'price_target_stddev', 'last_price');
+
+-- 7c.2 KalmanFilterPriceTarget: analyst rating-mix carriers copied over from the
+--      price_target MV (feat_holds/buys/sells/no_opinion, the bullish/bearish/
+--      neutral pcts, conviction and the raw analyst_rating consensus score).
+UPDATE pml.pml_df_metadata
+SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
+WHERE column_name IN ('num_hold_ratings', 'num_strong_buys_ratings', 'num_buys_ratings',
+                      'num_sell_ratings', 'num_strong_sell_ratings', 'num_no_opinion_ratings',
+                      'analyst_rating');
 
 -- 7d. DCFPriceTarget: cash-flow predictors, FCF estimates, valuation,
 --     EV/EBITDA, profitability margins.
@@ -1404,9 +1411,12 @@ WHERE column_name IN ('price_target_high',
                       'price_target_median',
                       'price_target_num',
                       'price_target_stddev_1w_ago',
+                      'price_target_stddev_mtd_ago',
                       'price_target_stddev_1m_ago',
+                      'price_target_stddev_qtd_ago',
                       'price_target_stddev_3m_ago',
                       'price_target_stddev_6m_ago',
+                      'price_target_stddev_ytd_ago',
                       'price_target_stddev_1y_ago',
                       'total_return_ytd',
                       'total_return_5y',
@@ -1431,14 +1441,17 @@ WHERE column_name IN ('price_target_high',
                       'total_return_2022',
                       'total_return_2021');
 
--- 7h.3b KalmanFilterPriceTarget: short-term momentum. one_day_pct (last day's
---       price change) is emitted by mv_pymc_kalman_pt as feat_one_day_return, a
---       drift / state-transition mutable_predictor. Extend its model_targets so it
---       surfaces in vw_pymc_feature_catalogue for kalman_pt (the per-source alias
---       is registered in pml.pml_df_feature_alias below).
+-- 7h.3b KalmanFilterPriceTarget: short/mid-term momentum. one_day_pct (last
+--       day's price change -> feat_one_day_return) and price_chg_pct_3m
+--       (3m price change -> feat_price_chg_pct_3m) are emitted by
+--       mv_pymc_kalman_pt as drift / state-transition mutable_predictors.
+--       Extend their model_targets so they surface in vw_pymc_feature_catalogue
+--       for kalman_pt (the per-source aliases are registered in
+--       pml.pml_df_feature_alias below; without this model_targets entry the
+--       alias row alone never reaches the catalogue's unnest fan-out).
 UPDATE pml.pml_df_metadata
 SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
-WHERE column_name = 'one_day_pct';
+WHERE column_name IN ('one_day_pct', 'price_chg_pct_3m');
 
 -- 7h.3a KalmanFilterPriceTarget: fiscal-calendar anchors + derived day-count
 --       horizons (mirrors the price_target wiring in 7h.2). These give the
@@ -1701,10 +1714,12 @@ VALUES
 	                            ('feat_coverage_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_coverage_drift',                ARRAY ['kalman_pt']                                                                                                   ),
 	                            ('feat_pt_noise_drift',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_noise_drift',                ARRAY ['kalman_pt']                                                                                                   ),
 	-- Valid-pair coverage counts for the drift trails (pml.target_drift_n):
-	-- constant_data the fused panel / coverage guard gate on so a sparse,
-	-- mostly-NULL trail cannot enter the ICM as a degenerate response.
-	                            ('feat_pt_drift_n',                    'analyst_targets', 'metadata',   'constant_data',     'feat_pt_drift_n',                    ARRAY ['kalman_pt']                                                                                                   ),
-	                            ('feat_price_drift_n',                 'analyst_targets', 'metadata',   'constant_data',     'feat_price_drift_n',                 ARRAY ['kalman_pt']                                                                                                   ),
+	-- mutable_predictor so the counts reach the catalogue-driven feature
+	-- containers alongside their *_drift columns; the fused panel / coverage
+	-- guard still gate on them so a sparse, mostly-NULL trail cannot enter the
+	-- ICM as a degenerate response.
+	                            ('feat_pt_drift_n',                    'analyst_targets', 'metadata',   'mutable_predictor', 'feat_pt_drift_n',                    ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_price_drift_n',                 'analyst_targets', 'metadata',   'mutable_predictor', 'feat_price_drift_n',                 ARRAY ['kalman_pt']                                                                                                   ),
 	                            ('feat_pt_range_norm',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_norm',                 ARRAY ['kalman_pt']                                                                                                   ),
 	-- Drift of the market_cap / enterprise_value ratio trail
 	-- (equity share of EV) across the fiscal-year lags. A
@@ -1713,6 +1728,20 @@ VALUES
 	-- drift predictor — see feat_mv_ev_drift in mv_pymc_kalman_pt.
 	                            ('feat_mv_ev_drift',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mv_ev_drift',                   ARRAY ['kalman_pt']                                                                                                   ),
 	                            ('feat_avg_beta',                      'volatility',      'predictor',  'mutable_predictor', 'feat_avg_beta',                      ARRAY ['kalman_pt']                                                                                                   ),
+	-- Drift across the realized-vol term structure (volatility_{1m,3m,6m,1y}):
+	-- replaces the absolute feat_vol_* levels as the kalman_pt volatility signal
+	-- (sigma_obs widener), with its target_drift_n valid-pair count companion.
+	                            ('feat_vol_drift',                     'volatility',      'predictor',  'mutable_predictor', 'feat_vol_drift',                     ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_vol_drift_n',                   'volatility',      'metadata',   'mutable_predictor', 'feat_vol_drift_n',                   ARRAY ['kalman_pt']                                                                                                   ),
+	-- Analyst rating-mix aggregates (strong+plain buy / sell sums) shared by
+	-- mv_pymc_price_target and mv_pymc_kalman_pt. Multi-source, so self-rows.
+	                            ('feat_buys',                          'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_buys',                          ARRAY ['price_target', 'kalman_pt']                                                                                   ),
+	                            ('feat_sells',                         'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_sells',                         ARRAY ['price_target', 'kalman_pt']                                                                                   ),
+	-- kalman_pt copy of the 1y target-achievement feature. price_target reaches it
+	-- via the price_target_1y_ago carrier alias below, but that (column_name,
+	-- 'kalman_pt') alias PK is already taken by the observed target trail, so
+	-- kalman_pt needs the self-row.
+	                            ('feat_pt_achievement_1y',             'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_achievement_1y',             ARRAY ['kalman_pt']                                                                                                   ),
 	-- earnings_beat logit-beat-rate + revision-acceleration feats (mv_pymc_earnings_beat)
 	                            ('feat_logit_beat_rate',               'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate',               ARRAY ['earnings_beat']                                                                                               ),
 	                            ('feat_logit_beat_rate_annual',        'eps',             'predictor',  'mutable_predictor', 'feat_logit_beat_rate_annual',        ARRAY ['earnings_beat']                                                                                               ),
@@ -1734,10 +1763,10 @@ VALUES
 	-- equals the MV column name exactly, and drop the bad carrier aliases below.
 	                            ('feat_target_range_width',            'analyst_targets', 'predictor',  'mutable_predictor', 'feat_target_range_width',            ARRAY ['price_target']                                                                                                ),
 	                            ('feat_52w_range_position',            'technical',       'predictor',  'mutable_predictor', 'feat_52w_range_position',            ARRAY ['price_target']                                                                                                ),
-	                            ('feat_pt_range_hit_rate',             'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_hit_rate',             ARRAY ['price_target']                                                                                                ),
+	                            ('feat_pt_range_hit_rate',             'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_hit_rate',             ARRAY ['price_target', 'kalman_pt']                                                                                   ),
 	                            ('feat_pt_high_low_convergence_1y',    'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_high_low_convergence_1y',    ARRAY ['price_target']                                                                                                ),
 	                            ('feat_analyst_count_stability',       'analyst_targets', 'predictor',  'mutable_predictor', 'feat_analyst_count_stability',       ARRAY ['price_target']                                                                                                ),
-	                            ('feat_pt_accuracy_1y',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_accuracy_1y',                ARRAY ['price_target']                                                                                                ),
+	                            ('feat_pt_accuracy_1y',                'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_accuracy_1y',                ARRAY ['price_target', 'kalman_pt']                                                                                   ),
 	                            ('feat_pt_optimism_bias',              'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_optimism_bias',              ARRAY ['price_target']                                                                                                ),
 	                            ('feat_net_buy_sentiment',             'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_net_buy_sentiment',             ARRAY ['price_target']                                                                                                ),
 	                            ('feat_conviction_ratio',              'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_conviction_ratio',              ARRAY ['price_target']                                                                                                ),
@@ -1747,13 +1776,54 @@ VALUES
 	                            ('feat_mcap_trend_1y',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_trend_1y',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
 	                            ('feat_mcap_vs_3yavg',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_vs_3yavg',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
 	                            ('feat_ev_vs_3yavg',                   'market_data',     'predictor',  'mutable_predictor', 'feat_ev_vs_3yavg',                   ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
-	                            ('feat_mcap_country_r',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_country_r',                   ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])
+	-- feat_mcap_country_r is emitted ONLY by mv_pymc_kalman_pt (the other MVs do
+	-- not carry it) — registering it for all seven models made it a
+	-- PHANTOM_CATALOGUE_ALIAS for the other six in vw_pymc_catalogue_coverage_check.
+	                            ('feat_mcap_country_r',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_country_r',                   ARRAY ['kalman_pt'])
 ON CONFLICT (column_name) DO UPDATE SET pymc_role     = excluded.pymc_role,
                                         feature_alias = excluded.feature_alias,
                                         model_targets = (SELECT ARRAY(SELECT DISTINCT
                                                                              unnest(pml.pml_df_metadata.model_targets || excluded.model_targets))
                                         ),
                                         updated_at    = CURRENT_TIMESTAMP;
+
+-- ---------------------------------------------------------------------------
+-- TASK 4b: data_type + description backfill for the engineered self-rows.
+-- The TASK 4 INSERT seeds them with NULL data_type / description (they have no
+-- information_schema row on pml_df), which surfaces as empty catalogue columns
+-- in vw_pymc_feature_catalogue. data_type reflects the MV output type: the
+-- winsorised pml.target_drift(... numeric) drifts are 'numeric',
+-- pml.target_drift_n counts are 'integer', the rest 'double precision'.
+-- ---------------------------------------------------------------------------
+UPDATE pml.pml_df_metadata md
+SET data_type   = v.data_type,
+    description = v.description,
+    updated_at  = CURRENT_TIMESTAMP
+FROM (VALUES ('feat_implied_upside', 'double precision', 'Consensus implied upside: (price_target - last_price) / last_price'),
+             ('feat_pt_drift', 'numeric', 'Winsorised [-1, 1] per-step mean change ratio of the mean analyst price-target trail (now -> 1y ago)'),
+             ('feat_price_drift', 'numeric', 'Winsorised [-1, 1] per-step mean change ratio of the spot-price trail (now -> 1y ago)'),
+             ('feat_pt_high_drift', 'numeric', 'Winsorised [-1, 1] per-step drift of the high analyst-target trail'),
+             ('feat_pt_low_drift', 'numeric', 'Winsorised [-1, 1] per-step drift of the low analyst-target trail'),
+             ('feat_pt_median_drift', 'numeric', 'Winsorised [-1, 1] per-step drift of the median analyst-target trail'),
+             ('feat_coverage_drift', 'numeric', 'Winsorised [-1, 1] drift of the analyst-count trail (rising / falling coverage participation)'),
+             ('feat_pt_noise_drift', 'numeric', 'Winsorised [-1, 1] drift of the analyst-stddev trail: how consensus noise itself is evolving (state-space Q proxy)'),
+             ('feat_vol_drift', 'numeric', 'Winsorised [-1, 1] drift across the realized-vol term structure (1m -> 1y): how price volatility itself is evolving; sigma_obs widener'),
+             ('feat_pt_drift_n', 'integer', 'Valid consecutive-pair count behind feat_pt_drift (coverage gate)'),
+             ('feat_price_drift_n', 'integer', 'Valid consecutive-pair count behind feat_price_drift (coverage gate)'),
+             ('feat_vol_drift_n', 'integer', 'Valid consecutive-pair count behind feat_vol_drift (coverage gate)'),
+             ('feat_pt_range_norm', 'double precision', 'Inter-analyst target range (high - low) normalised by the mean price target'),
+             ('feat_avg_beta', 'double precision', 'NULL-aware mean of beta_{1y,2y,5y}: the systematic-risk (CAPM) driver of risk_adj_return'),
+             ('feat_mv_ev_drift', 'double precision', 'Winsorised [-1, 1] drift of market_cap / enterprise_value across the fiscal-year trail (de-leveraging / equity re-rating)'),
+             ('feat_mcap_trend_1y', 'double precision', '1y market-cap change ratio: (market_cap - market_cap_neg1fy) / market_cap_neg1fy'),
+             ('feat_mcap_vs_3yavg', 'double precision', 'Market cap relative to its own 3y average'),
+             ('feat_ev_vs_3yavg', 'double precision', 'Enterprise value relative to its own 3y average'),
+             ('feat_mcap_country_r', 'double precision', 'Country market-cap rank score: (100 - market_cap_country_r) / 100, 1 = largest in country'),
+             ('feat_buys', 'integer', 'Buy-side analyst rating count (strong buy + buy)'),
+             ('feat_sells', 'integer', 'Sell-side analyst rating count (strong sell + sell)'),
+             ('feat_pt_achievement_1y', 'double precision', 'Realised achievement of the 1y-ago mean target: 1.0 if reached, else last_price / price_target_1y_ago'),
+             ('feat_pt_accuracy_1y', 'double precision', 'Absolute relative error of the 1y-ago mean target: |last_price - price_target_1y_ago| / |price_target_1y_ago|'),
+             ('feat_pt_range_hit_rate', 'double precision', '1.0 when last_price landed inside the 1y-ago analyst low-high target range, else 0.0')) AS v(column_name, data_type, description)
+WHERE md.column_name = v.column_name;
 
 -- =============================================================================
 -- DEFAULT (MODEL-AGNOSTIC) feature_alias BACKFILL
@@ -1867,38 +1937,50 @@ VALUES
 
 	-- ---- kalman_pt aliases (from mv_pymc_kalman_pt) ----
 	                                 ('price_target',                      'kalman_pt',          'observed_pt',                       'observed'         ),
-	                                 ('last_price',                        'kalman_pt',          'last_price',                        'mutable_predictor'),
+	-- last_price / price_target_stddev: observed alongside the target trail (the
+	-- filter conditions on the realised spot anchor and the evolving consensus
+	-- dispersion rather than treating them as trainable predictors).
+	                                 ('last_price',                        'kalman_pt',          'last_price',                        'observed'         ),
 	                                 ('price_target_high',                 'kalman_pt',          'price_target_high',                 'observed'         ),
 	                                 ('price_target_low',                  'kalman_pt',          'price_target_low',                  'observed'         ),
 	                                 ('price_target_median',               'kalman_pt',          'price_target_median',               'observed'         ),
 	                                 ('price_target_num',                  'kalman_pt',          'n_analysts',                        'constant_data'    ),
-	                                 ('price_target_stddev',               'kalman_pt',          'feat_pt_noise_sigma',               'mutable_predictor'),
-	                                 ('volatility_1m',                     'kalman_pt',          'feat_vol_1m',                       'mutable_predictor'),
-	                                 ('volatility_3m',                     'kalman_pt',          'feat_vol_3m',                       'mutable_predictor'),
-	                                 ('volatility_6m',                     'kalman_pt',          'feat_vol_6m',                       'mutable_predictor'),
-	                                 ('volatility_1y',                     'kalman_pt',          'feat_vol_1y',                       'mutable_predictor'),
-	                                 ('total_return_ytd',                  'kalman_pt',          'feat_total_return_ytd',             'mutable_predictor'),
-	                                 ('total_return_5y',                   'kalman_pt',          'feat_total_return_5y',              'mutable_predictor'),
-	                                 ('total_return_10y',                  'kalman_pt',          'feat_total_return_10y',             'mutable_predictor'),
-	                                 ('tot_return_pct_cagr_3y',            'kalman_pt',          'feat_tr_cagr_3y',                   'mutable_predictor'),
-	                                 ('tot_return_pct_cagr_10y',           'kalman_pt',          'feat_tr_cagr_10y',                  'mutable_predictor'),
-	                                 ('tot_return_pct_cagr_5y',            'kalman_pt',          'feat_tr_cagr_5y',                   'mutable_predictor'),
-	                                 ('tot_return_pct_cagr_1y',            'kalman_pt',          'feat_tr_cagr_1y',                   'mutable_predictor'),
-	                                 ('total_return_1d',                   'kalman_pt',          'feat_total_return_1d',              'mutable_predictor'),
-	                                 ('total_return_5d',                   'kalman_pt',          'feat_total_return_5d',              'mutable_predictor'),
-	                                 ('total_return_1w',                   'kalman_pt',          'feat_total_return_1w',              'mutable_predictor'),
-	                                 ('total_return_1m',                   'kalman_pt',          'feat_total_return_1m',              'mutable_predictor'),
-	                                 ('total_return_3m',                   'kalman_pt',          'feat_total_return_3m',              'mutable_predictor'),
-	                                 ('total_return_6m',                   'kalman_pt',          'feat_total_return_6m',              'mutable_predictor'),
-	                                 ('total_return_1y',                   'kalman_pt',          'feat_total_return_1y',              'mutable_predictor'),
-	                                 ('total_return_3y',                   'kalman_pt',          'feat_total_return_3y',              'mutable_predictor'),
-	                                 ('total_return_mtd',                  'kalman_pt',          'feat_total_return_mtd',             'mutable_predictor'),
-	                                 ('total_return_qtd',                  'kalman_pt',          'feat_total_return_qtd',             'mutable_predictor'),
-	                                 ('total_return_2025',                 'kalman_pt',          'feat_total_return_2025',            'mutable_predictor'),
-	                                 ('total_return_2024',                 'kalman_pt',          'feat_total_return_2024',            'mutable_predictor'),
-	                                 ('total_return_2023',                 'kalman_pt',          'feat_total_return_2023',            'mutable_predictor'),
-	                                 ('total_return_2022',                 'kalman_pt',          'feat_total_return_2022',            'mutable_predictor'),
-	                                 ('total_return_2021',                 'kalman_pt',          'feat_total_return_2021',            'mutable_predictor'),
+	                                 ('price_target_stddev',               'kalman_pt',          'feat_pt_noise_sigma',               'observed'         ),
+	-- Analyst rating-mix carriers copied from the price_target MV: same pct /
+	-- conviction feat aliases, all mutable_predictor (feat_buys / feat_sells are
+	-- multi-source and live as TASK 4 self-rows instead).
+	                                 ('num_hold_ratings',                  'kalman_pt',          'feat_holds',                        'mutable_predictor'),
+	                                 ('num_no_opinion_ratings',            'kalman_pt',          'feat_no_opinion',                   'mutable_predictor'),
+	                                 ('num_strong_buys_ratings',           'kalman_pt',          'feat_analyst_bullish_pct',          'mutable_predictor'),
+	                                 ('num_strong_sell_ratings',           'kalman_pt',          'feat_analyst_bearish_pct',          'mutable_predictor'),
+	                                 ('num_buys_ratings',                  'kalman_pt',          'feat_analyst_neutral_pct',          'mutable_predictor'),
+	                                 ('num_sell_ratings',                  'kalman_pt',          'feat_analyst_conviction',           'mutable_predictor'),
+	                                 ('analyst_rating',                    'kalman_pt',          'feat_analyst_rating',               'mutable_predictor'),
+	-- Total-return family: observed response series for the kalman_pt ICM panel
+	-- (realised return outcomes the fused model can treat as observed state
+	-- evidence) rather than trainable predictors.
+	                                 ('total_return_ytd',                  'kalman_pt',          'feat_total_return_ytd',             'observed'         ),
+	                                 ('total_return_5y',                   'kalman_pt',          'feat_total_return_5y',              'observed'         ),
+	                                 ('total_return_10y',                  'kalman_pt',          'feat_total_return_10y',             'observed'         ),
+	                                 ('tot_return_pct_cagr_3y',            'kalman_pt',          'feat_tr_cagr_3y',                   'observed'         ),
+	                                 ('tot_return_pct_cagr_10y',           'kalman_pt',          'feat_tr_cagr_10y',                  'observed'         ),
+	                                 ('tot_return_pct_cagr_5y',            'kalman_pt',          'feat_tr_cagr_5y',                   'observed'         ),
+	                                 ('tot_return_pct_cagr_1y',            'kalman_pt',          'feat_tr_cagr_1y',                   'observed'         ),
+	                                 ('total_return_1d',                   'kalman_pt',          'feat_total_return_1d',              'observed'         ),
+	                                 ('total_return_5d',                   'kalman_pt',          'feat_total_return_5d',              'observed'         ),
+	                                 ('total_return_1w',                   'kalman_pt',          'feat_total_return_1w',              'observed'         ),
+	                                 ('total_return_1m',                   'kalman_pt',          'feat_total_return_1m',              'observed'         ),
+	                                 ('total_return_3m',                   'kalman_pt',          'feat_total_return_3m',              'observed'         ),
+	                                 ('total_return_6m',                   'kalman_pt',          'feat_total_return_6m',              'observed'         ),
+	                                 ('total_return_1y',                   'kalman_pt',          'feat_total_return_1y',              'observed'         ),
+	                                 ('total_return_3y',                   'kalman_pt',          'feat_total_return_3y',              'observed'         ),
+	                                 ('total_return_mtd',                  'kalman_pt',          'feat_total_return_mtd',             'observed'         ),
+	                                 ('total_return_qtd',                  'kalman_pt',          'feat_total_return_qtd',             'observed'         ),
+	                                 ('total_return_2025',                 'kalman_pt',          'feat_total_return_2025',            'observed'         ),
+	                                 ('total_return_2024',                 'kalman_pt',          'feat_total_return_2024',            'observed'         ),
+	                                 ('total_return_2023',                 'kalman_pt',          'feat_total_return_2023',            'observed'         ),
+	                                 ('total_return_2022',                 'kalman_pt',          'feat_total_return_2022',            'observed'         ),
+	                                 ('total_return_2021',                 'kalman_pt',          'feat_total_return_2021',            'observed'         ),
 	-- Short-term momentum: one_day_pct (last day's price change) -> feat_one_day_return.
 	                                 ('one_day_pct',                       'kalman_pt',          'feat_one_day_return',               'mutable_predictor'),
 	                                 ('price_chg_pct_3m',                       'kalman_pt',          'feat_price_chg_pct_3m',               'mutable_predictor'),
@@ -2060,11 +2142,11 @@ ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.f
                                                       pymc_role     = excluded.pymc_role;
 
 -- Analyst-count trail: fixed per-step participation the panel conditions on ->
--- constant_data. No 6m horizon: price_target_num_6m_ago feeds feat_coverage_drift
--- only and intentionally stays 'derived_input'.
+-- constant_data. Includes the 6m horizon (price_target_num_6m_ago), which also
+-- feeds feat_coverage_drift.
 INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
 SELECT col, 'kalman_pt', col, 'constant_data'
-FROM unnest(ARRAY [ 'price_target_num_1w_ago', 'price_target_num_mtd_ago', 'price_target_num_1m_ago', 'price_target_num_qtd_ago', 'price_target_num_3m_ago', 'price_target_num_ytd_ago', 'price_target_num_1y_ago' ]) AS col
+FROM unnest(ARRAY [ 'price_target_num_1w_ago', 'price_target_num_mtd_ago', 'price_target_num_1m_ago', 'price_target_num_qtd_ago', 'price_target_num_3m_ago', 'price_target_num_6m_ago', 'price_target_num_ytd_ago', 'price_target_num_1y_ago' ]) AS col
 ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias,
                                                       pymc_role     = excluded.pymc_role;
 
@@ -2079,22 +2161,20 @@ ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.f
 -- notebook's `feature_alias IN kalman_df.columns` present-check resolves.
 INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
 SELECT col, 'kalman_pt', col, 'observed'
-FROM unnest(ARRAY [ 'price_5d_ago', 'price_1w_ago', 'price_1m_ago', 'price_3m_ago', 'price_6m_ago', 'price_1y_ago', 'price_3y_ago', 'price_5y_ago', 'price_qtd_ago' ]) AS col
+FROM unnest(ARRAY [ 'price_1d_ago', 'price_5d_ago', 'price_1w_ago', 'price_mtd_ago', 'price_1m_ago', 'price_3m_ago', 'price_6m_ago', 'price_ytd_ago', 'price_1y_ago', 'price_3y_ago', 'price_5y_ago', 'price_qtd_ago' ]) AS col
 ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias,
                                                       pymc_role     = excluded.pymc_role;
 
--- Realized-volatility term-structure: the stochastic-volatility anchor.
--- mv_pymc_kalman_pt emits volatility_{1m,3m,6m,1y} AS feat_vol_{1m,3m,6m,1y}, so
--- without a per-model alias the catalogue's feature_alias falls back to the raw
--- column name ('volatility_1m') and the notebook's `feature_alias IN
--- kalman_df.columns` present-check misses the MV column ('feat_vol_1m'). We map
--- the alias to the MV name and keep the global 'mutable_predictor' role: these
--- columns inform the per-time prior mean (shape) of the log-volatility random walk
--- in KalmanFilterPriceTarget.fit(stochastic_volatility=True) — see
--- _build_stochastic_volatility(). Mirrors the alias-row pattern above.
+-- Analyst-stddev trail: consensus-dispersion *_ago snapshots the panel observes
+-- as the evolving measurement-noise level (paired with the feat_pt_noise_sigma
+-- current snapshot, itself 'observed' above). Emitted un-prefixed by
+-- mv_pymc_kalman_pt so feature_alias == column_name resolves in the notebook
+-- present-check. NOTE: the absolute volatility_{1m,3m,6m,1y} alias rows
+-- (feat_vol_*) were removed — realized vol now enters only via the engineered
+-- feat_vol_drift / feat_vol_drift_n self-rows (TASK 4).
 INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
-SELECT col, 'kalman_pt', 'feat_vol_' || split_part(col, '_', 2), 'mutable_predictor'
-FROM unnest(ARRAY [ 'volatility_1m', 'volatility_3m', 'volatility_6m', 'volatility_1y' ]) AS col
+SELECT col, 'kalman_pt', col, 'observed'
+FROM unnest(ARRAY [ 'price_target_stddev_1w_ago', 'price_target_stddev_mtd_ago', 'price_target_stddev_1m_ago', 'price_target_stddev_qtd_ago', 'price_target_stddev_3m_ago', 'price_target_stddev_6m_ago', 'price_target_stddev_ytd_ago', 'price_target_stddev_1y_ago' ]) AS col
 ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.feature_alias,
                                                       pymc_role     = excluded.pymc_role;
 

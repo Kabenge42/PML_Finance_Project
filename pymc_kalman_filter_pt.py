@@ -17,8 +17,9 @@ The cross-sectional spine is the **fused MvGRW panel model** (Model A + Model B,
 The Kalman-specific change vs. the price-target panel: the risk adjustment is keyed on
 **systematic risk** (``feat_avg_beta``, the NULL-aware mean of ``beta_{1y,2y,5y}``)
 rather than analyst conviction, so the latent target reads ``risk_adj_return =
-expected_return`` *given systematic risk* — replacing the earlier expected-volatility
-(``feat_vol_*``) penalty. Per-ISIN screening signals are drawn from the posterior
+expected_return`` *given systematic risk*; realized volatility enters only through
+the ``feat_vol_drift`` observation-noise widener (drift of the vol term structure,
+not absolute levels). Per-ISIN screening signals are drawn from the posterior
 ``risk_adj_return`` / ``sigma_isin`` / ``nu`` via the canonical structural-TS Monte-Carlo
 helpers (:func:`simulate_lagged_risk_adjusted_returns` / :func:`summarize_mc_returns`).
 
@@ -47,8 +48,10 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util as _ilu
+import json
 import logging
 import os
+import re
 import sys
 import warnings
 from dataclasses import dataclass, field
@@ -98,7 +101,13 @@ except ImportError:  # pragma: no cover - optional dependency
     _HAS_PLOTLY = False
 
 from probabilistic_ml_model._pymc_arviz_compat import extend_datatree
+from probabilistic_ml_model.pymc_models._feature_alignment import (
+    load_feature_metadata_from_db,
+    stamp_feature_provenance,
+)
 from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+    KALMAN_DRIFT_EXCLUDED_FEATURES,
+    KALMAN_TIME_COVARIATE_PREFIX,
     KalmanFilterPriceTarget,
     KalmanPanelInputs,
     build_fused_kalman_pt_model,
@@ -141,8 +150,17 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
                   'feat_pt_high_drift', 'feat_pt_low_drift', 'feat_pt_median_drift',
                   'feat_coverage_drift', 'feat_pt_noise_drift',
                   'feat_pt_noise_sigma', 'feat_pt_range_norm',
-                  'feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y',
+                  # Drift of the realized-vol term structure (1m -> 1y) and its
+                  # valid-pair counter — replaces the absolute feat_vol_* levels.
+                  'feat_vol_drift', 'feat_vol_drift_n',
                   'feat_avg_beta',
+                  # Analyst rating mix / conviction and 1y achievement feats
+                  # (copied from mv_pymc_price_target).
+                  'feat_holds', 'feat_buys', 'feat_sells', 'feat_no_opinion',
+                  'feat_analyst_bullish_pct', 'feat_analyst_bearish_pct',
+                  'feat_analyst_neutral_pct', 'feat_analyst_conviction',
+                  'feat_analyst_rating', 'feat_pt_achievement_1y',
+                  'feat_pt_accuracy_1y', 'feat_pt_range_hit_rate',
                   # Short-term momentum: last day's price change (one_day_pct).
                   'feat_one_day_return','feat_price_chg_pct_3m',
                   'feat_total_return_ytd', 'feat_total_return_5y', 'feat_total_return_10y',
@@ -163,13 +181,34 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
                   # mv_pymc_* view; provenance-only for the fused panel — see §note below).
                   'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg']
 
+# Last-resort drift-feature literal for ``map_state_space_features`` when BOTH
+# the passed catalogue frame and the direct ``vw_pymc_feature_catalogue`` query
+# are unavailable (e.g. offline unit tests). Mirrors the catalogue-driven
+# selection: the ``kalman_pt`` mutable_predictor aliases surviving
+# ``KalmanFilterPriceTarget.select_drift_features`` as of 2026-07-24.
+_DRIFT_FEATURE_FALLBACK: tuple[str, ...] = (
+    # Analyst-target / price / coverage drift trails.
+    'feat_pt_drift', 'feat_price_drift', 'feat_pt_high_drift',
+    'feat_pt_low_drift', 'feat_pt_median_drift', 'feat_coverage_drift',
+    'feat_pt_noise_drift',
+    # Short/mid-horizon momentum.
+    'feat_one_day_return', 'feat_price_chg_pct_3m',
+    # Analyst-sentiment composition (neutral leg dropped as collinear).
+    'feat_analyst_bullish_pct', 'feat_analyst_bearish_pct',
+    'feat_analyst_conviction', 'feat_analyst_rating',
+    # 1y price-target credibility.
+    'feat_pt_achievement_1y', 'feat_pt_accuracy_1y', 'feat_pt_range_hit_rate',
+    # Market-cap / EV size & trend.
+    'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg',
+    'feat_mv_ev_drift',
+)
+
 # Hierarchical classification coords (categorical group effects), distinct from the
 # fiscal-calendar DATE anchors. Both carry pymc_role='coord', but the date anchors
 # define the single-security time axis (sections 11–13) and must NOT be treated as
 # categorical effects in the cross-sectional model.
 CLASSIFICATION_COORDS_ALL = (
-    'region', 'trading_region', 'country', 'trading_country',
-    'exchange', 'unit', 'sector', 'industry', 'style_class', 'size_class'
+    'region','country', 'trading_region','trading_country','exchange', 'sector','industry', 'style_class', 'size_class','unit'
 
 )
 FISCAL_CALENDAR_COLS_ALL = (
@@ -182,18 +221,46 @@ DAY_COUNT_COLS_ALL = (
 )
 
 # Candidate categorical group-effect coords for the hierarchical drift mean (section 5).
-_CANDIDATE_GROUPS = ('region', 'trading_region', 'style_class', 'size_class', 'sector')
+_CANDIDATE_GROUPS = ('region', 'trading_region', 'style_class', 'size_class', 'sector','exchange','unit')
 
 # *_ago price-target history column pattern shared by sections 11–13.
 HIST_COL_PATTERN = (r"^(price_target(_high|_low|_median)?|price)"
                     r"_(5d|1w|1m|3m|6m|1y|3y|5y|mtd|qtd|ytd)_ago$")
 
 # ``display`` exists only in IPython; fall back to ``print`` for plain-script runs.
+# The module-level :func:`display` wrapper below shadows the IPython callable so every
+# displayed DataFrame / Series is also captured by the artifact exporter (section 1c)
+# when :func:`enable_artifact_export` is active.
 try:  # pragma: no cover - depends on runtime
-    from IPython.display import display
+    from IPython.display import display as _display_impl
 except ImportError:  # pragma: no cover
-    def display(obj: object) -> None:
+    def _display_impl(obj: object) -> None:
         print(obj)
+
+
+def display(obj: object, *, label: Optional[str] = None) -> None:
+    """Show ``obj`` in the front-end, snapshotting tables when artifact export is on.
+
+    DataFrames / Series routed through the notebook ``display`` are transient
+    render-time artifacts; when artifact export is enabled they are additionally
+    written as CSV snapshots named after the active :func:`export_section`. Figures
+    (including the ``_safe_show`` fallback path) pass straight through — only
+    pandas objects are captured here, so a figure can never be exported twice.
+
+    Parameters
+    ----------
+    obj
+        Object to display.
+    label
+        Optional filename slug for the CSV snapshot; auto-numbered when omitted.
+    """
+    if isinstance(obj, (pd.DataFrame, pd.Series)):
+        try:
+            if get_export_state().enabled:
+                _export_dataframe(obj, _next_stem(label or 'table'))
+        except Exception as exc:  # pragma: no cover - export is best-effort
+            logger.debug("Table export skipped: %r", exc)
+    _display_impl(obj)
 
 
 # =============================================================================
@@ -307,6 +374,87 @@ def _forest_height_px(n_rows: int, *, per_row: int = 26, base: int = 190,
     return int(np.clip(max(int(n_rows), 1) * per_row + base, min_px, max_px))
 
 
+# --- Diagnostic facet-grid sizing (SSOT for the §9 run_diagnostics panels) ----
+# arviz-plots fans a vector variable (e.g. the ~40-element ``beta`` drift-slope
+# vector) into one facet per element and wraps the facets into a grid, so panel
+# heights must budget for the FACET count, not the variable count. Every §9
+# grid (trace / rank-dist / prior-posterior / ESS evolution) derives its
+# geometry from these two knobs so the diagnostics share one dynamic rule.
+_DIAG_FACET_COLS = 4  # facet-wrap width of the wrapped diagnostic grids
+_DIAG_ROW_PX = 260    # vertical budget per grid row (panel + axes + title)
+
+
+def _n_facets(posterior, var_names: Sequence[str]) -> int:
+    """Total non-sample elements (= plot facets) across ``var_names``.
+
+    Scalars count 1; a vector variable contributes one facet per element of
+    its non-sample dims (e.g. ``beta`` over ``drift_feature``). Names absent
+    from ``posterior`` are skipped.
+    """
+    total = 0
+    for v in var_names:
+        if v not in posterior.data_vars:
+            continue
+        da = posterior[v]
+        total += int(np.prod([da.sizes[d] for d in da.dims
+                              if d not in ('chain', 'draw')], initial=1))
+    return total
+
+
+def _facet_grid_height_px(n_facets: int, *, cols: int = _DIAG_FACET_COLS,
+                          per_row: int = _DIAG_ROW_PX, base: int = 170,
+                          min_px: int = 420, max_px: int = 6200) -> int:
+    """Height (px) for a wrapped facet grid from its facet count.
+
+    ``cols`` is the facet-wrap width. The raised ``max_px`` (vs
+    :func:`_forest_height_px`) lets long grids scroll in the notebook instead
+    of compressing dozens of facets into a fixed-height banner.
+    """
+    n_rows = int(np.ceil(max(int(n_facets), 1) / max(int(cols), 1)))
+    return int(np.clip(n_rows * per_row + base, min_px, max_px))
+
+
+def _diag_figure_kwargs(posterior, var_names: Sequence[str],
+                        *, cols: int = _DIAG_FACET_COLS,
+                        per_row: int = _DIAG_ROW_PX) -> dict[str, Any]:
+    """Standardised ``figure_kwargs`` for the §9 diagnostic facet grids."""
+    return _azp_figure_kwargs(
+        _facet_grid_height_px(_n_facets(posterior, var_names),
+                              cols=cols, per_row=per_row))
+
+
+_RANK_DIST_ROW_PX = 220  # vertical budget per compact rank-dist row (dist | rank)
+
+
+def _rank_dist_figure_kwargs(var_names: Sequence[str]) -> dict[str, Any]:
+    """``figure_kwargs`` for the §9.3b compact ``plot_rank_dist`` panels.
+
+    ``azp.plot_rank_dist(compact=True)`` pins exactly one grid row per
+    *variable* (``rows=['__variable__']``, dist | rank columns) and overlays a
+    vector variable's elements within that single row — unlike ``plot_trace``,
+    which fans elements into wrapped facets. Height must therefore budget the
+    variable count, not the element count :func:`_n_facets` reports (element
+    sizing inflated a one-row vector panel to ~2800 px).
+    """
+    return _azp_figure_kwargs(
+        _facet_grid_height_px(len(var_names), cols=1,
+                              per_row=_RANK_DIST_ROW_PX, base=150, min_px=360))
+
+
+def _polish_facet_axes(pc) -> None:
+    """Re-enable the tick labels Plotly culls on small facets; pad the margins.
+
+    Best-effort cosmetic pass shared by the §9 grids so every facet keeps
+    visible x/y axes regardless of how many panels the grid wraps.
+    """
+    fig = _plotly_figure_of(pc)
+    if fig is None:
+        return
+    fig.update_xaxes(showticklabels=True, tickfont=dict(size=9))
+    fig.update_yaxes(showticklabels=True, tickfont=dict(size=9))
+    fig.update_layout(margin=dict(t=70, b=50))
+
+
 def _mpl_figsize(height_frac: float = 0.45, *, width_frac: float = 1.0) -> tuple[float, float]:
     """Matplotlib ``figsize`` (inches) derived from the shared pixel width.
 
@@ -316,7 +464,7 @@ def _mpl_figsize(height_frac: float = 0.45, *, width_frac: float = 1.0) -> tuple
     """
     dpi = float(plt.rcParams.get('figure.dpi', 100.0)) or 100.0
     w_in = _display_width_px() * float(np.clip(width_frac, 0.2, 1.0)) / dpi
-    return (w_in, max(2.0, w_in * float(height_frac)))
+    return w_in, max(2.0, w_in * float(height_frac))
 
 
 def _plotly_figure_of(obj) -> Optional[object]:
@@ -371,7 +519,7 @@ def _autosize_plotly(obj) -> None:
         pass
 
 
-def _show_fig(fig) -> None:
+def _show_fig(fig, *, label: Optional[str] = None) -> None:
     """Surface a Plotly :class:`~plotly.graph_objects.Figure` in any front-end.
 
     Thin wrapper over :func:`_render_plotly` (dark ``arviz-tumma`` template + a silent
@@ -384,8 +532,10 @@ def _show_fig(fig) -> None:
     fig
         The Plotly figure to surface (typically the first element of a
         :func:`plot_kalman_forecast` return tuple).
+    label
+        Optional filename slug forwarded to the artifact exporter.
     """
-    _render_plotly(fig)
+    _render_plotly(fig, label=label)
 
 
 def _present_vars(idata, candidates: Sequence[str]) -> list[str]:
@@ -896,7 +1046,9 @@ def build_noise_wideners(df: pd.DataFrame, *, fillna: bool = True) -> dict[str, 
     SINGLE SOURCE OF TRUTH for the observation-noise wideners shared by the §2.4c EDA
     panel and the §4.2 model containers, so the picture and the likelihood agree by
     construction. Each quantity is returned in the units the measurement model consumes
-    (``sigma_obs = sigma_obs_base * (1 + range + cv + 0.5*vol) / sqrt(n_analysts)``).
+    (``sigma_obs = sigma_obs_base * (1 + range + cv + 0.5*max(vol_drift, 0)) /
+    sqrt(n_analysts)`` — rising-vol regimes widen the observation noise; falling or
+    flat vol contributes 0 via the non-negativity clip).
 
     Parameters
     ----------
@@ -911,13 +1063,12 @@ def build_noise_wideners(df: pd.DataFrame, *, fillna: bool = True) -> dict[str, 
     Returns
     -------
     dict[str, np.ndarray]
-        Keys ``range``, ``cv``, ``vol``, ``sqrt_n`` plus the realised per-row
-        ``multiplier`` = ``(1 + range + cv + 0.5*vol) / sqrt_n``.
+        Keys ``range``, ``cv``, ``vol_drift``, ``sqrt_n`` plus the realised per-row
+        ``multiplier`` = ``(1 + range + cv + 0.5*max(vol_drift, 0)) / sqrt_n``.
     """
     range_col = 'feat_pt_range_norm' if 'feat_pt_range_norm' in df.columns else None
     sigma_col = 'feat_pt_noise_sigma' if 'feat_pt_noise_sigma' in df.columns else None
-    vol_cols = [c for c in ('feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y')
-                if c in df.columns]
+    vol_cols = [c for c in ('feat_vol_drift',) if c in df.columns]
 
     def _col(name):
         s = df[name].astype('float64') if name and name in df.columns \
@@ -954,28 +1105,7 @@ def build_noise_wideners(df: pd.DataFrame, *, fillna: bool = True) -> dict[str, 
                 + 0.5 * vol_s.clip(lower=0).fillna(0).to_numpy()) / sqrt_n
 
     return {'range': range_s.to_numpy(), 'cv': cv_s.to_numpy(),
-            'vol': vol_s.to_numpy(), 'sqrt_n': sqrt_n, 'multiplier': mult}
-
-
-def build_realized_vol_path(vol_term_structure, dates) -> Optional[np.ndarray]:
-    """Map a 1m/3m/6m/1y volatility term-structure onto an irregular asof_date grid.
-
-    Returns a strictly-positive per-time realized-volatility anchor aligned to
-    ``dates`` (recent dates -> short-horizon vol, older dates -> long-horizon vol, via
-    linear interpolation in lookback-days). Only the *shape* informs the SV log-vol
-    prior, so the units of ``vol_term_structure`` (percent vs decimal) are irrelevant.
-    Returns ``None`` when no finite, positive term-structure point is available.
-    """
-    horizons = np.array([30.0, 90.0, 180.0, 365.0])  # 1m, 3m, 6m, 1y in days
-    vols = np.asarray(vol_term_structure, dtype='float64')
-    ok = np.isfinite(vols) & (vols > 0)
-    if not ok.any():
-        return None
-    d = pd.DatetimeIndex(dates)
-    lookback = (d.max() - d).days.to_numpy().astype('float64')  # 0 at the latest date
-    order = np.argsort(horizons[ok])
-    rv = np.interp(lookback, horizons[ok][order], vols[ok][order])  # clamps at the ends
-    return np.clip(rv, 1e-6, None)
+            'vol_drift': vol_s.to_numpy(), 'sqrt_n': sqrt_n, 'multiplier': mult}
 
 
 def _resolve_env_setting(key: str, env_file: str = 'environment_variables.txt',
@@ -1098,6 +1228,430 @@ def fetch_history_columns(engine, keep: Sequence[str],
 
 
 # =============================================================================
+# 1c. Artifact export — figures / tables / DataTrees -> KALMAN_PT_RESULTS_DIR
+# =============================================================================
+# Every figure shown through the :func:`_safe_show` funnel (which also serves
+# :func:`_render_plotly` / :func:`_show_fig`), every DataFrame routed through
+# :func:`display`, and the bulk data artifacts returned by :func:`main` are
+# persisted under ``KALMAN_PT_RESULTS_DIR`` (env / environment_variables.txt,
+# default ``pymc_kalman_filter_pt_results`` next to this script):
+#
+# * figures       -> PNG via plotly/kaleido or matplotlib; self-contained HTML
+#                    fallback when kaleido / Chromium is unavailable
+# * DataFrames    -> CSV (JSON additionally where requested)
+# * DataTrees     -> NetCDF (h5netcdf) + compact per-group JSON summary
+#
+# Exports are side effects in the same sense as rendering: every writer is
+# guarded and logs a warning instead of raising, so a failed export can never
+# abort the workflow (mirrors the ``_safe_show`` philosophy).
+_DEFAULT_RESULTS_DIRNAME = 'pymc_kalman_filter_pt_results'
+_DEFAULT_EXPORT_PNG_WIDTH = 1400
+_DEFAULT_EXPORT_PNG_HEIGHT = 780
+_DEFAULT_EXPORT_PNG_SCALE = 2.0
+_DEFAULT_EXPORT_DPI = 150
+_EXPORT_SLUG_MAXLEN = 48
+# DataTree groups that get an ``azs.summary`` statistics table in the JSON
+# sidecar. ``posterior_predictive`` / ``observed_data`` are inventoried only:
+# a second full ESS/R-hat sweep over the (chain, draw, isin, y_series) PPC
+# tensor would roughly double the §9 diagnostics runtime for no screening value.
+_DATATREE_SUMMARY_GROUPS = ('posterior', 'prior', 'predictions')
+
+
+@dataclass
+class _ExportState:
+    """Mutable module-level artifact-export state (lazy singleton).
+
+    Attributes
+    ----------
+    root
+        Resolved output directory (``KALMAN_PT_RESULTS_DIR``).
+    enabled
+        Master switch; all export helpers no-op while ``False``.
+    section
+        Active filename prefix, managed by :func:`export_section`.
+    counters
+        Per-section running counter for auto-numbered artifact stems.
+    png_ok
+        Memo flag — flips ``False`` after the first kaleido/Chromium failure so
+        every subsequent Plotly figure goes straight to the HTML fallback.
+    """
+
+    root: Path
+    enabled: bool = False
+    section: str = '00_misc'
+    counters: dict[str, int] = field(default_factory=dict)
+    png_ok: bool = True
+
+
+_export_state_instance: Optional[_ExportState] = None
+
+
+def get_export_state() -> _ExportState:
+    """Return the lazy export-state singleton, resolving the output directory once.
+
+    ``KALMAN_PT_RESULTS_DIR`` is resolved via :func:`_resolve_env_setting` (env →
+    ``environment_variables.txt`` → default). A relative value is anchored at this
+    script's directory, so the default lands at
+    ``<project root>/pymc_kalman_filter_pt_results`` regardless of the CWD.
+    """
+    global _export_state_instance
+    if _export_state_instance is None:
+        raw = _resolve_env_setting('KALMAN_PT_RESULTS_DIR',
+                                   default=_DEFAULT_RESULTS_DIRNAME)
+        root = Path(raw)
+        if not root.is_absolute():
+            root = Path(__file__).resolve().parent / root
+        _export_state_instance = _ExportState(root=root)
+    return _export_state_instance
+
+
+def reset_export_state() -> None:
+    """Reset the export-state singleton (re-reads ``KALMAN_PT_RESULTS_DIR``)."""
+    global _export_state_instance
+    _export_state_instance = None
+
+
+def enable_artifact_export(enabled: bool = True) -> None:
+    """Turn artifact export on (or off) for the current process."""
+    get_export_state().enabled = enabled
+
+
+@contextlib.contextmanager
+def export_section(label: str):
+    """Scope auto-generated artifact filenames to a workflow section.
+
+    Sets the ``{section}`` prefix used by the auto-capture hooks in
+    :func:`_safe_show` and :func:`display` while the block is active; restores
+    the previous section on exit (nestable). Entering a section never touches
+    the filesystem.
+
+    Parameters
+    ----------
+    label
+        Section prefix, e.g. ``'09_diagnostics'``.
+    """
+    state = get_export_state()
+    prev = state.section
+    state.section = label
+    try:
+        yield
+    finally:
+        state.section = prev
+
+
+def _slugify(raw: str) -> str:
+    """Compress ``raw`` to a lowercase ``[a-z0-9_]`` filename slug."""
+    parts = re.findall(r'[a-z0-9]+', str(raw).lower())
+    return '_'.join(parts)[:_EXPORT_SLUG_MAXLEN].strip('_')
+
+
+def _export_path(stem: str, ext: str) -> Path:
+    """Return ``root/stem.ext``, creating the results directory on first use."""
+    state = get_export_state()
+    state.root.mkdir(parents=True, exist_ok=True)
+    return state.root / f"{stem}.{ext}"
+
+
+def _next_stem(label: Optional[str] = None, obj: object = None) -> str:
+    """Return the next auto-numbered ``{section}_{NN}[_{slug}]`` filename stem.
+
+    The slug comes from ``label`` when given, else (best-effort) from the Plotly
+    figure title of ``obj`` — meaningful names for free on most panels without
+    touching call sites.
+    """
+    state = get_export_state()
+    n = state.counters.get(state.section, 0) + 1
+    state.counters[state.section] = n
+    slug = label
+    if slug is None and obj is not None:
+        try:
+            slug = obj.layout.title.text  # type: ignore[attr-defined]
+        except Exception:
+            slug = None
+    stem = f"{state.section}_{n:02d}"
+    if slug:
+        slug = _slugify(slug)
+        if slug:
+            stem = f"{stem}_{slug}"
+    return stem
+
+
+def _write_plotly_figure(fig: object, stem: str) -> None:
+    """Write a Plotly figure as PNG, falling back to self-contained HTML.
+
+    PNG needs ``kaleido`` + a Chromium binary (``plotly_get_chrome -y``). The
+    first failure flips :attr:`_ExportState.png_ok` so later figures skip the
+    doomed ``write_image`` attempt. ``_autosize_plotly`` clears ``layout.width``
+    before display, so an explicit pixel width is always passed.
+    """
+    state = get_export_state()
+    if state.png_ok:
+        try:
+            fig.update_layout(template='arviz-tumma')  # exported == displayed theme
+            fig.write_image(
+                str(_export_path(stem, 'png')),
+                width=int(fig.layout.width or _DEFAULT_EXPORT_PNG_WIDTH),
+                height=int(fig.layout.height or _DEFAULT_EXPORT_PNG_HEIGHT),
+                scale=_DEFAULT_EXPORT_PNG_SCALE,
+            )
+            return
+        except Exception as exc:
+            state.png_ok = False
+            logger.warning(
+                "Plotly PNG export unavailable (install kaleido + run "
+                "`plotly_get_chrome -y`): %r -- falling back to HTML", exc)
+    fig.write_html(str(_export_path(stem, 'html')),
+                   include_plotlyjs=True, full_html=True)
+
+
+def _export_figure(obj: object, *, label: Optional[str] = None) -> None:
+    """Persist any displayed figure object under the active export section.
+
+    Handles a raw Plotly figure or an ``arviz_plots`` PlotCollection (both via
+    :func:`_plotly_figure_of`) and matplotlib figures (``savefig``; the dark
+    ``savefig.facecolor`` comes from :func:`setup_plotting`). No-op while export
+    is disabled; never raises.
+    """
+    state = get_export_state()
+    if not state.enabled or obj is None:
+        return
+    try:
+        fig = _plotly_figure_of(obj)
+        stem = _next_stem(label, fig if fig is not None else obj)
+        if fig is not None:
+            _write_plotly_figure(fig, stem)
+        elif hasattr(obj, 'viz') and hasattr(obj, 'savefig'):
+            # PlotCollection whose figure node could not be resolved directly.
+            ext = 'png' if state.png_ok else 'html'
+            obj.savefig(str(_export_path(stem, ext)))
+        elif hasattr(obj, 'savefig'):  # matplotlib Figure
+            obj.savefig(_export_path(stem, 'png'),
+                        dpi=_DEFAULT_EXPORT_DPI, bbox_inches='tight')
+        else:
+            logger.debug("Figure export skipped (unrecognised type %s)", type(obj))
+    except Exception as exc:
+        logger.warning("Figure export skipped (%s): %r", label or '?', exc)
+
+
+def _export_dataframe(df: object, name: str, *,
+                      index: Optional[bool] = None,
+                      also_json: bool = False) -> None:
+    """Write a DataFrame / Series as ``{name}.csv`` (and optionally ``.json``).
+
+    Parameters
+    ----------
+    df
+        Frame or Series to export (Series are exported via ``to_frame()``).
+    name
+        Full filename stem (caller supplies any section prefix).
+    index
+        Include the index column; ``None`` auto-includes it whenever the index
+        is not a bare RangeIndex (e.g. ``azs.summary`` variable-name indexes).
+    also_json
+        Additionally write JSON records (``default_handler=str`` guards the
+        Timestamp columns).
+    """
+    state = get_export_state()
+    if not state.enabled or df is None:
+        return
+    try:
+        frame = df.to_frame() if isinstance(df, pd.Series) else df
+        if index is None:
+            index = not isinstance(frame.index, pd.RangeIndex)
+        frame.to_csv(_export_path(name, 'csv'), index=index)
+        if also_json:
+            frame.to_json(_export_path(name, 'json'), orient='records',
+                          date_format='iso', default_handler=str, indent=2)
+        logger.info("Exported dataframe %s (%d rows)", name, len(frame))
+    except Exception as exc:
+        logger.warning("DataFrame export skipped (%s): %r", name, exc)
+
+
+def _export_datatree(dt: object, name: str) -> None:
+    """Write a DataTree as ``{name}.nc`` plus a compact ``{name}_summary.json``.
+
+    The NetCDF file (h5netcdf engine) is the full-fidelity, reload-with-arviz
+    artifact. The JSON sidecar carries a per-group ``data_vars``/``sizes``
+    inventory and, for the groups in :data:`_DATATREE_SUMMARY_GROUPS`, the
+    ``azs.summary`` statistics table. Each part is individually guarded.
+    """
+    state = get_export_state()
+    if not state.enabled or dt is None:
+        return
+    try:
+        path = _export_path(name, 'nc')
+        dt.to_netcdf(path, engine='h5netcdf')
+        logger.info("Exported DataTree %s (%.1f MB)", name,
+                    path.stat().st_size / 1e6)
+    except Exception as exc:
+        logger.warning("DataTree NetCDF export skipped (%s): %r", name, exc)
+    summary: dict[str, Any] = {'groups': {}}
+    try:
+        for group, node in (getattr(dt, 'children', {}) or {}).items():
+            ds = getattr(node, 'ds', node)
+            entry: dict[str, Any] = {
+                'data_vars': [str(v) for v in getattr(ds, 'data_vars', [])],
+                'sizes': {str(k): int(v)
+                          for k, v in dict(getattr(ds, 'sizes', {})).items()},
+            }
+            if group in _DATATREE_SUMMARY_GROUPS and {'chain', 'draw'} <= set(entry['sizes']):
+                try:
+                    stats = azs.summary(dt, group=str(group))
+                    entry['summary'] = stats.reset_index().to_dict(orient='records')
+                except Exception as exc:
+                    logger.debug("azs.summary skipped for %s/%s: %r", name, group, exc)
+            summary['groups'][str(group)] = entry
+        _export_json(summary, f"{name}_summary")
+    except Exception as exc:
+        logger.warning("DataTree summary export skipped (%s): %r", name, exc)
+
+
+def _export_json(payload: Optional[dict], name: str) -> None:
+    """Write ``payload`` as pretty-printed ``{name}.json`` (``default=str``)."""
+    state = get_export_state()
+    if not state.enabled or payload is None:
+        return
+    try:
+        with open(_export_path(name, 'json'), 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh, indent=2, default=str)
+        logger.info("Exported json %s", name)
+    except Exception as exc:
+        logger.warning("JSON export skipped (%s): %r", name, exc)
+
+
+def _export_context(ctx: Optional[dict], name: str) -> None:
+    """Export a section context dict by underlying value type.
+
+    DataFrames/Series -> ``{name}_{key}.csv``; DataTrees -> NetCDF + summary;
+    Datasets -> NetCDF; small ndarrays / DatetimeIndexes / scalars are collected
+    into ``{name}_meta.json`` (large arrays become dtype/shape stubs, model
+    objects are recorded by type only). ``None`` and the partial early-exit
+    dicts (e.g. §12's) are handled — every key is optional.
+    """
+    state = get_export_state()
+    if not state.enabled or not ctx:
+        return
+    meta: dict[str, Any] = {}
+    for key, val in ctx.items():
+        try:
+            if isinstance(val, (pd.DataFrame, pd.Series)):
+                _export_dataframe(val, f"{name}_{key}")
+            elif isinstance(val, xr.DataTree):
+                _export_datatree(val, f"{name}_{key}")
+            elif isinstance(val, xr.Dataset):
+                val.to_netcdf(_export_path(f"{name}_{key}", 'nc'), engine='h5netcdf')
+            elif isinstance(val, xr.DataArray):
+                logger.debug("Context %s.%s: raw DataArray skipped", name, key)
+            elif isinstance(val, np.ndarray):
+                meta[key] = (val.tolist() if val.size <= 10_000
+                             else {'dtype': str(val.dtype), 'shape': list(val.shape)})
+            elif isinstance(val, pd.DatetimeIndex):
+                meta[key] = [str(v) for v in val]
+            elif isinstance(val, (str, int, float, bool, type(None), list, dict)):
+                meta[key] = val
+            else:
+                meta[key] = f"<{type(val).__module__}.{type(val).__qualname__}>"
+        except Exception as exc:
+            logger.warning("Context export skipped (%s.%s): %r", name, key, exc)
+    _export_json(meta, f"{name}_meta")
+
+
+def export_all_artifacts(artifacts: dict, *, results_dir: Optional[str] = None) -> None:
+    """Export the :func:`main` artifact dict to ``KALMAN_PT_RESULTS_DIR``.
+
+    Persists the durable data artifacts (the render-time figure/table snapshots
+    are captured separately by the :func:`_safe_show` / :func:`display` hooks):
+
+    * ``prior_idata`` / ``idata`` DataTrees -> NetCDF + JSON summary
+    * ``panel.frame``, ``results``, ``kalman_results``, ``screen.mc_summary``,
+      ``risk_book.analytics`` / ``.book`` -> CSV (``results`` also JSON)
+    * ``risk_book.summary`` and the ``universe_fit`` scalars -> JSON
+    * ``universe_fit.idata`` / ``.pred.predictions`` -> NetCDF
+
+    The raw ``screen.eu`` / ``screen.ept`` posterior draws (~200 MB each) are
+    skipped unless ``KALMAN_PT_EXPORT_DRAWS=1``, in which case they are bundled
+    into ``10_screen_posterior_draws.nc``; their decision content is already in
+    ``10_screen_results.csv`` and the posterior NetCDF.
+
+    Callable on ``main(export_results=False)`` output — export is force-enabled
+    for the duration of this call only. Missing keys / ``None`` values are
+    skipped silently; individual failures log warnings and never raise.
+
+    Parameters
+    ----------
+    artifacts
+        The dict returned by :func:`main`.
+    results_dir
+        Optional override of the resolved output directory for this call.
+    """
+    state = get_export_state()
+    prev_root, prev_enabled = state.root, state.enabled
+    if results_dir is not None:
+        state.root = Path(results_dir)
+    state.enabled = True
+    try:
+        _export_datatree(artifacts.get('prior_idata'), '06_prior_idata')
+        _export_datatree(artifacts.get('idata'), '07_posterior_idata')
+
+        panel = artifacts.get('panel')
+        if getattr(panel, 'frame', None) is not None:
+            _export_dataframe(panel.frame, '04_panel_frame')
+
+        _export_dataframe(artifacts.get('results'), '10_screen_results',
+                          also_json=True)
+        screen = artifacts.get('screen')
+        if screen is not None:
+            _export_dataframe(getattr(screen, 'mc_summary', None), '10_screen_mc_summary')
+            if _resolve_env_setting('KALMAN_PT_EXPORT_DRAWS', default='0') == '1':
+                try:
+                    xr.Dataset({'expected_upside': screen.eu,
+                                'expected_pt': screen.ept}).to_netcdf(
+                        _export_path('10_screen_posterior_draws', 'nc'),
+                        engine='h5netcdf')
+                except Exception as exc:
+                    logger.warning("Posterior-draw export skipped: %r", exc)
+            else:
+                logger.info("Raw eu/ept posterior draws skipped "
+                            "(set KALMAN_PT_EXPORT_DRAWS=1 to export as NetCDF)")
+
+        risk_book = artifacts.get('risk_book')
+        if risk_book is not None:
+            _export_dataframe(getattr(risk_book, 'analytics', None), '10b_risk_analytics')
+            _export_dataframe(getattr(risk_book, 'book', None), '10b_risk_book')
+            _export_json(dict(getattr(risk_book, 'summary', {}) or {}), '10b_risk_summary')
+
+        _export_dataframe(artifacts.get('kalman_results'), '10c_kalman_results')
+
+        fit = artifacts.get('universe_fit')
+        if fit is not None:
+            _export_datatree(getattr(fit, 'idata', None), '10k_universe_idata')
+            preds = getattr(getattr(fit, 'pred', None), 'predictions', None)
+            if preds is not None:
+                try:
+                    preds.to_netcdf(_export_path('10k_universe_predictions', 'nc'),
+                                    engine='h5netcdf')
+                except Exception as exc:
+                    logger.warning("Universe-prediction export skipped: %r", exc)
+            fit_meta: dict[str, Any] = {
+                'horizons_days': getattr(fit, 'horizons_days', None),
+                'fiscal_dates': [str(d) for d in getattr(fit, 'fiscal_dates', []) or []],
+                'labels': getattr(fit, 'labels', None),
+                'last_obs': str(getattr(fit, 'last_obs', None)),
+                'last_price': getattr(fit, 'last_price', None),
+            }
+            with contextlib.suppress(Exception):
+                fit_meta['fit_kind'] = fit.fit_kind
+                fit_meta['n_divergences'] = int(fit.n_divergences)
+            _export_json(fit_meta, '10k_universe_fit_meta')
+
+        logger.info("Artifact export complete -> %s", state.root)
+    except Exception as exc:  # pragma: no cover - belt and braces
+        logger.warning("export_all_artifacts aborted early: %r", exc)
+    finally:
+        state.root, state.enabled = prev_root, prev_enabled
+
+
+# =============================================================================
 # Data loading + feature-role resolution
 # =============================================================================
 def load_kalman_df(engine) -> pd.DataFrame:
@@ -1155,8 +1709,11 @@ def resolve_feature_roles(kalman_df: pd.DataFrame,
     coord_cols = present.loc[present['pymc_role'] == 'coord', 'feature_alias'].tolist()
     response_cols = present.loc[present['pymc_role'].isin(['response', 'observed']), 'feature_alias'].tolist()
 
+    # Fallback must not re-promote columns the catalogue now assigns to the
+    # observed/response side (e.g. feat_pt_noise_sigma, feat_total_return_*).
     for col in KNOWN_FEATURES:
-        if col in kalman_df.columns and col not in predictor_cols:
+        if (col in kalman_df.columns and col not in predictor_cols
+                and col not in response_cols):
             predictor_cols.append(col)
     if 'observed_pt' in kalman_df.columns and 'observed_pt' not in response_cols:
         response_cols.append('observed_pt')
@@ -1201,19 +1758,27 @@ _EDA_DRIVER_SPECS: tuple[tuple[str, str], ...] = (
     ('feat_one_day_return', 'one-day return — short-horizon momentum'),
     ('feat_price_chg_pct_3m', 'three-month return — mid-horizon momentum'),
     ('noise_cv', 'consensus noise CV — sigma_obs widener'),
-    ('feat_vol_6m', '6m volatility — sigma_obs widener'),
+    ('feat_vol_drift', 'realized-vol drift — sigma_obs widener'),
     ('feat_total_return_ytd', 'YTD total return — momentum'),
+    # Catalogue mutable_predictors integrated into the drift design matrix.
+    ('feat_analyst_bullish_pct', 'bullish rating share — analyst sentiment'),
+    ('feat_analyst_conviction', 'net rating conviction — analyst sentiment'),
+    ('feat_pt_achievement_1y', '1y PT achievement — target credibility'),
+    ('feat_pt_accuracy_1y', '1y PT abs error — target credibility'),
+    ('feat_mcap_trend_1y', 'mcap 1y trend — size re-rating'),
 )
 
 
-def _render_plotly(fig: object, *, height: Optional[int] = None) -> None:
+def _render_plotly(fig: object, *, height: Optional[int] = None,
+                   label: Optional[str] = None) -> None:
     """Render a Plotly figure in the notebook (side-effecting; dark theme).
 
     Applies the ``arviz-tumma`` dark template so every hand-built Plotly panel matches
     the ArviZ figures (which inherit it via ``plotly.io.templates.default``, pinned in
     :func:`setup_plotting`). Mirrors the ``pc.show()`` convention used throughout the
     module; falls back to :func:`display` and is a silent no-op when no renderer is
-    available, so a headless / plain-script run never raises.
+    available, so a headless / plain-script run never raises. ``label`` is forwarded
+    to the artifact exporter via :func:`_safe_show`.
     """
     if fig is None:
         return
@@ -1221,10 +1786,11 @@ def _render_plotly(fig: object, *, height: Optional[int] = None) -> None:
     if height is not None:
         fig.update_layout(height=height)
     _autosize_plotly(fig)
-    _safe_show(fig, _fallback=display)
+    _safe_show(fig, label=label, _fallback=display)
 
 
-def _safe_show(obj: object, *, _fallback: Optional[object] = None) -> None:
+def _safe_show(obj: object, *, label: Optional[str] = None,
+               _fallback: Optional[object] = None) -> None:
     """Display any Plotly figure or ``arviz_plots`` PlotCollection, swallowing transport errors.
 
     IDE-managed display back-ends (e.g. PyCharm's DataLore/Kaleido helper) push the
@@ -1234,10 +1800,17 @@ def _safe_show(obj: object, *, _fallback: Optional[object] = None) -> None:
     workflow. Handles both :class:`arviz_plots.PlotCollection` (``.show()``) and Plotly
     figures; ``pc.show()`` and raw ``fig.show()`` both route through this one guard.
 
+    This is also the single auto-capture point for artifact export: every displayed
+    figure is handed to :func:`_export_figure` *before* ``show()``, so a display
+    transport failure still yields the exported file.
+
     Parameters
     ----------
     obj
         The figure or PlotCollection to display. ``None`` is a no-op.
+    label
+        Optional filename slug for the exported artifact; auto-derived from the
+        figure title (or just auto-numbered) when omitted.
     _fallback
         Optional callable tried when ``obj.show()`` raises — used by
         :func:`_render_plotly` to fall back to :func:`display` for a returned figure.
@@ -1245,6 +1818,7 @@ def _safe_show(obj: object, *, _fallback: Optional[object] = None) -> None:
     if obj is None:
         return
     _autosize_plotly(obj)  # width tracks the editor pane; heights stay explicit
+    _export_figure(obj, label=label)
     try:
         obj.show()
     except Exception as exc:  # pragma: no cover - display transport is environment-dependent
@@ -1329,14 +1903,14 @@ def _plot_upside_vs_drivers_plotly(kalman_df: pd.DataFrame) -> None:
 
 
 def _plot_upside_vs_signals_mpl(kalman_df: pd.DataFrame) -> None:
-    """Static seaborn fallback for §2.4e (upside vs consensus dispersion / 6m vol)."""
+    """Static seaborn fallback for §2.4e (upside vs consensus dispersion / vol drift)."""
     _g = kalman_df[(kalman_df['observed_pt'] > 0) & (kalman_df['last_price'] > 0)].copy()
     _g['upside_pct'] = ((_g['observed_pt'] / _g['last_price'] - 1.0) * 100.0).clip(-100, 500)
     _g['sector'] = _g.get('sector', pd.Series('Unknown', index=_g.index)).fillna('Unknown')
     if 'feat_pt_noise_sigma' in _g.columns:
         _g['noise_cv'] = (_g['feat_pt_noise_sigma'].astype('float64')
                           / _g['last_price'].clip(lower=1e-9)).clip(0, 1)
-    _g['vol_6m'] = _g.get('feat_vol_6m', pd.Series(np.nan, index=_g.index)).astype('float64')
+    _g['vol_drift'] = _g.get('feat_vol_drift', pd.Series(np.nan, index=_g.index)).astype('float64')
 
     fig, axes = plt.subplots(1, 2, figsize=_mpl_figsize(0.42), sharey=True,
                              layout='constrained')
@@ -1352,14 +1926,14 @@ def _plot_upside_vs_signals_mpl(kalman_df: pd.DataFrame) -> None:
         axes[0].set_title('Upside vs consensus dispersion')
         axes[0].set_xlim(0, 0.5)
     for sec, sub in _gs.groupby('sector'):
-        axes[1].scatter(sub['vol_6m'], sub['upside_pct'], s=8, alpha=0.4,
+        axes[1].scatter(sub['vol_drift'], sub['upside_pct'], s=8, alpha=0.4,
                         color=_pal[sec], label=sec)
-    axes[1].set_xlabel('6m volatility  (feat_vol_6m)')
-    axes[1].set_title('Upside vs 6m volatility')
-    axes[1].set_xlim(0, float(np.nanquantile(_gs['vol_6m'], 0.97))
-    if _gs['vol_6m'].notna().any() else 1)
+    axes[1].set_xlabel('realized-vol drift  (feat_vol_drift, winsorised [-1, 1])')
+    axes[1].set_title('Upside vs realized-vol drift')
+    axes[1].set_xlim(-1, 1)
     axes[1].legend(fontsize=7, framealpha=0.25, title='sector', title_fontsize=8,
                    loc='upper right')
+    _export_figure(fig, label='upside_vs_signals')
     plt.show()
 
 
@@ -1493,7 +2067,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
                              )
                  if c in kalman_df.columns]
     eda_noise = [c for c in ('feat_pt_range_norm', 'feat_pt_noise_sigma',
-                             'feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y')
+                             'feat_vol_drift')
                  if c in kalman_df.columns]
     # Size / valuation context (market-cap trend, size-vs-3y-avg, EV-vs-3y-avg).
     eda_size = [c for c in ('feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg')
@@ -1536,7 +2110,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     _widener_specs = [
         ('range  (feat_pt_range_norm)', _w['range'], False),
         ('cv  (feat_pt_noise_sigma / last_price)', _w['cv'], False),
-        ('vol mean  (feat_vol_*, mean)', _w['vol'], False),
+        ('vol drift  (feat_vol_drift, signed)', _w['vol_drift'], True),
     ]
     if 'feat_pt_noise_drift' in kalman_df.columns:
         _widener_specs.insert(
@@ -1549,7 +2123,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     fig = make_subplots(
         rows=1, cols=2, horizontal_spacing=0.09,
         subplot_titles=('Observation-noise wideners (raw, model-scaled → σ_obs)',
-                        'Realised σ_obs multiplier  (1 + range + cv + ½·vol) / √n'))
+                        'Realised σ_obs multiplier  (1 + range + cv + ½·max(vol_drift, 0)) / √n'))
     _pal = [_mcolors.to_hex(c) for c in sns.color_palette('flare', len(_widener_specs))]
     _rows = []
     for (label, arr, is_signed), c in zip(_widener_specs, _pal):
@@ -1616,6 +2190,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
                     cbar_kws={'shrink': 0.7, 'label': 'Spearman ρ'},
                     annot=True, fmt='.2f', annot_kws={'size': 6})
         ax.set_title('feat_* correlation — drift vs noise-widener blocks', pad=10)
+        _export_figure(fig, label='feature_corr_heatmap')
         plt.show()
 
     # 2.4e Implied upside vs the fused-panel risk/return drivers. Interactive Plotly
@@ -1630,8 +2205,8 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     # 2.4f Empirical per-group implied-upside forest (EDA preview of §5 group effects).
     _fe = kalman_df[(kalman_df['observed_pt'] > 0) & (kalman_df['last_price'] > 0)].copy()
     _fe['upside_pct'] = ((_fe['observed_pt'] / _fe['last_price'] - 1.0) * 100.0).clip(-100, 200)
-    _group_preview = [c for c in ('region', 'trading_region', 'sector', 'size_class',
-                                  'style_class', 'unit') if c in _fe.columns]
+    _group_preview = [c for c in ('region', 'trading_region', 'sector', 'exchange_name', 'size_class',
+                                  'style_class', 'unit_name') if c in _fe.columns]
     _min_per_level = 5
     _boot_draws = 4000
     for _coord in _group_preview:
@@ -1680,11 +2255,33 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
 # =============================================================================
 # 3. State-space feature mapping (Kalman semantics)
 # =============================================================================
-def map_state_space_features(kalman_df: pd.DataFrame) -> tuple[list[str], pd.DataFrame]:
-    """Map ``mv_pymc_kalman_pt`` ``feat_*`` columns onto Kalman state-space roles.
+def map_state_space_features(
+        kalman_df: pd.DataFrame,
+        feature_catalogue: Optional[pd.DataFrame] = None,
+) -> tuple[list[str], pd.DataFrame]:
+    """Map the catalogue's ``kalman_pt`` mutable_predictors onto state-space roles.
 
-    Returns the drift-feature list (state-transition mean / ``beta`` slopes) and a tidy
-    role-mapping frame.
+    The drift-feature list (state-transition mean / ``beta`` slopes) is derived
+    from ``pml.vw_pymc_feature_catalogue`` (``pymc_role = 'mutable_predictor'``)
+    — the SQL registry is the SSOT — filtered through
+    :meth:`KalmanFilterPriceTarget.select_drift_features`, which drops the
+    aliases consumed elsewhere in the fused model (noise wideners, the
+    ``feat_avg_beta`` / ``feat_mcap_country_r`` tilts, ``days_*`` time
+    covariates, drift-support counters, raw rating counts) and the
+    response-leakage alias. Returns the drift-feature list and a tidy
+    role-mapping frame covering every mutable_predictor disposition.
+
+    Parameters
+    ----------
+    kalman_df
+        Snapshot frame backed by ``pml.mv_pymc_kalman_pt``; aliases absent from
+        its columns are dropped.
+    feature_catalogue
+        The ``kalman_pt`` rows of ``pml.vw_pymc_feature_catalogue`` (from
+        :func:`load_feature_catalogue`). When ``None`` the aliases are fetched
+        via ``KalmanFilterPriceTarget._resolve_kalman_feature_aliases`` (a
+        direct catalogue query); if that also fails, the curated
+        :data:`_DRIFT_FEATURE_FALLBACK` literal keeps the workflow alive.
 
     Notes
     -----
@@ -1692,35 +2289,32 @@ def map_state_space_features(kalman_df: pd.DataFrame) -> tuple[list[str], pd.Dat
     a deterministic function of the RESPONSE; ``log1p(feat_implied_upside)`` IS the
     log-uplift the model targets, so it must never enter the drift-PREDICTOR matrix.
     """
-    drift_features = [c for c in ('feat_pt_drift', 'feat_price_drift',
-                                  'feat_pt_high_drift', 'feat_pt_low_drift',
-                                  'feat_pt_median_drift', 'feat_coverage_drift',
-                                  'feat_one_day_return','feat_price_chg_pct_3m',
-                                  'feat_total_return_ytd', 'feat_total_return_5y',
-                                  'feat_total_return_10y', 'feat_tr_cagr_3y',
-                                  # Curated momentum ladder from the new realised-return
-                                  # features: rolling 1m/3m/6m/1y returns + the 5y CAGR.
-                                  # The remaining mv_pymc_kalman_pt return columns
-                                  # (1d/5d/1w, 3y, mtd/qtd, cagr_1y/10y, and the calendar-
-                                  # year buckets) stay available in the MV / catalogue but
-                                  # are intentionally excluded here to avoid piling
-                                  # collinear momentum inputs onto the state-transition mean.
-                                  'feat_total_return_1m', 'feat_total_return_3m',
-                                  'feat_total_return_6m', 'feat_total_return_1y',
-                                  'feat_tr_cagr_5y',
-                                  # Market-cap / EV ratio (equity share of EV) drift
-                                  # across the fiscal-year trail — a size/leverage
-                                  # re-rating signal on the state-transition mean.
-                                  'feat_mv_ev_drift',
-                                  )
-                      if c in kalman_df.columns]
+    # --- Candidate mutable_predictor aliases (catalogue SSOT, layered fallbacks)
+    candidates: list[str] = []
+    source = 'feature_catalogue frame'
+    if feature_catalogue is not None and {'pymc_role', 'feature_alias'} <= set(feature_catalogue.columns):
+        candidates = (
+            feature_catalogue.loc[
+                feature_catalogue['pymc_role'] == 'mutable_predictor', 'feature_alias']
+            .dropna().astype(str).tolist()
+        )
+    if not candidates:
+        candidates = list(KalmanFilterPriceTarget._resolve_kalman_feature_aliases())
+        source = 'vw_pymc_feature_catalogue (direct query)'
+    if not candidates:
+        candidates = list(_DRIFT_FEATURE_FALLBACK)
+        source = '_DRIFT_FEATURE_FALLBACK literal'
+
+    drift_features = KalmanFilterPriceTarget.select_drift_features(
+        candidates, available_columns=kalman_df.columns,
+    )
     assert 'feat_implied_upside' not in drift_features, (
         'feat_implied_upside must not be a drift predictor (target leakage).'
     )
+
     range_col = 'feat_pt_range_norm' if 'feat_pt_range_norm' in kalman_df.columns else None
     sigma_col = 'feat_pt_noise_sigma' if 'feat_pt_noise_sigma' in kalman_df.columns else None
-    vol_cols = [c for c in ('feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y')
-                if c in kalman_df.columns]
+    vol_cols = [c for c in ('feat_vol_drift',) if c in kalman_df.columns]
 
     mapping_rows: list[tuple[str, str]] = [
         (c, 'drift / state-transition mean (beta)') for c in drift_features
@@ -1729,9 +2323,32 @@ def map_state_space_features(kalman_df: pd.DataFrame) -> tuple[list[str], pd.Dat
         mapping_rows.append((range_col, 'observation-noise widener (range)'))
     if sigma_col:
         mapping_rows.append((sigma_col, 'observation-noise widener (consensus sigma)'))
-    mapping_rows += [(c, 'observation-noise widener (volatility)') for c in vol_cols]
+    mapping_rows += [(c, 'observation-noise widener (realized-vol drift)') for c in vol_cols]
+    # Remaining mutable_predictor dispositions, so the mapping frame accounts
+    # for every catalogue row (dropped ≠ forgotten).
+    mapping_rows += [
+        (c, 'risk/size tilt (named pm.Data container)')
+        for c in ('feat_avg_beta', 'feat_mcap_country_r') if c in kalman_df.columns
+    ]
+    mapping_rows += [
+        (c, 'time covariate (t_scaled axis)')
+        for c in candidates
+        if c.startswith(KALMAN_TIME_COVARIATE_PREFIX) and c in kalman_df.columns
+    ]
+    if 'feat_implied_upside' in kalman_df.columns:
+        mapping_rows.append(
+            ('feat_implied_upside', 'RESPONSE (log1p -> feat_log_uplift; leakage-barred)')
+        )
+    mapping_rows += [
+        (c, 'excluded (drift-support counter / raw rating count / collinear leg)')
+        for c in candidates
+        if (c in KALMAN_DRIFT_EXCLUDED_FEATURES and c in kalman_df.columns
+            and c not in drift_features
+            and all(c != row[0] for row in mapping_rows))
+    ]
     mapping = pd.DataFrame(mapping_rows, columns=['mv_column', 'state_space_role'])
 
+    print(f'Drift-feature source: {source} ({len(candidates)} mutable_predictor candidates)')
     print(f'Drift features : {drift_features}')
     print(f'Noise drivers  : range={range_col}, sigma={sigma_col}, vol={vol_cols}')
     display(mapping)
@@ -1827,10 +2444,10 @@ def build_model_data(kalman_df: pd.DataFrame, roles: FeatureRoles,
     _nw = build_noise_wideners(model_df, fillna=True)
     range_norm_xs = _nw['range']
     noise_cv_xs = _nw['cv']
-    vol_xs = _nw['vol']
+    vol_xs = _nw['vol_drift']
     sqrt_n_xs = _nw['sqrt_n']
     print(f'noise drivers (mean) — range:{range_norm_xs.mean():.3f}  '
-          f'cv:{noise_cv_xs.mean():.3f}  vol:{vol_xs.mean():.3f}')
+          f'cv:{noise_cv_xs.mean():.3f}  vol_drift:{vol_xs.mean():.3f}')
 
     group_effects = [c for c in _CANDIDATE_GROUPS if c in coord_idx]
 
@@ -1872,7 +2489,7 @@ def build_kalman_pt_model(data: ModelData, *, robust: bool = True) -> "pm.Model"
         Xd = pm.Data('drift_features', data.x_drift, dims=('isin', 'drift_feature'))
         rng_d = pm.Data('feat_pt_range_norm', data.range_norm_xs, dims='isin')
         cv_d = pm.Data('feat_pt_noise_cv', data.noise_cv_xs, dims='isin')
-        vol_d = pm.Data('feat_vol_mean', data.vol_xs, dims='isin')
+        vol_d = pm.Data('feat_vol_drift', data.vol_xs, dims='isin')
         sqn = pm.Data('sqrt_n_analysts', data.sqrt_n_xs, dims='isin')
         log_uplift_obs_d = pm.Data('log_uplift_observed', data.log_uplift_obs, dims='isin')
         idx_data = {col: pm.Data(f'{col}_idx', data.coord_idx[col], dims='isin')
@@ -2158,19 +2775,20 @@ def prepare_kalman_panel_inputs(
     x_std = ((x_raw - x_raw.mean()) / x_raw.std(ddof=0).replace(0, 1.0)).fillna(0.0).to_numpy()
 
     # --- Model-A / σ drivers (shared SSOT helper) -----------------------------
-    # expected_vol == feat_vol_* term-structure mean (the volatility the
-    # risk_adj_return is conditioned on); cv == consensus noise CV widening σ.
+    # vol_drift == feat_vol_drift (drift of the realized-vol term structure; the
+    # σ_obs widener carrier); cv == consensus noise CV widening σ.
     _nw = build_noise_wideners(model_df, fillna=True)
-    expected_vol = _nw['vol']
+    vol_drift = _nw['vol_drift']
     dispersion_cv = _nw['cv']
     sqrt_n = _nw['sqrt_n']
     n_analysts = model_df['n_analysts'].astype('float64').clip(lower=1).to_numpy()
 
     # --- Systematic-risk driver (feat_avg_beta) -------------------------------
     # feat_avg_beta == NULL-aware mean of beta_{1y,2y,5y} (mv_pymc_kalman_pt). It
-    # replaces expected_vol as the risk_adj_return discount key; the raw beta is
-    # carried here and z-scored inside build_fused_kalman_pt_model. Falls back to
-    # NaN (→ 0 tilt after the model's nan_to_num) when the column is absent.
+    # is the risk_adj_return discount key (realized vol enters only via the
+    # vol_drift widener); the raw beta is carried here and z-scored inside
+    # build_fused_kalman_pt_model. Falls back to NaN (→ 0 tilt after the model's
+    # nan_to_num) when the column is absent.
     if 'feat_avg_beta' in model_df.columns:
         avg_beta = pd.to_numeric(model_df['feat_avg_beta'], errors='coerce').to_numpy('float64')
     else:
@@ -2208,13 +2826,13 @@ def prepare_kalman_panel_inputs(
     print(f'Fused panel — isins:{n_isin}  T:{T}  D:{D} ({resp})')
     print(f'  drift_features:{len(drift_features)}  avg_beta(mean):{np.nanmean(avg_beta):.3f}'
           f'  size_ratio(mean):{np.nanmean(size_ratio):.3f}'
-          f'  expected_vol(mean):{np.nanmean(expected_vol):.3f}'
+          f'  vol_drift(mean):{np.nanmean(vol_drift):.3f}'
           f'  cv(mean):{np.nanmean(dispersion_cv):.3f}')
 
     return KalmanPanelInputs(
         frame=model_df, isins=isin_labels, Y=Y_std, t_scaled=t_scaled,
         X_drift=x_std, n_analysts=n_analysts, sqrt_n_analysts=sqrt_n,
-        expected_vol=expected_vol, dispersion_cv=dispersion_cv, avg_beta=avg_beta,
+        vol_drift=vol_drift, dispersion_cv=dispersion_cv, avg_beta=avg_beta,
         size_ratio=size_ratio,
         drift_names=list(drift_features), response_names=list(resp),
         coord_uniques=coord_uniques, coord_idx=coord_idx,
@@ -2497,7 +3115,8 @@ def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs):
 # =============================================================================
 # 7. Posterior inference (NUTS)
 # =============================================================================
-def sample_posterior(model: "pm.Model", prior_idata, *, cores: int = 1):
+def sample_posterior(model: "pm.Model", prior_idata, *, cores: int = 1,
+                     panel: Optional[KalmanPanelInputs] = None):
     """Sample the posterior, trying nutpie -> numpyro -> pymc in priority order.
 
     Merges the prior groups into the posterior idata for one-object downstream access.
@@ -2508,6 +3127,11 @@ def sample_posterior(model: "pm.Model", prior_idata, *, cores: int = 1):
         The built PyMC model to sample.
     prior_idata
         Prior-predictive groups to merge into the returned posterior ``DataTree``.
+    panel
+        When given, the drift-feature aliases (``panel.drift_names``) plus their
+        catalogue metadata are stamped onto ``constant_data['drift_features']``
+        via ``stamp_feature_provenance`` (best-effort; the ``pm.Data`` container
+        of the same name lands in ``constant_data`` automatically).
     cores
         Number of chains to run in parallel. Defaults to ``4`` for the standalone
         script / CLI path, where the native (nutpie numba/rust) sampler runs
@@ -2534,7 +3158,7 @@ def sample_posterior(model: "pm.Model", prior_idata, *, cores: int = 1):
     # stuck at R-hat ≈ 1.5–4.5, ESS ≈ 4–7) — a sampling budget could never have
     # fixed that, since a single collapsed slice (T=1) cannot identify a
     # between-group variance. With the model well-conditioned the cross-section
-    # adapts fast: draws=1000, tune=1000, target_accept=0.95, chains=4, cores=4
+    # adapts fast: draws=1000, tune=1000, target_accept=0.90, chains=4, cores=4
     # (all chains in parallel) clears ESS > 400 comfortably. When a genuine
     # (isin, time) panel is later supplied (collapse_time=False), raise tune≈2000
     # for the richer GRW geometry.
@@ -2600,6 +3224,19 @@ def sample_posterior(model: "pm.Model", prior_idata, *, cores: int = 1):
             "All NUTS samplers failed:\n"
             + "\n".join(f"  - {s}: {err}" for s, err in sampling_errors)
         )
+
+    # Feature provenance: record which catalogue aliases back the
+    # ``drift_feature`` dim (plus their data_type / category metadata) on the
+    # constant_data group, so exported idata is self-describing. Best-effort —
+    # a missing DB / constant_data group must never fail the sampling path.
+    if panel is not None:
+        try:
+            stamp_feature_provenance(
+                idata, "drift_features", panel.drift_names,
+                load_feature_metadata_from_db(),
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Could not stamp drift-feature provenance: %s", exc)
 
     return extend_datatree(idata, prior_idata)
 
@@ -2771,7 +3408,7 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
         raise RuntimeError('No non-empty variables to summarise.')
 
     summary = azs.summary(idata, var_names=available, round_to=4)
-    display(summary.sort_values('r_hat', ascending=False).head(50))
+    display(summary.sort_values('r_hat', ascending=False).head(100))
 
     # 9.2 Divergences and aggregated R-hat / ESS.
     n_div = int(idata.sample_stats['diverging'].sum())
@@ -2854,9 +3491,11 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
         for v in _degenerate:
             print(f'  - {v}')
 
-    # 9.3 Trace + marginal densities. plot_trace can crash when a single call mixes
-    # variables whose non-sample dims differ, so we split scalar vs vector vars and
-    # keep a per-variable fallback.
+    # 9.3 Trace + marginal densities. plot_trace can crash when a single call
+    # mixes variables whose non-sample dims differ, so we split scalar vs
+    # vector vars and keep a per-variable fallback. Sizing budgets the FACET
+    # count (one facet per vector element) via the shared _diag_figure_kwargs
+    # helper — sizing by len(_vars) squeezed beta's ~40 panels into ~300 px.
     post_trace = idata.posterior
     requested = [*FUSED_SCALAR_VARS, *FUSED_VECTOR_VARS,
                  *(f'sigma_{g}' for g in group_effects)]
@@ -2874,11 +3513,12 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
     # signal, so the raw per-slice warnings are pure noise here.
     def _show_trace(_vars):
         with _quiet_degenerate_density():
-            _safe_show(azp.plot_trace(
+            pc = azp.plot_trace(
                 idata, var_names=_vars, backend='plotly',
-                figure_kwargs=_azp_figure_kwargs(
-                    _forest_height_px(len(_vars), per_row=210, base=110)),
-            ))
+                figure_kwargs=_diag_figure_kwargs(post_trace, _vars),
+            )
+            _polish_facet_axes(pc)
+            _safe_show(pc)
 
     if scalar_vars:
         try:
@@ -2892,14 +3532,19 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
     if not scalar_vars and not vector_vars:
         print('No trace-eligible variables available.')
 
-    # 9.3b Fractional-rank Delta-ECDF plots (same scalar/vector split).
+    # 9.3b Fractional-rank Delta-ECDF plots (same scalar/vector split, but
+    # sized per VARIABLE row via _rank_dist_figure_kwargs: compact
+    # plot_rank_dist overlays vector elements in one row instead of fanning
+    # them into facets, so the trace grid's facet-count budget over-sizes it).
     def _show_rank_dist(_vars):
         with _quiet_degenerate_density():
-            _safe_show(azp.plot_rank_dist(
+            pc = azp.plot_rank_dist(
                 idata, var_names=_vars, backend='plotly',
-                figure_kwargs=_azp_figure_kwargs(
-                    _forest_height_px(len(_vars), per_row=170, base=140)),
-            ))
+                figure_kwargs=_rank_dist_figure_kwargs(_vars),
+            )
+            pc.add_title('Fractional-rank Δ-ECDF — ' + ', '.join(_vars))
+            _polish_facet_axes(pc)
+            _safe_show(pc)
 
     if scalar_vars:
         try:
@@ -2914,14 +3559,9 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
     # 9.4 Forest of hierarchical group-effect scales, drift slopes and GRW innovations.
     forest_vars = [f'sigma_{g}' for g in group_effects
                    if f'sigma_{g}' in idata.posterior.data_vars]
-    forest_vars += [v for v in ('beta', 'sigma_alpha_innov', 'sigma_beta_innov')
-                    if v in idata.posterior.data_vars]
     if forest_vars:
         # One forest row per non-sample element (vector vars span multiple rows).
-        _n_rows = sum(
-            int(np.prod([post_trace[v].sizes[d] for d in post_trace[v].dims
-                         if d not in ('chain', 'draw')], initial=1))
-            for v in forest_vars)
+        _n_rows = _n_facets(post_trace, forest_vars)
         with _quiet_degenerate_density():
             pc = azp.plot_forest(
                 idata, var_names=forest_vars, combined=True,
@@ -2958,11 +3598,11 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
             with _quiet_degenerate_density():
                 pc_pp = azp.plot_prior_posterior(
                     idata, var_names=_pp_vars, backend='plotly',
-                    figure_kwargs=_azp_figure_kwargs(
-                        _forest_height_px(len(_pp_vars), per_row=170, base=140)),
+                    figure_kwargs=_diag_figure_kwargs(posterior, _pp_vars),
                 )
                 pc_pp.add_title('Prior vs posterior — global hyper-parameters '
                                 '(contraction = information gained from data)')
+                _polish_facet_axes(pc_pp)
                 _safe_show(pc_pp)
         else:
             print('plot_prior_posterior skipped: no hyper-parameter overlaps the '
@@ -2977,11 +3617,11 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
         try:
             pc_ess = azp.plot_ess_evolution(
                 idata, var_names=scalar_vars, backend='plotly',
-                figure_kwargs=_azp_figure_kwargs(
-                    _forest_height_px(len(scalar_vars), per_row=170, base=140)),
+                figure_kwargs=_diag_figure_kwargs(post_trace, scalar_vars),
             )
             pc_ess.add_title('ESS evolution (bulk / tail) — should grow ~linearly '
                              'with draws')
+            _polish_facet_axes(pc_ess)
             _safe_show(pc_ess)
         except Exception as exc:  # pragma: no cover - best-effort diagnostic
             print(f'plot_ess_evolution skipped: {exc!r}')
@@ -3071,28 +3711,30 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
         'expected_pt': exp_pt,
         'expected_pt_hdi_lo': pt_lo,
         'expected_pt_hdi_hi': pt_hi,
-        'expected_upside_pct': exp_up * 100,
+        # All return/upside columns are stored as raw decimals (0.25 = +25%);
+        # percent scaling happens only at display boundaries.
+        'expected_upside': exp_up,
         'risk_adj_return': risk_adj,
         'prob_pos': prob_pos,
-        'implied_upside_pct': (
-            frame['feat_implied_upside'].to_numpy() * 100
+        'implied_upside': (
+            frame['feat_implied_upside'].to_numpy()
             if 'feat_implied_upside' in frame.columns
-            else (frame['observed_pt'] / frame['last_price'] - 1.0).to_numpy() * 100
+            else (frame['observed_pt'] / frame['last_price'] - 1.0).to_numpy()
         ),
-        'total_return_ytd_pct': (
-            frame['feat_total_return_ytd'].to_numpy() * 100
+        'total_return_ytd': (
+            frame['feat_total_return_ytd'].to_numpy()
             if 'feat_total_return_ytd' in frame.columns else np.nan
         ),
-        'total_return_5y_pct': (
-            frame['feat_total_return_5y'].to_numpy() * 100
+        'total_return_5y': (
+            frame['feat_total_return_5y'].to_numpy()
             if 'feat_total_return_5y' in frame.columns else np.nan
         ),
-        'total_return_10y_pct': (
-            frame['feat_total_return_10y'].to_numpy() * 100
+        'total_return_10y': (
+            frame['feat_total_return_10y'].to_numpy()
             if 'feat_total_return_10y' in frame.columns else np.nan
         ),
-        'tr_cagr_3y_pct': (
-            frame['feat_tr_cagr_3y'].to_numpy() * 100
+        'tr_cagr_3y': (
+            frame['feat_tr_cagr_3y'].to_numpy()
             if 'feat_tr_cagr_3y' in frame.columns else np.nan
         ),
         'n_analysts': frame['n_analysts'].to_numpy(),
@@ -3101,7 +3743,7 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
     results = results.merge(
         mc_summary.rename(columns={'prob_pos': 'mc_prob_pos'}), on='isin', how='left',
     )
-    results = results.sort_values('expected_upside_pct', ascending=False).reset_index(drop=True)
+    results = results.sort_values('expected_upside', ascending=False).reset_index(drop=True)
     print(f'Fused-panel screen for {len(results)} ISINs '
           f'(MC horizon={horizon}, rho={rho}).')
     display(results.head(50))
@@ -3238,7 +3880,11 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
 
     ``eu`` is the de-standardised ``expected_upside`` posterior (chain, draw, isin).
     """
-    _comp = results.dropna(subset=['expected_upside_pct']).copy()
+    _comp = results.dropna(subset=['expected_upside']).copy()
+    # Display boundary: the screen frame stores decimals — build local percent
+    # columns for the plots only.
+    for _c in ('expected_upside', 'implied_upside', 'total_return_ytd'):
+        _comp[f'{_c}_pct'] = pd.to_numeric(_comp.get(_c), errors='coerce') * 100.0
 
     # (1) Shrinkage scatter: raw analyst-implied upside vs Kalman-smoothed expected upside.
     _both = np.r_[_comp['implied_upside_pct'].to_numpy(), _comp['expected_upside_pct'].to_numpy()]
@@ -3347,19 +3993,22 @@ class RiskBook:
     ----------
     analytics : pandas.DataFrame
         Per-ISIN copy of the §10 ``results`` table augmented with the risk columns
-        ``p_upside_pos``, ``kalman_gain``, ``p_upside_pos_cond``, ``band_width_pct``,
-        ``exp_vol_pct``, ``cvar05_pct``, ``ret_vol_ratio``, ``tail_risk_pct``,
-        ``starr`` and the normalised ``book_weight`` (0 for names outside the sized
-        book). ``p_upside_pos_cond`` is the *conditional* probability of a positive
-        upside given the smoother's state confidence: the structural-TS MC
-        ``mc_prob_pos`` multiplied by ``kalman_gain`` (posterior-mean
-        ``achieve_prob``, which is inverse to ``kalman_variance``).
+        ``p_upside_pos``, ``kalman_gain``, ``p_upside_pos_cond``, ``band_width``,
+        ``exp_vol``, ``cvar05``, ``ret_vol_ratio``, ``tail_risk``, ``starr``,
+        ``expected_sharpe`` and the normalised ``book_weight`` (0 for names outside
+        the sized book). All return/risk columns are stored as raw decimals
+        (0.25 = +25%); ratios (``ret_vol_ratio``, ``starr``, ``expected_sharpe``)
+        are dimensionless. ``p_upside_pos_cond`` is the *conditional* probability
+        of a positive upside given the smoother's state confidence: the
+        structural-TS MC ``mc_prob_pos`` multiplied by ``kalman_gain``
+        (posterior-mean ``achieve_prob``, which is inverse to ``kalman_variance``).
     book : pandas.DataFrame
         The sized top-``k_book`` long subset (``starr``-ranked) carrying a ``weight``
         column that sums to 1 (100% gross) after the per-name cap.
     summary : dict[str, float]
         Portfolio-level metrics (``port_up``, ``port_cvar``, ``wavg_cvar``,
-        ``port_vol``, ``starr_book``, ``div``, ``n_book``) and the sizing parameters
+        ``port_vol`` — decimal returns; ``starr_book``, ``div``, ``n_book``
+        dimensionless) and the sizing parameters
         (``alpha``, ``cap``, ``k_book``, ``p_long``, plus the derived ``univ_gain``
         and conditional-scale gate ``p_long_cond = p_long * univ_gain``).
     """
@@ -3409,13 +4058,13 @@ def _cap_normalize_weights(w: np.ndarray, cap: float) -> np.ndarray:
 def compute_cvar_aware_book(
         idata, panel: KalmanPanelInputs, screen: ScreenContext, results: pd.DataFrame,
         *, alpha: float = 0.05, cap: float = 0.08, k_book: int = 50,
-        p_long: float = 0.50,
+        p_long: float = 0.67,
 ) -> RiskBook:
     """Build the CVaR-aware long book and per-name risk analytics (SSOT).
 
     Re-ranks the §10 screen on risk-adjusted terms — reward per unit *expected
-    volatility* (the ``feat_vol_*`` term-structure) and reward per unit
-    *expected-shortfall* (CVaR of the posterior upside draws) — then sizes a long
+    volatility* (the per-name dispersion of the posterior upside draws) and reward
+    per unit *expected-shortfall* (CVaR of the same draws) — then sizes a long
     book on the STARR (reward-to-CVaR) ratio with a per-name cap. Shared by
     :func:`export_analytics` (persists ``book_weight``) and
     :func:`run_recommendations` (prints §8–§10) so the exported and displayed sizing
@@ -3428,7 +4077,7 @@ def compute_cvar_aware_book(
         (the exported ``kalman_gain``) used to condition ``P(upside>0)`` on the
         smoother's state confidence; the screen draws come via ``screen``.
     panel
-        The :class:`KalmanPanelInputs` (supplies ``feat_vol_*`` and the ISIN order).
+        The :class:`KalmanPanelInputs` (supplies the modelling frame and ISIN order).
     screen
         The :class:`ScreenContext` carrying the ``expected_upside`` draws ``eu``.
     results
@@ -3452,15 +4101,14 @@ def compute_cvar_aware_book(
     RiskBook
         Analytics frame, sized book and portfolio summary.
     """
-    model_df = panel.frame
-    eu = screen.eu * 100.0  # expected upside draws (chain, draw, isin), percent
+    eu = screen.eu  # expected upside draws (chain, draw, isin), decimal
     nm = results.copy()
 
     # Posterior P(upside>0) and credible-band width (mirror the §5 name screen).
     p_pos_name = (eu > 0).mean(('chain', 'draw')).to_series()
     nm['p_upside_pos'] = nm['isin'].map(p_pos_name).astype('float64')
     _den = nm['expected_pt'].replace(0, np.nan)
-    nm['band_width_pct'] = (nm['expected_pt_hdi_hi'] - nm['expected_pt_hdi_lo']) / _den * 100.0
+    nm['band_width'] = (nm['expected_pt_hdi_hi'] - nm['expected_pt_hdi_lo']) / _den
 
     # Conditional P(upside>0 | kalman gain). ``achieve_prob`` (exported as
     # ``kalman_gain``) is the smoother's state-confidence analogue — inverse to
@@ -3488,21 +4136,11 @@ def compute_cvar_aware_book(
         univ_gain = 1.0
     p_long_cond = p_long * univ_gain
 
-    # Expected volatility = feat_vol_* term-structure mean, on the model-facing
-    # scale. Auto-detect decimal (~0.30) vs percent (~30) and normalise to percent.
-    _vol_cols = [c for c in ('feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y')
-                 if c in model_df.columns]
-    if _vol_cols:
-        _vol_raw = model_df[_vol_cols].astype('float64').mean(axis=1, skipna=True)
-        _vol_med = float(np.nanmedian(_vol_raw.to_numpy())) if len(_vol_raw) else float('nan')
-        _vol_to_pct = 100.0 if (np.isfinite(_vol_med) and _vol_med < 3.0) else 1.0
-        _vol_ser = pd.Series((_vol_raw * _vol_to_pct).to_numpy(),
-                             index=model_df['isin'].astype(str).to_numpy())
-        nm['exp_vol_pct'] = nm['isin'].astype(str).map(_vol_ser).astype('float64')
-    else:
-        nm['exp_vol_pct'] = np.nan
-
-    # Per-name CVaR: mean of the worst ALPHA-tail of the posterior upside draws (%).
+    # Per-name CVaR and expected volatility from the posterior upside draws
+    # (decimal return units). exp_vol is the per-name std of the draws — a
+    # genuinely forward-looking dispersion (the absolute feat_vol_* MV levels
+    # were replaced by the feat_vol_drift widener, which is a signed drift,
+    # not a level).
     _row_of: dict[str, int] = {}
     _eu_vals = None
     try:
@@ -3514,26 +4152,41 @@ def compute_cvar_aware_book(
         _cvar = np.where(_mask, _eu_vals, 0.0).sum(axis=1) / _denom
         _isin_order = _eu_s.coords['isin'].values.astype(str)
         _row_of = {is_: i for i, is_ in enumerate(_isin_order)}
-        nm['cvar05_pct'] = nm['isin'].astype(str).map(
+        nm['cvar05'] = nm['isin'].astype(str).map(
             pd.Series(_cvar, index=_isin_order)).astype('float64')
+        nm['exp_vol'] = nm['isin'].astype(str).map(
+            pd.Series(_eu_vals.std(axis=1), index=_isin_order)).astype('float64')
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning('CVaR computation from upside draws failed: %s', exc)
-        nm['cvar05_pct'] = np.nan
+        nm['cvar05'] = np.nan
+        nm['exp_vol'] = np.nan
 
-    # Reward-to-risk ratios.
-    #   * ret_vol_ratio  - reward per unit expected volatility (forward Sharpe-like).
-    #   * tail_risk_pct  - binding downside: the larger of the posterior mean->CVaR
-    #     dispersion and the Student-t MC 5% loss magnitude (floored at 1pp). Names
-    #     with a wide posterior OR a fat simulated tail both score high here.
-    #   * starr          - reward per unit expected-shortfall (STARR ratio).
-    _exp_vol_pos = nm['exp_vol_pct'].where(nm['exp_vol_pct'] > 0)
-    nm['ret_vol_ratio'] = nm['expected_upside_pct'] / _exp_vol_pos
-    _md_disp = (nm['expected_upside_pct'] - nm['cvar05_pct']).fillna(0.0).clip(lower=0.0)
-    _mc_loss = (-(nm['er_p05'].astype('float64') * 100.0)
+    # Reward-to-risk ratios (all dimensionless — decimal / decimal).
+    #   * ret_vol_ratio    - reward per unit posterior dispersion of the upside
+    #     draws (estimation-uncertainty-adjusted reward; internal only, NOT a
+    #     Sharpe ratio — the denominator is parameter uncertainty).
+    #   * expected_sharpe  - er_mean / er_sd of the structural-TS MC forward-return
+    #     distribution: a genuine forward-looking Sharpe (exported as
+    #     ``expected_sharpe_ratio``).
+    #   * tail_risk        - binding downside: the larger of the posterior
+    #     mean->CVaR dispersion and the Student-t MC 5% loss magnitude (floored
+    #     at 1pp = 0.01). Names with a wide posterior OR a fat simulated tail
+    #     both score high here.
+    #   * starr            - reward per unit expected-shortfall (STARR ratio).
+    _exp_vol_pos = nm['exp_vol'].where(nm['exp_vol'] > 0)
+    nm['ret_vol_ratio'] = nm['expected_upside'] / _exp_vol_pos
+    if {'er_mean', 'er_sd'} <= set(nm.columns):
+        _er_sd_pos = pd.to_numeric(nm['er_sd'], errors='coerce')
+        nm['expected_sharpe'] = (pd.to_numeric(nm['er_mean'], errors='coerce')
+                                 / _er_sd_pos.where(_er_sd_pos > 0))
+    else:  # pragma: no cover - older screen frame without the MC summary
+        nm['expected_sharpe'] = np.nan
+    _md_disp = (nm['expected_upside'] - nm['cvar05']).fillna(0.0).clip(lower=0.0)
+    _mc_loss = (-nm['er_p05'].astype('float64')
                 if 'er_p05' in nm.columns else pd.Series(0.0, index=nm.index)).fillna(0.0)
-    nm['tail_risk_pct'] = np.maximum.reduce([
-        _md_disp.to_numpy(), _mc_loss.to_numpy(), np.full(len(nm), 1.0)])
-    nm['starr'] = nm['expected_upside_pct'] / nm['tail_risk_pct']
+    nm['tail_risk'] = np.maximum.reduce([
+        _md_disp.to_numpy(), _mc_loss.to_numpy(), np.full(len(nm), 0.01)])
+    nm['starr'] = nm['expected_upside'] / nm['tail_risk']
 
     # Sized long book: STARR-ranked, cap-and-spill normalised to 100% gross.
     nm['book_weight'] = 0.0
@@ -3544,7 +4197,7 @@ def compute_cvar_aware_book(
         'wavg_cvar': float('nan'), 'port_vol': float('nan'),
         'starr_book': float('nan'), 'div': float('nan'),
     }
-    _book = nm[(nm['expected_upside_pct'] > 0) & (nm['p_upside_pos_cond'] >= p_long_cond)
+    _book = nm[(nm['expected_upside'] > 0) & (nm['p_upside_pos_cond'] >= p_long_cond)
                & np.isfinite(nm['starr'])].copy()
     if len(_book):
         _book = _book.sort_values('starr', ascending=False).head(k_book)
@@ -3565,9 +4218,9 @@ def compute_cvar_aware_book(
                 _pv = np.quantile(_port_draws, alpha)
                 port_cvar = float(_port_draws[_port_draws <= _pv].mean())
                 port_up = float(_port_draws.mean())
-                wavg_cvar = float(np.nansum(_wk * _book['cvar05_pct'].to_numpy()[_keep]))
+                wavg_cvar = float(np.nansum(_wk * _book['cvar05'].to_numpy()[_keep]))
         port_vol = float(np.nansum(
-            _book['weight'].to_numpy() * _book['exp_vol_pct'].to_numpy()))
+            _book['weight'].to_numpy() * _book['exp_vol'].to_numpy()))
         summary.update(
             n_book=float(len(_book)), port_up=port_up, port_cvar=port_cvar,
             wavg_cvar=wavg_cvar, port_vol=port_vol,
@@ -3618,9 +4271,9 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame) -> None:
     er_p50_pct = _num('er_p50') * 100.0
     er_p95_pct = _num('er_p95') * 100.0
     exp_ret_pct = _num('expected_return_kalman') * 100.0
-    exp_vol_pct = _num('expected_vol_kalman')
-    cvar_pct = _num('cvar_5pct_kalman')
-    starr = _num('reward_to_cvar')
+    exp_vol_pct = _num('expected_vol_kalman') * 100.0
+    cvar_pct = _num('cvar_5pct_kalman') * 100.0
+    starr = _num('reward_to_cvar')  # dimensionless STARR ratio — never scaled
     weight = _num('cvar_book_weight').fillna(0.0)
     mc_pos = _num('mc_prob_pos')
     p_cond = _num('p_upside_pos_cond')
@@ -3759,7 +4412,8 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     * ``market_cap`` / ``enterprise_value`` — size context from the panel frame.
     * ``expected_pt_hdi_lo`` / ``expected_pt_hdi_hi`` — 94% posterior price-target band.
     * ``risk_adj_return`` — posterior-mean risk-adjusted-return latent.
-    * ``er_mean`` / ``er_p05`` / ``er_p50`` / ``er_p95`` — MC return distribution summary.
+    * ``er_mean`` / ``er_sd`` / ``er_p05`` / ``er_p50`` / ``er_p95`` — MC return
+      distribution summary (decimal returns).
     * ``mc_prob_pos`` — MC probability of a positive return.
 
     It also wires the §10b CVaR-aware sizing onto each row:
@@ -3767,9 +4421,12 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     * ``cvar_book_weight`` — the normalised long-book weight (0 for names outside the
       sized book; the held names sum to 1 / 100% gross).
     * ``cvar_5pct_kalman`` — per-name 5% expected shortfall (CVaR) of the posterior
-      upside draws (%).
+      upside draws (decimal return units).
+    * ``expected_vol_kalman`` — per-name std of the posterior upside draws (decimal).
     * ``reward_to_cvar`` — the STARR ratio (expected upside / binding tail risk) the
-      weights are ranked on.
+      weights are ranked on (dimensionless).
+    * ``expected_sharpe_ratio`` — ``er_mean / er_sd`` of the structural-TS MC
+      forward-return distribution (dimensionless).
     * ``p_upside_pos_cond`` — conditional probability of a positive upside given the
       smoother's state confidence (``mc_prob_pos`` × ``kalman_gain``), the quantity
       the book's ``p_long`` eligibility gate is applied to.
@@ -3815,10 +4472,14 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
         'name': _idcol('name'),
         'trading_region': _idcol('trading_region'),
         'trading_country': _idcol('trading_country'),
+        'trading_country_name': _idcol('trading_country_name'),
         'region': _idcol('region'),
         'country': _idcol('country'),
+        'country_name': _idcol('country_name'),
         'unit': _idcol('unit'),
+        'unit_name': _idcol('unit_name'),
         'exchange': _idcol('exchange'),
+        'exchange_name': _idcol('exchange_name'),
         'sector': _idcol('sector'),
         'industry': _idcol('industry'),
         'style_class': _idcol('style_class'),
@@ -3840,14 +4501,30 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
         'days_to_next_report': _idcol('days_to_next_report'),
         'days_to_expected_report': _idcol('days_to_expected_report'),
         'days_since_fy_end': _idcol('days_since_fy_end'),
-        'expected_return_kalman': expected_upside_kalman,
+        'market_cap': model_df['market_cap'].to_numpy(),
+        'enterprise_value': model_df['enterprise_value'].to_numpy(),
+        'mcap_country_r': model_df['feat_mcap_country_r'].to_numpy(),
+        'beta': model_df['feat_avg_beta'].to_numpy(),
+        'original_price': model_df['last_price'].to_numpy(),
+        'original_target': model_df['observed_pt'].to_numpy(),
         'price_target_kalman': kalman_estimate,
+        'implied_upside': model_df['feat_implied_upside'].to_numpy(),
+        'expected_return_kalman': expected_upside_kalman,
         'kalman_variance': kalman_variance,
         'kalman_gain': kalman_gain,
         'signal_strength': signal_strength,
-        'original_price': model_df['last_price'].to_numpy(),
-        'original_target': model_df['observed_pt'].to_numpy(),
-        'beta': model_df['feat_avg_beta'].to_numpy(),
+        # Analyst Rating columns.
+        'n_holds': _numcol('feat_holds'),
+        'n_buys': _numcol('feat_buys'),
+        'n_sells': _numcol('feat_sells'),
+        'feat_no_opinion': _numcol('feat_no_opinion'),
+        'analyst_bullish_pct': _numcol('feat_analyst_bullish_pct'),
+        'analyst_bearish_pct': _numcol('feat_analyst_bearish_pct'),
+        'analyst_neutral_pct': _numcol('feat_analyst_neutral_pct'),
+        'analyst_conviction': _numcol('feat_analyst_conviction'),
+        'analyst_rating': _numcol('feat_analyst_rating'),
+        'pt_achievement_1y': _numcol('feat_pt_achievement_1y'),
+        'pt_range_hit_rate': _numcol('feat_pt_range_hit_rate'),
         # Consensus price-target levels + the *_ago price-target trail.
         'price_target_median': _numcol('price_target_median'),
         'price_target_high': _numcol('price_target_high'),
@@ -3875,9 +4552,9 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     # Pull valuation, posterior-band and MC summary columns straight from the §10 screen
     # table (the SSOT), keyed on isin — so the export never recomputes, nor drifts from,
     # those figures. Columns absent from an older screen are simply skipped.
-    _screen_cols = ['market_cap', 'enterprise_value',
-                    'expected_pt_hdi_lo', 'expected_pt_hdi_hi', 'risk_adj_return',
-                    'er_mean', 'er_p05', 'er_p50', 'er_p95', 'mc_prob_pos']
+    _screen_cols = ['expected_pt_hdi_lo', 'expected_pt_hdi_hi', 'risk_adj_return',
+                    'er_mean', 'er_sd', 'er_p05', 'er_p50', 'er_p95', 'mc_prob_pos'
+                    ]
     _present = [c for c in _screen_cols if c in screen.results.columns]
     if _present:
         kalman_results = kalman_results.merge(
@@ -3886,15 +4563,15 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     # Resolve the CVaR-aware sizing book: reuse the one passed in (so the export and the
     # §14b screen share a single computation), otherwise recompute it from the screen —
     # exactly as the docstring promises. ``RiskBook.analytics`` carries the per-ISIN
-    # book_weight / cvar05_pct / starr keyed on isin.
+    # book_weight / cvar05 / starr keyed on isin.
     rb = risk_book if risk_book is not None else compute_cvar_aware_book(idata, panel, screen, screen.results)
-    _sized = (rb.analytics[['isin', 'book_weight', 'cvar05_pct', 'starr', 'exp_vol_pct','ret_vol_ratio',
-                            'p_upside_pos_cond']]
+    _sized = (rb.analytics[['isin', 'book_weight', 'cvar05', 'starr', 'exp_vol',
+                            'expected_sharpe', 'p_upside_pos_cond']]
               .rename(columns={'book_weight': 'cvar_book_weight',
-                               'cvar05_pct': 'cvar_5pct_kalman',
+                               'cvar05': 'cvar_5pct_kalman',
                                'starr': 'reward_to_cvar',
-                               'exp_vol_pct': 'expected_vol_kalman',
-                               'ret_vol_ratio': 'expected_sharpe_ratio'}))
+                               'exp_vol': 'expected_vol_kalman',
+                               'expected_sharpe': 'expected_sharpe_ratio'}))
     kalman_results = kalman_results.merge(_sized, on='isin', how='left')
 
     # Guarantee the column exists regardless of whether a risk book was passed.
@@ -3921,7 +4598,9 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     _date_cols = [c for c in (*FISCAL_CALENDAR_COLS_ALL, 'next_earnings_when',
                               'next_earnings_status', *DAY_COUNT_COLS_ALL)
                   if c in kalman_results.columns]
-    _id_cols = [c for c in ('isin', 'ticker', 'name', 'trading_region','trading_country', 'region', 'country', 'unit', 'exchange',
+    _id_cols = [c for c in
+                ('isin', 'ticker', 'name', 'trading_region', 'trading_country','trading_country_name', 'region', 'country', 'unit', 'exchange'
+                     , 'exchange_name', 'unit_name', 'country_name',
                             'sector', 'industry', 'size_class', 'style_class') if c in kalman_results.columns]
     _other_cols = [c for c in kalman_results.columns
                    if c not in (*_id_cols, *_date_cols)]
@@ -3934,7 +4613,7 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     if write:
         _n = export_to_analytics_db(kalman_results, 'kalman_filtered_price_targets',
                                     if_exists='replace')
-        print(f'Appended {_n} rows to analytics.kalman_filtered_price_targets.')
+        print(f'Replaced analytics.kalman_filtered_price_targets with {_n} rows.')
     else:
         print('write=False -> not persisted. Pass write=True to append to the DB sink.')
     return kalman_results
@@ -4374,11 +5053,11 @@ def run_universe_kalman_fit(kalman_df: pd.DataFrame,
             return None
 
         kwargs: dict[str, Any] = dict(
-            samples=2500, tune=2500, chains=4, target_accept=0.9,
+            samples=2500, tune=2500, chains=4, target_accept=0.90,
             random_seed=RANDOM_SEED, parameterization='marginalized', trend=True,
             nuts_sampler='nutpie',
             forecast_df=kalman_df, forecast_aggregate='median',
-            forecast_anchor_col='last_updated',
+            forecast_anchor_col='fy_end_date',
         )
         kwargs.update(fit_kwargs)
 
@@ -4408,14 +5087,14 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
     """
     model_df = frame
     try:
-        keep = ('isin', 'ticker', 'name', 'last_price', 'price_target', 'market_cap', 'enterprise_value',
+        keep = ('isin', 'ticker', 'name', 'last_price', 'price_target', 'market_cap','market_cap_country_r', 'enterprise_value',
                 'income_statement_report_date', 'next_earnings', 'fy_end_date', 'next_fiscal_quarter', 'last_updated',
                 'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date')
         hist_cols, col_sql = fetch_history_columns(engine, keep)
         cohort = model_df['isin'].astype(str).tolist()
         with engine.connect() as conn:
             # Rank the cohort by the most recent earnings (next_earnings closest to
-            # today), breaking ties by the largest market cap, and pull the top 20
+            # today), breaking ties by the largest market cap, and pull the top 50
             # candidates.  cf. SELECT GREATEST(market_cap) WHERE next_earnings = current_date.
             # The first of these that has >=2 *_ago observations is fitted below.
             snap = pd.read_sql(
@@ -4423,10 +5102,10 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
                     f'SELECT {col_sql} FROM pml.pml_df '
                     'WHERE isin = ANY(:isins) '
                     '  AND next_earnings IS NOT NULL '
-                    '  AND market_cap IS NOT NULL '
-                    'ORDER BY ABS(next_earnings - CURRENT_DATE) ASC, '
+                    '  AND market_cap_country_r > 95 '
+                    'ORDER BY ABS(next_earnings - CURRENT_DATE) , '
                     '         market_cap DESC '
-                    'LIMIT 20'
+                    'LIMIT 50'
                 ),
                 conn, params={'isins': cohort},
             )
@@ -4467,8 +5146,8 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         # snapshot ``last_updated`` (fused-panel row) plus the fiscal-calendar DATE
         # coords resolved by build_forecast_specs.
         res = fit_kalman_model(price_targets=observed, isin=str(chosen), dates=dates, last_price=last_price,
-                               samples=2500, tune=1000, chains=4, target_accept=0.9, random_seed=RANDOM_SEED,
-                               trend=True, parameterization='marginalized', nuts_sampler='nutpie', forecast_df=_row,
+                               samples=2500, tune=2500, chains=4, target_accept=0.90, random_seed=RANDOM_SEED,
+                               trend=True, parameterization='auto', nuts_sampler='nutpie', forecast_df=_row,
                                forecast_aggregate='first')
         kf, kf_idata = res.kf, res.idata
 
@@ -4525,8 +5204,11 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
     """Section 11b: re-fit the single-ISIN series with stochastic volatility.
 
     The scalar ``sigma_obs`` is replaced by a latent log-volatility random walk
-    (``sigma_obs_t = exp(log_vol_t)``) under a robust Student-t likelihood; the realized
-    volatility term-structure (``feat_vol_*``) anchors the *shape* of the log-vol prior.
+    (``sigma_obs_t = exp(log_vol_t)``) under a robust Student-t likelihood. The
+    log-vol walk is anchored at the constant ``log(scale)`` of the observed scatter
+    (the absolute ``feat_vol_*`` term-structure anchor was retired with the
+    ``feat_vol_drift`` MV refactor; ``fit(realized_vol=...)`` still accepts an
+    external volatility series when one is available).
     """
     try:
         if not ctx:
@@ -4535,18 +5217,11 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
         chosen, dates, observed = ctx['chosen'], ctx['dates'], ctx['observed']
         ticker, _row = ctx['ticker'], ctx['row']
         last_price = ctx.get('last_price')
-        _vts = [
-            _row[c].iloc[0] if (len(_row) and c in _row.columns) else np.nan
-            for c in ('feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y')
-        ]
-        rv_path = build_realized_vol_path(_vts, dates)
-        print('SV realized-vol anchor (per-time):',
-              np.round(rv_path, 2) if rv_path is not None else 'unavailable -> log(scale)')
 
         # Fit + forecast via the shared driver (SV path; spot anchoring adopted).
         res_sv = fit_kalman_model(price_targets=observed, isin=str(chosen), dates=dates, last_price=last_price,
                                   samples=2500, tune=2500, chains=4, random_seed=RANDOM_SEED, trend=True,
-                                  stochastic_volatility=True, realized_vol=rv_path, parameterization='marginalized',
+                                  stochastic_volatility=False, parameterization='auto',
                                   nuts_sampler='nutpie', forecast_df=_row, forecast_aggregate='first')
         kf_sv, kf_sv_idata = res_sv.kf, res_sv.idata
 
@@ -4614,7 +5289,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
     """
     model_df = frame
     try:
-        keep = ('isin', 'name', 'ticker', 'last_price', 'price_target', 'market_cap', 'enterprise_value',
+        keep = ('isin', 'name', 'ticker', 'last_price', 'price_target', 'market_cap', 'market_cap_country_r', 'enterprise_value',
                 'income_statement_report_date', 'next_earnings', 'fy_end_date', 'next_fiscal_quarter', 'last_updated',
                 'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date',)
         hist_cols, col_sql = fetch_history_columns(engine, keep)
@@ -4624,9 +5299,10 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
                     SELECT {col_sql}
                     FROM pml.pml_df
                     WHERE next_earnings >= '2026-01-01'
-                      AND last_updated >= '2026-01-01'
+                      AND income_statement_report_date >= '2025-01-01'
                       AND next_earnings >= current_date - INTERVAL '5 days'
                       AND next_earnings <= current_date + INTERVAL '5 days'
+                      AND market_cap_country_r > 95
                     ORDER BY market_cap DESC 
                 """),
                 conn,
@@ -4667,9 +5343,9 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         # Fit + cohort structural forecast via the shared driver (spot anchoring
         # adopted; cohort-median fiscal dates + last_updated anchor).
         res = fit_kalman_model(price_targets=observed, isin=label, dates=dates, last_price=last_price, samples=2500,
-                               tune=2500, chains=4, target_accept=0.9, random_seed=RANDOM_SEED, trend=True,
-                               parameterization='marginalized', nuts_sampler='nutpie', forecast_df=snap,
-                               forecast_aggregate='median')
+                               tune=2500, chains=4, target_accept=0.97, random_seed=RANDOM_SEED, trend=True,
+                               parameterization='auto', nuts_sampler='nutpie', forecast_df=snap,
+                               forecast_aggregate='first')
         kf, kf_idata = res.kf, res.idata
 
         print(f'{res.fit_kind} fit: {len(observed)} obs, '
@@ -4757,39 +5433,27 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
 def run_mingled_cohort_stochastic_vol(frame: pd.DataFrame, ctx: Optional[dict]) -> None:
     """Section 12b: stochastic-volatility variant of the mingled earnings cohort.
 
-    The anchor is the cohort-median ``feat_vol_*`` term-structure (from the fused panel's
-    modelling frame ``panel.frame``), mapped onto the mingled ``asof_date`` grid.
+    The log-vol walk is anchored at the constant ``log(scale)`` of the cohort's
+    observed scatter (the cohort-median ``feat_vol_*`` term-structure anchor was
+    retired with the ``feat_vol_drift`` MV refactor; ``fit(realized_vol=...)``
+    still accepts an external volatility series when one is available).
     """
     try:
         mingled = ctx.get('mingled') if ctx else None
         if mingled is None or len(mingled) < 2:
             print('Section 12 produced no mingled cohort; stochastic-volatility variant skipped.')
             return
-        model_df = frame
-        snap = ctx.get('snap')
         label = ctx.get('label', 'EARNINGS-COHORT')
         last_price = ctx.get('last_price')
 
         _dates_sv = pd.DatetimeIndex(mingled['asof_date'])
         _observed_sv = mingled['price_target'].to_numpy()
 
-        _cohort = (snap['isin'].astype(str).unique()
-                   if snap is not None and 'isin' in snap.columns else [])
-        _mv = model_df[model_df['isin'].astype(str).isin(_cohort)]
-        _vts = [
-            float(np.nanmedian(_mv[c]))
-            if (c in _mv.columns and _mv[c].notna().any()) else np.nan
-            for c in ('feat_vol_1m', 'feat_vol_3m', 'feat_vol_6m', 'feat_vol_1y')
-        ]
-        rv_path = build_realized_vol_path(_vts, _dates_sv)
-        print('Cohort SV realized-vol anchor (per-time):',
-              np.round(rv_path, 2) if rv_path is not None else 'unavailable -> log(scale)')
-
         # Fit via the shared driver (SV path; no forward forecast in this section,
         # so ``forecast_df`` is omitted). Spot anchoring adopted.
         res_sv = fit_kalman_model(price_targets=_observed_sv, isin=label, dates=_dates_sv, last_price=last_price,
                                   samples=2500, tune=2500, chains=4, random_seed=RANDOM_SEED, trend=True,
-                                  stochastic_volatility=True, realized_vol=rv_path, parameterization='marginalized',
+                                  stochastic_volatility=True, parameterization='non_centered',
                                   nuts_sampler='nutpie')
         kf_sv, kf_sv_idata = res_sv.kf, res_sv.idata
 
@@ -4842,9 +5506,10 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
     ``cohort_meta`` ...) for §13.1 / §14.
     """
     try:
-        keep_cols_tuple = ('isin', 'ticker', 'name', 'description', 'trading_region', 'region', 'country', 'exchange',
-                           'unit', 'sector',
-                           'industry', 'market_cap', 'enterprise_value', 'last_price', 'price_target', 'next_earnings',
+        keep_cols_tuple = ('isin', 'ticker', 'name', 'description', 'trading_region', 'region', 'country',
+                           'trading_country', 'trading_country_name', 'exchange',
+                           'unit', 'exchange_name', 'unit_name', 'country_name', 'sector',
+                           'industry', 'market_cap','market_cap_country_r', 'enterprise_value', 'last_price', 'price_target', 'next_earnings',
                            'days_to_earnings','fy_end_date', 'last_updated', 'next_fiscal_quarter',
                            'income_statement_report_date', 'next_income_statement_report_date', 'next_fy_end_date')
         _hist_cols, col_sql = fetch_history_columns(engine, keep_cols_tuple)
@@ -4858,9 +5523,10 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
                 text(f"""
                         SELECT {col_sql}
                         FROM pml.pml_df
-                        WHERE next_earnings >= '2026-01-01'
+                        WHERE income_statement_report_date >= '2025-01-01'
                           AND next_earnings >= current_date - INTERVAL ':past_days days'
                           AND next_earnings <= current_date + INTERVAL ':future_days days'
+                          AND market_cap_country_r > 95
                     """.replace(':past_days', str(earnings_past_days))
                      .replace(':future_days', str(earnings_future_days))),
                 conn,
@@ -4881,7 +5547,7 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
 
         MAX_FOREST = 50
         cohort_results = (results[results['isin'].isin(cohort_isins)]
-                          .sort_values('expected_upside_pct', ascending=False))
+                          .sort_values('expected_upside', ascending=False))
         if len(cohort_results) > MAX_FOREST:
             half = MAX_FOREST // 2
             keep = pd.concat([cohort_results.head(half), cohort_results.tail(half)])
@@ -4936,11 +5602,12 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
               f'50% HDI band: ({band50[0]:.2f}, {band50[1]:.2f});  '
               f'cohort last_price ref = {cohort_last_price:.2f}.')
 
-        _cols = ['isin', 'ticker', 'name', 'description', 'trading_region', 'region', 'country', 'exchange', 'unit',
+        _cols = ['isin', 'ticker', 'name', 'description', 'trading_region', 'region', 'country_name', 'exchange_name',
+                 'unit_name',
                  'sector', 'industry',
                  'market_cap', 'enterprise_value', 'last_price', 'observed_pt',
                  'expected_pt', 'expected_pt_hdi_lo', 'expected_pt_hdi_hi',
-                 'expected_upside_pct']
+                 'expected_upside']
         display(keep[[c for c in _cols if c in keep.columns]]
                 .round(3).reset_index(drop=True))
 
@@ -5115,6 +5782,11 @@ def run_summary(results: pd.DataFrame, screen: ScreenContext,
         return (df['expected_pt'] / denom - 1.0) * 100.0
 
     universe = results.copy()
+    # Display boundary: the screen frame stores decimal upside — build a local
+    # percent column for the summary tables/prints (cohort/rest slice universe,
+    # so they inherit it).
+    universe['expected_upside_pct'] = (
+        pd.to_numeric(universe['expected_upside'], errors='coerce') * 100.0)
 
     # ---- A. Cross-sectional: earnings cohort vs the rest of the universe ----
     _cohort_ids = set(cohort_meta['isin'].astype(str)) if cohort_meta is not None else None
@@ -5253,10 +5925,13 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
       universe posture: ``excess_g = E[group upside] - E[universe upside]`` shrunk by
       ``lambda_g = tau^2 / (tau^2 + s_g^2)`` (between-group signal variance vs the
       group's posterior noise), with a per-coord OW/UW band of ±1 cross-group sd of
-      the shrunk excess replacing the former static ±2pp gates.
+      the shrunk excess replacing the former static ±2pp gates. Groups backed by
+      fewer than ``MIN_GROUP_N`` (15) names are excluded before the shrinkage
+      stats, so thin coord groups neither receive verdicts nor distort
+      ``tau^2`` / the OW/UW band.
     * **§8 — risk-adjusted return.** Reward per unit of *expected volatility* (the
-      ``feat_vol_*`` term-structure the panel conditions its observation noise on),
-      i.e. a forward Sharpe-like ranking that demotes high-upside / high-vol names.
+      per-name dispersion of the posterior upside draws — a genuinely forward-looking
+      vol proxy), i.e. a Sharpe-like ranking that demotes high-upside / high-vol names.
     * **§9 — CVaR tail analytics.** Per-name expected shortfall (CVaR, mean of the worst
       ``ALPHA``-tail) of the posterior upside draws, cross-checked against the
       Student-t Monte-Carlo 5% return. With a low estimated ``nu`` the analyst-target
@@ -5290,6 +5965,13 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
         univ_gain = 1.0
     P_HI_BASE, P_LO_BASE = 0.67, 0.33
     P_HI, P_LO = P_HI_BASE * univ_gain, P_LO_BASE * univ_gain
+
+    # Minimum-coverage gate for the §4 group allocation signals: coord groups
+    # backed by fewer than MIN_GROUP_N names carry too little cross-sectional
+    # evidence for a posture verdict (a 1-3 name "exchange" is a stock pick,
+    # not an allocation signal). Such groups are dropped BEFORE the shrinkage
+    # stats so they neither receive verdicts nor distort tau^2 / the OW/UW band.
+    MIN_GROUP_N = 15
 
     # Shared CVaR-aware analytics + sized book (SSOT with the §10c export).
     rb = risk_book if risk_book is not None else compute_cvar_aware_book(idata, panel, screen, results)
@@ -5347,24 +6029,39 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
           f'lambda = tau^2/(tau^2+s_g^2); OVERWEIGHT if shrunk excess >= +1 '
           f'cross-group sd and P(>0|gain)>={P_HI:.0%}; UNDERWEIGHT if <= -1 sd '
           f'or P(>0|gain)<={P_LO:.0%}  (gates = {P_HI_BASE:.0%}/{P_LO_BASE:.0%} '
-          f'x mean gain).')
+          f'x mean gain). Groups with n<{MIN_GROUP_N} names are excluded from '
+          f'the group signals below.')
 
     # 4. Group allocation signals (hierarchical coords).
     _coords = [c for c in
-               ('region', 'trading_region', 'exchange', 'unit', 'country', 'sector', 'industry', 'size_class',
+               ('region', 'trading_region', 'exchange_name', 'unit_name', 'country_name', 'sector', 'industry',
+                'size_class',
                 'style_class')
                if c in model_df.columns]
     for col in _coords:
         lab = model_df[col].fillna('Unknown').astype(str).to_numpy()
         da = xr.DataArray(lab, dims='isin', coords={'isin': isin_dim})
-        grp = eu.groupby(da.rename(col)).mean('isin')
-        stk = grp.stack(s=('chain', 'draw'))
-        gmean = stk.mean('s');
-        glo = stk.quantile(0.03, 's');
-        ghi = stk.quantile(0.97, 's')
-        gpos = (grp > 0).mean(('chain', 'draw'))
-        ggain = gain_da.groupby(da.rename(col)).mean('isin')
         counts = pd.Series(lab).value_counts()
+
+        # Minimum-coverage gate: keep only groups with n >= MIN_GROUP_N names.
+        # Applied before the shrinkage stats so thin groups do not inflate
+        # tau^2 (between-group variance) or the ±1 sd OW/UW band.
+        grp_all = eu.groupby(da.rename(col)).mean('isin')
+        eligible = [g for g in grp_all[col].values
+                    if int(counts.get(str(g), 0)) >= MIN_GROUP_N]
+        n_dropped = grp_all.sizes[col] - len(eligible)
+        if not eligible:
+            print(f'\n4.{col.upper()} SIGNALS  (0 of {grp_all.sizes[col]} groups '
+                  f'with n>={MIN_GROUP_N} - section skipped)')
+            continue
+
+        grp = grp_all.sel({col: eligible})
+        stk = grp.stack(s=('chain', 'draw'))
+        gmean = stk.mean('s')
+        glo = stk.quantile(0.03, 's')
+        ghi = stk.quantile(0.97, 's')
+        gpos = (grp > 5).mean(('chain', 'draw'))
+        ggain = gain_da.groupby(da.rename(col)).mean('isin').sel({col: eligible})
 
         # Hierarchical shrinkage of the per-group excess return vs the universe
         # posture: lambda_g = tau^2 / (tau^2 + s_g^2), where tau^2 is the
@@ -5389,7 +6086,8 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
                  int(counts.get(str(g), 0)))
                 for g in grp[col].values]
         rows.sort(key=lambda r: r[1], reverse=True)
-        print(f'\n4.{col.upper()} SIGNALS  ({len(rows)} groups)  '
+        print(f'\n4.{col.upper()} SIGNALS  ({len(rows)} groups, '
+              f'{n_dropped} dropped n<{MIN_GROUP_N})  '
               f'OW/UW band=±{_band:.2f}pp shrunk excess')
 
         def _emit(r):
@@ -5409,8 +6107,12 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
                 _emit(r)
 
     # 5. Name-level action list. ``nm`` carries the §8-§10 risk analytics + book
-    # weights from the shared RiskBook (p_upside_pos, band_width_pct, cvar05_pct, ...).
-    nm = rb.analytics
+    # weights from the shared RiskBook (p_upside_pos, band_width, cvar05, ...).
+    # The RiskBook frame stores raw decimals — build local percent columns here
+    # so this display-only section prints on the % scale.
+    nm = rb.analytics.copy()
+    for _c in ('expected_upside', 'band_width', 'exp_vol', 'cvar05', 'tail_risk'):
+        nm[f'{_c}_pct'] = pd.to_numeric(nm.get(_c), errors='coerce') * 100.0
     _wide = float(np.nanpercentile(nm['band_width_pct'], 95)) if len(nm) else float('inf')
 
     def _nm_label(r):
@@ -5468,8 +6170,8 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     #
     # The §5b panel uses a Student-t likelihood whose estimated df (``nu``) is low
     # (heavy tails), so analyst-target outliers dominate naive mean-upside rankings.
-    # §8 re-ranks on reward per unit of *expected volatility* (the ``feat_vol_*``
-    # term-structure the model conditions on); §9 measures each name's expected
+    # §8 re-ranks on reward per unit of *expected volatility* (the per-name
+    # dispersion of the posterior upside draws); §9 measures each name's expected
     # shortfall (CVaR) tail; §10 reports the long book sized on a reward-to-CVaR
     # budget so a single fat-tailed name cannot dominate the portfolio's downside.
     # ------------------------------------------------------------------
@@ -5529,8 +6231,11 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
               'the mean upside, is the right sizing denominator.')
 
     # 10. CVaR-aware position sizing (long book, expected-shortfall budget).
+    # ``rb.book`` and the ``rb.summary`` return metrics are decimal — scale at print.
     _s = rb.summary
-    _book = rb.book
+    _book = rb.book.copy()
+    for _c in ('expected_upside', 'exp_vol', 'cvar05'):
+        _book[f'{_c}_pct'] = pd.to_numeric(_book.get(_c), errors='coerce') * 100.0
     print(f'\n10. CVaR-AWARE SIZING  (top {int(_s["k_book"])} reward-to-CVaR longs, '
           f'{_s["cap"]:.0%} name cap, 100% gross)')
     if len(_book):
@@ -5539,11 +6244,11 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
             print(f'   {_nm_label(r):<14.14s}  {r["weight"] * 100:5.1f}%  '
                   f'{r["expected_upside_pct"]:7.2f}%  {_na(r["exp_vol_pct"], 1, "%"):>7}  '
                   f'{_na(r["cvar05_pct"], 1, "%"):>8}  {_na(r["starr"], 2):>6}')
-        print(f'   PORTFOLIO  expected upside={_na(_s["port_up"], 2, "%")}  '
-              f'CVaR5={_na(_s["port_cvar"], 2, "%")}  reward/CVaR={_na(_s["starr_book"], 2)}  '
-              f'approx vol(upper bnd)={_na(_s["port_vol"], 1, "%")}')
-        print(f'   Diversification: weighted-avg name CVaR5={_na(_s["wavg_cvar"], 2, "%")} vs '
-              f'portfolio CVaR5={_na(_s["port_cvar"], 2, "%")} '
+        print(f'   PORTFOLIO  expected upside={_na(_s["port_up"] * 100.0, 2, "%")}  '
+              f'CVaR5={_na(_s["port_cvar"] * 100.0, 2, "%")}  reward/CVaR={_na(_s["starr_book"], 2)}  '
+              f'approx vol(upper bnd)={_na(_s["port_vol"] * 100.0, 1, "%")}')
+        print(f'   Diversification: weighted-avg name CVaR5={_na(_s["wavg_cvar"] * 100.0, 2, "%")} vs '
+              f'portfolio CVaR5={_na(_s["port_cvar"] * 100.0, 2, "%")} '
               f'(tail lift x{_na(_s["div"], 2)}); weights inverse to expected shortfall, so '
               f'the analyst-target outliers are capped, not chased. Persisted to '
               f'analytics.kalman_filtered_price_targets as cvar_book_weight.')
@@ -5561,7 +6266,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
 # Entry point
 # =============================================================================
 def main(*, run_eda_section: bool = True, write_analytics: bool = True,
-         robust: bool = True) -> dict:
+         robust: bool = False, export_results: bool = True) -> dict:
     """Run the full Kalman price-target workflow end-to-end on the fused panel model.
 
     The cross-sectional spine is the §5b fused MvGRW + volatility-conditioned model
@@ -5578,6 +6283,10 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     robust
         When ``True`` (default), use the Student-t panel likelihood (absorbs analyst
         outliers); ``False`` selects the Normal-likelihood twin.
+    export_results
+        When ``True`` (default), persist every rendered figure / displayed table
+        (via the :func:`_safe_show` / :func:`display` hooks) and the bulk data
+        artifacts (:func:`export_all_artifacts`) under ``KALMAN_PT_RESULTS_DIR``.
 
     Returns
     -------
@@ -5587,58 +6296,87 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     """
     logging.basicConfig(level=os.environ.get('LOG_LEVEL', 'INFO'))
     setup_plotting()
+    if export_results:
+        enable_artifact_export()
+        logger.info("Artifact export enabled -> %s", get_export_state().root)
 
     engine = create_engine(resolve_db_url())
 
     # Data load + role resolution.
-    kalman_df = load_kalman_df(engine)
-    feature_catalogue = load_feature_catalogue(engine)
-    roles = resolve_feature_roles(kalman_df, feature_catalogue)
+    with export_section('01_data'):
+        kalman_df = load_kalman_df(engine)
+        feature_catalogue = load_feature_catalogue(engine)
+        roles = resolve_feature_roles(kalman_df, feature_catalogue)
 
     # §2 EDA (optional).
     if run_eda_section:
-        run_eda(kalman_df, roles)
+        with export_section('02_eda'):
+            run_eda(kalman_df, roles)
 
     # §3 state-space feature mapping + §4 fused-panel data containers.
-    drift_features, _mapping = map_state_space_features(kalman_df)
-    panel = prepare_kalman_panel_inputs(kalman_df, roles, drift_features)
+    with export_section('03_features'):
+        drift_features, _mapping = map_state_space_features(kalman_df, feature_catalogue)
+        panel = prepare_kalman_panel_inputs(kalman_df, roles, drift_features)
 
     # §5b fused model -> §6 prior -> §7 posterior -> §8 PPC.
     model = build_panel_model(panel, robust=robust)
-    prior_idata = run_prior_predictive(model, panel)
-    idata = sample_posterior(model, prior_idata)
-    run_posterior_predictive(model, idata, panel)
+    with export_section('06_prior'):
+        prior_idata = run_prior_predictive(model, panel)
+    with export_section('07_posterior'):
+        idata = sample_posterior(model, prior_idata, panel=panel)
+    with export_section('08_ppc'):
+        run_posterior_predictive(model, idata, panel)
 
     # §9 diagnostics -> §10 screening table -> §10b risk book -> §10c export.
-    run_diagnostics(idata, panel)
-    screen = summarize_panel_screen(idata, panel)
-    results = screen.results
-    risk_book = compute_cvar_aware_book(idata, panel, screen, results)
-    kalman_results = export_analytics(idata, panel, screen, risk_book=risk_book, write=write_analytics)
+    with export_section('09_diagnostics'):
+        run_diagnostics(idata, panel)
+    with export_section('10_screen'):
+        screen = summarize_panel_screen(idata, panel)
+        results = screen.results
+    with export_section('10b_risk_book'):
+        risk_book = compute_cvar_aware_book(idata, panel, screen, results)
+    with export_section('10c_analytics'):
+        kalman_results = export_analytics(idata, panel, screen, risk_book=risk_book,
+                                          write=write_analytics)
 
     # §10K universe-consensus fit via the shared fit_kalman_model driver
     # (all kalman_df rows pooled into one median *_ago consensus trail).
-    universe_fit = run_universe_kalman_fit(kalman_df)
+    with export_section('10k_universe'):
+        universe_fit = run_universe_kalman_fit(kalman_df)
 
     # §11 single-ISIN filter (+11b SV).
-    single_ctx = run_single_isin_filter(panel.frame, engine)
-    run_single_isin_stochastic_vol(single_ctx)
+    with export_section('11_single_isin'):
+        single_ctx = run_single_isin_filter(panel.frame, engine)
+        _export_context(single_ctx, '11_single_isin_ctx')
+    with export_section('11b_single_sv'):
+        run_single_isin_stochastic_vol(single_ctx)
 
     # §12 mingled cohort (+12b SV).
-    mingled_ctx = run_mingled_cohort_filter(panel.frame, engine)
-    run_mingled_cohort_stochastic_vol(panel.frame, mingled_ctx)
+    with export_section('12_mingled'):
+        mingled_ctx = run_mingled_cohort_filter(panel.frame, engine)
+        _export_context(mingled_ctx, '12_mingled_ctx')
+    with export_section('12b_mingled_sv'):
+        run_mingled_cohort_stochastic_vol(panel.frame, mingled_ctx)
 
     # §13 granular forest (+13.1 further views).
-    forest_ctx = run_granular_forest(idata, results, panel, screen, engine)
-    run_granular_further_views(prior_idata, panel, screen, forest_ctx)
+    with export_section('13_forest'):
+        forest_ctx = run_granular_forest(idata, results, panel, screen, engine)
+        _export_context(forest_ctx, '13_forest_ctx')
+    with export_section('13b_further_views'):
+        run_granular_further_views(prior_idata, panel, screen, forest_ctx)
 
     # §14 summary + 14b recommendations.
-    run_summary(results, screen, forest_ctx, mingled_ctx)
-    run_recommendations(idata, panel, results, screen, forest_ctx, risk_book=risk_book)
+    with export_section('14_summary'):
+        run_summary(results, screen, forest_ctx, mingled_ctx)
+    with export_section('14b_recommendations'):
+        run_recommendations(idata, panel, results, screen, forest_ctx, risk_book=risk_book)
 
-    return {'idata': idata, 'prior_idata': prior_idata, 'results': results,
-            'kalman_results': kalman_results, 'panel': panel, 'screen': screen,
-            'risk_book': risk_book, 'universe_fit': universe_fit}
+    artifacts = {'idata': idata, 'prior_idata': prior_idata, 'results': results,
+                 'kalman_results': kalman_results, 'panel': panel, 'screen': screen,
+                 'risk_book': risk_book, 'universe_fit': universe_fit}
+    if export_results:
+        export_all_artifacts(artifacts)
+    return artifacts
 
 
 if __name__ == '__main__':

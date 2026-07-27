@@ -647,8 +647,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_price_target_isin ON pml.mv_pymc_p
 -- risk_adj_return = expected_return * exp(-risk_penalty * z(feat_avg_beta)),
 -- feat_pt_noise_sigma as the cv that widens
 -- sigma_isin = sigma_base * (1 + cv) / sqrt(n_analysts), and n_analysts as the
--- precision count. feat_vol_{1m,3m,6m,1y} is retained as a provenance / EDA
--- volatility term-structure (no longer the risk-adjustment driver).
+-- precision count. feat_vol_drift (drift across the realized-vol term structure
+-- 1m -> 1y, mirroring feat_pt_noise_drift) is the observation-noise-drift
+-- widener; the absolute feat_vol_{1m,3m,6m,1y} levels are no longer emitted.
 CREATE MATERIALIZED VIEW IF NOT EXISTS pml.mv_pymc_kalman_pt AS
 SELECT isin,
        ticker,
@@ -733,13 +734,14 @@ SELECT isin,
        price_target_median_1y_ago,
        -- ---- Lagged analyst-count trail (kalman_pt constant_data scale) ----------
        -- Coverage-count *_ago snapshots: fixed per-step analyst participation the
-       -- panel conditions on (pymc_role 'constant_data'). No 6m horizon
-       -- (price_target_num_6m_ago feeds feat_coverage_drift only, stays derived_input).
+       -- panel conditions on (pymc_role 'constant_data'), incl. the 6m horizon
+       -- (which also feeds feat_coverage_drift).
        price_target_num_1w_ago,
        price_target_num_mtd_ago,
        price_target_num_1m_ago,
        price_target_num_qtd_ago,
        price_target_num_3m_ago,
+       price_target_num_6m_ago,
        price_target_num_ytd_ago,
        price_target_num_1y_ago,
        -- ---- Lagged spot-price trail (kalman_pt observed state sequence) ---------
@@ -751,17 +753,55 @@ SELECT isin,
        -- pml.vw_pymc_feature_catalogue; emitted un-prefixed so feature_alias
        -- (== column_name) resolves against kalman_df.columns in the notebook
        -- present-check. Horizons mirror the feat_price_drift inputs plus the long
-       -- 3y/5y anchors and the qtd period-to-date snapshot.
+       -- 3y/5y anchors and the 1d / period-to-date (mtd/qtd/ytd) snapshots.
+       price_1d_ago,
        price_5d_ago,
        price_1w_ago,
+       price_mtd_ago,
        price_1m_ago,
        price_3m_ago,
        price_6m_ago,
+       price_ytd_ago,
        price_1y_ago,
        price_3y_ago,
        price_5y_ago,
        price_qtd_ago,
        calc_change_ratio(price_target::numeric, last_price::numeric)                                                                                                                                           AS feat_implied_upside,
+       -- ---- Analyst rating mix, conviction and 1y achievement / accuracy ---------
+       -- Copied verbatim from mv_pymc_price_target so the kalman_pt cross-section
+       -- carries the same analyst-sentiment predictors (all mutable_predictor).
+       num_hold_ratings                                                                                                                                                                                        AS feat_holds,
+       num_strong_buys_ratings + num_buys_ratings                                                                                                                                                              AS feat_buys,
+       num_strong_sell_ratings + num_sell_ratings                                                                                                                                                              AS feat_sells,
+       num_no_opinion_ratings                                                                                                                                                                                  AS feat_no_opinion,
+       pml.safe_divide((num_strong_buys_ratings + num_buys_ratings)::numeric,
+                       (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_no_opinion_ratings +
+                        num_sell_ratings +
+                        num_strong_sell_ratings)::numeric)                                                                                                                                                     AS feat_analyst_bullish_pct,
+       pml.safe_divide((num_sell_ratings + num_strong_sell_ratings)::numeric,
+                       (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_no_opinion_ratings +
+                        num_sell_ratings +
+                        num_strong_sell_ratings)::numeric)                                                                                                                                                     AS feat_analyst_bearish_pct,
+       pml.safe_divide(num_hold_ratings::numeric,
+                       (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_no_opinion_ratings +
+                        num_sell_ratings +
+                        num_strong_sell_ratings)::numeric)                                                                                                                                                     AS feat_analyst_neutral_pct,
+       abs(pml.safe_divide(
+		       (num_strong_buys_ratings + num_buys_ratings - (num_sell_ratings + num_strong_sell_ratings))::numeric,
+		       (num_strong_buys_ratings + num_buys_ratings + num_hold_ratings + num_no_opinion_ratings +
+		        num_sell_ratings +
+		        num_strong_sell_ratings)::numeric))                                                                                                                                                            AS feat_analyst_conviction,
+       analyst_rating                                                                                                                                                                                          AS feat_analyst_rating,
+       CASE
+	       WHEN price_target_1y_ago > 0::double precision AND last_price >= price_target_1y_ago
+		       THEN 1.0::double precision
+	       WHEN price_target_1y_ago > 0::double precision THEN pml.safe_divide(last_price, price_target_1y_ago)
+	       ELSE NULL::double precision END                                                                                                                                                                     AS feat_pt_achievement_1y,
+       pml.safe_divide(abs(last_price - price_target_1y_ago),
+                       abs(price_target_1y_ago))                                                                                                                                                               AS feat_pt_accuracy_1y,
+       CASE
+	       WHEN last_price >= price_target_low_1y_ago AND last_price <= price_target_high_1y_ago THEN 1.0
+	       ELSE 0.0 END                                                                                                                                                                                        AS feat_pt_range_hit_rate,
        -- ---- Per-step drift (mean log-uplift) across every price / target trail ----
        -- Each drift is min-points-guarded (>=2 valid consecutive pairs) so a single
        -- noisy pair can't masquerade as signal, and winsorised to [-1, 1] to bound the
@@ -803,24 +843,40 @@ SELECT isin,
 		                     2), -1,
                      1)                                                                                                                                                                                        AS feat_pt_noise_drift,
        price_target_stddev                                                                                                                                                                                     AS feat_pt_noise_sigma,
+       -- ---- Lagged analyst-stddev trail (kalman_pt observed noise sequence) -----
+       -- Consensus-dispersion *_ago snapshots the panel observes as the evolving
+       -- measurement-noise level (pymc_role 'observed'); emitted un-prefixed so
+       -- feature_alias (== column_name) resolves in the notebook present-check.
+       price_target_stddev_1w_ago,
+       price_target_stddev_mtd_ago,
+       price_target_stddev_1m_ago,
+       price_target_stddev_qtd_ago,
+       price_target_stddev_3m_ago,
+       price_target_stddev_6m_ago,
+       price_target_stddev_ytd_ago,
+       price_target_stddev_1y_ago,
        -- Inter-analyst range (high - low) normalised by mean target
        pml.safe_divide(price_target_high - price_target_low,
                        NULLIF(price_target, 0))                                                                                                                                                                AS feat_pt_range_norm,
        -- Short-term momentum: last day's price change (mutable_predictor).
        one_day_pct                                                                                                                                                                                             AS feat_one_day_return,
        price_chg_pct_3m                                                                                                                                                                                             AS feat_price_chg_pct_3m,
-       volatility_1m                                                                                                                                                                                           AS feat_vol_1m,
-       volatility_3m                                                                                                                                                                                           AS feat_vol_3m,
-       volatility_6m                                                                                                                                                                                           AS feat_vol_6m,
-       volatility_1y                                                                                                                                                                                           AS feat_vol_1y,
+       -- Drift across the realized-vol term structure (1m -> 1y) tells how price
+       -- volatility itself is evolving (the sigma_obs widener analogue of
+       -- feat_pt_noise_drift's state-space Q), with the matching valid-pair count.
+       pml.winsorise(pml.target_drift(
+		                     ARRAY [volatility_1m::NUMERIC, volatility_3m::NUMERIC, volatility_6m::NUMERIC, volatility_1y::NUMERIC],
+		                     2), -1,
+                     1)                                                                                                                                                                                        AS feat_vol_drift,
+       pml.target_drift_n(ARRAY [volatility_1m::NUMERIC, volatility_3m::NUMERIC, volatility_6m::NUMERIC, volatility_1y::NUMERIC])                                                                              AS feat_vol_drift_n,
        -- Raw beta windows (systematic-risk inputs to feat_avg_beta below).
        beta_1y,
        beta_2y,
        beta_5y,
        -- feat_avg_beta: NULL-aware mean of the available beta windows. The fused
        -- panel keys its risk adjustment on this systematic-risk (CAPM) driver,
-       -- risk_adj_return = expected_return * exp(-risk_penalty * z(feat_avg_beta)),
-       -- replacing the prior expected-volatility (feat_vol_*) penalty.
+       -- risk_adj_return = expected_return * exp(-risk_penalty * z(feat_avg_beta));
+       -- realized vol enters only via the feat_vol_drift sigma_obs widener above.
        ((COALESCE(beta_1y, 0::double precision) + COALESCE(beta_2y, 0::double precision) +
          COALESCE(beta_5y, 0::double precision)) /
         NULLIF((beta_1y IS NOT NULL)::int + (beta_2y IS NOT NULL)::int + (beta_5y IS NOT NULL)::int,
@@ -1105,8 +1161,8 @@ ORDER BY model_target, pymc_role;
 -- model would silently reindex the column to 0.0 (Finding 1) or list an alias
 -- the MV never emits (Findings 3/4).
 --
--- This view reconciles the live MV output columns (information_schema) against
--- the catalogue, in BOTH directions:
+-- This view reconciles the live MV output columns (pg_catalog.pg_attribute)
+-- against the catalogue, in BOTH directions:
 --   * MISSING_FROM_CATALOGUE  : MV emits the column but the catalogue has no
 --                               matching feature_alias for that model.
 --   * DUPLICATE_CATALOGUE_ALIAS: more than one catalogue row claims the alias.
@@ -1121,13 +1177,20 @@ WITH mv_map(mv_name, model_target) AS (VALUES ('mv_pymc_earnings_beat', 'earning
                                               ('mv_pymc_credit_risk', 'credit_risk'),
                                               ('mv_pymc_accounting_anomaly', 'accounting_anomaly')
                                       ),
-     mv_cols                       AS (SELECT mm.model_target, c.column_name AS feat_name
-                                       FROM mv_map                              mm
-	                                            JOIN information_schema.columns c
-	                                                 ON c.table_schema = 'pml' AND c.table_name = mm.mv_name
-                                       WHERE c.column_name LIKE 'feat\_%'
-	                                      OR c.column_name LIKE 'observed\_%'
-	                                      OR c.column_name LIKE 'n\_%'
+     -- NOTE: pg_class/pg_attribute (not information_schema.columns) — the SQL
+     -- standard information_schema does NOT expose materialized-view columns,
+     -- which silently emptied mv_cols and flagged every alias as PHANTOM.
+     mv_cols                       AS (SELECT mm.model_target, a.attname::TEXT AS feat_name
+                                       FROM mv_map                        mm
+	                                            JOIN pg_catalog.pg_class     cl
+	                                                 ON cl.relname = mm.mv_name AND cl.relkind = 'm'
+	                                            JOIN pg_catalog.pg_namespace ns
+	                                                 ON ns.oid = cl.relnamespace AND ns.nspname = 'pml'
+	                                            JOIN pg_catalog.pg_attribute a
+	                                                 ON a.attrelid = cl.oid AND a.attnum > 0 AND NOT a.attisdropped
+                                       WHERE a.attname LIKE 'feat\_%'
+	                                      OR a.attname LIKE 'observed\_%'
+	                                      OR a.attname LIKE 'n\_%'
                                       ),
      cat                           AS (SELECT model_target, feature_alias, COUNT(*) AS n_rows
                                        FROM pml.vw_pymc_feature_catalogue

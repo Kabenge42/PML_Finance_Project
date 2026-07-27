@@ -48,11 +48,11 @@ row_limit_default = 500
 _COLUMNS = [
     ("ticker", "Ticker", None),
     ("name", "Name", None),
-    ("country", "Country", None),
+    ("country_name", "Country", None),
     ("industry", "Industry", None),
     ("sector", "Sector", None),
-    ("exchange", "Exchange", None),
-    ("unit", "Currency", None),
+    ("exchange_name", "Exchange", None),
+    ("unit_name", "Currency", None),
     ("original_price", "Original Price", 2),
     ("price_target_kalman", "Price Target Kalman", 2),
     ("price_target_median", "Price Target Median", 2),
@@ -84,7 +84,7 @@ def _table_columns() -> list[dict]:
 
 def component() -> "object":
     country_opts = [{"label": "All", "value": "All"}]
-    country_opts += [{"label": c, "value": c} for c in column_values(get_data(), "country")]
+    country_opts += [{"label": c, "value": c} for c in column_values(get_data(), "country_name")]
 
     return theme_card(
         title,
@@ -153,15 +153,15 @@ def _update_logic(**kwargs) -> list[dict]:
     if df is None or len(df) == 0:
         return []
 
-    country = kwargs.get(country_id) or country_default
+    country_name = kwargs.get(country_id) or country_default
     sort_by = kwargs.get(sort_by_id) or sort_by_default
     if isinstance(sort_by, str):
         sort_by = [sort_by]
     row_limit = kwargs.get(row_limit_id, row_limit_default)
 
     df = df[(df["expected_return_kalman"] > 0.3) & (df["p_upside_pos_cond"] > 0.67)]
-    if country != "All":
-        df = df[df["country"] == country]
+    if country_name != "All":
+        df = df[df["country_name"] == country_name]
     if len(df) == 0:
         return []
 
@@ -195,7 +195,7 @@ def update(**kwargs) -> Tuple[list, str, list, str]:
     # globally-filtered universe.
     df_all = filter_data(get_data(), **kwargs)
     country_opts, country_val = scoped_filter(
-        df_all, "country", kwargs.get(country_id), include_all=True, all_label="All"
+        df_all, "country_name", kwargs.get(country_id), include_all=True, all_label="All"
     )
     kwargs[country_id] = country_val
     try:

@@ -10,3 +10,7 @@ logs/
 outputs/
 pml_model_analysis_files/
 .coverage
+!/pymc_kalman_filter_pt_results/
+# posterior/prior draw NetCDFs exceed GitHub 100MB limit (use LFS if needed)
+pymc_kalman_filter_pt_results/06_prior_idata.nc
+pymc_kalman_filter_pt_results/07_posterior_idata.nc

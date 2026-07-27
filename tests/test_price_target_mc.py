@@ -155,8 +155,9 @@ class TestSummarizeMcReturns:
         out = summarize_mc_returns(mc, isins)
 
         assert list(out.columns) == [
-            "isin", "er_mean", "er_p05", "er_p50", "er_p95", "prob_pos"
+            "isin", "er_mean", "er_sd", "er_p05", "er_p50", "er_p95", "prob_pos"
         ]
+        assert (out["er_sd"] >= 0.0).all()
         assert len(out) == 3
         assert list(out["isin"]) == ["A", "B", "C"]
 
@@ -174,6 +175,7 @@ class TestSummarizeMcReturns:
         out = summarize_mc_returns(mc, np.array(["a", "b"]))
         np.testing.assert_array_equal(out["prob_pos"].to_numpy(), [1.0, 1.0])
         np.testing.assert_allclose(out["er_mean"].to_numpy(), [1.0, 1.0])
+        np.testing.assert_allclose(out["er_sd"].to_numpy(), [0.0, 0.0])
 
     def test_custom_quantiles_label_columns(self):
         mc = np.zeros((1, 5, 2))

@@ -20,6 +20,9 @@ $env:DATA_DIR = "data"
 $env:MODEL_DIR = "regression"
 $env:CACHE_DIR = ".cache"
 $env:OUTPUT_DIR = "outputs"
+# Kalman price-target workflow artifact exports (figures/CSV/JSON/NetCDF).
+# Anchored at this script's directory so the path is absolute regardless of CWD.
+$env:KALMAN_PT_RESULTS_DIR = Join-Path $PSScriptRoot "pymc_kalman_filter_pt_results"
 
 # Model configuration
 $env:MODEL_VERSION = "v9_10"
@@ -135,6 +138,7 @@ Write-Host "Environment variables set successfully!" -ForegroundColor Green
 Write-Host "NO_COLOR: $env:NO_COLOR"
 Write-Host "DATA_DIR: $env:DATA_DIR"
 Write-Host "OUTPUT_DIR: $env:OUTPUT_DIR"
+Write-Host "KALMAN_PT_RESULTS_DIR: $env:KALMAN_PT_RESULTS_DIR"
 Write-Host "MODEL_DIR: $env:MODEL_DIR"
 Write-Host "RANDOM_SEED: $env:RANDOM_SEED"
 Write-Host "DB_URL: $env:DB_URL"

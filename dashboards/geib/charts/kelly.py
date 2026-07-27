@@ -153,8 +153,8 @@ def _calculate_kelly_fraction(row) -> float:
     q = 1 - p
     if p <= 0 or p >= 1:
         return 0.0
-    # cvar_5pct_kalman is stored on a percent scale; Kelly needs the decimal.
-    cvar = row["cvar_5pct_kalman"] / 100.0
+    # cvar_5pct_kalman is stored as a decimal return, same as expected_return_kalman.
+    cvar = row["cvar_5pct_kalman"]
     expected_return = row["expected_return_kalman"]
     if cvar == 0 or expected_return <= 0:
         return 0.0
@@ -171,7 +171,7 @@ def _create_table(df: pd.DataFrame) -> html.Div:
                "CVaR 5% (%)", "Win Probability"]
     view = df[cols].copy()
     view["expected_return_kalman"] = (view["expected_return_kalman"] * 100).round(2)
-    view["cvar_5pct_kalman"] = view["cvar_5pct_kalman"].round(2)
+    view["cvar_5pct_kalman"] = (view["cvar_5pct_kalman"] * 100).round(2)
     view["p_upside_pos_cond"] = (view["p_upside_pos_cond"] * 100).round(2)
     view["allocation_pct"] = view["allocation_pct"].round(2)
 

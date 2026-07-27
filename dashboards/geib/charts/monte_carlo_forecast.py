@@ -268,9 +268,9 @@ def _build_table(row, terminal, num_simulations, horizon_days, initial_price) ->
          "Posterior likelihood of a gain"),
         ("Simulated Std Dev", _fmt_pct(float(terminal.std())),
          "Dispersion of the simulated terminal returns"),
-        # cvar_5pct_kalman is stored on a percent scale already (unlike the
-        # decimal er_p* / expected_return_kalman columns), so it is NOT * 100.
-        ("CVaR (5%)", _fmt_num(finite_cell(row, "cvar_5pct_kalman"), "%"),
+        # cvar_5pct_kalman is stored as a decimal return like er_p* /
+        # expected_return_kalman — format with the same percent renderer.
+        ("CVaR (5%)", _fmt_pct(finite_cell(row, "cvar_5pct_kalman")),
          "Expected loss in the worst 5% tail"),
         ("Reward-to-CVaR", _fmt_num(finite_cell(row, "reward_to_cvar")),
          "Risk-adjusted return vs tail loss"),

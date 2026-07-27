@@ -1,7 +1,6 @@
 CREATE TABLE pml_df_feature_alias
 (
-	column_name   text NOT NULL
-		CONSTRAINT fk_column_name REFERENCES pml_df_metadata ON DELETE CASCADE,
+	column_name   text NOT NULL,
 	model_target  text NOT NULL,
 	feature_alias text NOT NULL,
 	pymc_role     text,

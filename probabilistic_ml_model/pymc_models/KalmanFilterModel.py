@@ -15,7 +15,7 @@ import re
 import warnings
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Hashable, Literal, Optional, Sequence, TYPE_CHECKING, Union
+from typing import Any, Hashable, Iterable, Literal, Optional, Sequence, TYPE_CHECKING, Union
 
 from pandas import Timestamp
 from pandas._libs import NaTType
@@ -177,6 +177,82 @@ DAY_COUNT_HORIZON_LABELS: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Catalogue-driven drift-feature selection (SSOT).
+#
+# The candidate pool is ``pml.vw_pymc_feature_catalogue`` rows with
+# ``model_target = 'kalman_pt' AND pymc_role = 'mutable_predictor'``
+# (see :meth:`KalmanFilterPriceTarget._resolve_kalman_feature_aliases`).
+# Not every mutable_predictor may enter the drift design matrix: some aliases
+# are consumed elsewhere in the fused model (noise wideners, named tilts, the
+# ``t_scaled`` time covariate) and one is the response itself. These frozensets
+# partition the pool so drift selection stays deterministic and auditable.
+# ---------------------------------------------------------------------------
+
+# ``feat_implied_upside`` is a deterministic function of the RESPONSE
+# (``feat_log_uplift = log1p(feat_implied_upside)``) — never a drift predictor.
+KALMAN_LEAKAGE_FEATURES: frozenset[str] = frozenset({"feat_implied_upside"})
+
+# sigma_obs wideners (``build_noise_wideners`` in ``pymc_kalman_filter_pt.py``):
+# they scale the observation noise, so they must not double as mean predictors.
+KALMAN_NOISE_WIDENER_FEATURES: frozenset[str] = frozenset({
+    "feat_pt_range_norm",
+    "feat_pt_noise_sigma",
+    "feat_vol_drift",
+})
+
+# Named tilt drivers with dedicated ``pm.Data`` containers + sign-fixed loadings
+# in ``build_fused_kalman_pt_model`` (risk / size adjustments on
+# ``risk_adj_return``); folding them into the generic ``beta`` block as well
+# would double-count them.
+KALMAN_TILT_FEATURES: frozenset[str] = frozenset({
+    "feat_avg_beta",
+    "feat_mcap_country_r",
+})
+
+# Valid-pair counters behind the ``target_drift_n`` SQL helper
+# (feature_role='metadata'): drift-support diagnostics, not signals.
+KALMAN_DRIFT_SUPPORT_COUNTERS: frozenset[str] = frozenset({
+    "feat_pt_drift_n",
+    "feat_price_drift_n",
+    "feat_vol_drift_n",
+})
+
+# Raw analyst-rating counts. The compositional percentage / conviction variants
+# (``feat_analyst_bullish_pct`` / ``feat_analyst_bearish_pct`` /
+# ``feat_analyst_conviction`` / ``feat_analyst_rating``) enter the drift matrix
+# instead; the raw counts are collinear with them and with ``n_analysts``.
+KALMAN_RATING_COUNT_FEATURES: frozenset[str] = frozenset({
+    "feat_holds",
+    "feat_buys",
+    "feat_sells",
+    "feat_no_opinion",
+})
+
+# One leg of the bullish/bearish/neutral composition (the three sum to ~1, so
+# after z-scoring the triplet is perfectly collinear); the neutral leg is the
+# least informative and is dropped.
+KALMAN_COLLINEAR_COMPOSITION_FEATURES: frozenset[str] = frozenset({
+    "feat_analyst_neutral_pct",
+})
+
+# ``days_*`` mutable_predictors are fiscal-calendar time covariates: they feed
+# the standardised ``t_scaled`` axis (``DAY_COUNT_COLS_ALL``), not the drift
+# design matrix.
+KALMAN_TIME_COVARIATE_PREFIX: str = "days_"
+
+# Union of every alias barred from the drift design matrix (``days_*`` columns
+# are excluded by prefix, see KALMAN_TIME_COVARIATE_PREFIX).
+KALMAN_DRIFT_EXCLUDED_FEATURES: frozenset[str] = (
+    KALMAN_LEAKAGE_FEATURES
+    | KALMAN_NOISE_WIDENER_FEATURES
+    | KALMAN_TILT_FEATURES
+    | KALMAN_DRIFT_SUPPORT_COUNTERS
+    | KALMAN_RATING_COUNT_FEATURES
+    | KALMAN_COLLINEAR_COMPOSITION_FEATURES
+)
+
+
 class KalmanFilterPriceTarget:
     """Bayesian state-space model for price target filtering.
 
@@ -275,6 +351,82 @@ class KalmanFilterPriceTarget:
             metadata = load_feature_metadata_from_db(connection_string)
             return coerce_by_data_type(df, list(feature_aliases), metadata)
         return df.reindex(columns=feature_aliases).astype("float64").fillna(0.0).to_numpy()
+
+    @classmethod
+    def select_drift_features(
+            cls,
+            feature_aliases: Iterable[str],
+            available_columns: Optional[Iterable[str]] = None,
+    ) -> list[str]:
+        """Filter mutable_predictor aliases down to drift design-matrix inputs.
+
+        Applies the module-level SSOT partition: drops the response-leakage
+        alias, the sigma_obs noise wideners, the named risk/size tilt drivers,
+        the drift-support counters, the raw analyst-rating counts, the
+        collinear composition leg, and the ``days_*`` time covariates
+        (see :data:`KALMAN_DRIFT_EXCLUDED_FEATURES` /
+        :data:`KALMAN_TIME_COVARIATE_PREFIX`).
+
+        Parameters
+        ----------
+        feature_aliases
+            Candidate ``mutable_predictor`` aliases (catalogue order is
+            preserved; duplicates are dropped).
+        available_columns
+            When given, only aliases present in this collection survive
+            (typically ``kalman_df.columns``).
+
+        Returns
+        -------
+        list[str]
+            Ordered drift-feature aliases for the ``drift_feature`` dim.
+        """
+        available = set(available_columns) if available_columns is not None else None
+        selected: list[str] = []
+        for alias in feature_aliases:
+            if alias in selected:
+                continue
+            if alias in KALMAN_DRIFT_EXCLUDED_FEATURES:
+                continue
+            if alias.startswith(KALMAN_TIME_COVARIATE_PREFIX):
+                continue
+            if available is not None and alias not in available:
+                continue
+            selected.append(alias)
+        return selected
+
+    @classmethod
+    def resolve_drift_features(
+            cls,
+            kalman_df: Optional[pd.DataFrame] = None,
+            *,
+            feature_aliases: Optional[Iterable[str]] = None,
+            connection_string: Optional[str] = None,
+    ) -> list[str]:
+        """Resolve the catalogue-driven drift-feature list for the fused model.
+
+        Fetches the ``kalman_pt`` mutable_predictor aliases from
+        ``pml.vw_pymc_feature_catalogue`` (unless ``feature_aliases`` is
+        supplied) and applies :meth:`select_drift_features`. Returns an empty
+        list when the catalogue is unreachable so callers can fall back to a
+        curated literal list.
+
+        Parameters
+        ----------
+        kalman_df
+            Modelling frame backed by ``pml.mv_pymc_kalman_pt``; when given,
+            aliases absent from its columns are dropped.
+        feature_aliases
+            Pre-fetched candidate aliases (bypasses the catalogue query).
+        connection_string
+            Optional SQLAlchemy URL override (defaults to ``DB_URL``).
+        """
+        if feature_aliases is None:
+            feature_aliases = cls._resolve_kalman_feature_aliases(connection_string)
+        return cls.select_drift_features(
+            feature_aliases,
+            available_columns=None if kalman_df is None else kalman_df.columns,
+        )
 
     # ------------------------------------------------------------------
     # Snapshot -> per-ISIN price-target time-series helpers.
@@ -824,7 +976,7 @@ class KalmanFilterPriceTarget:
             the per-time prior *mean* of the log-volatility walk; the absolute
             *level* is a learned ``vol_anchor_offset ~ Normal(log(scale), 1)``.
             This deliberately makes the anchor **scale-invariant** — realized
-            volatility may arrive in percent (e.g. ``feat_vol_*`` ≈ 40) while
+            volatility may arrive in percent units (e.g. ≈ 40) while
             the observation noise lives on the log-price-target scatter scale
             (≈ 0.05–0.2), so equating absolute levels would be nonsensical; the
             term-structure still carries the relative time variation. When
@@ -1714,9 +1866,10 @@ class KalmanFilterPriceTarget:
 # Mirrors :func:`probabilistic_ml_model.pymc_models.PriceTargetModel.
 # build_fused_price_target_model`, re-homed onto the Kalman price-target panel
 # (``pml.mv_pymc_kalman_pt``). The single notebook-Kalman refinement: the
-# Model-A risk adjustment is re-keyed from *analyst conviction* to *expected
-# volatility*, so the latent target is ``risk_adj_return = expected_return``
-# **given expected_volatility** (the volatility term-structure mean).
+# Model-A risk adjustment is re-keyed from *analyst conviction* to *systematic
+# risk*, so the latent target is ``risk_adj_return = expected_return`` **given
+# systematic risk** (``feat_avg_beta``); realized vol enters only via the
+# ``feat_vol_drift`` observation-noise widener.
 # ===========================================================================
 
 # Group-effect coords (highest-signal, lowest-cardinality) that receive a
@@ -1733,6 +1886,8 @@ _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
     "sector",
     "size_class",
     "style_class",
+    "exchange",
+    "unit"
 )
 
 # Fixed (non-learned) scale for the crossed group-intercept ``ZeroSumNormal``
@@ -1755,9 +1910,9 @@ class KalmanPanelInputs:
     design matrix, and the per-ISIN Model-A / σ inputs. The conviction latent of
     the price-target panel is replaced by ``avg_beta`` (the NULL-aware mean of the
     ``beta_{1y,2y,5y}`` windows), the systematic-risk (CAPM beta) driver of the
-    ``risk_adj_return`` adjustment. ``expected_vol`` (the volatility term-structure
-    mean) is retained for provenance / σ-widening but no longer drives the risk
-    adjustment.
+    ``risk_adj_return`` adjustment. ``vol_drift`` (``feat_vol_drift``, the drift
+    across the realized-vol term structure) is retained for provenance /
+    σ-widening but does not drive the risk adjustment.
 
     Attributes
     ----------
@@ -1771,17 +1926,25 @@ class KalmanPanelInputs:
         Standardised fiscal-anchor time matrix, shape ``(n_isin, T)``.
     X_drift : numpy.ndarray
         Standardised drift-feature design matrix, shape ``(n_isin, n_drift)``.
-        Backs the state-transition mean (``beta`` slopes): the analyst-target /
-        price drift trails, the momentum / realised-return features, and
-        ``feat_mv_ev_drift`` — the drift of the ``market_cap / enterprise_value``
-        ratio (equity share of EV) across the fiscal-year trail, an equity
-        re-rating / de-leveraging signal.
+        Backs the state-transition mean (``beta`` slopes). Columns are the
+        catalogue-driven ``kalman_pt`` mutable_predictor aliases surviving
+        :meth:`KalmanFilterPriceTarget.select_drift_features`: the
+        analyst-target / price drift trails, short/mid-horizon momentum, the
+        analyst-sentiment composition (``feat_analyst_bullish_pct`` /
+        ``feat_analyst_bearish_pct`` / ``feat_analyst_conviction`` /
+        ``feat_analyst_rating``), the 1-year price-target credibility trio
+        (``feat_pt_achievement_1y`` / ``feat_pt_accuracy_1y`` /
+        ``feat_pt_range_hit_rate``), the consensus-dispersion drift
+        (``feat_pt_noise_drift``), and the market-cap / EV size-&-trend
+        signals (``feat_mcap_trend_1y`` / ``feat_mcap_vs_3yavg`` /
+        ``feat_ev_vs_3yavg`` / ``feat_mv_ev_drift``).
     n_analysts, sqrt_n_analysts : numpy.ndarray
         Floored analyst count and its NumPy-precomputed square root (so the PyMC
         graph never applies an inplace ``Sqrt`` that NUTS rejects).
-    expected_vol : numpy.ndarray
-        Per-ISIN expected volatility (the ``feat_vol_*`` term-structure mean).
-        Retained for provenance / σ-widening; no longer the risk-adjustment driver.
+    vol_drift : numpy.ndarray
+        Per-ISIN realized-vol drift (``feat_vol_drift``, winsorised [-1, 1] drift
+        across the volatility term structure).
+        Retained for provenance / σ-widening; not the risk-adjustment driver.
     avg_beta : numpy.ndarray
         Per-ISIN average market beta (``feat_avg_beta`` = NULL-aware mean of
         ``beta_{1y,2y,5y}``). The systematic-risk (CAPM) driver of the
@@ -1810,7 +1973,7 @@ class KalmanPanelInputs:
     X_drift: np.ndarray
     n_analysts: np.ndarray
     sqrt_n_analysts: np.ndarray
-    expected_vol: np.ndarray
+    vol_drift: np.ndarray
     dispersion_cv: np.ndarray
     avg_beta: np.ndarray
     size_ratio: np.ndarray
@@ -1856,8 +2019,8 @@ def build_fused_kalman_pt_model(
     ``expected_return`` *given systematic risk*. Beta (``feat_avg_beta``, the
     NULL-aware mean of ``beta_{1y,2y,5y}``) enters as a **standardised** (z-scored)
     cross-sectional tilt, never as a raw level (see the convergence notes below).
-    Expected volatility (``feat_vol_*``) is retained as a provenance container but
-    no longer drives the penalty.
+    Realized-vol drift (``feat_vol_drift``) is retained as a provenance container
+    but does not drive the penalty.
 
     A second **size tilt** sits alongside the beta penalty on ``risk_adj_return``:
     ``risk_adj_return = expected_return - risk_loading * z(avg_beta)
@@ -1979,6 +2142,18 @@ def build_fused_kalman_pt_model(
             "fused Kalman price-target model."
         )
 
+    # Guard: response-leakage aliases must never reach the drift design matrix
+    # (``feat_implied_upside`` IS the log-uplift response after ``log1p``). The
+    # catalogue-driven selector already drops them; this backstop protects
+    # callers that hand-assemble ``KalmanPanelInputs``.
+    leaked = sorted(KALMAN_LEAKAGE_FEATURES.intersection(panel.drift_names))
+    if leaked:
+        raise ValueError(
+            f"build_fused_kalman_pt_model: drift_names contains response-leakage "
+            f"features {leaked!r}. Remove them upstream ("
+            "KalmanFilterPriceTarget.select_drift_features enforces this)."
+        )
+
     n_isin, T, D = panel.Y.shape
 
     # Guard: a (near-)zero-variance NON-PRIMARY response series leaves its rank-1
@@ -2061,14 +2236,15 @@ def build_fused_kalman_pt_model(
     size_ratio_z = np.nan_to_num((_size_raw - _size_mu) / _size_sd, nan=0.0)
     size_ratio_filled = np.nan_to_num(_size_raw, nan=_size_mu)
 
-    # Standardised expected volatility, retained for provenance only. ``feat_vol_*``
-    # arrives in *percent* units (≈ 45); it is z-scored here purely so the stored
-    # ``feat_expected_vol_z`` container stays on the same relative scale as before.
-    _vol_raw = np.asarray(panel.expected_vol, dtype="float64")
+    # Standardised realized-vol drift, retained for provenance only.
+    # ``feat_vol_drift`` is a winsorised [-1, 1] drift; it is z-scored here so the
+    # stored ``feat_vol_drift_z`` container carries the cross-sectional relative
+    # position alongside the raw signed drift.
+    _vol_raw = np.asarray(panel.vol_drift, dtype="float64")
     _vol_mu = float(np.nanmean(_vol_raw)) if np.isfinite(_vol_raw).any() else 0.0
     _vol_sd = float(np.nanstd(_vol_raw))
     _vol_sd = _vol_sd if (np.isfinite(_vol_sd) and _vol_sd > 1e-9) else 1.0
-    expected_vol_z = np.nan_to_num((_vol_raw - _vol_mu) / _vol_sd, nan=0.0)
+    vol_drift_z = np.nan_to_num((_vol_raw - _vol_mu) / _vol_sd, nan=0.0)
 
     # Median-normalised analyst-count precision weight for the measurement scale.
     # The response tensor ``Y`` is z-scored per series (std ≈ 1), so dividing the
@@ -2103,13 +2279,13 @@ def build_fused_kalman_pt_model(
         # retained for provenance; the math consumes the standardised ``size_z``.
         pm.Data("feat_mcap_country_r", size_ratio_filled, dims="isin")
         size_z = pm.Data("feat_mcap_country_r_z", size_ratio_z, dims="isin")
-        # Expected volatility (feat_vol_* term-structure mean) retained as a
-        # provenance container only — no longer drives the risk adjustment.
+        # Realized-vol drift (feat_vol_drift) retained as a provenance container
+        # only — it does not drive the risk adjustment.
         # ``build_noise_wideners(..., fillna=True)`` already 0-fills these for the
         # model contract; ``nan_to_num`` is a defensive guard so any stray NaN
         # (PyMC 6.0 rejects NaN in ``pm.Data``) can never break model build.
-        pm.Data("feat_expected_vol", np.nan_to_num(panel.expected_vol), dims="isin")
-        pm.Data("feat_expected_vol_z", expected_vol_z, dims="isin")
+        pm.Data("feat_vol_drift", np.nan_to_num(panel.vol_drift), dims="isin")
+        pm.Data("feat_vol_drift_z", vol_drift_z, dims="isin")
         cv_data = pm.Data(
             "feat_pt_noise_cv", np.nan_to_num(panel.dispersion_cv), dims="isin"
         )

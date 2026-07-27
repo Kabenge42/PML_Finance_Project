@@ -8,6 +8,12 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
         "ProbabilisticLinearRegression",
     ),
     "KalmanFilterPriceTarget": (".KalmanFilterModel", "KalmanFilterPriceTarget"),
+    "KalmanPanelInputs": (".KalmanFilterModel", "KalmanPanelInputs"),
+    "build_fused_kalman_pt_model": (".KalmanFilterModel", "build_fused_kalman_pt_model"),
+    "KALMAN_DRIFT_EXCLUDED_FEATURES": (
+        ".KalmanFilterModel",
+        "KALMAN_DRIFT_EXCLUDED_FEATURES",
+    ),
     "DCFPriceTarget": (".DCF_PriceTargetModel", "DCFPriceTarget"),
     "EarningsBeatBayesian": (".EarningsBeatModel", "EarningsBeatBayesian"),
     "DividendSafetyBayesian": (".DividendSafetyModel", "DividendSafetyBayesian"),

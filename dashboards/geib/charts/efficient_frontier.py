@@ -110,7 +110,7 @@ description = (
 def component() -> "object":
     df = get_data()
     sector_opts = [{"label": s, "value": s} for s in sector_values(df)]
-    currency_opts = [{"label": c, "value": c} for c in column_values(df, "unit")]
+    currency_opts = [{"label": c, "value": c} for c in column_values(df, "unit_name")]
 
     return theme_card(
         title,
@@ -219,7 +219,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if df is None or len(df) == 0:
         return empty_figure("No data is available to display"), html.Div()
 
-    df = df[["ticker", "name", "sector", "unit", "market_cap", "p_upside_pos_cond",
+    df = df[["ticker", "name", "sector", "unit_name", "market_cap", "p_upside_pos_cond",
              "expected_return_kalman", "er_p05", "er_p95"]].copy()
     logger.debug(schema(df))
 
@@ -419,7 +419,7 @@ def update(**kwargs) -> Tuple[go.Figure, html.Div, str, list, list, list, str]:
     sector_opts, sector_val = scoped_filter(
         df_all, "sector", kwargs.get(sector_filter_id), multi=True
     )
-    currency_opts, currency_val = scoped_filter(df_all, "unit", kwargs.get(currency_id))
+    currency_opts, currency_val = scoped_filter(df_all, "unit_name", kwargs.get(currency_id))
     kwargs[sector_filter_id] = sector_val
     kwargs[currency_id] = currency_val
     try:

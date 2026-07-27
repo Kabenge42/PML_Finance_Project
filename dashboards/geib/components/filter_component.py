@@ -41,10 +41,10 @@ from ..theme import CONTROLS_ROW_STYLE, control
 COORD_FILTERS: tuple[tuple[str, str], ...] = (
     ("trading_region", "Trading Region"),
     ("region", "Region"),
-    ("country", "Country"),
-    ("trading_country", "Trading Country"),
-    ("exchange", "Exchange"),
-    ("unit", "Unit"),
+    ("country_name", "Country"),
+    ("trading_country_name", "Trading Country"),
+    ("exchange_name", "Exchange"),
+    ("unit_name", "Unit"),
     ("sector", "Sector"),
     ("industry", "Industry"),
     ("style_class", "Style Class"),
@@ -54,7 +54,7 @@ COORD_FILTERS: tuple[tuple[str, str], ...] = (
 )
 
 # High-cardinality coords get a searchable dropdown (better than scrolling).
-_SEARCHABLE_COORDS = frozenset({"country", "exchange", "unit", "sector", "industry"})
+_SEARCHABLE_COORDS = frozenset({"country_name", "exchange_name", "unit_name", "sector", "industry"})
 
 MKTCAP_ID = "global_filter_mktcap"
 RESULTS_ID = "global_filter_results"
@@ -232,7 +232,7 @@ def _apply_mktcap(df: pd.DataFrame, ranges: list) -> pd.DataFrame:
 
 # --- Cascading (dependent) coord filters -----------------------------------
 # The coord dropdowns cascade top-down in registry order: changing an upstream
-# filter (e.g. ``region``) repopulates every downstream filter (``country``,
+# filter (e.g. ``region``) repopulates every downstream filter (``country_name``,
 # ``sector``, ``industry`` …) to the values still present under the upstream
 # selection, and re-selects them all. The Market-Cap range sits above all coords,
 # so changing it repopulates the entire coord stack. This keeps the choices a

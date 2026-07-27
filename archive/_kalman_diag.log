@@ -1,0 +1,8 @@
+C:\Users\markm\PML_Finance_Project\.venv\Lib\site-packages\pytensor\configparser.py:309: UserWarning: PyTensor does not recognise this flag: device
+  warnings.warn(f"PyTensor does not recognise this flag: {key}")
+Sampling: [beta, mu_logit, region_effect_z, sector_effect_z, sigma_base, sigma_expected_return, sigma_logit, sigma_region, sigma_sector, sigma_size_class, sigma_style_class, size_class_effect_z, style_class_effect_z, z_expected_return, z_isin]
+INFO:pymc.sampling.forward:Sampling: [beta, mu_logit, region_effect_z, sector_effect_z, sigma_base, sigma_expected_return, sigma_logit, sigma_region, sigma_sector, sigma_size_class, sigma_style_class, size_class_effect_z, style_class_effect_z, z_expected_return, z_isin]
+C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt.py:1573: UserWarning: The figure layout has changed to tight
+  plt.tight_layout()
+NUTS[nutpie]: [mu_logit, sigma_logit, z_isin, beta, sigma_region, region_effect_z, sigma_sector, sector_effect_z, sigma_size_class, size_class_effect_z, sigma_style_class, style_class_effect_z, sigma_expected_return, z_expected_return, sigma_alpha_innov, sigma_beta_innov, z_alpha, z_beta, mu_isin_loading, sigma_base, nu_tail]
+INFO:pymc.sampling.mcmc:NUTS[nutpie]: [mu_logit, sigma_logit, z_isin, beta, sigma_region, region_effect_z, sigma_sector, sector_effect_z, sigma_size_class, size_class_effect_z, sigma_style_class, style_class_effect_z, sigma_expected_return, z_expected_return, sigma_alpha_innov, sigma_beta_innov, z_alpha, z_beta, mu_isin_loading, sigma_base, nu_tail]

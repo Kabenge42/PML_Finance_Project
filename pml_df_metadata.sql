@@ -129,13 +129,22 @@ COMMENT ON TABLE pml.pml_df_feature_alias IS 'Per-model alias overrides for sour
 -- Fused Kalman MvGRW panel (kalman_pt) — role notes.
 --   The fused cross-sectional Kalman model (build_fused_kalman_pt_model) reuses
 --   the existing kalman_pt catalogue roles in fused state-space positions:
---     * feat_vol_{1m,3m,6m,1y} (mutable_predictor) -> EXPECTED VOLATILITY: the
---       term-structure mean conditions risk_adj_return = expected_return *
---       exp(-risk_penalty * expected_vol) and the expected_return prior scale.
---     * feat_pt_noise_sigma (mutable_predictor) -> cv = feat_pt_noise_sigma /
---       last_price, widening sigma_isin = sigma_base * (1 + cv) / sqrt(n_analysts).
+--     * feat_vol_drift / feat_vol_drift_n (mutable_predictor, engineered
+--       self-rows over volatility_{1m,3m,6m,1y}) -> realized-vol DRIFT: how
+--       price volatility itself is evolving; widens sigma_obs via
+--       (1 + range + cv + 0.5 * max(vol_drift, 0)) / sqrt(n_analysts). The
+--       absolute feat_vol_* levels are no longer emitted; feat_avg_beta is the
+--       systematic-risk driver of risk_adj_return.
+--     * feat_pt_noise_sigma (observed) -> the current consensus-dispersion
+--       snapshot; still forms cv = feat_pt_noise_sigma / last_price in the
+--       sigma_isin widener. Its price_target_stddev_*_ago trail (observed)
+--       exposes the evolving measurement-noise level.
+--     * last_price (observed) -> the realised spot anchor; the price_*_ago
+--       spot trail (observed) pools with the target trail.
 --     * n_analysts (constant_data) -> sqrt(n) precision weight.
 --     * the price_target_*_ago response trails (observed) -> the (isin, time,
 --       y_series) MvGRW response tensor.
+--     * feat_total_return_* / feat_tr_cagr_* (observed) -> realised-return
+--       outcome series available to the ICM panel as observed evidence.
 --   No metadata schema change is required; this note documents the consumption.
 -- ---------------------------------------------------------------------------

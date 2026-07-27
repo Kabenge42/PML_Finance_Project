@@ -26,7 +26,7 @@ color_by_options = [
     {"label": "None", "value": "none"},
     {"label": "Sector", "value": "sector"},
     {"label": "Industry", "value": "industry"},
-    {"label": "Country", "value": "country"},
+    {"label": "Country", "value": "country_name"},
     {"label": "Beta", "value": "beta"},
 ]
 color_by_default = "sector"
@@ -45,7 +45,7 @@ title = "Expected Return vs. Risk-Adjusted Return"
 description = (
     "Scatter plot showing the relationship between expected return "
     "(Kalman-filtered) and risk-adjusted return, with optional coloring by "
-    "sector/industry/country and sizing by signal strength or market cap."
+    "sector/industry/country_name and sizing by signal strength or market cap."
 )
 
 
@@ -117,7 +117,7 @@ def _update_logic(**kwargs) -> go.Figure:
             "risk_adj_return",
             "sector",
             "industry",
-            "country",
+            "country_name",
             "signal_strength",
             "market_cap",
             "beta",

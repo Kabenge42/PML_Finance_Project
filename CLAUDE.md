@@ -59,6 +59,7 @@ Key environment variables (full list in `environment_variables.txt`):
 | `PML_STRICT_STREAK_MERGE`                               | Fail-fast on missing EPS streak-merge columns (CI/regression)    |
 | `PML_ENABLE_PYTENSOR_C`                                 | `1` opts back into the PyTensor C backend (default: numba/py VM) |
 | `PML_FIG_WIDTH_PX`                                      | Target Plotly/mpl figure width (px) for the Kalman notebook panels |
+| `KALMAN_PT_RESULTS_DIR` / `KALMAN_PT_EXPORT_DRAWS`      | Kalman workflow artifact-export directory (PNG/CSV/JSON/NetCDF) / `1` also exports raw eu/ept draws |
 
 ### Code Quality & Testing
 

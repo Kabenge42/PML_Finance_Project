@@ -580,7 +580,10 @@ def summarize_mc_returns(
     Returns
     -------
     pandas.DataFrame
-        Columns: ``isin, er_mean, er_p05, er_p50, er_p95, prob_pos``.
+        Columns: ``isin, er_mean, er_sd, er_p05, er_p50, er_p95, prob_pos``.
+        ``er_sd`` is the pooled standard deviation over the ``(sample, horizon)``
+        draws — the forward-return volatility used as the denominator of the
+        exported ``expected_sharpe_ratio``.
     """
     mc = np.asarray(mc, dtype="float64")
     if mc.ndim != 3:
@@ -595,6 +598,7 @@ def summarize_mc_returns(
         {
             "isin": np.asarray(isins),
             "er_mean": mc.mean(axis=(1, 2)),
+            "er_sd": mc.std(axis=(1, 2)),
             f"er_p{int(round(lo * 100)):02d}": np.quantile(mc, lo, axis=(1, 2)),
             f"er_p{int(round(mid * 100)):02d}": np.quantile(mc, mid, axis=(1, 2)),
             f"er_p{int(round(hi * 100)):02d}": np.quantile(mc, hi, axis=(1, 2)),
