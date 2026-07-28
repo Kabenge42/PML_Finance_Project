@@ -1473,7 +1473,11 @@ def _export_datatree(dt: object, name: str) -> None:
     The NetCDF file (h5netcdf engine) is the full-fidelity, reload-with-arviz
     artifact. The JSON sidecar carries a per-group ``data_vars``/``sizes``
     inventory and, for the groups in :data:`_DATATREE_SUMMARY_GROUPS`, the
-    ``azs.summary`` statistics table. Each part is individually guarded.
+    ``azs.summary`` statistics table (``kind='all'`` when the group has
+    >= 2 chains and >= 4 draws, else a stats-only summary — r_hat / ESS are
+    between-chain diagnostics and would be NaN for the 1-chain ``prior``
+    group; the chosen kind is recorded as ``summary_kind``). Each part is
+    individually guarded.
     """
     state = get_export_state()
     if not state.enabled or dt is None:
@@ -1495,8 +1499,15 @@ def _export_datatree(dt: object, name: str) -> None:
                           for k, v in dict(getattr(ds, 'sizes', {})).items()},
             }
             if group in _DATATREE_SUMMARY_GROUPS and {'chain', 'draw'} <= set(entry['sizes']):
+                # r_hat / between-chain ESS need >= 2 chains and >= 4 draws;
+                # prior-predictive groups always carry chain=1, so ask for a
+                # stats-only summary there instead of tripping the arviz_stats
+                # shape validator (which logs and returns NaN diagnostics).
+                kind = ('all' if entry['sizes']['chain'] >= 2 and entry['sizes']['draw'] >= 4
+                        else 'stats')
                 try:
-                    stats = azs.summary(dt, group=str(group))
+                    stats = azs.summary(dt, group=str(group), kind=kind)
+                    entry['summary_kind'] = kind
                     entry['summary'] = stats.reset_index().to_dict(orient='records')
                 except Exception as exc:
                     logger.debug("azs.summary skipped for %s/%s: %r", name, group, exc)
@@ -1611,8 +1622,12 @@ def export_all_artifacts(artifacts: dict, *, results_dir: Optional[str] = None) 
                 except Exception as exc:
                     logger.warning("Posterior-draw export skipped: %r", exc)
             else:
-                logger.info("Raw eu/ept posterior draws skipped "
-                            "(set KALMAN_PT_EXPORT_DRAWS=1 to export as NetCDF)")
+                logger.info(
+                    "Raw eu/ept posterior draw export is off by default "
+                    "(~200 MB per array); set KALMAN_PT_EXPORT_DRAWS=1 to bundle "
+                    "them into 10_screen_posterior_draws.nc — screen decision "
+                    "content is already in 10_screen_results.csv and the "
+                    "posterior NetCDF.")
 
         risk_book = artifacts.get('risk_book')
         if risk_book is not None:
@@ -3133,9 +3148,10 @@ def sample_posterior(model: "pm.Model", prior_idata, *, cores: int = 1,
         via ``stamp_feature_provenance`` (best-effort; the ``pm.Data`` container
         of the same name lands in ``constant_data`` automatically).
     cores
-        Number of chains to run in parallel. Defaults to ``4`` for the standalone
-        script / CLI path, where the native (nutpie numba/rust) sampler runs
-        happily in parallel. **Pass ``cores=1`` from an IDE-managed Jupyter kernel
+        Number of chains to run in parallel. Defaults to ``1`` (kernel-safe,
+        chains run sequentially); pass ``cores=4`` on the standalone script /
+        CLI path, where the native (nutpie numba/rust) sampler runs
+        happily in parallel. **Keep ``cores=1`` in an IDE-managed Jupyter kernel
         (e.g. PyCharm / DataSpell) on Windows:** launching nutpie's parallel native
         worker threads inside the embedded kernel can crash the kernel process
         outright — a native crash that no Python ``try``/``except`` can catch, so

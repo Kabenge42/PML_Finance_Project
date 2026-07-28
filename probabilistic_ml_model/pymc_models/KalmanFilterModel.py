@@ -1138,6 +1138,12 @@ class KalmanFilterPriceTarget:
         Applies the project defaults (compile kwargs, no log-likelihood),
         layers in ``nuts_sampler`` and caller overrides, then strips
         ``idata_kwargs`` for nutpie (which ignores it and warns).
+
+        Notes
+        -----
+        Warns when the effective chain count (after ``sample_kwargs``
+        overrides) is below 2: r-hat and between-chain ESS are undefined
+        for a single chain, so downstream ArviZ diagnostics come back NaN.
         """
         scall: dict[str, Any] = dict(
             draws=samples,
@@ -1152,6 +1158,16 @@ class KalmanFilterPriceTarget:
             scall["nuts_sampler"] = nuts_sampler
         scall.setdefault("idata_kwargs", {"log_likelihood": False})
         scall.update(sample_kwargs)
+
+        eff_chains = int(scall.get("chains", chains))
+        if eff_chains < 2:
+            logger.warning(
+                "KalmanFilterPriceTarget: sampling with chains=%d; r_hat and "
+                "between-chain ESS diagnostics require >= 2 chains "
+                "(4 recommended) and will be NaN. Single-chain fits are for "
+                "fast tests only.",
+                eff_chains,
+            )
 
         # nutpie ignores idata_kwargs and emits a UserWarning; strip it
         # to keep logs clean while preserving behaviour for other samplers.
