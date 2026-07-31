@@ -236,6 +236,17 @@ KALMAN_COLLINEAR_COMPOSITION_FEATURES: frozenset[str] = frozenset({
     "feat_analyst_neutral_pct",
 })
 
+# Per-fiscal-year Piotroski F-score components (``pml.piotroski_f_score`` in
+# ``mv_pymc_kalman_pt``): their median ``feat_median_piotroski_f_score`` is the
+# fundamental-quality drift predictor; the four components are collinear with
+# it and stay out of the drift matrix (EDA / analytics export only).
+KALMAN_PIOTROSKI_COMPONENT_FEATURES: frozenset[str] = frozenset({
+    "feat_piotroski_f_score_fy",
+    "feat_piotroski_f_score_neg1fy",
+    "feat_piotroski_f_score_neg2fy",
+    "feat_piotroski_f_score_neg3fy",
+})
+
 # ``days_*`` mutable_predictors are fiscal-calendar time covariates: they feed
 # the standardised ``t_scaled`` axis (``DAY_COUNT_COLS_ALL``), not the drift
 # design matrix.
@@ -250,6 +261,7 @@ KALMAN_DRIFT_EXCLUDED_FEATURES: frozenset[str] = (
     | KALMAN_DRIFT_SUPPORT_COUNTERS
     | KALMAN_RATING_COUNT_FEATURES
     | KALMAN_COLLINEAR_COMPOSITION_FEATURES
+    | KALMAN_PIOTROSKI_COMPONENT_FEATURES
 )
 
 
@@ -363,7 +375,9 @@ class KalmanFilterPriceTarget:
         Applies the module-level SSOT partition: drops the response-leakage
         alias, the sigma_obs noise wideners, the named risk/size tilt drivers,
         the drift-support counters, the raw analyst-rating counts, the
-        collinear composition leg, and the ``days_*`` time covariates
+        collinear composition leg, the per-fiscal-year Piotroski component
+        scores (their median ``feat_median_piotroski_f_score`` enters instead),
+        and the ``days_*`` time covariates
         (see :data:`KALMAN_DRIFT_EXCLUDED_FEATURES` /
         :data:`KALMAN_TIME_COVARIATE_PREFIX`).
 
@@ -1951,9 +1965,12 @@ class KalmanPanelInputs:
         ``feat_analyst_rating``), the 1-year price-target credibility trio
         (``feat_pt_achievement_1y`` / ``feat_pt_accuracy_1y`` /
         ``feat_pt_range_hit_rate``), the consensus-dispersion drift
-        (``feat_pt_noise_drift``), and the market-cap / EV size-&-trend
+        (``feat_pt_noise_drift``), the market-cap / EV size-&-trend
         signals (``feat_mcap_trend_1y`` / ``feat_mcap_vs_3yavg`` /
-        ``feat_ev_vs_3yavg`` / ``feat_mv_ev_drift``).
+        ``feat_ev_vs_3yavg`` / ``feat_mv_ev_drift``), and the
+        fundamental-quality level ``feat_median_piotroski_f_score`` (median of
+        the four per-fiscal-year Piotroski F-scores; the per-year components
+        are barred via :data:`KALMAN_PIOTROSKI_COMPONENT_FEATURES`).
     n_analysts, sqrt_n_analysts : numpy.ndarray
         Floored analyst count and its NumPy-precomputed square root (so the PyMC
         graph never applies an inplace ``Sqrt`` that NUTS rejects).

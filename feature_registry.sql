@@ -6986,6 +6986,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_uq_calc_features_feature_key ON calculated
 -- Wrap upsert in transaction for atomicity
 BEGIN;
 
+-- Pre-flight: calculated_features_registry.primary_source_col has an FK to
+-- equities_schema_metadata(column_name). Fail fast with an actionable message if
+-- the metadata table has not been seeded (run equities_schema_metadata_setup.sql
+-- first) — otherwise the registry upsert below aborts on the first FK violation
+-- with no indication of the required ordering.
+DO
+$$
+BEGIN
+	IF NOT EXISTS (SELECT 1 FROM equities_schema_metadata) THEN
+		RAISE EXCEPTION 'equities_schema_metadata is empty — run equities_schema_metadata_setup.sql before feature_registry.sql (calculated_features_registry.primary_source_col references it)';
+	END IF;
+END
+$$;
+
 -- Upsert all function metadata
 INSERT INTO feature_registry_metadata (function_name,                            category,                feature_count,
 	                                                                                                           description,

@@ -202,6 +202,33 @@ $$
 SELECT pml.safe_divide(ni - cfo, NULLIF(scale, 0));
 $$;
 
+-- Piotroski F-score (0-9): 9-signal fundamental-quality composite (positive
+-- ROA / CFO, rising ROA, accruals quality CFO > NI, de-leveraging, rising
+-- liquidity, no dilution, rising gross margin, rising asset turnover).
+-- NULL-tolerant: a NULL comparison scores 0 for that signal (never NULL
+-- overall). Called 4x per row by mv_pymc_kalman_pt (fy vs neg1fy .. neg3fy vs
+-- neg4fy lag pairs) and by calc_piotroski_f_score (LTM screener variant).
+CREATE OR REPLACE FUNCTION pml.piotroski_f_score(roa NUMERIC, roa_prev NUMERIC,
+                                                 cfo NUMERIC, ni NUMERIC,
+                                                 ltde NUMERIC, ltde_prev NUMERIC,
+                                                 cr NUMERIC, cr_prev NUMERIC,
+                                                 shrs NUMERIC, shrs_prev NUMERIC,
+                                                 gpm NUMERIC, gpm_prev NUMERIC,
+                                                 at NUMERIC, at_prev NUMERIC) RETURNS INTEGER
+	IMMUTABLE PARALLEL SAFE
+	LANGUAGE sql AS
+$$
+SELECT (CASE WHEN roa > 0 THEN 1 ELSE 0 END +
+        CASE WHEN cfo > 0 THEN 1 ELSE 0 END +
+        CASE WHEN roa > roa_prev THEN 1 ELSE 0 END +
+        CASE WHEN cfo > ni THEN 1 ELSE 0 END +
+        CASE WHEN ltde < ltde_prev THEN 1 ELSE 0 END +
+        CASE WHEN cr > cr_prev THEN 1 ELSE 0 END +
+        CASE WHEN shrs <= shrs_prev THEN 1 ELSE 0 END +
+        CASE WHEN gpm > gpm_prev THEN 1 ELSE 0 END +
+        CASE WHEN at > at_prev THEN 1 ELSE 0 END)::INTEGER;
+$$;
+
 -- -----------------------------------------------------------------------------
 -- DOUBLE PRECISION overloads of the pml.* PyMC helpers. pml.pml_df columns are
 -- DOUBLE PRECISION, so these overloads let the materialized views below call
@@ -345,6 +372,65 @@ CREATE OR REPLACE FUNCTION pml.accruals_ratio(ni    DOUBLE PRECISION,
 $$
 SELECT pml.safe_divide(ni - cfo, NULLIF(scale, 0));
 $$;
+
+CREATE OR REPLACE FUNCTION pml.piotroski_f_score(roa       DOUBLE PRECISION,
+                                                 roa_prev  DOUBLE PRECISION,
+                                                 cfo       DOUBLE PRECISION,
+                                                 ni        DOUBLE PRECISION,
+                                                 ltde      DOUBLE PRECISION,
+                                                 ltde_prev DOUBLE PRECISION,
+                                                 cr        DOUBLE PRECISION,
+                                                 cr_prev   DOUBLE PRECISION,
+                                                 shrs      DOUBLE PRECISION,
+                                                 shrs_prev DOUBLE PRECISION,
+                                                 gpm       DOUBLE PRECISION,
+                                                 gpm_prev  DOUBLE PRECISION,
+                                                 at        DOUBLE PRECISION,
+                                                 at_prev   DOUBLE PRECISION) RETURNS INTEGER
+	IMMUTABLE PARALLEL SAFE
+	LANGUAGE sql AS
+$$
+SELECT (CASE WHEN roa > 0 THEN 1 ELSE 0 END +
+        CASE WHEN cfo > 0 THEN 1 ELSE 0 END +
+        CASE WHEN roa > roa_prev THEN 1 ELSE 0 END +
+        CASE WHEN cfo > ni THEN 1 ELSE 0 END +
+        CASE WHEN ltde < ltde_prev THEN 1 ELSE 0 END +
+        CASE WHEN cr > cr_prev THEN 1 ELSE 0 END +
+        CASE WHEN shrs <= shrs_prev THEN 1 ELSE 0 END +
+        CASE WHEN gpm > gpm_prev THEN 1 ELSE 0 END +
+        CASE WHEN at > at_prev THEN 1 ELSE 0 END)::INTEGER;
+$$;
+
+-- piotroski_f_score LTM screener: thin set-returning wrapper over the scalar
+-- pml.piotroski_f_score composite above (defined after both overloads so the
+-- body validates on a fresh top-to-bottom run).
+-- LTM-era signal wiring: ROA/CFO/leverage/liquidity/margin compare LTM vs
+-- neg1fy, share count compares shrs_out vs shrs_out_neg1fy, and asset turnover
+-- uses the FQ-vs-FY proxy (no LTM asset-turnover column exists).
+CREATE OR REPLACE FUNCTION calc_piotroski_f_score(p_isin text DEFAULT NULL::text)
+	RETURNS TABLE
+	        (
+		        isin              text,
+		        piotroski_f_score integer
+	        )
+	STABLE PARALLEL SAFE
+	LANGUAGE sql
+AS
+$$
+SELECT isin AS isin,
+       pml.piotroski_f_score(return_on_assets_roa_pct_ltm, return_on_assets_roa_pct_neg1fy,
+                             cfo_ltm, net_income_ltm,
+                             long_term_debt_equity_ltm, long_term_debt_equity_neg1fy,
+                             current_ratio_ltm, current_ratio_neg1fy,
+                             shrs_out, shrs_out_neg1fy,
+                             gross_profit_margin_pct_ltm, gross_profit_margin_pct_neg1fy,
+                             asset_turnover_fq, asset_turnover_fy) AS piotroski_f_score
+FROM pml.pml_df pd
+WHERE p_isin IS NULL
+   OR isin = p_isin;
+$$;
+
+ALTER FUNCTION calc_piotroski_f_score(text) OWNER TO postgres;
 
 -- =============================================================================
 -- PER-MODEL MATERIALIZED VIEWS (one per pymc model_target)
@@ -933,8 +1019,56 @@ SELECT isin,
        pml.winsorise(pml.target_drift(
 		                     ARRAY [pml.safe_divide(market_cap, enterprise_value), pml.safe_divide(market_cap_neg1fy, enterprise_value_neg1fy), pml.safe_divide(market_cap_neg2fy, enterprise_value_neg2fy), pml.safe_divide(market_cap_neg3fy, enterprise_value_neg3fy), pml.safe_divide(market_cap_neg4fy, enterprise_value_neg4fy)],
 		                     2), -1,
-                     1)                                                                                                                                                                                        AS feat_mv_ev_drift
-FROM pml.pml_df;
+                     1)                                                                                                                                                                                        AS feat_mv_ev_drift,
+       -- ---- Piotroski F-score fundamental-quality trail ----
+       -- Four per-fiscal-year 9-signal composites (pml.piotroski_f_score over the
+       -- ROA / CFO / leverage / liquidity / share-count / margin / asset-turnover
+       -- lag pairs, computed once in the pio LATERAL below) plus their median.
+       -- Only feat_median_piotroski_f_score enters the fused drift design matrix
+       -- (KALMAN_PIOTROSKI_COMPONENT_FEATURES bars the collinear per-year
+       -- components in KalmanFilterModel.select_drift_features); the component
+       -- scores are emitted for EDA / analytics.
+       pio.feat_piotroski_f_score_fy,
+       pio.feat_piotroski_f_score_neg1fy,
+       pio.feat_piotroski_f_score_neg2fy,
+       pio.feat_piotroski_f_score_neg3fy,
+       -- Exact median of the four never-NULL scores: (sum - max - min) / 2.
+       ((pio.feat_piotroski_f_score_fy + pio.feat_piotroski_f_score_neg1fy +
+         pio.feat_piotroski_f_score_neg2fy + pio.feat_piotroski_f_score_neg3fy
+	       - GREATEST(pio.feat_piotroski_f_score_fy, pio.feat_piotroski_f_score_neg1fy,
+	                  pio.feat_piotroski_f_score_neg2fy, pio.feat_piotroski_f_score_neg3fy)
+	       - LEAST(pio.feat_piotroski_f_score_fy, pio.feat_piotroski_f_score_neg1fy,
+	               pio.feat_piotroski_f_score_neg2fy, pio.feat_piotroski_f_score_neg3fy)) /
+        2.0)::double precision                                                                                                                                                                                 AS feat_median_piotroski_f_score
+FROM pml.pml_df
+	     CROSS JOIN LATERAL (SELECT pml.piotroski_f_score(return_on_assets_roa_pct_fy, return_on_assets_roa_pct_neg1fy,
+	                                                      cfo_fy, net_income_fy,
+	                                                      long_term_debt_equity_fy, long_term_debt_equity_neg1fy,
+	                                                      current_ratio_fy, current_ratio_neg1fy,
+	                                                      shrs_out, shrs_out_neg1fy,
+	                                                      gross_profit_margin_pct_fy, gross_profit_margin_pct_neg1fy,
+	                                                      asset_turnover_fy, asset_turnover_neg1fy)     AS feat_piotroski_f_score_fy,
+	                                pml.piotroski_f_score(return_on_assets_roa_pct_neg1fy, return_on_assets_roa_pct_neg2fy,
+	                                                      cfo_neg1fy, net_income_neg1fy,
+	                                                      long_term_debt_equity_neg1fy, long_term_debt_equity_neg2fy,
+	                                                      current_ratio_neg1fy, current_ratio_neg2fy,
+	                                                      shrs_out_neg1fy, shrs_out_neg2fy,
+	                                                      gross_profit_margin_pct_neg1fy, gross_profit_margin_pct_neg2fy,
+	                                                      asset_turnover_neg1fy, asset_turnover_neg2fy) AS feat_piotroski_f_score_neg1fy,
+	                                pml.piotroski_f_score(return_on_assets_roa_pct_neg2fy, return_on_assets_roa_pct_neg3fy,
+	                                                      cfo_neg2fy, net_income_neg2fy,
+	                                                      long_term_debt_equity_neg2fy, long_term_debt_equity_neg3fy,
+	                                                      current_ratio_neg2fy, current_ratio_neg3fy,
+	                                                      shrs_out_neg2fy, shrs_out_neg3fy,
+	                                                      gross_profit_margin_pct_neg2fy, gross_profit_margin_pct_neg3fy,
+	                                                      asset_turnover_neg2fy, asset_turnover_neg3fy) AS feat_piotroski_f_score_neg2fy,
+	                                pml.piotroski_f_score(return_on_assets_roa_pct_neg3fy, return_on_assets_roa_pct_neg4fy,
+	                                                      cfo_neg3fy, net_income_neg3fy,
+	                                                      long_term_debt_equity_neg3fy, long_term_debt_equity_neg4fy,
+	                                                      current_ratio_neg3fy, current_ratio_neg4fy,
+	                                                      shrs_out_neg3fy, shrs_out_neg4fy,
+	                                                      gross_profit_margin_pct_neg3fy, gross_profit_margin_pct_neg4fy,
+	                                                      asset_turnover_neg3fy, asset_turnover_neg4fy) AS feat_piotroski_f_score_neg3fy) pio;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_kalman_pt_isin ON pml.mv_pymc_kalman_pt (isin);
 

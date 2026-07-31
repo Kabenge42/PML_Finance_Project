@@ -283,7 +283,7 @@ WHERE column_name LIKE 'p_e_neg%'
    OR column_name LIKE 'peg_neg%';
 
 -- =========================================================================
--- PROFITABILITY  (margins, ROA, gross profit)
+-- PROFITABILITY  (margins, ROA, asset turnover, gross profit)
 -- =========================================================================
 UPDATE pml.pml_df_metadata
 SET category     = 'profitability',
@@ -291,13 +291,17 @@ SET category     = 'profitability',
 WHERE column_name IN ('gross_profit_margin_pct_ltm', 'gross_profit_margin_pct_fy',
                       'gross_profit_margin_pct_fq',
                       'gross_profit_margin_pct_3yavgfq', 'gross_profit_margin_pct_5yavgfq',
-                      'return_on_assets_roa_pct_ltm', 'return_on_assets_roa_pct_fy');
+                      'return_on_assets_roa_pct_ltm', 'return_on_assets_roa_pct_fy',
+                      'return_on_assets_roa_pct_fq',
+                      'asset_turnover_fq', 'asset_turnover_fy');
 
 UPDATE pml.pml_df_metadata
 SET category     = 'profitability',
     feature_role = 'historical'
 WHERE column_name LIKE 'gross_profit_margin_pct_neg%'
-   OR column_name LIKE 'gross_profit_neg%';
+   OR column_name LIKE 'gross_profit_neg%'
+   OR column_name LIKE 'return_on_assets_roa_pct_neg%'
+   OR column_name LIKE 'asset_turnover_neg%';
 
 -- =========================================================================
 -- EPS (NORM / ADJ / BASIC / GAAP)
@@ -431,7 +435,7 @@ WHERE column_name LIKE 'issuance_common_stock_neg%'
    OR column_name LIKE 'repurchase_common_stock_neg%';
 
 -- =========================================================================
--- CREDIT RISK / DISTRESS  (Altman Z)
+-- CREDIT RISK / DISTRESS  (Altman Z, liquidity & leverage ratios)
 -- =========================================================================
 UPDATE pml.pml_df_metadata
 SET category     = 'credit_risk',
@@ -442,6 +446,42 @@ UPDATE pml.pml_df_metadata
 SET category     = 'credit_risk',
     feature_role = 'historical'
 WHERE column_name LIKE 'altman_z_score_neg%';
+
+-- Liquidity (quick / current ratio) and leverage (long-term debt / equity)
+-- ratios: current-period levels are ready-to-use predictors; neg* lags are
+-- history-only inputs for trend / drift feature engineering.
+UPDATE pml.pml_df_metadata
+SET category     = 'credit_risk',
+    feature_role = 'predictor'
+WHERE column_name IN ('quick_ratio_ltm', 'quick_ratio_fq', 'quick_ratio_fy',
+                      'current_ratio_ltm', 'current_ratio_fq', 'current_ratio_fy',
+                      'long_term_debt_equity_ltm', 'long_term_debt_equity_fq',
+                      'long_term_debt_equity_fy');
+
+UPDATE pml.pml_df_metadata
+SET category     = 'credit_risk',
+    feature_role = 'historical'
+WHERE column_name LIKE 'quick_ratio_neg%'
+   OR column_name LIKE 'current_ratio_neg%'
+   OR column_name LIKE 'long_term_debt_equity_neg%';
+
+-- =========================================================================
+-- NET INCOME  (income-statement bottom line -- LTM/FQ/FY levels + lag trail)
+-- =========================================================================
+-- Current-period levels are ready-to-use predictors; the neg* lag trail is
+-- history-only input for trend / quality feature engineering (it feeds the
+-- pml.piotroski_f_score fy composites in mv_pymc_kalman_pt). No model_targets
+-- are set: like the raw volatility_* columns, the raw levels are consumed
+-- inside the MV but never emitted.
+UPDATE pml.pml_df_metadata
+SET category     = 'net_income',
+    feature_role = 'predictor'
+WHERE column_name IN ('net_income_ltm', 'net_income_fq', 'net_income_fy');
+
+UPDATE pml.pml_df_metadata
+SET category     = 'net_income',
+    feature_role = 'historical'
+WHERE column_name LIKE 'net_income_neg%';
 
 -- =========================================================================
 -- HEADCOUNT  (employees -- low-frequency fundamentals)
@@ -909,6 +949,19 @@ WHERE column_name = 'return_on_assets_roa_pct_ltm';
 UPDATE pml.pml_df_metadata
 SET description = 'Return on assets % (Fiscal Year)'
 WHERE column_name = 'return_on_assets_roa_pct_fy';
+UPDATE pml.pml_df_metadata
+SET description = 'Return on assets % (Fiscal Quarter)'
+WHERE column_name = 'return_on_assets_roa_pct_fq';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged return on assets % (prior period)'
+WHERE column_name LIKE 'return_on_assets_roa_pct_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Asset turnover (revenue / total assets, period indicated by suffix)'
+WHERE column_name LIKE 'asset_turnover_%'
+  AND column_name NOT LIKE 'asset_turnover_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged asset turnover (prior period)'
+WHERE column_name LIKE 'asset_turnover_neg%';
 
 -- EPS
 UPDATE pml.pml_df_metadata
@@ -1070,6 +1123,34 @@ WHERE column_name = 'altman_z_score_ltm';
 UPDATE pml.pml_df_metadata
 SET description = 'Lagged Altman Z-Score (prior period)'
 WHERE column_name LIKE 'altman_z_score_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Quick ratio - liquidity (period indicated by suffix)'
+WHERE column_name LIKE 'quick_ratio_%'
+  AND column_name NOT LIKE 'quick_ratio_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged quick ratio (prior period)'
+WHERE column_name LIKE 'quick_ratio_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Current ratio - liquidity (period indicated by suffix)'
+WHERE column_name LIKE 'current_ratio_%'
+  AND column_name NOT LIKE 'current_ratio_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged current ratio (prior period)'
+WHERE column_name LIKE 'current_ratio_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Long-term debt / common equity - leverage (period indicated by suffix)'
+WHERE column_name LIKE 'long_term_debt_equity_%'
+  AND column_name NOT LIKE 'long_term_debt_equity_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged long-term debt / equity (prior period)'
+WHERE column_name LIKE 'long_term_debt_equity_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Net income - income statement (period indicated by suffix)'
+WHERE column_name LIKE 'net_income_%'
+  AND column_name NOT LIKE 'net_income_neg%';
+UPDATE pml.pml_df_metadata
+SET description = 'Lagged net income (prior period)'
+WHERE column_name LIKE 'net_income_neg%';
 
 -- Employees
 UPDATE pml.pml_df_metadata
@@ -1779,7 +1860,19 @@ VALUES
 	-- feat_mcap_country_r is emitted ONLY by mv_pymc_kalman_pt (the other MVs do
 	-- not carry it) — registering it for all seven models made it a
 	-- PHANTOM_CATALOGUE_ALIAS for the other six in vw_pymc_catalogue_coverage_check.
-	                            ('feat_mcap_country_r',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_country_r',                   ARRAY ['kalman_pt'])
+	                            ('feat_mcap_country_r',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_country_r',                   ARRAY ['kalman_pt']),
+	-- Piotroski F-score fundamental-quality trail (mv_pymc_kalman_pt): four
+	-- per-fiscal-year 9-signal composites (pml.piotroski_f_score over the ROA /
+	-- CFO / leverage / liquidity / share-count / margin / asset-turnover lag
+	-- pairs) plus their median. Multi-source, so self-rows. Only the median
+	-- enters the fused drift design matrix (KALMAN_PIOTROSKI_COMPONENT_FEATURES
+	-- bars the collinear per-year components in
+	-- KalmanFilterModel.select_drift_features).
+	                            ('feat_piotroski_f_score_fy',          'profitability',   'score',      'mutable_predictor', 'feat_piotroski_f_score_fy',          ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_piotroski_f_score_neg1fy',      'profitability',   'score',      'mutable_predictor', 'feat_piotroski_f_score_neg1fy',      ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_piotroski_f_score_neg2fy',      'profitability',   'score',      'mutable_predictor', 'feat_piotroski_f_score_neg2fy',      ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_piotroski_f_score_neg3fy',      'profitability',   'score',      'mutable_predictor', 'feat_piotroski_f_score_neg3fy',      ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_median_piotroski_f_score',      'profitability',   'score',      'mutable_predictor', 'feat_median_piotroski_f_score',      ARRAY ['kalman_pt']                                                                                                   )
 ON CONFLICT (column_name) DO UPDATE SET pymc_role     = excluded.pymc_role,
                                         feature_alias = excluded.feature_alias,
                                         model_targets = (SELECT ARRAY(SELECT DISTINCT
@@ -1822,7 +1915,12 @@ FROM (VALUES ('feat_implied_upside', 'double precision', 'Consensus implied upsi
              ('feat_sells', 'integer', 'Sell-side analyst rating count (strong sell + sell)'),
              ('feat_pt_achievement_1y', 'double precision', 'Realised achievement of the 1y-ago mean target: 1.0 if reached, else last_price / price_target_1y_ago'),
              ('feat_pt_accuracy_1y', 'double precision', 'Absolute relative error of the 1y-ago mean target: |last_price - price_target_1y_ago| / |price_target_1y_ago|'),
-             ('feat_pt_range_hit_rate', 'double precision', '1.0 when last_price landed inside the 1y-ago analyst low-high target range, else 0.0')) AS v(column_name, data_type, description)
+             ('feat_pt_range_hit_rate', 'double precision', '1.0 when last_price landed inside the 1y-ago analyst low-high target range, else 0.0'),
+             ('feat_piotroski_f_score_fy', 'integer', 'Piotroski F-score 0-9 for the current fiscal year (9-signal fundamental-quality composite vs neg1fy)'),
+             ('feat_piotroski_f_score_neg1fy', 'integer', 'Piotroski F-score 0-9 for the prior fiscal year (9-signal fundamental-quality composite vs neg2fy)'),
+             ('feat_piotroski_f_score_neg2fy', 'integer', 'Piotroski F-score 0-9 two fiscal years back (9-signal fundamental-quality composite vs neg3fy)'),
+             ('feat_piotroski_f_score_neg3fy', 'integer', 'Piotroski F-score 0-9 three fiscal years back (9-signal fundamental-quality composite vs neg4fy)'),
+             ('feat_median_piotroski_f_score', 'double precision', 'Median of the four fiscal-year Piotroski F-scores (robust fundamental-quality level; the kalman_pt drift predictor)')) AS v(column_name, data_type, description)
 WHERE md.column_name = v.column_name;
 
 -- =============================================================================

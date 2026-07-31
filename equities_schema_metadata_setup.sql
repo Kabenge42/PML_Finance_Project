@@ -1,7 +1,10 @@
 -- =============================================================================
 -- EQUITIES SCHEMA METADATA TABLE
 -- =============================================================================
-DROP TABLE IF EXISTS equities_schema_metadata CASCADE;
+-- NOTE: do NOT `DROP TABLE ... CASCADE` here — calculated_features_registry has an
+-- FK (primary_source_col → equities_schema_metadata.column_name) and CASCADE would
+-- silently drop that constraint on every rerun. The script is idempotent via
+-- CREATE TABLE IF NOT EXISTS + ON CONFLICT DO UPDATE, so no drop is needed.
 -- Create a metadata table documenting available Equities schema columns
 CREATE TABLE IF NOT EXISTS equities_schema_metadata
 (
@@ -107,6 +110,8 @@ VALUES
     -- ===========================================
     ('Price Target',                          'price_target',                'price_target',      1, 'Analyst consensus price target',                    'NUMERIC',              CURRENT_TIMESTAMP),
     ('Price Target - Median',                 'price_target_median',         'price_target',      1, 'Median analyst price target',                       'NUMERIC',
+     CURRENT_TIMESTAMP),
+    ('Target % (Avg)',                        'target_vs_price_pct',         'price_target',      1, 'Delta between Stock Price Target and last Price (%)', 'NUMERIC',
      CURRENT_TIMESTAMP),
     ('Dividend Record (Amount)',              'dividend_record_amount',      'historical_prices', 1, 'Dividend amount per share',
      'NUMERIC DEFAULT 0', CURRENT_TIMESTAMP),

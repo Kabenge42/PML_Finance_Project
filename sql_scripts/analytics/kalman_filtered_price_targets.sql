@@ -49,6 +49,7 @@ CREATE TABLE analytics.kalman_filtered_price_targets
 	n_holds                           double precision,
 	n_buys                            double precision,
 	n_sells                           double precision,
+	n_analysts                        double precision,
 	feat_no_opinion                   double precision,
 	analyst_bullish_pct               double precision,
 	analyst_bearish_pct               double precision,

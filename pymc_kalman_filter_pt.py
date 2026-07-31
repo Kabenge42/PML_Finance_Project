@@ -19,7 +19,10 @@ The Kalman-specific change vs. the price-target panel: the risk adjustment is ke
 rather than analyst conviction, so the latent target reads ``risk_adj_return =
 expected_return`` *given systematic risk*; realized volatility enters only through
 the ``feat_vol_drift`` observation-noise widener (drift of the vol term structure,
-not absolute levels). Per-ISIN screening signals are drawn from the posterior
+not absolute levels). The drift design matrix also carries a fundamental-quality
+level: ``feat_median_piotroski_f_score``, the median of the four per-fiscal-year
+Piotroski F-scores emitted by the MV (the per-year components are barred as
+collinear with their median). Per-ISIN screening signals are drawn from the posterior
 ``risk_adj_return`` / ``sigma_isin`` / ``nu`` via the canonical structural-TS Monte-Carlo
 helpers (:func:`simulate_lagged_risk_adjusted_returns` / :func:`summarize_mc_returns`).
 
@@ -147,7 +150,6 @@ FEATURE_CATALOGUE_QUERY = """
 # price_* / price_target_* family plus the noise wideners. Resilience fallback for
 # MV columns absent from the catalogue snapshot.
 KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
-                  'feat_pt_high_drift', 'feat_pt_low_drift', 'feat_pt_median_drift',
                   'feat_coverage_drift', 'feat_pt_noise_drift',
                   'feat_pt_noise_sigma', 'feat_pt_range_norm',
                   # Drift of the realized-vol term structure (1m -> 1y) and its
@@ -179,17 +181,23 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
                   'feat_mv_ev_drift',
                   # Cross-cutting market-cap / EV size & trend feats (added to every
                   # mv_pymc_* view; provenance-only for the fused panel — see §note below).
-                  'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg']
+                  'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg',
+                  # Piotroski F-score fundamental-quality trail: four per-fiscal-year
+                  # 9-signal composites plus their median (the drift predictor; the
+                  # per-year components are barred as collinear — see
+                  # KALMAN_PIOTROSKI_COMPONENT_FEATURES).
+                  'feat_piotroski_f_score_fy', 'feat_piotroski_f_score_neg1fy',
+                  'feat_piotroski_f_score_neg2fy', 'feat_piotroski_f_score_neg3fy',
+                  'feat_median_piotroski_f_score']
 
 # Last-resort drift-feature literal for ``map_state_space_features`` when BOTH
 # the passed catalogue frame and the direct ``vw_pymc_feature_catalogue`` query
 # are unavailable (e.g. offline unit tests). Mirrors the catalogue-driven
 # selection: the ``kalman_pt`` mutable_predictor aliases surviving
-# ``KalmanFilterPriceTarget.select_drift_features`` as of 2026-07-24.
+# ``KalmanFilterPriceTarget.select_drift_features`` as of 2026-07-30.
 _DRIFT_FEATURE_FALLBACK: tuple[str, ...] = (
     # Analyst-target / price / coverage drift trails.
-    'feat_pt_drift', 'feat_price_drift', 'feat_pt_high_drift',
-    'feat_pt_low_drift', 'feat_pt_median_drift', 'feat_coverage_drift',
+    'feat_pt_drift', 'feat_price_drift','feat_coverage_drift',
     'feat_pt_noise_drift',
     # Short/mid-horizon momentum.
     'feat_one_day_return', 'feat_price_chg_pct_3m',
@@ -201,6 +209,9 @@ _DRIFT_FEATURE_FALLBACK: tuple[str, ...] = (
     # Market-cap / EV size & trend.
     'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg',
     'feat_mv_ev_drift',
+    # Fundamental quality: median of the four per-fiscal-year Piotroski
+    # F-scores (the components are barred as collinear with their median).
+    'feat_median_piotroski_f_score',
 )
 
 # Hierarchical classification coords (categorical group effects), distinct from the
@@ -1781,6 +1792,7 @@ _EDA_DRIVER_SPECS: tuple[tuple[str, str], ...] = (
     ('feat_pt_achievement_1y', '1y PT achievement — target credibility'),
     ('feat_pt_accuracy_1y', '1y PT abs error — target credibility'),
     ('feat_mcap_trend_1y', 'mcap 1y trend — size re-rating'),
+    ('feat_median_piotroski_f_score', 'median Piotroski F — fundamental quality'),
 )
 
 
@@ -2069,9 +2081,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     display(pd.Series(card).sort_values(ascending=False))
 
     # 2.4a Distributional summary of the feat_* columns via arviz-stats.
-    eda_drift = [c for c in ('feat_pt_drift', 'feat_price_drift', 'feat_pt_high_drift',
-                             'feat_pt_low_drift', 'feat_pt_median_drift',
-                             'feat_coverage_drift', 'feat_pt_noise_drift',
+    eda_drift = [c for c in ('feat_pt_drift', 'feat_price_drift','feat_coverage_drift', 'feat_pt_noise_drift',
                              'feat_one_day_return','feat_price_chg_pct_3m',
                              'feat_total_return_ytd', 'feat_total_return_5y',
                              'feat_total_return_10y', 'feat_tr_cagr_3y',
@@ -2282,7 +2292,8 @@ def map_state_space_features(
     :meth:`KalmanFilterPriceTarget.select_drift_features`, which drops the
     aliases consumed elsewhere in the fused model (noise wideners, the
     ``feat_avg_beta`` / ``feat_mcap_country_r`` tilts, ``days_*`` time
-    covariates, drift-support counters, raw rating counts) and the
+    covariates, drift-support counters, raw rating counts, the per-fiscal-year
+    Piotroski component scores — their median enters instead) and the
     response-leakage alias. Returns the drift-feature list and a tidy
     role-mapping frame covering every mutable_predictor disposition.
 
@@ -2355,7 +2366,7 @@ def map_state_space_features(
             ('feat_implied_upside', 'RESPONSE (log1p -> feat_log_uplift; leakage-barred)')
         )
     mapping_rows += [
-        (c, 'excluded (drift-support counter / raw rating count / collinear leg)')
+        (c, 'excluded (drift-support counter / raw rating count / collinear leg / Piotroski component)')
         for c in candidates
         if (c in KALMAN_DRIFT_EXCLUDED_FEATURES and c in kalman_df.columns
             and c not in drift_features
@@ -4533,12 +4544,18 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
         'n_holds': _numcol('feat_holds'),
         'n_buys': _numcol('feat_buys'),
         'n_sells': _numcol('feat_sells'),
+        'n_analysts': _numcol('n_analysts'),
         'feat_no_opinion': _numcol('feat_no_opinion'),
         'analyst_bullish_pct': _numcol('feat_analyst_bullish_pct'),
         'analyst_bearish_pct': _numcol('feat_analyst_bearish_pct'),
         'analyst_neutral_pct': _numcol('feat_analyst_neutral_pct'),
         'analyst_conviction': _numcol('feat_analyst_conviction'),
         'analyst_rating': _numcol('feat_analyst_rating'),
+        'piotroski_f_score_median': _numcol('feat_median_piotroski_f_score'),
+        'piotroski_f_score_fy': _numcol('feat_piotroski_f_score_fy'),
+        'piotroski_f_score_neg1fy': _numcol('feat_piotroski_f_score_neg1fy'),
+        'piotroski_f_score_neg2fy': _numcol('feat_piotroski_f_score_neg2fy'),
+        'piotroski_f_score_neg3fy': _numcol('feat_piotroski_f_score_neg3fy'),
         'pt_achievement_1y': _numcol('feat_pt_achievement_1y'),
         'pt_range_hit_rate': _numcol('feat_pt_range_hit_rate'),
         # Consensus price-target levels + the *_ago price-target trail.

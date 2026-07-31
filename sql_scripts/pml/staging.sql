@@ -569,7 +569,18 @@ CREATE TABLE staging
 	"Gross Profit Margin % (-4FY)"         text,
 	"Gross Profit Margin % (-5FY)"         text,
 	"Gross Profit Margin % (3YAVGFQ)"      text,
-	"Gross Profit Margin % (5YAVGFQ)"      text
+	"Gross Profit Margin % (5YAVGFQ)"      text,
+	"Net Income - (IS) (LTM)"              text,
+	"Net Income - (IS) (FQ)"               text,
+	"Net Income - (IS) (FY)"               text,
+	"Net Income - (IS) (-1FQFQ)"           text,
+	"Net Income - (IS) (-2FQFQ)"           text,
+	"Net Income - (IS) (-3FQFQ)"           text,
+	"Net Income - (IS) (-4FQFQ)"           text,
+	"Net Income - (IS) (-1FY)"             text,
+	"Net Income - (IS) (-2FY)"             text,
+	"Net Income - (IS) (-3FY)"             text,
+	"Net Income - (IS) (-4FY)"             text
 );
 
 ALTER TABLE staging

@@ -6,7 +6,7 @@ CREATE TABLE public.calculated_features_registry
 	source_function    varchar(128),
 	description        text,
 	source_columns     text[],
-	primary_source_col text,
+	primary_source_col text REFERENCES public.equities_schema_metadata,
 	calculation_type   varchar(32),
 	data_type          varchar(32),
 	updated_at         timestamp DEFAULT CURRENT_TIMESTAMP
