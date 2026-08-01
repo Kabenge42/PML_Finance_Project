@@ -28,9 +28,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Any, Literal, Optional, TYPE_CHECKING
-
-from pymc.backends.base import MultiTrace
+from typing import Any, Literal, Optional, TYPE_CHECKING, Union
 
 # PyMC 6.0 + ArviZ 1.0: top-level ``arviz`` re-exports the modular API,
 # so the legacy ``arviz_base`` fallback (PyMC 5.x transition artefact) is
@@ -54,6 +52,7 @@ except ImportError:
 if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
     import pymc as pm_typing  # noqa: F401
+    from pymc.backends.base import MultiTrace  # noqa: F401
 
 from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
@@ -177,7 +176,7 @@ class AccountingAnomalyBayesian:
         parameterization: Parameterization = "non_centered",
         nuts_sampler: Optional[str] = None,
         **sample_kwargs: Any,
-    ) -> tuple[InferenceLike | MultiTrace, Any]:
+    ) -> tuple[Union[InferenceLike, MultiTrace], Any]:
         """Fit anomaly model and return ``(InferenceData, Model)``.
 
         Parameters

@@ -5,6 +5,262 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.11] - 2026-08-01
+
+### Added
+
+- **Return-space structural forecast** — new `plot_kalman_forecast_returns`
+  (`pymc_kalman_filter_pt.py`): observed implied returns, the smoothed
+  implied-upside path + 94 % band, and **nested per-fiscal-event forecast
+  bands** — predictive (`forecast_pt / last_price − 1`, incl. observation
+  noise) around latent (the previously **unused**
+  `implied_upside_future` draws from `KalmanFilterModel.forecast()`) — with
+  a 0 % break-even line, per-horizon `+X.X%` annotations and the
+  fiscal-event markers. §10K/§11/§11b/§12 now render this panel **instead
+  of** the price-space `plot_kalman_forecast` (which stays exported for
+  price views); their forecast tables always carry `implied_upside_pct`
+  (the §10K/§12 call sites previously dropped it).
+- **Portfolio & recommendations visuals** (previously console-only):
+  `plot_group_signal_forest` (stacked shrunk-excess forest over the
+  group-effect coords with per-coord OW/UW bands and verdict colouring),
+  `plot_book_composition` (book weights + cap line + per-name CVaR5 with
+  the portfolio aggregates in the title), a portfolio **star marker** +
+  held-name **efficient hull** on the §10c overview risk-return map (and
+  the same marker on the tail-asymmetry panel), `run_summary` decision
+  panels (cohort/baseline/universe grouped metric bars; sector-tilt
+  diverging bar), a §8 coverage bar against the 0.94 target, and a §9
+  variance-partition stacked bar.
+- **Promoted notebook builders** — `plot_screen_overview`,
+  `plot_risk_return_scatter`, `plot_top_candidate_forest` move from
+  notebook-inline cells into the module (SSOT; standardised hover/axes).
+- **`pymc_kalman_filter_pt_v3.ipynb`** — new 42-cell notebook twin:
+  `KalmanRunConfig`-driven §0 (with a commented T=4 opt-in toggle and the
+  validation history), rewritten §5 generative form (per-time direct
+  intercepts, `beta_t` only when `t_scaled` varies across ISINs,
+  Deterministic `achieve_prob`), new §4 lookback-panel narrative,
+  return-space §10K/§11/§12 narrative, §14 visuals. Supersedes
+  `pymc_kalman_filter_pt_v2.ipynb`.
+
+### Changed
+
+- **Visualization hygiene standardised across the suite** — semantic palette
+  constants (`C_POSTERIOR/C_OBSERVED/C_FORECAST/C_REF/C_HIGHLIGHT/C_VOL/
+  C_DRAWS/C_ACCENT/C_MUTED`; ~70 inline hexes replaced, §11b/§12b/§13b
+  one-off palettes retired) and height ladder (`H_SHORT…H_GRID`); shared
+  `_hover_pct` / `_hover_price` / `_hover_prob` / `_fmt_axis` helpers +
+  conventions (every trace named or hover-skipped, `<extra></extra>`
+  templates, `ticksuffix='%'` on percent axes, `tickformat='.0%'` on
+  decimal-probability axes, `legendgroup` on trace families, one legend
+  font size); `hovermode` support in `_render_plotly` (`'x unified'` on
+  time-series panels); `_render_plotly`/`_safe_show` hoisted into §1.
+  Fixed defects: the unnamed "trace N" hover in `plot_fused_model_effects`
+  (b), the blank hover key in the §2.4e driver facets, NaN markers hovering
+  as `null` (§10b sector reference points, §10c MC fan — now masked), the
+  §6 prior panel's decimal-scale axis (now %), and bare arviz figures
+  (§9.3 / §11b / §12b traces titled + polished; §10 industry forest and
+  §2.2 ridge gain 0 %-lines, axis titles and median sorting).
+- **EDA decision context** — §2.4e driver facets annotate per-facet
+  Spearman ρ (+ OLS trend when `statsmodels` is present); the §2.4f
+  per-coord forests (up to 7 figures) consolidate into **one faceted
+  panel** gated to the model's group-effect coords, levels sorted by
+  median with universe-median reference.
+- **Figure consolidation** (~6 figures fewer per run; artifact filenames
+  shift accordingly): price-space shrinkage scatter removed (the
+  percent-space view remains; §10c reuses the shared signed-log
+  `create_kalman_vs_raw_scatter` from
+  `probabilistic_ml_model.visualizations`, guarded import), duplicate
+  average-upside KDE removed from `_plot_comparative_returns`, duplicate
+  arviz PPC ECDF removed (the pooled hand-built overlay remains).
+
+## [0.9.9.10] - 2026-07-31
+
+### Added
+
+- **Genuine (isin, time) fused-panel time dimension (T=4, opt-in)** —
+  `prepare_kalman_panel_inputs` gains `history_lookbacks`
+  (`KalmanRunConfig.panel_lookbacks`, e.g. `('6m', '3m', '1m')`; default `()`
+  keeps the collapsed T=1 cross-section — see the validation note below):
+  each lookback's implied uplift
+  `price_target_{lb}_ago / price_{lb}_ago − 1` is winsorised to
+  [−95 %, +500 %] and `log1p`-transformed onto the response scale, giving a
+  real oldest→newest `(isin, T=4, 1)` log-uplift panel with the current
+  snapshot as the final step. This activates `build_fused_kalman_pt_model`'s
+  zero-anchored GRW deviations on `alpha`/`beta_t` (their innovation scales
+  are now identified by the multiple time steps); `t_scaled` carries the
+  standardised calendar offsets (≈ −182/−91/−30/0 days). Missing history
+  cells (~a few % per trail) are filled with the name's **own** snapshot
+  uplift — never a fake cross-sectional-mean observation. The legacy
+  `collapse_time=False` branch, which merely `np.tile`-d the snapshot across
+  the fiscal anchors (T-fold observation double-counting, the historic
+  ill-conditioned posterior), is removed; `()` lookbacks reproduce the
+  collapsed T=1 cross-section. `sample_posterior` bumps `tune` to ≥ 2000
+  automatically when T > 1. **Validation note (2026-07-31): the first full
+  T=4 run (6,398 ISINs, tune=2000, target_accept=0.9; 1.4 % of history
+  cells snapshot-filled) was inconclusive-to-negative — nutpie sampled the
+  full budget but its result was destroyed by a cp1252 console-encoding
+  crash (headless stdout redirect; U+2009 in nutpie's output) before any
+  diagnostics, and the numpyro fallback then logged 315 post-tuning
+  divergences (~7.9 % of kept draws); a nutpie re-run at
+  `target_accept=0.95` still logged 190, with the pathology isolated to the
+  per-series level/slope + GRW-innovation block (`alpha_level` r_hat 1.06 /
+  bulk-ESS 73, `sigma_alpha_innov` 1.04 / 122). The block was then
+  **reparameterised (2026-08-01)**: at T > 1 the aliased scalar level +
+  slope + two zero-anchored GRW deviation walks + two innovation scales are
+  replaced by **T direct per-time intercepts** (`alpha_level` dims
+  `(time, y_series)`, exactly identified — the same direct-Normal medicine
+  as the historic T=1 ridge fix), and `beta_t` is materialised only when
+  `t_scaled` genuinely varies across ISINs (fixed at 0 on an isin-constant
+  lookback axis; also fixes the prior-only `beta_slope` sampled against an
+  all-zero T=1 fallback covariate). `sigma_alpha_innov` / `sigma_beta_innov`
+  / `z_alpha` / `z_beta` are removed, and the T>1 tune bump (→ 2000) is
+  dropped with them. **Re-validation passes**: 0 divergences, worst r_hat
+  1.00, worst bulk-ESS ≈ 1.6k across the per-time intercepts and all 21
+  drift betas, 15.7 min end-to-end (vs ~36 min sampling alone before). The
+  per-time intercepts recover a clean monotone level path (−0.164 at 6m ago
+  → −0.036 now) and the T=4 panel identifies two betas that were null on
+  the T=1 snapshot (`feat_analyst_conviction` +0.022, `feat_one_day_return`
+  −0.024). The default stays `panel_lookbacks=()` (T=1) per the 2026-07-31
+  decision; flipping it to `('6m', '3m', '1m')` is now validated-safe.**
+- **`KalmanRunConfig` frozen dataclass + `from_env()`**
+  (`pymc_kalman_filter_pt.py`, per the `PipelineConfig` "Configuration as
+  Dataclass" pattern): consolidates the NUTS budget
+  (`draws/tune/chains/cores/target_accept/random_seed/prior_draws`), screen
+  Monte-Carlo (`mc_horizon`, `mc_rho`), risk book (`cvar_alpha`,
+  `weight_cap`, `k_book`, `p_long`), panel lookbacks, universe-query dates /
+  thresholds (`min_next_earnings`, `min_report_date`,
+  `min_mcap_country_rank`, `candidate_limit`, `earnings_window_days`) and
+  env plumbing (`results_dir`, `export_draws`, `fig_width_px`, `log_level`).
+  `main(config=…)` threads it end-to-end; `get_run_config()` /
+  `set_run_config()` expose the lazy module singleton. The previously
+  **hardcoded** `next_earnings >= '2026-01-01'` /
+  `income_statement_report_date >= '2025-01-01'` universe-date literals (a
+  silent time-bomb as dates roll forward) now live on the config
+  (ISO-validated, injection-safe) and feed `kalman_df_query()` plus the
+  §11–§13 candidate queries (`market_cap_country_r` floor, `LIMIT`, earnings
+  window all bind-parameterised).
+
+### Changed
+
+- **SSOT dedup between `KalmanFilterModel.py` and the workflow script** —
+  `FISCAL_CALENDAR_COLS_ALL` / `DAY_COUNT_COLS_ALL` are now derived from
+  `FISCAL_HORIZONS`; `HIST_COL_PATTERN` derives its suffix alternation from
+  the new public `AGO_SUFFIX_PATTERN` (kept free of Python named groups so it
+  stays a valid PostgreSQL POSIX regex); the noise-widener / tilt column
+  literals resolve through the new `KALMAN_RANGE_WIDENER_FEATURE` /
+  `KALMAN_CONSENSUS_SIGMA_FEATURE` / `KALMAN_VOL_DRIFT_FEATURE` /
+  `KALMAN_TILT_FEATURE_ORDER` constants. New lazy exports on
+  `pymc_models/__init__.py` for all of the above plus `FISCAL_HORIZONS` /
+  `FiscalHorizon` / `AGO_HISTORY_RE`.
+- **Helper extraction** — shared `_forecast_table` / `_plot_sigma_obs_path` /
+  `_fmt_or_na` / `_display_label` / `_resolve_risk_book` replace the
+  byte-identical §10K/§11/§12(±b)/§14(b) blocks; `_HDI_LO/_HDI_HI = 0.03/0.97`
+  replace 13 repeated quantile literals; `_KF_SUMMARY_VARS` /
+  `_SV_SUMMARY_VARS` / `_SV_TRACE_VARS` replace the per-section var-list
+  literals. `KalmanFilterModel`: triplicated nan-safe z-score block →
+  `_nan_zscore()`; `select_drift_features` dedup is O(n) (`seen` set);
+  `_build_ago_offset_map` is `lru_cache`d and the `*_ago` regex compiled once;
+  `_DEFAULT_SAMPLES/_DEFAULT_TUNE/_DEFAULT_CHAINS/_DEFAULT_TARGET_ACCEPT/
+  _DEFAULT_RANDOM_SEED` + `_MIN_ESS_GATE` name the magic numbers.
+- **Lazy-import contract restored** — the unguarded module-level
+  `from pymc.backends.base import MultiTrace` in `KalmanFilterModel.py` and
+  `AccountingAnomalyModel.py` (which made both modules hard-require pymc at
+  import time) moved under `TYPE_CHECKING`; both modules now import cleanly
+  with pymc absent.
+- **Dataclass hygiene** — `ScreenContext` / `RiskBook` are `frozen=True,
+  eq=False`; `KalmanPanelInputs` gains `eq=False` (ndarray `__eq__` hazard on
+  a frozen dataclass).
+- Type/docs polish: `build_price_target_history` third return annotated
+  `Optional[str]` (stale `# type: ignore` dropped), `forecast` /
+  `fit` / `fit_from_snapshot` return types concretised
+  (`"pm_typing.Model"`, `xr` Dataset union), `main() -> dict[str, Any]`;
+  stale `compute_cvar_aware_book` docstring defaults (25 / 0.80 → the actual
+  50 / 0.67) and the inverted `main(robust=…)` docstring fixed; root-logger
+  `logging.info` calls in `export_to_analytics_db` now use the module logger.
+- **Model-results note**: `beta[feat_one_day_return]` (0.002 ± 0.006) and
+  `beta[feat_analyst_conviction]` (−0.016 ± 0.017) straddle zero on the T=1
+  snapshot — deliberately kept in the drift matrix (documented next to
+  `KALMAN_DRIFT_EXCLUDED_FEATURES`); revisit on the genuine time panel.
+
+### Removed
+
+- **Legacy §4/§5 pre-fusion cross-sectional model** (`ModelData`,
+  `build_model_data`, `build_kalman_pt_model`, `_CANDIDATE_GROUPS`) from
+  `pymc_kalman_filter_pt.py` (~185 lines; superseded by
+  `prepare_kalman_panel_inputs` + `build_panel_model`; deprecation note added
+  to `docs/pymc_kalman_filter_pt.md` §5). Dead `KalmanFilterModel` APIs:
+  `resolve_drift_features` (no caller), `_align_kalman_features` (+ its
+  now-unused `_feature_alignment` imports), and the unused
+  `FISCAL_HORIZON_LABELS` / `DAY_COUNT_HORIZON_LABELS` dicts.
+
+> Packaging note: `pyproject.toml` and the README badge still lag at 0.9.9.5
+> pending the next packaging bump (recurring follow-up).
+
+## [0.9.9.9] - 2026-07-31
+
+### Added
+
+- **Piotroski F-score composite (SQL)** — new `pml.piotroski_f_score(roa, roa_prev,
+  cfo, ni, ltde, ltde_prev, cr, cr_prev, shrs, shrs_prev, gpm, gpm_prev, at,
+  at_prev) → INTEGER` scalar function (`sql_scripts/pml/piotroski_f_score.sql`;
+  `NUMERIC` + `DOUBLE PRECISION` overloads, `IMMUTABLE PARALLEL SAFE`): the
+  classic 9-signal 0–9 fundamental-quality composite (positive ROA, positive
+  CFO, rising ROA, accruals quality CFO > NI, falling LT-debt/equity, rising
+  current ratio, no share dilution, rising gross margin, rising asset
+  turnover). NULL-tolerant: a NULL comparison scores 0 for that signal, never
+  NULL overall. Plus `pml.calc_piotroski_f_score(p_isin DEFAULT NULL) →
+  TABLE(isin, piotroski_f_score)`, a thin set-returning LTM screener wrapper
+  (`sql_scripts/pml/calc_piotroski_f_score.sql`).
+- **New raw fundamentals column families on `pml.pml_df` / `pml.staging`** —
+  the Piotroski inputs, each as level (`_ltm`/`_fy`/`_fq`) plus
+  `neg1..neg4` fy/fqfq lag variants: `return_on_assets_roa_pct_*`,
+  `asset_turnover_*`, `quick_ratio_*`, `current_ratio_*`,
+  `long_term_debt_equity_*`, `net_income_*`. Mapped from the vendor headers in
+  `import_pml_data.sql` and registered (roles, `data_type`, descriptions) in
+  `pml_df_metadata_populate.sql`; regional `data/pml/` and `data/screening_*`
+  CSV snapshots refreshed to carry the new vendor columns.
+- **Piotroski features on `pml.mv_pymc_kalman_pt`** — four per-fiscal-year
+  composites `feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`
+  (`pml.piotroski_f_score` over consecutive lag pairs, fy vs neg1fy …
+  neg3fy vs neg4fy) plus their median `feat_median_piotroski_f_score`,
+  registered as `mutable_predictor` catalogue rows for `kalman_pt`. Only the
+  median enters the fused drift design matrix as the fundamental-quality
+  level; the per-year components are collinear with it and are barred via the
+  new `KALMAN_PIOTROSKI_COMPONENT_FEATURES` frozenset (folded into
+  `KALMAN_DRIFT_EXCLUDED_FEATURES` /
+  `KalmanFilterPriceTarget.select_drift_features()` in
+  `probabilistic_ml_model/pymc_models/KalmanFilterModel.py`) — EDA / analytics
+  export only.
+- **Analytics export columns** — the `kalman_results` export frame and
+  `analytics.kalman_filtered_price_targets` gain `n_analysts` and
+  `piotroski_f_score_{median,fy,neg1fy,neg2fy,neg3fy}`
+  (`sql_scripts/analytics/kalman_filtered_price_targets.sql`). As usual,
+  schema changes ship as a pair: re-run `export_analytics(write=True)` and
+  redeploy the GEIB dashboard.
+- **New analytics / screening DDL** — `analytics."10b_risk_book"`
+  (`sql_scripts/analytics/10b_risk_book.sql`, persisted CVaR-aware risk book)
+  and `pml.screening_global_yields`
+  (`sql_scripts/pml/screening_global_yields.sql`, backed by the new
+  `data/playground/screening_global_yields.csv` snapshot).
+- **Import / registry hardening** — `import_pml_data.sql` fails fast if the
+  vendor CSV header has no `ISIN` column, filters ISIN-less rows at `\copy`
+  time (`WHERE NULLIF(BTRIM("ISIN"), '') IS NOT NULL`) and asserts none reach
+  `pml_df` before the `TRUNCATE`; `feature_registry.sql` pre-flights that
+  `equities_schema_metadata` is seeded (its FK target) with an actionable
+  error; `equities_schema_metadata_setup.sql` documents why it must not
+  `DROP TABLE … CASCADE` (would silently drop the registry FK).
+
+### Changed
+
+- **Kalman drift design matrix slimmed** — the high/low/median analyst-target
+  trail drifts (`feat_pt_high_drift`, `feat_pt_low_drift`,
+  `feat_pt_median_drift`) were removed from the expected drift-feature set and
+  the EDA drift panels in `pymc_kalman_filter_pt.py` (they remain available on
+  the MV / in the catalogue); `feat_median_piotroski_f_score` joins as the
+  fundamental-quality drift predictor.
+
+> Follow-up (recurring): `pyproject.toml` / README badge still lag the
+> CHANGELOG version pending the next packaging bump.
+
 ## [0.9.9.8] - 2026-07-26
 
 ### Changed

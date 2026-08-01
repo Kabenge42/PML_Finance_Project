@@ -20,7 +20,6 @@ from typing import Any, Hashable, Iterable, Literal, Optional, Sequence, TYPE_CH
 from pandas import Timestamp
 from pandas._libs import NaTType
 from pandas.tseries.offsets import DateOffset, MonthBegin, QuarterBegin, YearBegin
-from pymc.backends.base import MultiTrace
 
 # PyMC 6.0 + ArviZ 1.0: top-level ``arviz`` re-exports the modular API,
 # so the legacy ``arviz_base`` fallback (PyMC 5.x transition artefact) is
@@ -43,13 +42,11 @@ except ImportError:
 if TYPE_CHECKING:
     import arviz as az_typing  # noqa: F401
     import pymc as pm_typing  # noqa: F401
+    import xarray as xr_typing  # noqa: F401
+    from pymc.backends.base import MultiTrace  # noqa: F401
 
 from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
-from probabilistic_ml_model.pymc_models._feature_alignment import (
-    coerce_by_data_type,
-    load_feature_metadata_from_db,
-)
 from probabilistic_ml_model.pymc_models._hierarchy import (
     build_hierarchy_indices,
     coerce_categories,
@@ -63,6 +60,15 @@ Parameterization = Literal["centered", "non_centered", "marginalized", "auto"]
 # sample; ``parameterization="auto"`` collapses to the funnel-free
 # ``marginalized`` form for such short ``*_ago`` cohorts.
 _SHORT_SERIES_THRESHOLD = 25
+
+# Default MCMC budget shared by ``fit`` / ``fit_from_snapshot`` / ``forecast``.
+_DEFAULT_SAMPLES = 2000
+_DEFAULT_TUNE = 1000
+_DEFAULT_CHAINS = 4
+_DEFAULT_TARGET_ACCEPT = 0.90
+_DEFAULT_RANDOM_SEED = 42
+# Minimum bulk ESS before ``_log_sample_diagnostics`` warns (project gate).
+_MIN_ESS_GATE = 400
 
 # ---------------------------------------------------------------------------
 # Historical "*_ago" cohort -> per-ISIN time-series helpers.
@@ -81,20 +87,25 @@ _SHORT_SERIES_THRESHOLD = 25
 # (``price_{5d,1w,1m,3m,6m,1y,3y,5y,qtd}_ago``) un-prefixed alongside the
 # analyst-target trail, so snapshots loaded from the MV (not just ``pml_df``)
 # carry the full price + target ``*_ago`` cohort that
-# :data:`_AGO_HISTORY_RE` unpivots.
+# :data:`AGO_HISTORY_RE` unpivots.
 #
 # This logic lives on the model class so the notebook (Section 7.1 of
 # ``pymc_expected_returns_model.ipynb``) and any future batch scorer can
 # call a single canonical helper instead of inlining the unpivot.
 # ---------------------------------------------------------------------------
 
-# Map textual *_ago suffix -> pandas DateOffset.
-_AGO_SUFFIX_PATTERN = r"5d|1w|1m|3m|6m|1y|3y|5y|mtd|qtd|ytd"
-_AGO_HISTORY_RE = (
-        r"^(price_target(?:_high|_low|_median)?|price)" r"_(?P<suf>" + _AGO_SUFFIX_PATTERN + r")_ago$"
+# Map textual *_ago suffix -> pandas DateOffset. ``AGO_HISTORY_RE`` is the
+# SSOT ``*_ago`` history-column pattern shared with ``pymc_kalman_filter_pt.py``
+# (sections 11-13 column discovery against ``pml.pml_df``).
+AGO_SUFFIX_PATTERN = r"5d|1w|1m|3m|6m|1y|3y|5y|mtd|qtd|ytd"
+AGO_HISTORY_RE = (
+    r"^(price_target(?:_high|_low|_median)?|price)"
+    r"_(?P<suf>" + AGO_SUFFIX_PATTERN + r")_ago$"
 )
+_AGO_HISTORY_PATTERN = re.compile(AGO_HISTORY_RE)
 
 
+@lru_cache(maxsize=1)
 def _build_ago_offset_map() -> dict[str, Any]:
     return {
         "1w": DateOffset(weeks=1),
@@ -166,15 +177,8 @@ FISCAL_HORIZONS: tuple[FiscalHorizon, ...] = (
     FiscalHorizon("expected_report_date", "days_to_expected_report", "Expected report"),
     FiscalHorizon("next_fy_end_date", "days_to_next_fy_end", "Next FY end"),
     FiscalHorizon("fy_end_date", "days_since_fy_end", "FY end"),
-    FiscalHorizon("next_fiscal_quarter","days_to_next_fiscal_quarter","Next fiscal quarter"),
+    FiscalHorizon("next_fiscal_quarter", "days_to_next_fiscal_quarter", "Next fiscal quarter"),
 )
-
-# DATE column -> human label, for callers holding a fiscal-calendar date column.
-FISCAL_HORIZON_LABELS: dict[str, str] = {fh.date_col: fh.label for fh in FISCAL_HORIZONS}
-# day-count column -> human label, for callers projecting from ``days_*`` values.
-DAY_COUNT_HORIZON_LABELS: dict[str, str] = {
-    fh.day_count_col: fh.label for fh in FISCAL_HORIZONS
-}
 
 
 # ---------------------------------------------------------------------------
@@ -195,20 +199,25 @@ KALMAN_LEAKAGE_FEATURES: frozenset[str] = frozenset({"feat_implied_upside"})
 
 # sigma_obs wideners (``build_noise_wideners`` in ``pymc_kalman_filter_pt.py``):
 # they scale the observation noise, so they must not double as mean predictors.
+# Each widener has a distinct role in the measurement model, so the individual
+# column names are exported alongside the aggregate frozenset — downstream
+# consumers must reference these constants rather than re-spelling the strings.
+KALMAN_RANGE_WIDENER_FEATURE: str = "feat_pt_range_norm"
+KALMAN_CONSENSUS_SIGMA_FEATURE: str = "feat_pt_noise_sigma"
+KALMAN_VOL_DRIFT_FEATURE: str = "feat_vol_drift"
 KALMAN_NOISE_WIDENER_FEATURES: frozenset[str] = frozenset({
-    "feat_pt_range_norm",
-    "feat_pt_noise_sigma",
-    "feat_vol_drift",
+    KALMAN_RANGE_WIDENER_FEATURE,
+    KALMAN_CONSENSUS_SIGMA_FEATURE,
+    KALMAN_VOL_DRIFT_FEATURE,
 })
 
 # Named tilt drivers with dedicated ``pm.Data`` containers + sign-fixed loadings
 # in ``build_fused_kalman_pt_model`` (risk / size adjustments on
 # ``risk_adj_return``); folding them into the generic ``beta`` block as well
-# would double-count them.
-KALMAN_TILT_FEATURES: frozenset[str] = frozenset({
-    "feat_avg_beta",
-    "feat_mcap_country_r",
-})
+# would double-count them. The ordered tuple backs display frames; the
+# frozenset backs the drift-exclusion union.
+KALMAN_TILT_FEATURE_ORDER: tuple[str, ...] = ("feat_avg_beta", "feat_mcap_country_r")
+KALMAN_TILT_FEATURES: frozenset[str] = frozenset(KALMAN_TILT_FEATURE_ORDER)
 
 # Valid-pair counters behind the ``target_drift_n`` SQL helper
 # (feature_role='metadata'): drift-support diagnostics, not signals.
@@ -254,6 +263,14 @@ KALMAN_TIME_COVARIATE_PREFIX: str = "days_"
 
 # Union of every alias barred from the drift design matrix (``days_*`` columns
 # are excluded by prefix, see KALMAN_TIME_COVARIATE_PREFIX).
+#
+# NOTE (2026-07-31 run): two surviving drift betas are statistically
+# indistinguishable from zero on the T=1 snapshot —
+# ``beta[feat_one_day_return]`` = 0.002 ± 0.006 and
+# ``beta[feat_analyst_conviction]`` = −0.016 ± 0.017 (89% ETIs straddle 0).
+# They are deliberately KEPT in the drift matrix (pruning is a model-composition
+# change requiring a validation re-run); revisit if they stay null on the
+# genuine (isin, time) panel.
 KALMAN_DRIFT_EXCLUDED_FEATURES: frozenset[str] = (
     KALMAN_LEAKAGE_FEATURES
     | KALMAN_NOISE_WIDENER_FEATURES
@@ -335,35 +352,6 @@ class KalmanFilterPriceTarget:
             logger.warning("Could not load kalman_pt feature catalogue: %s", exc)
             return tuple()
 
-    @staticmethod
-    def _align_kalman_features(
-            kalman_features_df: Optional[pd.DataFrame],
-            isin: np.ndarray,
-            feature_aliases: list[str],
-            *,
-            use_typed_coercion: bool = False,
-            connection_string: Optional[str] = None,
-    ) -> np.ndarray:
-        """Align an (isin × kalman_feature) matrix to the model dims.
-
-        Missing columns/rows are filled with ``0.0`` so the container always
-        has shape ``(n_isin, n_kalman_feature)``.
-        """
-        n_isin = len(isin)
-        n_feat = len(feature_aliases)
-        if kalman_features_df is None or n_feat == 0 or n_isin == 0:
-            return np.zeros((n_isin, max(n_feat, 0)), dtype="float64")
-
-        df = kalman_features_df.copy()
-        if "isin" in df.columns:
-            df = df.drop_duplicates(subset="isin").set_index("isin")
-        df = df.reindex(index=isin)
-
-        if use_typed_coercion:
-            metadata = load_feature_metadata_from_db(connection_string)
-            return coerce_by_data_type(df, list(feature_aliases), metadata)
-        return df.reindex(columns=feature_aliases).astype("float64").fillna(0.0).to_numpy()
-
     @classmethod
     def select_drift_features(
             cls,
@@ -397,9 +385,11 @@ class KalmanFilterPriceTarget:
         """
         available = set(available_columns) if available_columns is not None else None
         selected: list[str] = []
+        seen: set[str] = set()
         for alias in feature_aliases:
-            if alias in selected:
+            if alias in seen:
                 continue
+            seen.add(alias)
             if alias in KALMAN_DRIFT_EXCLUDED_FEATURES:
                 continue
             if alias.startswith(KALMAN_TIME_COVARIATE_PREFIX):
@@ -408,39 +398,6 @@ class KalmanFilterPriceTarget:
                 continue
             selected.append(alias)
         return selected
-
-    @classmethod
-    def resolve_drift_features(
-            cls,
-            kalman_df: Optional[pd.DataFrame] = None,
-            *,
-            feature_aliases: Optional[Iterable[str]] = None,
-            connection_string: Optional[str] = None,
-    ) -> list[str]:
-        """Resolve the catalogue-driven drift-feature list for the fused model.
-
-        Fetches the ``kalman_pt`` mutable_predictor aliases from
-        ``pml.vw_pymc_feature_catalogue`` (unless ``feature_aliases`` is
-        supplied) and applies :meth:`select_drift_features`. Returns an empty
-        list when the catalogue is unreachable so callers can fall back to a
-        curated literal list.
-
-        Parameters
-        ----------
-        kalman_df
-            Modelling frame backed by ``pml.mv_pymc_kalman_pt``; when given,
-            aliases absent from its columns are dropped.
-        feature_aliases
-            Pre-fetched candidate aliases (bypasses the catalogue query).
-        connection_string
-            Optional SQLAlchemy URL override (defaults to ``DB_URL``).
-        """
-        if feature_aliases is None:
-            feature_aliases = cls._resolve_kalman_feature_aliases(connection_string)
-        return cls.select_drift_features(
-            feature_aliases,
-            available_columns=None if kalman_df is None else kalman_df.columns,
-        )
 
     # ------------------------------------------------------------------
     # Snapshot -> per-ISIN price-target time-series helpers.
@@ -527,12 +484,12 @@ class KalmanFilterPriceTarget:
             min_observations: int = 2,
             timestamp_col: str = "feature_calculated_at",
             fiscal_anchor_col: Optional[str] = None,
-    ) -> tuple[pd.DataFrame, pd.Series, str]:
+    ) -> tuple[pd.DataFrame, pd.Series, Optional[str]]:
         """Build a long ``(isin, asof_date, price_target)`` panel from a snapshot.
 
         Unpivots the ``*_ago`` cohort
         (``price_target``, ``price_target_high|low|median``, ``price``) using
-        :data:`_AGO_HISTORY_RE` and translates each suffix to a real
+        :data:`AGO_HISTORY_RE` and translates each suffix to a real
         ``pd.Timestamp`` via :func:`_build_ago_offset_map`. The
         point-in-time ``price_target`` / ``last_price`` values are seeded
         at the resolved "now" anchor.
@@ -568,7 +525,7 @@ class KalmanFilterPriceTarget:
         eligible : pandas.Series
             Per-ISIN observation counts for ISINs with
             ``count >= min_observations``.
-        date_col : str
+        date_col : str, optional
             ``"asof_date"`` when the unpivot succeeded; otherwise ``None``.
         """
         offset_map = _build_ago_offset_map()
@@ -581,10 +538,9 @@ class KalmanFilterPriceTarget:
                 return pd.Series(ref_now, index=ids.index)
             return ids.map(anchor_by_isin).fillna(ref_now)
 
-        ago_re = re.compile(_AGO_HISTORY_RE)
         history_cols: list[tuple[str, str]] = []
         for col in df.columns:
-            m = ago_re.match(col)
+            m = _AGO_HISTORY_PATTERN.match(col)
             if m:
                 history_cols.append((col, m.group("suf")))
 
@@ -621,7 +577,7 @@ class KalmanFilterPriceTarget:
 
         if not frames:
             empty = pd.DataFrame(columns=[id_col, "asof_date", "price_target"])
-            return empty, pd.Series(dtype="int64"), None  # type: ignore[return-value]
+            return empty, pd.Series(dtype="int64"), None
 
         long_df = pd.concat(frames, ignore_index=True)
         long_df = long_df[(long_df["price_target"] > 0) & np.isfinite(long_df["price_target"])]
@@ -1225,13 +1181,14 @@ class KalmanFilterPriceTarget:
                 min_ess = float(az.ess(idata).to_array().min())
             except Exception:  # pragma: no cover - defensive
                 min_ess = float("nan")
-            if np.isfinite(min_ess) and min_ess < 400:
+            if np.isfinite(min_ess) and min_ess < _MIN_ESS_GATE:
                 logger.warning(
-                    "KalmanFilterPriceTarget[%s]: minimum ESS %.0f < 400 "
+                    "KalmanFilterPriceTarget[%s]: minimum ESS %.0f < %d "
                     "(project convergence gate); increase tune/draws for "
                     "reliable r-hat / ESS.",
                     tag,
                     min_ess,
+                    _MIN_ESS_GATE,
                 )
 
     def fit(
@@ -1243,11 +1200,11 @@ class KalmanFilterPriceTarget:
             sectors: Optional[np.ndarray] = None,
             categories_df: Optional[pd.DataFrame] = None,
             hierarchy_levels: Optional[list[str]] = None,
-            samples: int = 2000,
-            tune: int = 1000,
-            chains: int = 4,
-            target_accept: float = 0.95,
-            random_seed: int = 42,
+            samples: int = _DEFAULT_SAMPLES,
+            tune: int = _DEFAULT_TUNE,
+            chains: int = _DEFAULT_CHAINS,
+            target_accept: float = _DEFAULT_TARGET_ACCEPT,
+            random_seed: int = _DEFAULT_RANDOM_SEED,
             trend: bool = False,
             trend_sigma: float = 0.5,
             stochastic_volatility: bool = False,
@@ -1255,7 +1212,7 @@ class KalmanFilterPriceTarget:
             parameterization: Parameterization = "auto",
             nuts_sampler: Optional[str] = None,
             **sample_kwargs: Any,
-    ) -> tuple[Union[InferenceLike, MultiTrace], Any]:
+    ) -> tuple[Union[InferenceLike, "MultiTrace"], "pm_typing.Model"]:
         """
         Fit a state-space model to the provided price targets using a Kalman filter
         approach in log-space. The function handles inference via PyMC and returns
@@ -1436,7 +1393,7 @@ class KalmanFilterPriceTarget:
 
         # The augmented (level + log-volatility) latent geometry samples harder;
         # nudge the target acceptance up when the caller left it at the default.
-        if stochastic_volatility and target_accept == 0.9:
+        if stochastic_volatility and target_accept == _DEFAULT_TARGET_ACCEPT:
             target_accept = 0.95
 
         # Elapsed-time vector for the (optionally marginalized) GRW covariance —
@@ -1533,8 +1490,8 @@ class KalmanFilterPriceTarget:
         if isin is not None:
             try:
                 model.name = f"KalmanFilter[{isin}]"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not set model name for %r: %s", isin, exc)
 
         # Surface sampler-quality diagnostics so the model self-reports funnel
         # problems (divergences / low ESS) instead of relying on console scraping.
@@ -1545,7 +1502,11 @@ class KalmanFilterPriceTarget:
         # guide) at runtime via the shim's typing alias. Falls back to MultiTrace
         # detection so external NUTS samplers that bypass ArviZ still work.
         _az_inference = getattr(az, "InferenceData", None) if az is not None else None
-        self.idata_ = idata if (_az_inference is not None and isinstance(idata, _az_inference)) else None
+        self.idata_ = (
+            idata
+            if (_az_inference is not None and isinstance(idata, _az_inference))
+            else None
+        )
 
         # Retain fit context so :meth:`forecast` can project forward to future
         # fiscal events. ``_fit_idata_`` keeps whatever has a ``posterior`` group
@@ -1623,8 +1584,8 @@ class KalmanFilterPriceTarget:
             fiscal_dates: Optional[Any] = None,
             labels: Optional[list[str]] = None,
             last_price: Optional[float] = None,
-            random_seed: int = 42,
-    ) -> Any:
+            random_seed: int = _DEFAULT_RANDOM_SEED,
+    ) -> Union[InferenceLike, "xr_typing.Dataset"]:
         """Project the fitted local-level process forward to future fiscal events.
 
         This is the structural *prediction step* of the *Forecasting with
@@ -1672,7 +1633,7 @@ class KalmanFilterPriceTarget:
         labels : list of str, optional
             Optional human-readable horizon labels aligned 1:1 with
             ``horizons_days`` (e.g. ``["Next earnings", "Next report"]`` from
-            :data:`FISCAL_HORIZON_LABELS`), attached as a ``label`` coord along
+            the :data:`FISCAL_HORIZONS` labels), attached as a ``label`` coord along
             ``time_future`` for forecast tables / plot annotations.
         last_price : float, optional
             Spot price for ``implied_upside_future``. Defaults to the
@@ -1756,7 +1717,10 @@ class KalmanFilterPriceTarget:
         if fiscal_dates is not None:
             tf = pd.DatetimeIndex(pd.to_datetime(np.asarray(fiscal_dates)))
             if len(tf) != h.size:
-                raise ValueError("fiscal_dates must align 1:1 with horizons_days.")
+                raise ValueError(
+                    f"fiscal_dates must align 1:1 with horizons_days "
+                    f"(got {len(tf)} vs {h.size})."
+                )
             time_future: np.ndarray = tf.values
         else:
             time_future = h
@@ -1785,7 +1749,10 @@ class KalmanFilterPriceTarget:
         )
         if labels is not None:
             if len(labels) != h.size:
-                raise ValueError("labels must align 1:1 with horizons_days.")
+                raise ValueError(
+                    f"labels must align 1:1 with horizons_days "
+                    f"(got {len(labels)} vs {h.size})."
+                )
             ds = ds.assign_coords(label=("time_future", list(labels)))
 
         # Expose as a ``predictions`` group, mirroring
@@ -1810,7 +1777,7 @@ class KalmanFilterPriceTarget:
             now_cols: tuple[str, ...] = ("price_target", "last_price"),
             fiscal_anchor_col: Optional[str] = None,
             **fit_kwargs: Any,
-    ) -> tuple[Optional[Union[InferenceLike, MultiTrace]], Any]:
+    ) -> tuple[Optional[Union[InferenceLike, "MultiTrace"]], Optional["pm_typing.Model"]]:
         """Build a per-ISIN history from a snapshot frame and fit the model.
 
         Convenience wrapper around :meth:`build_price_target_history`,
@@ -1858,9 +1825,9 @@ class KalmanFilterPriceTarget:
         )
         if date_col is None or eligible.empty:
             warnings.warn(
-                "No ISIN has >= %d non-null price_target observations across "
-                "the *_ago cohort. Skipping Kalman fit (point-in-time snapshot)."
-                % min_observations,
+                f"No ISIN has >= {min_observations} non-null price_target "
+                "observations across the *_ago cohort. Skipping Kalman fit "
+                "(point-in-time snapshot).",
                 stacklevel=2,
             )
             return None, None
@@ -1887,7 +1854,12 @@ class KalmanFilterPriceTarget:
             if not lp.empty:
                 fit_kwargs["last_price"] = float(lp.iloc[0])
 
-        return self.fit(price_targets=ts["price_target"].to_numpy(), isin=chosen, dates=dates, **fit_kwargs)
+        return self.fit(
+            price_targets=ts["price_target"].to_numpy(),
+            isin=chosen,
+            dates=dates,
+            **fit_kwargs,
+        )
 
 
 # ===========================================================================
@@ -1917,7 +1889,7 @@ _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
     "size_class",
     "style_class",
     "exchange",
-    "unit"
+    "unit",
 )
 
 # Fixed (non-learned) scale for the crossed group-intercept ``ZeroSumNormal``
@@ -1929,15 +1901,33 @@ _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
 GROUP_EFFECT_SCALE: float = 0.25
 
 
-@dataclass(frozen=True)
+def _nan_zscore(raw: np.ndarray, *, eps: float = 1e-9) -> tuple[np.ndarray, float]:
+    """Nan-safe cross-sectional z-score for the fused-model tilt containers.
+
+    Missing entries map to a 0 (neutral) tilt; a degenerate spread falls back
+    to sd=1 so the z-scores stay finite. Returns ``(z, mean)`` — the mean is
+    reused by callers that also need a mean-filled raw container (PyMC 6
+    rejects NaN in ``pm.Data``).
+    """
+    arr = np.asarray(raw, dtype="float64")
+    mu = float(np.nanmean(arr)) if np.isfinite(arr).any() else 0.0
+    sd = float(np.nanstd(arr))
+    sd = sd if (np.isfinite(sd) and sd > eps) else 1.0
+    return np.nan_to_num((arr - mu) / sd, nan=0.0), mu
+
+
+@dataclass(frozen=True, eq=False)
 class KalmanPanelInputs:
     """Container of arrays consumed by the fused (3-D MvGRW) Kalman model.
 
     The Kalman analogue of
     :class:`probabilistic_ml_model.pymc_models._price_target_mc.PriceTargetPanelInputs`.
     Carries the standardised ``(isin, time, y_series)`` response tensor, the
-    ``(isin, time)`` fiscal-anchor time matrix, the standardised drift-feature
-    design matrix, and the per-ISIN Model-A / σ inputs. The conviction latent of
+    ``(isin, time)`` standardised time matrix (``*_ago`` lookback offsets when a
+    genuine history panel is built via ``history_lookbacks``; a single
+    days-to-event covariate on the collapsed T=1 cross-section), the
+    standardised drift-feature design matrix, and the per-ISIN Model-A / σ
+    inputs. The conviction latent of
     the price-target panel is replaced by ``avg_beta`` (the NULL-aware mean of the
     ``beta_{1y,2y,5y}`` windows), the systematic-risk (CAPM beta) driver of the
     ``risk_adj_return`` adjustment. ``vol_drift`` (``feat_vol_drift``, the drift
@@ -1953,7 +1943,7 @@ class KalmanPanelInputs:
     Y : numpy.ndarray
         Standardised response tensor, shape ``(n_isin, T, D)``.
     t_scaled : numpy.ndarray
-        Standardised fiscal-anchor time matrix, shape ``(n_isin, T)``.
+        Standardised time matrix, shape ``(n_isin, T)``.
     X_drift : numpy.ndarray
         Standardised drift-feature design matrix, shape ``(n_isin, n_drift)``.
         Backs the state-transition mean (``beta`` slopes). Columns are the
@@ -2120,9 +2110,8 @@ def build_fused_kalman_pt_model(
       dispersion is carried by the Student-t measurement noise ``sigma_isin``.
       ``expected_return`` remains exposed as a Deterministic for downstream consumers.
     * Per-series level ``alpha`` / time-slope ``beta_t`` are **direct Normals** on
-      the collapsed cross-section (``T == 1``, the one-row-per-ISIN
-      ``mv_pymc_kalman_pt`` default — see ``prepare_kalman_panel_inputs(...,
-      collapse_time=True)``). The previous build parameterised them as a
+      the collapsed cross-section (``T == 1``, ``prepare_kalman_panel_inputs``
+      without ``history_lookbacks``). The previous build parameterised them as a
       single-step Gaussian random walk ``alpha[0,d] = sigma_alpha_innov[d] *
       z_alpha[0,d]`` — a product of **two** scalars representing **one** intercept.
       The likelihood sees only the product, so the (scale, innovation) pair is
@@ -2132,9 +2121,14 @@ def build_fused_kalman_pt_model(
       ``sigma_group`` was squeezed to ≈ 0 — even after the funnel above was removed.
       Direct intercepts delete the redundant scale parameters and the model mixes
       (R-hat ≈ 1.0, ESS in the hundreds–thousands). A genuine time panel
-      (``T > 1``, ``collapse_time=False``) re-adds a **zero-anchored** GRW deviation
-      on top of ``alpha``/``beta_t``, where ``sigma_*_innov`` (HalfNormal(0.5)) is
-      identified by the multiple time steps.
+      (``T > 1``, built from the ``*_ago`` trails via
+      ``prepare_kalman_panel_inputs(history_lookbacks=...)``) uses **T direct
+      per-time intercepts** for the same reason: the earlier zero-anchored GRW
+      deviations (plus a global slope) were mutually aliased per time slice on
+      an isin-constant time axis and reproduced the ridge (2026-08-01 T=4 run:
+      190 divergences, ``alpha_level``/``beta_slope`` R-hat 1.06). The
+      per-series time slope ``beta_t`` is materialised only when ``t_scaled``
+      genuinely varies across ISINs; otherwise it is fixed at 0.
     * Each response series carries its **own** noise scale ``sigma_series`` (the ICM
       ``kappa`` diagonal; primary anchored at 1, others ``HalfNormal(0.5)``) so a
       noisier output (``feat_pt_drift``) no longer inflates the primary series' σ —
@@ -2241,18 +2235,16 @@ def build_fused_kalman_pt_model(
     # low-beta names lifted, mean discount ≈ 1 (``exp(±risk_penalty)`` over ±1 sd of
     # beta) — which is robust to cross-sectional level shifts and leaves the
     # structural level identified by ``mu_isin``/``alpha``.
-    _beta_raw = np.asarray(panel.avg_beta, dtype="float64")
-    _beta_mu = float(np.nanmean(_beta_raw)) if np.isfinite(_beta_raw).any() else 0.0
-    _beta_sd = float(np.nanstd(_beta_raw))
-    _beta_sd = _beta_sd if (np.isfinite(_beta_sd) and _beta_sd > 1e-9) else 1.0
-    avg_beta_z = np.nan_to_num((_beta_raw - _beta_mu) / _beta_sd, nan=0.0)
+    avg_beta_z, _beta_mu = _nan_zscore(panel.avg_beta)
     # ``feat_avg_beta`` is intentionally left NaN-bearing by
     # ``prepare_kalman_panel_inputs`` (missing beta → 0 tilt via ``avg_beta_z``
     # above). The raw container is provenance-only — the math consumes
     # ``beta_z`` — but PyMC 6.0 rejects NaN in ``pm.Data``, so fill missing
     # entries with the cross-sectional mean to keep the stored record honest on
     # the raw beta scale (and unbiased) rather than collapsing them to 0.
-    avg_beta_filled = np.nan_to_num(_beta_raw, nan=_beta_mu)
+    avg_beta_filled = np.nan_to_num(
+        np.asarray(panel.avg_beta, dtype="float64"), nan=_beta_mu
+    )
 
     # Standardised size ratio for the learned size tilt on ``expected_return``.
     # ``panel.size_ratio`` is ``feat_mcap_country_r`` (= market_cap / market_cap_3yavg):
@@ -2262,22 +2254,16 @@ def build_fused_kalman_pt_model(
     # exactly as for ``avg_beta``. Missing entries (NaN) map to a 0 tilt via the
     # z-scored container; the raw container is filled with the cross-sectional mean
     # for an honest provenance record (PyMC 6.0 rejects NaN in ``pm.Data``).
-    _size_raw = np.asarray(panel.size_ratio, dtype="float64")
-    _size_mu = float(np.nanmean(_size_raw)) if np.isfinite(_size_raw).any() else 0.0
-    _size_sd = float(np.nanstd(_size_raw))
-    _size_sd = _size_sd if (np.isfinite(_size_sd) and _size_sd > 1e-9) else 1.0
-    size_ratio_z = np.nan_to_num((_size_raw - _size_mu) / _size_sd, nan=0.0)
-    size_ratio_filled = np.nan_to_num(_size_raw, nan=_size_mu)
+    size_ratio_z, _size_mu = _nan_zscore(panel.size_ratio)
+    size_ratio_filled = np.nan_to_num(
+        np.asarray(panel.size_ratio, dtype="float64"), nan=_size_mu
+    )
 
     # Standardised realized-vol drift, retained for provenance only.
     # ``feat_vol_drift`` is a winsorised [-1, 1] drift; it is z-scored here so the
     # stored ``feat_vol_drift_z`` container carries the cross-sectional relative
     # position alongside the raw signed drift.
-    _vol_raw = np.asarray(panel.vol_drift, dtype="float64")
-    _vol_mu = float(np.nanmean(_vol_raw)) if np.isfinite(_vol_raw).any() else 0.0
-    _vol_sd = float(np.nanstd(_vol_raw))
-    _vol_sd = _vol_sd if (np.isfinite(_vol_sd) and _vol_sd > 1e-9) else 1.0
-    vol_drift_z = np.nan_to_num((_vol_raw - _vol_mu) / _vol_sd, nan=0.0)
+    vol_drift_z, _ = _nan_zscore(panel.vol_drift)
 
     # Median-normalised analyst-count precision weight for the measurement scale.
     # The response tensor ``Y`` is z-scored per series (std ≈ 1), so dividing the
@@ -2380,7 +2366,7 @@ def build_fused_kalman_pt_model(
         # Why the group scale is NOT learned. Earlier builds sampled a learned
         # shared scale ``sigma_group`` (``effect = sigma_group * z_g`` non-centred,
         # or ``effect ~ ZSN(sigma=sigma_group)`` centred). On the collapsed
-        # cross-section (``collapse_time=True``, T=1, ~1 informative slice per
+        # cross-section (T=1, ~1 informative slice per
         # ISIN) a between-group variance component is *structurally
         # non-identified* — a single slice cannot tell between-group dispersion
         # apart from the residual base scale ``sigma_base``. Neither
@@ -2419,7 +2405,7 @@ def build_fused_kalman_pt_model(
         # (drift β + shared-scale group effects). The previous per-ISIN latent
         # ``mu_reg + sigma_er * z_expected_return`` added an explicit per-ISIN
         # signal random-effect with its own learned scale ``sigma_expected_return``
-        # — but on a single cross-sectional slice (``collapse_time=True``, T=1,
+        # — but on a single cross-sectional slice (collapsed T=1,
         # ~1 obs/ISIN) that scale could not be told apart from the crossed group
         # scales or the measurement noise, so it joined the unidentified variance
         # partition (it was itself stuck at R-hat ≈ 4.4, ESS ≈ 4) and drove most
@@ -2491,40 +2477,40 @@ def build_fused_kalman_pt_model(
         # the factor scale is identified, and per-output noise handled by the
         # diagonal ``tau_series`` (the ICM ``kappa`` term) on the σ side below.
         #
-        # Per-series level / slope are DIRECT Normals (``alpha`` / ``beta_t``),
-        # NOT a cumulative ``sigma_innov · z`` random walk. On the collapsed
-        # cross-section (``T == 1``, the one-row-per-ISIN ``mv_pymc_kalman_pt``
-        # default) each walk has a single step, so ``alpha[0,d] =
-        # sigma_alpha_innov[d]·z_alpha[0,d]`` was a product of TWO scalars
-        # representing ONE intercept — the likelihood sees only the product, so the
-        # scale/innovation pair is non-identified. That ridge (not a funnel — it
-        # survives with 0 divergences) trapped the sampler: ``sigma_*_innov``
-        # within-chain variance → 0 (the R-hat divide-by-zero NaN), ESS ≈ 7,
-        # R-hat ≈ 1.5, and ``sigma_group`` squeezed to ≈ 0. Direct intercepts
-        # remove the redundant scale parameters entirely. A genuine time panel
-        # (``T > 1``, ``collapse_time=False``) re-adds a zero-anchored GRW
-        # *deviation* on top, where the innovation scales ARE identified by the
-        # multiple time steps.
-        alpha_level = pm.Normal("alpha_level", 0.0, 1.0, dims="y_series")
-        beta_slope = pm.Normal("beta_slope", 0.0, 0.5, dims="y_series")
+        # Per-series level / slope are DIRECT Normals — never a cumulative
+        # ``sigma_innov · z`` random walk. On the collapsed cross-section
+        # (``T == 1``) the walk had a single step, so scale × innovation was a
+        # non-identified product (the historic ridge: ``sigma_*_innov``
+        # within-chain variance → 0, ESS ≈ 7, R-hat ≈ 1.5). On a genuine
+        # lookback panel (``T > 1``) the SAME ridge reappeared along time: the
+        # zero-anchored GRW deviations on ``alpha`` AND ``beta_t`` PLUS a
+        # global slope were mutually aliased per time slice — with an
+        # isin-constant time axis a per-time mean shift is attributable to the
+        # alpha deviation, the beta deviation × t, or the slope, so the T
+        # identifiable time-means were parameterised by ``2 + 2·(T-1) + 2``
+        # scales/levels. Observed on the 2026-08-01 T=4 validation
+        # (tune=2000, target_accept=0.95, nutpie): 190 divergences with
+        # ``alpha_level`` / ``beta_slope`` at R-hat 1.06 (bulk-ESS ≈ 75) and
+        # ``sigma_alpha_innov`` at 1.04 (ESS ≈ 120) while every other block
+        # mixed cleanly. Fix = the T=1 direct-intercept medicine applied per
+        # time step: T direct per-time intercepts (exactly identified), and a
+        # per-series scalar slope ONLY when ``t_scaled`` genuinely varies
+        # across ISINs (the T=1 days-to-event covariate). On an isin-constant
+        # axis — including the degenerate all-zero T=1 fallback, where the
+        # slope was previously sampled against zero data — the trend is
+        # absorbed by the intercepts and ``beta_t`` is fixed at 0 (kept as a
+        # Deterministic so downstream consumers are unchanged).
+        t_isin_varying = bool(np.any(np.ptp(panel.t_scaled, axis=0) > 1e-12))
         if T > 1:
-            sigma_alpha_innov = pm.HalfNormal(
-                "sigma_alpha_innov", sigma=0.5, dims="y_series"
-            )
-            sigma_beta_innov = pm.HalfNormal(
-                "sigma_beta_innov", sigma=0.5, dims="y_series"
-            )
-            z_alpha = pm.Normal("z_alpha", 0.0, 1.0, dims=("time", "y_series"))
-            z_beta = pm.Normal("z_beta", 0.0, 1.0, dims=("time", "y_series"))
-            # Zero-anchored time deviations (0 at t=0); the per-series level/slope
-            # carry the t=0 state so there is no level ridge against ``mu_isin``.
-            a_dev = pt.cumsum(z_alpha * sigma_alpha_innov[None, :], axis=0)
-            b_dev = pt.cumsum(z_beta * sigma_beta_innov[None, :], axis=0)
-            alpha_expr = alpha_level[None, :] + (a_dev - a_dev[0][None, :])
-            beta_expr = beta_slope[None, :] + (b_dev - b_dev[0][None, :])
+            alpha_expr = pm.Normal("alpha_level", 0.0, 1.0, dims=("time", "y_series"))
         else:
+            alpha_level = pm.Normal("alpha_level", 0.0, 1.0, dims="y_series")
             alpha_expr = alpha_level[None, :]
-            beta_expr = beta_slope[None, :]
+        if t_isin_varying:
+            beta_slope = pm.Normal("beta_slope", 0.0, 0.5, dims="y_series")
+            beta_expr = pt.tile(beta_slope[None, :], (T, 1))
+        else:
+            beta_expr = pt.zeros((T, D))
         alpha = pm.Deterministic("alpha", alpha_expr, dims=("time", "y_series"))
         beta_t = pm.Deterministic("beta_t", beta_expr, dims=("time", "y_series"))
 

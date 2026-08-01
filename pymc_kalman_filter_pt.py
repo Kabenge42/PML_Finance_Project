@@ -109,8 +109,14 @@ from probabilistic_ml_model.pymc_models._feature_alignment import (
     stamp_feature_provenance,
 )
 from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+    AGO_SUFFIX_PATTERN,
+    FISCAL_HORIZONS,
+    KALMAN_CONSENSUS_SIGMA_FEATURE,
     KALMAN_DRIFT_EXCLUDED_FEATURES,
+    KALMAN_RANGE_WIDENER_FEATURE,
+    KALMAN_TILT_FEATURE_ORDER,
     KALMAN_TIME_COVARIATE_PREFIX,
+    KALMAN_VOL_DRIFT_FEATURE,
     KalmanFilterPriceTarget,
     KalmanPanelInputs,
     build_fused_kalman_pt_model,
@@ -127,16 +133,8 @@ RANDOM_SEED = 42
 rng = np.random.default_rng(RANDOM_SEED)
 
 # --- Data-source queries (single source of truth = the pml schema) -----------
-# Cross-sectional snapshot: one row per ISIN with a usable analyst target, scoped
-# to names whose next earnings land in the current modelling horizon.
-KALMAN_DF_QUERY = """
-                  SELECT *
-                  FROM pml.mv_pymc_kalman_pt mpkp
-                  WHERE observed_pt IS NOT NULL
-                    AND next_earnings >= '2026-01-01'
-                    AND income_statement_report_date >= '2025-01-01'
-                    AND sector <> 'Financials'
-                  """
+# The cross-sectional universe query is built by :func:`kalman_df_query` from
+# the :class:`KalmanRunConfig` date/threshold fields (defined below).
 
 # Per-model feature catalogue (pymc_role / feature_role / alias) for kalman_pt.
 FEATURE_CATALOGUE_QUERY = """
@@ -148,7 +146,10 @@ FEATURE_CATALOGUE_QUERY = """
 
 # Canonical schema of pml.mv_pymc_kalman_pt: per-trail drift feature for every
 # price_* / price_target_* family plus the noise wideners. Resilience fallback for
-# MV columns absent from the catalogue snapshot.
+# MV columns absent from the catalogue snapshot. Deliberately a literal (NOT
+# derived from the DB at import time): ``pml.vw_pymc_feature_catalogue`` remains
+# the SSOT, and this list only keeps the workflow alive offline — keep it in
+# sync when the MV DDL changes.
 KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
                   'feat_coverage_drift', 'feat_pt_noise_drift',
                   'feat_pt_noise_sigma', 'feat_pt_range_norm',
@@ -219,24 +220,203 @@ _DRIFT_FEATURE_FALLBACK: tuple[str, ...] = (
 # define the single-security time axis (sections 11–13) and must NOT be treated as
 # categorical effects in the cross-sectional model.
 CLASSIFICATION_COORDS_ALL = (
-    'region','country', 'trading_region','trading_country','exchange', 'sector','industry', 'style_class', 'size_class','unit'
-
+    'region', 'country', 'trading_region', 'trading_country', 'exchange',
+    'sector', 'industry', 'style_class', 'size_class', 'unit',
 )
-FISCAL_CALENDAR_COLS_ALL = (
-    'income_statement_report_date', 'next_earnings', 'fy_end_date','next_fiscal_quarter', 'last_updated',
-    'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date',
-)
-DAY_COUNT_COLS_ALL = (
-    'days_to_next_earnings', 'days_since_last_report', 'days_to_next_fy_end','days_to_next_fiscal_quarter',
-    'days_to_next_report', 'days_to_expected_report', 'days_since_fy_end',
-)
+# Fiscal-calendar DATE anchors and their day-count covariates, derived from the
+# FISCAL_HORIZONS SSOT in KalmanFilterModel.py. ``last_updated`` is the MV
+# refresh timestamp — a calendar column on the frame but not a fiscal horizon.
+FISCAL_CALENDAR_COLS_ALL = tuple(fh.date_col for fh in FISCAL_HORIZONS) + ('last_updated',)
+DAY_COUNT_COLS_ALL = tuple(fh.day_count_col for fh in FISCAL_HORIZONS)
 
-# Candidate categorical group-effect coords for the hierarchical drift mean (section 5).
-_CANDIDATE_GROUPS = ('region', 'trading_region', 'style_class', 'size_class', 'sector','exchange','unit')
-
-# *_ago price-target history column pattern shared by sections 11–13.
+# *_ago price-target history column pattern shared by sections 11–13. The
+# suffix alternation comes from the KalmanFilterModel SSOT; the pattern is kept
+# free of Python named groups so it stays valid as a PostgreSQL POSIX regex
+# (``column_name ~ :pat`` in :func:`fetch_history_columns`).
 HIST_COL_PATTERN = (r"^(price_target(_high|_low|_median)?|price)"
-                    r"_(5d|1w|1m|3m|6m|1y|3y|5y|mtd|qtd|ytd)_ago$")
+                    r"_(" + AGO_SUFFIX_PATTERN + r")_ago$")
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# 94% equal-tailed credible-interval bounds shared by every HDI-style band in
+# the file (screen tables, forecast tables, sigma_obs paths, group forests).
+_HDI_LO, _HDI_HI = 0.03, 0.97
+
+# Approximate calendar day counts for the fixed *_ago lookback suffixes; backs
+# the fused panel's t_scaled axis when ``history_lookbacks`` is active. The
+# period-to-date suffixes (mtd/qtd/ytd) are date-dependent and deliberately
+# absent — they cannot anchor a shared panel time axis.
+_AGO_APPROX_DAYS: dict[str, int] = {
+    '1d': 1, '5d': 5, '1w': 7, '1m': 30, '3m': 91, '6m': 182,
+    '1y': 365, '3y': 1096, '5y': 1826,
+}
+
+
+@dataclass(frozen=True)
+class KalmanRunConfig:
+    """Workflow-level configuration for the Kalman price-target pipeline.
+
+    Centralises every previously-hardcoded sampling / screening / risk-book /
+    universe-query knob (CLAUDE.md "Configuration as Dataclass" pattern).
+    Function signatures keep their own literal defaults for direct calls;
+    :func:`main` resolves a config once (:meth:`from_env` by default) and
+    threads it through the workflow, so environment overrides apply end-to-end.
+
+    Attributes
+    ----------
+    random_seed
+        Workflow RNG seed (env: ``RANDOM_SEED``).
+    draws, tune, chains, cores, target_accept
+        Fused-panel NUTS budget (:func:`sample_posterior`). ``cores=1`` is the
+        kernel-safe default; the CLI path may raise it.
+    prior_draws
+        Prior-predictive draw count (:func:`run_prior_predictive`).
+    mc_horizon, mc_rho
+        Structural-TS Monte-Carlo horizon (fiscal quarters) and AR damping
+        (:func:`summarize_panel_screen`).
+    panel_lookbacks
+        ``*_ago`` suffixes building the genuine ``(isin, time)`` fused-panel
+        response (``T = len + 1``). Default ``()`` = collapsed T=1
+        cross-section; the T=4 panel is opt-in pending a divergence-free
+        validation run (see the field comment). See
+        :func:`prepare_kalman_panel_inputs`.
+    cvar_alpha, weight_cap, k_book, p_long
+        CVaR-aware book parameters (:func:`compute_cvar_aware_book`).
+    min_next_earnings, min_report_date
+        ISO-date universe filters in :func:`kalman_df_query` (previously
+        hardcoded ``'2026-01-01'`` / ``'2025-01-01'`` — roll these forward with
+        the modelling horizon).
+    min_mcap_country_rank
+        ``market_cap_country_r`` floor for the §11–§13 candidate cohorts.
+    candidate_limit
+        ``LIMIT`` for the §11 single-ISIN candidate pull.
+    earnings_window_days
+        Half-width (days) of the §12/§13 recent-earnings window around today.
+    results_dir, export_draws
+        Artifact export root / raw-draw export toggle (env:
+        ``KALMAN_PT_RESULTS_DIR`` / ``KALMAN_PT_EXPORT_DRAWS``).
+    fig_width_px
+        Target figure width override (env: ``PML_FIG_WIDTH_PX``); ``None``
+        falls back to :data:`_FIG_WIDTH_DEFAULT_PX`.
+    log_level
+        Root logging level for :func:`main` (env: ``LOG_LEVEL``).
+    """
+
+    # Sampling
+    random_seed: int = 42
+    draws: int = 1000
+    tune: int = 1000
+    chains: int = 4
+    cores: int = 1
+    target_accept: float = 0.9
+    prior_draws: int = 1000
+    # Screen / Monte-Carlo
+    mc_horizon: int = 4
+    mc_rho: float = 0.85
+    # Risk book
+    cvar_alpha: float = 0.05
+    weight_cap: float = 0.08
+    k_book: int = 50
+    p_long: float = 0.67
+    # Fused-panel time axis: *_ago lookbacks building the genuine (isin, time)
+    # log-uplift panel (oldest -> newest is resolved automatically; the current
+    # snapshot is always the final step, so T = len(panel_lookbacks) + 1).
+    # Default ``()`` keeps the collapsed T=1 cross-section; T=4 is opt-in
+    # (e.g. replace(cfg, panel_lookbacks=('6m', '3m', '1m'))) per the
+    # 2026-07-31 decision, and is VALIDATED since the per-time direct-intercept
+    # reparameterisation of build_fused_kalman_pt_model: the 2026-08-01
+    # T=4 run (tune=1000, target_accept=0.9, nutpie, ~1.5% history cells
+    # snapshot-filled) passed with 0 divergences, worst r_hat 1.00 and worst
+    # bulk-ESS ~1.6k, in 15.7 min end-to-end. (Earlier failures — 315/190
+    # divergences on 2026-07-31/08-01 — were the since-removed aliased
+    # level/slope + GRW-innovation block; see build_fused_kalman_pt_model.)
+    # Flipping this default to ('6m', '3m', '1m') is now safe if desired.
+    panel_lookbacks: tuple[str, ...] = ('6m', '3m', '1m')
+    # Universe query
+    min_next_earnings: str = '2026-01-01'
+    min_report_date: str = '2025-01-01'
+    min_mcap_country_rank: float = 95.0
+    candidate_limit: int = 50
+    earnings_window_days: int = 5
+    # Plumbing
+    results_dir: Optional[str] = None
+    export_draws: bool = False
+    fig_width_px: Optional[int] = None
+    log_level: str = 'INFO'
+
+    def __post_init__(self) -> None:
+        for field_name in ('min_next_earnings', 'min_report_date'):
+            value = getattr(self, field_name)
+            if not _ISO_DATE_RE.match(value):
+                raise ValueError(
+                    f"{field_name} must be an ISO date (YYYY-MM-DD), got {value!r}."
+                )
+
+    @classmethod
+    def from_env(cls) -> 'KalmanRunConfig':
+        """Build a config from the environment (``environment_variables.txt`` fallback).
+
+        Only the knobs with an established env contract are read
+        (``RANDOM_SEED``, ``KALMAN_PT_RESULTS_DIR``, ``KALMAN_PT_EXPORT_DRAWS``,
+        ``PML_FIG_WIDTH_PX``, ``LOG_LEVEL``); everything else keeps its
+        dataclass default and is overridden programmatically via
+        :func:`dataclasses.replace`.
+        """
+        def _int_or(key: str, default: Optional[int]) -> Optional[int]:
+            raw = _resolve_env_setting(key)
+            if raw is None or not raw.strip():
+                return default
+            try:
+                return int(float(raw))
+            except ValueError:
+                logger.warning('%s=%r is not numeric; using %r.', key, raw, default)
+                return default
+
+        return cls(
+            random_seed=_int_or('RANDOM_SEED', cls.random_seed) or cls.random_seed,
+            results_dir=_resolve_env_setting('KALMAN_PT_RESULTS_DIR'),
+            export_draws=(_resolve_env_setting('KALMAN_PT_EXPORT_DRAWS', default='0')
+                          or '0').strip() == '1',
+            fig_width_px=_int_or('PML_FIG_WIDTH_PX', None),
+            log_level=_resolve_env_setting('LOG_LEVEL', default='INFO') or 'INFO',
+        )
+
+
+_run_config: Optional[KalmanRunConfig] = None
+
+
+def get_run_config() -> KalmanRunConfig:
+    """Lazy module-level :class:`KalmanRunConfig` singleton (env-resolved once)."""
+    global _run_config
+    if _run_config is None:
+        _run_config = KalmanRunConfig.from_env()
+    return _run_config
+
+
+def set_run_config(config: Optional[KalmanRunConfig]) -> None:
+    """Install (or with ``None`` reset) the module-level run config."""
+    global _run_config
+    _run_config = config
+
+
+def kalman_df_query(config: Optional[KalmanRunConfig] = None) -> str:
+    """Cross-sectional universe query, parameterised on the run config.
+
+    One row per ISIN with a usable analyst target, scoped to names whose next
+    earnings land in the modelling horizon. Date literals are validated ISO
+    dates (see :meth:`KalmanRunConfig.__post_init__`), so the interpolation is
+    injection-safe.
+    """
+    cfg = config if config is not None else get_run_config()
+    return f"""
+           SELECT *
+           FROM pml.mv_pymc_kalman_pt mpkp
+           WHERE observed_pt IS NOT NULL
+             AND next_earnings >= '{cfg.min_next_earnings}'
+             AND income_statement_report_date >= '{cfg.min_report_date}'
+             AND sector <> 'Financials'
+           """
+
 
 # ``display`` exists only in IPython; fall back to ``print`` for plain-script runs.
 # The module-level :func:`display` wrapper below shadows the IPython callable so every
@@ -344,20 +524,34 @@ def setup_plotting() -> None:
 _FIG_WIDTH_DEFAULT_PX = 1150
 _FIG_WIDTH_MIN_PX, _FIG_WIDTH_MAX_PX = 700, 2200
 
+# --- Semantic series palette (single source of truth for every figure) --------
+# An Okabe-Ito-ish convention grown organically across the sections; declared
+# here so every panel keys colours on ROLE, not on a per-section hex. Reference
+# geometry (0-lines, y=x guides, now-boundaries) is always C_REF.
+C_POSTERIOR = '#56b4e9'    # posterior / model / expected series
+C_OBSERVED = '#ffb000'     # observed / raw consensus series
+C_FORECAST = '#cc79a7'     # forward-looking forecast bands / lines
+C_REF = '#bbbbbb'          # reference lines (zero, y=x, anchors)
+C_HIGHLIGHT = '#e69f00'    # emphasised subset (held book, key feature)
+C_VOL = '#ff7f0e'          # volatility paths (sigma_obs, SV panels)
+C_DRAWS = '#4daf4a'        # posterior-draw spaghetti / clouds
+C_ACCENT = '#2ca02c'       # secondary accent (scale panels, tertiary KDE)
+C_MUTED = '#7f7f7f'        # de-emphasised context points
+
+# Standard panel heights (px). Odd one-off heights remain inline where a panel
+# is genuinely bespoke; new figures should pick from this ladder.
+H_SHORT, H_STD, H_FORECAST, H_TALL, H_PANEL, H_GRID = 380, 440, 540, 560, 760, 900
+
 
 def _display_width_px() -> int:
-    """Resolve the target figure width (px) from ``PML_FIG_WIDTH_PX``.
+    """Resolve the target figure width (px) from the run config (``PML_FIG_WIDTH_PX``).
 
     Falls back to :data:`_FIG_WIDTH_DEFAULT_PX` and clamps to
     ``[_FIG_WIDTH_MIN_PX, _FIG_WIDTH_MAX_PX]`` so a typo cannot produce an
     unreadable sliver or a multi-screen banner.
     """
-    raw = os.environ.get('PML_FIG_WIDTH_PX', '').strip()
-    try:
-        width = int(float(raw)) if raw else _FIG_WIDTH_DEFAULT_PX
-    except ValueError:
-        logger.warning('PML_FIG_WIDTH_PX=%r is not numeric; using %d px.',
-                       raw, _FIG_WIDTH_DEFAULT_PX)
+    width = get_run_config().fig_width_px
+    if width is None:
         width = _FIG_WIDTH_DEFAULT_PX
     return int(np.clip(width, _FIG_WIDTH_MIN_PX, _FIG_WIDTH_MAX_PX))
 
@@ -530,6 +724,128 @@ def _autosize_plotly(obj) -> None:
         pass
 
 
+def _render_plotly(fig: object, *, height: Optional[int] = None,
+                   label: Optional[str] = None,
+                   hovermode: Optional[str] = None) -> None:
+    """Render a Plotly figure in the notebook (side-effecting; dark theme).
+
+    Applies the ``arviz-tumma`` dark template so every hand-built Plotly panel matches
+    the ArviZ figures (which inherit it via ``plotly.io.templates.default``, pinned in
+    :func:`setup_plotting`). Mirrors the ``pc.show()`` convention used throughout the
+    module; falls back to :func:`display` and is a silent no-op when no renderer is
+    available, so a headless / plain-script run never raises. ``label`` is forwarded
+    to the artifact exporter via :func:`_safe_show`.
+
+    ``hovermode`` overrides Plotly's default ``'closest'`` — pass ``'x unified'``
+    for time-series panels so all series report at the hovered date.
+    """
+    if fig is None:
+        return
+    fig.update_layout(template='arviz-tumma', margin=dict(l=60, r=30, t=70, b=50))
+    if height is not None:
+        fig.update_layout(height=height)
+    if hovermode is not None:
+        fig.update_layout(hovermode=hovermode)
+    _autosize_plotly(fig)
+    _safe_show(fig, label=label, _fallback=display)
+
+
+def _safe_show(obj: object, *, label: Optional[str] = None,
+               _fallback: Optional[object] = None) -> None:
+    """Display any Plotly figure or ``arviz_plots`` PlotCollection, swallowing transport errors.
+
+    IDE-managed display back-ends (e.g. PyCharm's DataLore/Kaleido helper) push the
+    rendered image to a local HTTP server; when that socket is aborted the underlying
+    ``show()`` raises ``ConnectionAbortedError`` (WinError 10053) mid-run. Rendering is a
+    side-effect, never part of the model result, so a failure here must never abort the
+    workflow. Handles both :class:`arviz_plots.PlotCollection` (``.show()``) and Plotly
+    figures; ``pc.show()`` and raw ``fig.show()`` both route through this one guard.
+
+    This is also the single auto-capture point for artifact export: every displayed
+    figure is handed to :func:`_export_figure` *before* ``show()``, so a display
+    transport failure still yields the exported file.
+
+    Parameters
+    ----------
+    obj
+        The figure or PlotCollection to display. ``None`` is a no-op.
+    label
+        Optional filename slug for the exported artifact; auto-derived from the
+        figure title (or just auto-numbered) when omitted.
+    _fallback
+        Optional callable tried when ``obj.show()`` raises — used by
+        :func:`_render_plotly` to fall back to :func:`display` for a returned figure.
+    """
+    if obj is None:
+        return
+    _autosize_plotly(obj)  # width tracks the editor pane; heights stay explicit
+    _export_figure(obj, label=label)
+    try:
+        obj.show()
+    except Exception as exc:  # pragma: no cover - display transport is environment-dependent
+        logger.debug("Figure display skipped (renderer/transport failure): %r", exc)
+        if _fallback is not None:
+            try:
+                _fallback(obj)
+            except Exception:
+                pass
+
+
+# --- Hover / axis formatting conventions -------------------------------------
+# Every hand-built trace gets a ``name=`` (or an explicit ``hoverinfo='skip'``
+# for guides and band edges); every hovertemplate ends in ``<extra></extra>``;
+# percent-scaled series format hover values as ``.1f`` + '%', decimal
+# probabilities as ``.0%``; band+line pairs share a ``legendgroup`` with
+# ``showlegend`` only on the line.
+_LEGEND_FONT_SIZE = 9
+
+
+def _hover_pct(label: str, *, axis: str = 'y', lead_text: bool = False,
+               date_x: bool = False) -> str:
+    """Hovertemplate for a percent-scaled series (values pre-scaled ×100)."""
+    lead = '%{text}<br>' if lead_text else ('%{x|%Y-%m-%d}<br>' if date_x else '')
+    return f'{lead}{label} = %{{{axis}:.1f}}%<extra></extra>'
+
+
+def _hover_price(label: str, *, date_x: bool = True, nd: int = 2) -> str:
+    """Hovertemplate for a price-space series along a date axis."""
+    lead = '%{x|%Y-%m-%d}<br>' if date_x else ''
+    return f'{lead}{label}: %{{y:.{nd}f}}<extra></extra>'
+
+
+def _hover_prob(label: str, *, axis: str = 'y') -> str:
+    """Hovertemplate for a decimal probability in [0, 1]."""
+    return f'{label} = %{{{axis}:.0%}}<extra></extra>'
+
+
+def _fmt_axis(fig, *, x: Optional[str] = None, y: Optional[str] = None,
+              x_kind: str = 'linear', y_kind: str = 'linear',
+              row: Optional[int] = None, col: Optional[int] = None) -> None:
+    """Set axis titles + unit formatting in one call.
+
+    ``*_kind``: ``'linear'`` (no formatting), ``'pct'`` (``ticksuffix='%'`` for
+    percent-scaled values), ``'prob'`` (``tickformat='.0%'`` for decimal
+    probabilities), ``'date'`` (``tickformat='%b %y'``).
+    """
+    def _apply(update, title, kind):
+        kw: dict[str, Any] = {}
+        if title is not None:
+            kw['title_text'] = title
+        if kind == 'pct':
+            kw['ticksuffix'] = '%'
+        elif kind == 'prob':
+            kw['tickformat'] = '.0%'
+        elif kind == 'date':
+            kw['tickformat'] = '%b %y'
+        if kw:
+            if row is not None or col is not None:
+                update(row=row, col=col, **kw)
+            else:
+                update(**kw)
+    _apply(fig.update_xaxes, x, x_kind)
+    _apply(fig.update_yaxes, y, y_kind)
+
+
 def _show_fig(fig, *, label: Optional[str] = None) -> None:
     """Surface a Plotly :class:`~plotly.graph_objects.Figure` in any front-end.
 
@@ -638,8 +954,8 @@ def plot_price_target_path(
         ticker: Optional[str] = None,
         hdi_probs: Sequence[float] = (0.94, 0.5),
         figsize: Optional[tuple[float, float]] = None,
-        color: str = "#56b4e9",
-        observed_color: str = "#ffb000",
+        color: str = C_POSTERIOR,
+        observed_color: str = C_OBSERVED,
 ):
     """Compose a Kalman-smoothed price-target trajectory with ``arviz_plots``.
 
@@ -736,7 +1052,7 @@ def plot_price_target_path(
 
     if last_price is not None and np.isfinite(last_price):
         target.add_hline(y=float(last_price),
-                         line=dict(color="#bbbbbb", dash="dash", width=1.2))
+                         line=dict(color=C_REF, dash="dash", width=1.2))
 
     if use_dates:
         target.update_xaxes(tickformat="%b %y")
@@ -771,7 +1087,7 @@ def plot_price_target_path(
         if last_price is not None and np.isfinite(last_price):
             fig.add_trace(go.Scatter(
                 x=[None], y=[None], mode="lines",
-                line=dict(color="#bbbbbb", dash="dash"),
+                line=dict(color=C_REF, dash="dash"),
                 name="last price"), row=_r, col=_c)
         fig.update_layout(showlegend=True)
 
@@ -865,10 +1181,10 @@ def _annotate_forecast_horizons(fig, fx, pg, *, color, row=1, col=1):
 
 def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
                          last_price=None, ticker=None, state_var='state',
-                         height_px=540, hist_color='#56b4e9',
-                         fc_color='#cc79a7', observed_color='#ffb000',
-                         pp_overlay=True, pp_draws=80, pp_color='#4daf4a',
-                         volatility_panel='auto', vol_color='#ff7f0e',
+                         height_px=540, hist_color=C_POSTERIOR,
+                         fc_color=C_FORECAST, observed_color=C_OBSERVED,
+                         pp_overlay=True, pp_draws=80, pp_color=C_DRAWS,
+                         volatility_panel='auto', vol_color=C_VOL,
                          random_seed=RANDOM_SEED):
     """Overlay the fitted smoothed state with the structural forecast bands.
 
@@ -943,8 +1259,8 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
     else:
         fx = hx[-1] + np.asarray(tf, dtype=float)
     f_med = fpt.median(('chain', 'draw')).values
-    f_lo = fpt.quantile(0.03, dim=('chain', 'draw')).values
-    f_hi = fpt.quantile(0.97, dim=('chain', 'draw')).values
+    f_lo = fpt.quantile(_HDI_LO, dim=('chain', 'draw')).values
+    f_hi = fpt.quantile(_HDI_HI, dim=('chain', 'draw')).values
 
     # Resolve the optional stochastic-volatility observation-noise path. The
     # companion volatility panel mirrors the reference example's lower subplot.
@@ -1002,10 +1318,10 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
         x=np.r_[hx[-1], fx], y=np.r_[hist_med[-1], f_med], mode='lines+markers',
         line=dict(color=fc_color, width=2.2, dash='dash'), marker=dict(size=6),
         name='forecast pt'), row=1, col=1)
-    fig.add_vline(x=_xval(hx[-1]), line=dict(color='#bbbbbb', dash='dot', width=1.2),
+    fig.add_vline(x=_xval(hx[-1]), line=dict(color=C_REF, dash='dot', width=1.2),
                   row=1, col=1)
     if last_price is not None and np.isfinite(last_price):
-        fig.add_hline(y=float(last_price), line=dict(color='#bbbbbb', dash='dash', width=1.0),
+        fig.add_hline(y=float(last_price), line=dict(color=C_REF, dash='dash', width=1.0),
                       annotation_text='last price', row=1, col=1)
 
     # Human-labelled fiscal-event horizon markers (Next earnings / Next report / ...).
@@ -1015,13 +1331,13 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
 
     if show_vol:
         v_med = so.mean(('chain', 'draw')).values
-        v_lo = so.quantile(0.03, dim=('chain', 'draw')).values
-        v_hi = so.quantile(0.97, dim=('chain', 'draw')).values
+        v_lo = so.quantile(_HDI_LO, dim=('chain', 'draw')).values
+        v_hi = so.quantile(_HDI_HI, dim=('chain', 'draw')).values
         _plotly_band(fig, hx, v_lo, v_hi, color=vol_color, alpha=0.25, row=2, col=1)
         fig.add_trace(go.Scatter(x=hx, y=v_med, mode='lines',
                                  line=dict(color=vol_color, width=2.0),
                                  name='posterior mean σ_obs(t)'), row=2, col=1)
-        fig.add_vline(x=_xval(hx[-1]), line=dict(color='#bbbbbb', dash='dot', width=1.2),
+        fig.add_vline(x=_xval(hx[-1]), line=dict(color=C_REF, dash='dot', width=1.2),
                       row=2, col=1)
         fig.update_yaxes(title_text='σ_obs', row=2, col=1)
 
@@ -1046,6 +1362,196 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
     fig.update_layout(
         title='Kalman state + structural forecast' + (f' — {ticker}' if ticker else ''),
         showlegend=True,
+        height=int(height_px + (200 if show_vol else 0)),
+    )
+    return fig, None
+
+
+def plot_kalman_forecast_returns(idata_fit, pred, *, observed=None, dates=None,
+                                 last_price=None, ticker=None, state_var='state',
+                                 height_px=H_FORECAST, hist_color=C_POSTERIOR,
+                                 fc_color=C_FORECAST, observed_color=C_OBSERVED,
+                                 volatility_panel='auto', vol_color=C_VOL):
+    """Return-space structural forecast — observed vs expected returns per fiscal event.
+
+    The return-space twin of :func:`plot_kalman_forecast` (which stays available
+    for price-space views but is no longer called by the workflow, 0.9.9.11):
+    everything is expressed as an **implied return over the spot price**
+    (``x / last_price − 1``, percent-scaled at this display boundary), so the
+    chart answers the investment question directly — *what return does the
+    smoothed consensus imply, and what return is forecast at each upcoming
+    fiscal event?*
+
+    Content:
+
+    - **Observed historical returns** — ``observed / last_price − 1`` as points.
+    - **Smoothed implied-upside path** — the latent state's implied return with
+      its 94% HDI band.
+    - **Per-fiscal-event forecast, nested bands** — the *predictive* band from
+      ``forecast_pt / last_price − 1`` (wide: latent + observation noise) and
+      the *latent* band from the ``implied_upside_future`` draws computed by
+      :meth:`KalmanFilterPriceTarget.forecast` (narrow: state uncertainty
+      only). The two are deliberately nested — the gap between them is the
+      analyst observation noise. The latent median line is stitched at the
+      now-boundary and each horizon carries a ``+X.X%`` median annotation.
+    - **0% break-even line** (replaces the price-space last-price line), the
+      ``now`` boundary, and the human-labelled fiscal-event markers
+      (:func:`_annotate_forecast_horizons`, reused verbatim).
+    - The stochastic-volatility companion row (posterior **median**
+      ``sigma_obs(t)``) when the fit exposes a time-varying scale.
+
+    Requires a finite positive ``last_price``; without one the return scale is
+    undefined and the function falls back to the price-space
+    :func:`plot_kalman_forecast` with a logged notice.
+
+    Returns
+    -------
+    tuple
+        ``(fig, None)`` — call-site parity with :func:`plot_kalman_forecast`.
+    """
+    if last_price is None or not np.isfinite(last_price) or last_price <= 0:
+        logger.info('plot_kalman_forecast_returns: no usable last_price — '
+                    'falling back to the price-space structural forecast.')
+        return plot_kalman_forecast(idata_fit, pred, observed=observed,
+                                    dates=dates, last_price=last_price,
+                                    ticker=ticker, state_var=state_var)
+    lp = float(last_price)
+
+    def _ret_pct(arr):
+        return (np.asarray(arr, dtype='float64') / lp - 1.0) * 100.0
+
+    post = idata_fit.posterior[state_var]
+    n_time = post.sizes['time']
+    use_dates = dates is not None and len(dates) == n_time
+    hx = np.asarray(dates) if use_dates else np.arange(n_time, dtype=float)
+    hist_med = _ret_pct(post.median(('chain', 'draw')).values)
+    _hdi = post.azstats.hdi(prob=0.94)
+    hlo = _ret_pct(_hdi.sel(ci_bound='lower').values)
+    hhi = _ret_pct(_hdi.sel(ci_bound='upper').values)
+
+    pg = pred.predictions if hasattr(pred, 'predictions') else pred
+    fpt = pg['forecast_pt']
+    tf = np.asarray(pg['time_future'].values)
+    if np.issubdtype(tf.dtype, np.datetime64):
+        if use_dates:
+            fx = tf
+        else:
+            anchor = (np.asarray(dates)[-1] if dates is not None and len(dates) else tf[0])
+            fx = hx[-1] + (tf - anchor) / np.timedelta64(1, 'D')
+    else:
+        fx = hx[-1] + np.asarray(tf, dtype=float)
+
+    # Predictive return band (latent + observation noise): forecast_pt / lp − 1.
+    p_med = _ret_pct(fpt.median(('chain', 'draw')).values)
+    p_lo = _ret_pct(fpt.quantile(_HDI_LO, dim=('chain', 'draw')).values)
+    p_hi = _ret_pct(fpt.quantile(_HDI_HI, dim=('chain', 'draw')).values)
+
+    # Latent return band (state uncertainty only): the decimal
+    # implied_upside_future draws when the forecast carried a spot anchor,
+    # else forecast_state / lp − 1.
+    if 'implied_upside_future' in pg:
+        _iu = pg['implied_upside_future'] * 100.0
+    else:
+        _iu = (pg['forecast_state'] / lp - 1.0) * 100.0
+    l_med = _iu.median(('chain', 'draw')).values
+    l_lo = _iu.quantile(_HDI_LO, dim=('chain', 'draw')).values
+    l_hi = _iu.quantile(_HDI_HI, dim=('chain', 'draw')).values
+
+    so = idata_fit.posterior['sigma_obs'] if 'sigma_obs' in idata_fit.posterior else None
+    has_vol = so is not None and 'time' in so.dims and so.sizes['time'] == n_time
+    show_vol = has_vol if volatility_panel == 'auto' else bool(volatility_panel) and has_vol
+
+    if show_vol:
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                            row_heights=[0.75, 0.25], vertical_spacing=0.06,
+                            subplot_titles=('', 'Posterior observation volatility'))
+    else:
+        fig = make_subplots(rows=1, cols=1)
+
+    # Smoothed implied-return path + band.
+    _plotly_band(fig, hx, hlo, hhi, color=hist_color, alpha=0.25,
+                 name='94% HDI (smoothed implied return)', row=1, col=1,
+                 showlegend=True)
+    fig.add_trace(go.Scatter(
+        x=hx, y=hist_med, mode='lines',
+        line=dict(color=hist_color, width=2.2),
+        hovertemplate=_hover_pct('smoothed implied return', date_x=use_dates),
+        name='smoothed implied return', legendgroup='state'), row=1, col=1)
+    if observed is not None:
+        fig.add_trace(go.Scatter(
+            x=hx, y=_ret_pct(observed), mode='markers',
+            marker=dict(color=observed_color, size=8,
+                        line=dict(color='#1e1e1e', width=0.6)),
+            hovertemplate=_hover_pct('observed implied return', date_x=use_dates),
+            name='observed target return', legendgroup='observed'), row=1, col=1)
+
+    # Nested forecast bands: predictive (wide) then latent (narrow) on top.
+    _plotly_band(fig, fx, p_lo, p_hi, color=fc_color, alpha=0.18,
+                 name='94% PI — predictive return (incl. obs noise)',
+                 row=1, col=1, showlegend=True)
+    _plotly_band(fig, fx, l_lo, l_hi, color=fc_color, alpha=0.32,
+                 name='94% HDI — latent expected return',
+                 row=1, col=1, showlegend=True)
+    fig.add_trace(go.Scatter(
+        x=np.r_[hx[-1], fx], y=np.r_[hist_med[-1], l_med], mode='lines+markers',
+        line=dict(color=fc_color, width=2.2, dash='dash'), marker=dict(size=6),
+        customdata=np.c_[np.r_[hist_med[-1], p_lo], np.r_[hist_med[-1], p_hi]],
+        hovertemplate=('%{x|%Y-%m-%d}<br>expected return = %{y:.1f}%<br>'
+                       'predictive 94% = [%{customdata[0]:.1f}%, '
+                       '%{customdata[1]:.1f}%]<extra></extra>')
+        if use_dates else
+        ('expected return = %{y:.1f}%<br>predictive 94% = '
+         '[%{customdata[0]:.1f}%, %{customdata[1]:.1f}%]<extra></extra>'),
+        name='expected return forecast', legendgroup='forecast'), row=1, col=1)
+
+    # Per-horizon +X.X% annotations under each fiscal-event marker.
+    for _x, _m in zip(np.atleast_1d(fx), np.atleast_1d(l_med)):
+        fig.add_annotation(x=_xval(_x), y=float(_m), yanchor='bottom',
+                           text=f'{_m:+.1f}%', showarrow=False,
+                           font=dict(size=9, color=fc_color), row=1, col=1)
+
+    fig.add_vline(x=_xval(hx[-1]), line=dict(color=C_REF, dash='dot', width=1.2),
+                  row=1, col=1)
+    fig.add_hline(y=0.0, line=dict(color=C_REF, dash='dash', width=1.0),
+                  annotation_text='break-even', row=1, col=1)
+    _annotate_forecast_horizons(fig, fx, pg, color=fc_color, row=1, col=1)
+    fig.update_yaxes(title_text='implied return over spot (%)', ticksuffix='%',
+                     row=1, col=1)
+
+    if show_vol:
+        v_med = so.median(('chain', 'draw')).values
+        v_lo = so.quantile(_HDI_LO, dim=('chain', 'draw')).values
+        v_hi = so.quantile(_HDI_HI, dim=('chain', 'draw')).values
+        _plotly_band(fig, hx, v_lo, v_hi, color=vol_color, alpha=0.25,
+                     name='94% HDI (σ_obs)', row=2, col=1)
+        fig.add_trace(go.Scatter(
+            x=hx, y=v_med, mode='lines', line=dict(color=vol_color, width=2.0),
+            hovertemplate='σ_obs = %{y:.4f}<extra></extra>',
+            name='posterior median σ_obs(t)', legendgroup='vol'), row=2, col=1)
+        fig.add_vline(x=_xval(hx[-1]), line=dict(color=C_REF, dash='dot', width=1.2),
+                      row=2, col=1)
+        fig.update_yaxes(title_text='σ_obs', row=2, col=1)
+
+    _vol_row = 2 if show_vol else 1
+    if not use_dates:
+        x_all = np.concatenate([np.asarray(hx, dtype=float).ravel(),
+                                np.asarray(fx, dtype=float).ravel()])
+        x_all = x_all[np.isfinite(x_all)]
+        if x_all.size:
+            x_lo, x_hi = float(x_all.min()), float(x_all.max())
+            pad = (x_hi - x_lo) * 0.02 or 1.0
+            fig.update_xaxes(range=[x_lo - pad, x_hi + pad])
+    else:
+        fig.update_xaxes(tickformat='%b %y')
+    fig.update_xaxes(title_text='as-of date' if use_dates else 'time step',
+                     row=_vol_row, col=1)
+
+    fig.update_layout(
+        title=('Observed vs expected returns — structural forecast to fiscal events'
+               + (f' — {ticker}' if ticker else '')),
+        showlegend=True,
+        legend=dict(font_size=_LEGEND_FONT_SIZE),
+        hovermode='x unified',
         height=int(height_px + (200 if show_vol else 0)),
     )
     return fig, None
@@ -1077,9 +1583,11 @@ def build_noise_wideners(df: pd.DataFrame, *, fillna: bool = True) -> dict[str, 
         Keys ``range``, ``cv``, ``vol_drift``, ``sqrt_n`` plus the realised per-row
         ``multiplier`` = ``(1 + range + cv + 0.5*max(vol_drift, 0)) / sqrt_n``.
     """
-    range_col = 'feat_pt_range_norm' if 'feat_pt_range_norm' in df.columns else None
-    sigma_col = 'feat_pt_noise_sigma' if 'feat_pt_noise_sigma' in df.columns else None
-    vol_cols = [c for c in ('feat_vol_drift',) if c in df.columns]
+    range_col = (KALMAN_RANGE_WIDENER_FEATURE
+                 if KALMAN_RANGE_WIDENER_FEATURE in df.columns else None)
+    sigma_col = (KALMAN_CONSENSUS_SIGMA_FEATURE
+                 if KALMAN_CONSENSUS_SIGMA_FEATURE in df.columns else None)
+    vol_cols = [c for c in (KALMAN_VOL_DRIFT_FEATURE,) if c in df.columns]
 
     def _col(name):
         s = df[name].astype('float64') if name and name in df.columns \
@@ -1204,7 +1712,7 @@ def export_to_analytics_db(df: pd.DataFrame, table_name: str,
     engine = create_engine(resolve_db_url())
     schema = _resolve_env_setting('DB_ANALYTICS_SCHEMA', default='analytics')
 
-    logging.info("Exporting %d rows to %s.%s", len(df), schema, table_name)
+    logger.info("Exporting %d rows to %s.%s", len(df), schema, table_name)
     result = df.to_sql(
         name=table_name,
         con=engine,
@@ -1212,7 +1720,7 @@ def export_to_analytics_db(df: pd.DataFrame, table_name: str,
         if_exists=if_exists,
         index=False,
     )
-    logging.info("Export complete: %s.%s", schema, table_name)
+    logger.info("Export complete: %s.%s", schema, table_name)
     return result
 
 
@@ -1680,10 +2188,10 @@ def export_all_artifacts(artifacts: dict, *, results_dir: Optional[str] = None) 
 # =============================================================================
 # Data loading + feature-role resolution
 # =============================================================================
-def load_kalman_df(engine) -> pd.DataFrame:
+def load_kalman_df(engine, config: Optional[KalmanRunConfig] = None) -> pd.DataFrame:
     """Load the cross-sectional ``pml.mv_pymc_kalman_pt`` snapshot (one row per ISIN)."""
     with engine.connect() as conn:
-        df = pd.read_sql(text(KALMAN_DF_QUERY), conn)
+        df = pd.read_sql(text(kalman_df_query(config)), conn)
     logger.info("Loaded kalman_df: %s", df.shape)
     return df
 
@@ -1796,67 +2304,6 @@ _EDA_DRIVER_SPECS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _render_plotly(fig: object, *, height: Optional[int] = None,
-                   label: Optional[str] = None) -> None:
-    """Render a Plotly figure in the notebook (side-effecting; dark theme).
-
-    Applies the ``arviz-tumma`` dark template so every hand-built Plotly panel matches
-    the ArviZ figures (which inherit it via ``plotly.io.templates.default``, pinned in
-    :func:`setup_plotting`). Mirrors the ``pc.show()`` convention used throughout the
-    module; falls back to :func:`display` and is a silent no-op when no renderer is
-    available, so a headless / plain-script run never raises. ``label`` is forwarded
-    to the artifact exporter via :func:`_safe_show`.
-    """
-    if fig is None:
-        return
-    fig.update_layout(template='arviz-tumma', margin=dict(l=60, r=30, t=70, b=50))
-    if height is not None:
-        fig.update_layout(height=height)
-    _autosize_plotly(fig)
-    _safe_show(fig, label=label, _fallback=display)
-
-
-def _safe_show(obj: object, *, label: Optional[str] = None,
-               _fallback: Optional[object] = None) -> None:
-    """Display any Plotly figure or ``arviz_plots`` PlotCollection, swallowing transport errors.
-
-    IDE-managed display back-ends (e.g. PyCharm's DataLore/Kaleido helper) push the
-    rendered image to a local HTTP server; when that socket is aborted the underlying
-    ``show()`` raises ``ConnectionAbortedError`` (WinError 10053) mid-run. Rendering is a
-    side-effect, never part of the model result, so a failure here must never abort the
-    workflow. Handles both :class:`arviz_plots.PlotCollection` (``.show()``) and Plotly
-    figures; ``pc.show()`` and raw ``fig.show()`` both route through this one guard.
-
-    This is also the single auto-capture point for artifact export: every displayed
-    figure is handed to :func:`_export_figure` *before* ``show()``, so a display
-    transport failure still yields the exported file.
-
-    Parameters
-    ----------
-    obj
-        The figure or PlotCollection to display. ``None`` is a no-op.
-    label
-        Optional filename slug for the exported artifact; auto-derived from the
-        figure title (or just auto-numbered) when omitted.
-    _fallback
-        Optional callable tried when ``obj.show()`` raises — used by
-        :func:`_render_plotly` to fall back to :func:`display` for a returned figure.
-    """
-    if obj is None:
-        return
-    _autosize_plotly(obj)  # width tracks the editor pane; heights stay explicit
-    _export_figure(obj, label=label)
-    try:
-        obj.show()
-    except Exception as exc:  # pragma: no cover - display transport is environment-dependent
-        logger.debug("Figure display skipped (renderer/transport failure): %r", exc)
-        if _fallback is not None:
-            try:
-                _fallback(obj)
-            except Exception:
-                pass
-
-
 def _sector_grouped(df: pd.DataFrame, *, max_sectors: int = 8) -> pd.DataFrame:
     """Return ``df`` with a capped ``sector_grp`` column (top-N sectors + ``Other``)."""
     g = df.copy()
@@ -1912,21 +2359,40 @@ def _plot_upside_vs_drivers_plotly(kalman_df: pd.DataFrame) -> None:
     long = pd.concat(frames, ignore_index=True)
     hover = {c: True for c in id_cols}
     hover.update({'driver': False, 'sector_grp': False})
+    # Per-driver Spearman ρ (signal strength), annotated on each facet title so
+    # the reader sees strength without cross-referencing the §2.4g momentum bar.
+    rho_by_label: dict[str, float] = {}
+    for col, lab in drivers:
+        _pair = d[[col, 'upside_pct']].astype('float64').dropna()
+        rho_by_label[lab] = (float(_pair[col].corr(_pair['upside_pct'],
+                                                   method='spearman'))
+                             if len(_pair) > 10 else float('nan'))
+    _trend_kw = ({'trendline': 'ols', 'trendline_color_override': C_REF}
+                 if _ilu.find_spec('statsmodels') is not None else {})
     fig = px.scatter(
         long, x='driver_value', y='upside_pct', color='sector_grp',
         facet_col='driver', facet_col_wrap=3, opacity=0.55, hover_data=hover,
         category_orders={'driver': [lab for _, lab in drivers]},
-        labels={'sector_grp': 'sector', 'driver_value': '', 'upside_pct': 'implied upside (%)'},
+        labels={'sector_grp': 'sector', 'driver_value': 'value',
+                'upside_pct': 'implied upside (%)'},
         color_discrete_sequence=px.colors.qualitative.Set2,
+        **_trend_kw,
     )
     fig.update_xaxes(matches=None, showticklabels=True)
-    fig.for_each_annotation(lambda a: a.update(text=a.text.split('=', 1)[-1], font_size=10))
-    fig.add_hline(y=0, line_dash='dash', line_color='#888888', opacity=0.7)
+
+    def _facet_title(a):
+        lab = a.text.split('=', 1)[-1]
+        rho = rho_by_label.get(lab)
+        suffix = f'  (ρ={rho:.2f})' if rho is not None and np.isfinite(rho) else ''
+        a.update(text=f'{lab}{suffix}', font_size=10)
+
+    fig.for_each_annotation(_facet_title)
+    fig.add_hline(y=0, line_dash='dash', line_color=C_REF, opacity=0.7)
     fig.update_layout(
         title='Implied upside vs fused-panel risk / return drivers (interactive)',
         legend_title_text='sector',
     )
-    _render_plotly(fig, height=640)
+    _render_plotly(fig, height=H_TALL)
 
 
 def _plot_upside_vs_signals_mpl(kalman_df: pd.DataFrame) -> None:
@@ -2014,13 +2480,13 @@ def _momentum_signal_table(kalman_df: pd.DataFrame,
 
 def _plot_momentum_signal_plotly(corr_df: pd.DataFrame) -> None:
     """Interactive horizontal rho-bar of the momentum table (new feature highlighted)."""
-    colors = np.where(corr_df['feature'] == 'feat_one_day_return', '#e69f00', '#56b4e9')
+    colors = np.where(corr_df['feature'] == 'feat_one_day_return', C_HIGHLIGHT, C_POSTERIOR)
     fig = go.Figure(go.Bar(
         x=corr_df['spearman_rho'], y=corr_df['feature'], orientation='h',
         marker_color=colors, customdata=corr_df[['n']].to_numpy(),
         hovertemplate='%{y}<br>rho = %{x:.3f}<br>n = %{customdata[0]}<extra></extra>',
     ))
-    fig.add_vline(x=0, line_dash='dash', line_color='#888888')
+    fig.add_vline(x=0, line_dash='dash', line_color=C_REF)
     fig.update_layout(
         title='Momentum / drift signal vs implied upside '
               '(Spearman rho; feat_one_day_return highlighted)',
@@ -2057,7 +2523,9 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     _counts = _d['industry'].value_counts()
     _keep = _counts[_counts >= 5].index.tolist()
     _d = _d[_d['industry'].isin(_keep)]
-    _industries = sorted(_d['industry'].unique())
+    # Sort industries by median upside so the ridge reads as a ranking.
+    _industries = (_d.groupby('industry')['upside_pct'].median()
+                   .sort_values().index.tolist())
     if _industries:
         _max_n = int(_d['industry'].value_counts().max())
         _arr = np.full((len(_industries), _max_n), np.nan)
@@ -2072,7 +2540,13 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
                             sample_dims=['sample'], combined=True,
                             figure_kwargs=_azp_figure_kwargs(
                                 _forest_height_px(len(_industries), per_row=30)))
-        pc.add_title('Implied upside (%) by industry — consensus observed_pt vs last_price')
+        pc.add_title('Implied upside (%) by industry — consensus observed_pt vs '
+                     'last_price (sorted by median)')
+        with contextlib.suppress(Exception):
+            _fx = _plotly_figure_of(pc)
+            if _fx is not None:
+                _fx.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+                _fx.update_xaxes(title_text='implied upside (%)', ticksuffix='%')
         _safe_show(pc)
         display(_d['upside_pct'].describe())
 
@@ -2173,24 +2647,24 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     mult = mult[np.isfinite(mult)]
     fig.add_trace(go.Histogram(
         x=mult, histnorm='probability density', nbinsx=80,
-        marker=dict(color=_hex_to_rgba('#56b4e9', 0.35)),
+        marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.35)),
         name='multiplier', showlegend=False), row=1, col=2)
     _xs_m, _ys_m = _kde_xy(mult, clip_low=0.0)
     if _xs_m is not None:
         fig.add_trace(go.Scatter(x=_xs_m, y=_ys_m, mode='lines',
-                                 line=dict(color='#56b4e9', width=2.0),
+                                 line=dict(color=C_POSTERIOR, width=2.0),
                                  name='multiplier KDE', showlegend=False), row=1, col=2)
     _mult_med, _mult_p99 = float(np.nanmedian(mult)), float(np.nanpercentile(mult, 99))
-    fig.add_vline(x=1.0, line=dict(color='#bbbbbb', dash='dash', width=1.2),
+    fig.add_vline(x=1.0, line=dict(color=C_REF, dash='dash', width=1.2),
                   annotation_text='×1 (=base)', row=1, col=2)
-    fig.add_vline(x=_mult_med, line=dict(color='#ffb000', width=1.6),
+    fig.add_vline(x=_mult_med, line=dict(color=C_OBSERVED, width=1.6),
                   annotation_text=f'median={_mult_med:.2f}', row=1, col=2)
-    fig.add_vline(x=_mult_p99, line=dict(color='#cc79a7', dash='dot', width=1.6),
+    fig.add_vline(x=_mult_p99, line=dict(color=C_FORECAST, dash='dot', width=1.6),
                   annotation_text=f'p99={_mult_p99:.2f}', row=1, col=2)
     fig.update_xaxes(title_text='σ_obs / σ_obs_base', row=1, col=2)
     fig.update_yaxes(title_text='density', row=1, col=2)
     fig.update_layout(barmode='overlay', legend=dict(font_size=9))
-    _render_plotly(fig, height=440)
+    _render_plotly(fig, height=H_STD)
 
     print('Observation-noise wideners (raw, un-winsorised, model-facing):')
     for lab, _c, m, p, mn in _rows:
@@ -2227,42 +2701,81 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     else:
         _plot_upside_vs_signals_mpl(kalman_df)
 
-    # 2.4f Empirical per-group implied-upside forest (EDA preview of §5 group effects).
+    # 2.4f Empirical per-group implied-upside forest (EDA preview of §5 group
+    # effects). Consolidated (0.9.9.11): the former up-to-7 near-identical
+    # per-coord figures collapse into ONE faceted panel gated to the coords the
+    # fused model actually uses as group effects, each facet sorted by median
+    # with universe-median and 0% reference lines.
     _fe = kalman_df[(kalman_df['observed_pt'] > 0) & (kalman_df['last_price'] > 0)].copy()
     _fe['upside_pct'] = ((_fe['observed_pt'] / _fe['last_price'] - 1.0) * 100.0).clip(-100, 200)
-    _group_preview = [c for c in ('region', 'trading_region', 'sector', 'exchange_name', 'size_class',
-                                  'style_class', 'unit_name') if c in _fe.columns]
+    # Mirrors _FUSED_KALMAN_GROUP_EFFECTS minus the high-cardinality
+    # exchange/unit coords (which drowned the preview and are model plumbing).
+    _group_preview = [c for c in ('region', 'trading_region', 'sector',
+                                  'size_class', 'style_class')
+                      if c in _fe.columns]
     _min_per_level = 5
     _boot_draws = 4000
+    _univ_median = float(_fe['upside_pct'].median())
+    _facets: list[tuple[str, list, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
     for _coord in _group_preview:
         lab = _fe[_coord].fillna('Unknown').astype(str)
         _counts = lab.value_counts()
-        levels = sorted(lv for lv in _counts.index if _counts[lv] >= _min_per_level)
+        levels = [lv for lv in _counts.index if _counts[lv] >= _min_per_level]
         if len(levels) < 2:
             continue
-        # Bootstrap each level's per-name upside to a common draw count and stack as a
-        # single posterior chain -> (chain=1, draw, <coord>) with no NaN padding.
-        _boot = np.empty((1, _boot_draws, len(levels)), dtype='float64')
+        # Bootstrap each level's per-name upside: point = bootstrap-mean median,
+        # CI = the 94% ETI of the bootstrap means.
+        _med = np.empty(len(levels))
+        _lo = np.empty(len(levels))
+        _hi = np.empty(len(levels))
         for i, lv in enumerate(levels):
             vals = _fe.loc[lab == lv, 'upside_pct'].to_numpy()
-            _boot[0, :, i] = vals[rng.integers(0, vals.size, _boot_draws)]
-        _level_labels = [f'{lv}  (n={_counts[lv]})' for lv in levels]
-        _ds = xr.Dataset(
-            {'implied_upside_pct': (('chain', 'draw', _coord), _boot)},
-            coords={_coord: _level_labels},
-        )
-        pc = azp.plot_forest(
-            _ds, var_names=['implied_upside_pct'], combined=True,
-            labels=[_coord], backend='plotly',
-            figure_kwargs=_azp_figure_kwargs(_forest_height_px(len(levels), per_row=34),
-                                             width_frac=0.85),
-        )
-        pc.add_title(f'Empirical implied upside (%) by {_coord} — EDA group-effect preview')
-        _ax = pc.viz['plot'].sel(column='forest').item()  # PlotlyPlot (figure + row/col)
-        _ax.add_vline(x=0, line=dict(color='#bbbbbb', dash='dash', width=1.0))
-        _ax.update_xaxes(
-            title_text='implied upside vs last_price  (observed_pt / last_price − 1, %)')
-        _safe_show(pc)
+            _bm = vals[rng.integers(0, vals.size, (_boot_draws, min(vals.size, 512)))
+                       ].mean(axis=1)
+            _med[i] = float(np.median(_bm))
+            _lo[i] = float(np.quantile(_bm, _HDI_LO))
+            _hi[i] = float(np.quantile(_bm, _HDI_HI))
+        _sorted = np.argsort(_med)
+        _n = np.array([_counts[lv] for lv in levels])
+        _facets.append((_coord,
+                        [f'{levels[j]}  (n={_counts[levels[j]]})' for j in _sorted],
+                        _med[_sorted], _lo[_sorted], _hi[_sorted], _n[_sorted]))
+    if _facets and _HAS_PLOTLY:
+        _tot = sum(len(f[1]) for f in _facets)
+        figf = make_subplots(
+            rows=len(_facets), cols=1, shared_xaxes=True,
+            vertical_spacing=min(0.06, 20.0 / max(_tot * 24, 1)),
+            row_heights=[len(f[1]) / _tot for f in _facets],
+            subplot_titles=[f[0] for f in _facets])
+        for i, (_coord, _lbls, _med, _lo, _hi, _n) in enumerate(_facets, start=1):
+            figf.add_trace(go.Scatter(
+                x=_med, y=_lbls, mode='markers',
+                marker=dict(color=C_POSTERIOR, size=8),
+                error_x=dict(type='data', symmetric=False,
+                             array=np.clip(_hi - _med, 0, None),
+                             arrayminus=np.clip(_med - _lo, 0, None),
+                             color=_hex_to_rgba(C_POSTERIOR, 0.5), thickness=1.4),
+                customdata=np.c_[_lo, _hi, _n],
+                hovertemplate=('%{y}<br>median upside = %{x:.1f}%<br>94% CI = '
+                               '[%{customdata[0]:.1f}%, %{customdata[1]:.1f}%]'
+                               '<br>n = %{customdata[2]:.0f}<extra></extra>'),
+                name=_coord, showlegend=False), row=i, col=1)
+            figf.add_vline(x=0, line=dict(color=C_REF, dash='dot', width=1.0),
+                           row=i, col=1)
+            figf.add_vline(x=_univ_median,
+                           line=dict(color=C_HIGHLIGHT, dash='dash', width=1.0),
+                           row=i, col=1)
+        figf.update_xaxes(
+            title_text=('implied upside vs last_price  '
+                        '(observed_pt / last_price − 1, %); dashed = universe median'),
+            ticksuffix='%', row=len(_facets), col=1)
+        figf.update_yaxes(automargin=True)
+        figf.update_layout(
+            title='Empirical implied upside by group — EDA preview of the §5 '
+                  'group effects (levels sorted by median)',
+            showlegend=False)
+        _render_plotly(figf, height=int(np.clip(24 * _tot + 80 * len(_facets) + 120,
+                                                480, 1800)))
 
     # 2.4g Momentum / drift term-structure signal. Spearman ρ of each drift feature —
     #      including the new short-horizon feat_one_day_return — against implied upside,
@@ -2338,9 +2851,11 @@ def map_state_space_features(
         'feat_implied_upside must not be a drift predictor (target leakage).'
     )
 
-    range_col = 'feat_pt_range_norm' if 'feat_pt_range_norm' in kalman_df.columns else None
-    sigma_col = 'feat_pt_noise_sigma' if 'feat_pt_noise_sigma' in kalman_df.columns else None
-    vol_cols = [c for c in ('feat_vol_drift',) if c in kalman_df.columns]
+    range_col = (KALMAN_RANGE_WIDENER_FEATURE
+                 if KALMAN_RANGE_WIDENER_FEATURE in kalman_df.columns else None)
+    sigma_col = (KALMAN_CONSENSUS_SIGMA_FEATURE
+                 if KALMAN_CONSENSUS_SIGMA_FEATURE in kalman_df.columns else None)
+    vol_cols = [c for c in (KALMAN_VOL_DRIFT_FEATURE,) if c in kalman_df.columns]
 
     mapping_rows: list[tuple[str, str]] = [
         (c, 'drift / state-transition mean (beta)') for c in drift_features
@@ -2354,7 +2869,7 @@ def map_state_space_features(
     # for every catalogue row (dropped ≠ forgotten).
     mapping_rows += [
         (c, 'risk/size tilt (named pm.Data container)')
-        for c in ('feat_avg_beta', 'feat_mcap_country_r') if c in kalman_df.columns
+        for c in KALMAN_TILT_FEATURE_ORDER if c in kalman_df.columns
     ]
     mapping_rows += [
         (c, 'time covariate (t_scaled axis)')
@@ -2382,190 +2897,12 @@ def map_state_space_features(
 
 
 # =============================================================================
-# 4. PyMC-aligned data containers
-# =============================================================================
-@dataclass
-class ModelData:
-    """Numeric arrays / coords feeding the cross-sectional state-space model (§5)."""
-
-    model_df: pd.DataFrame
-    isin_labels: np.ndarray
-    drift_features: list[str]
-    group_effects: list[str]
-    categorical_coords: list[str]
-    coord_uniques: dict[str, np.ndarray]
-    coord_idx: dict[str, np.ndarray]
-    log_last: np.ndarray
-    log_obs: np.ndarray
-    log_uplift_obs: np.ndarray
-    x_drift: np.ndarray
-    range_norm_xs: np.ndarray
-    noise_cv_xs: np.ndarray
-    vol_xs: np.ndarray
-    sqrt_n_xs: np.ndarray
-
-
-def build_model_data(kalman_df: pd.DataFrame, roles: FeatureRoles,
-                     drift_features: list[str]) -> ModelData:
-    """Filter to log-space-usable rows and build the PyMC data containers.
-
-    Keeps rows with strictly-positive ``observed_pt`` / ``last_price`` and >=1 analyst,
-    builds categorical coords (classification coords only — never the fiscal-calendar
-    date coords), the standardised drift matrix, the log-uplift target, and the
-    non-negative observation-noise drivers (shared :func:`build_noise_wideners`).
-    """
-    model_df = kalman_df.loc[
-        (kalman_df['observed_pt'] > 0)
-        & (kalman_df['last_price'] > 0)
-        & kalman_df['observed_pt'].notna()
-        & kalman_df['last_price'].notna()
-        ].copy().reset_index(drop=True)
-
-    if 'n_analysts' in model_df.columns:
-        model_df['n_analysts'] = model_df['n_analysts'].fillna(1).clip(lower=1)
-    else:
-        model_df['n_analysts'] = 1.0
-    print(f'Modelling rows (observed_pt>0 & last_price>0): {len(model_df)}')
-
-    isin_labels = model_df['isin'].astype(str).values
-
-    # Categorical group effects use ONLY the hierarchical classification coords.
-    categorical_coords = [c for c in roles.classification_coords
-                          if c in model_df.columns and c not in ('isin', 'ticker')]
-    coord_uniques: dict[str, np.ndarray] = {}
-    coord_idx: dict[str, np.ndarray] = {}
-    for col in categorical_coords:
-        labels = model_df[col].fillna('Unknown').astype(str).values
-        uniques, idx = np.unique(labels, return_inverse=True)
-        coord_uniques[col] = uniques
-        coord_idx[col] = idx.astype('int64')
-    print(f'Categorical coords ({len(categorical_coords)}): {categorical_coords}')
-
-    # Log-space transition anchor + observation (strictly-positive prices/targets).
-    log_last = np.log(model_df['last_price'].astype('float64').to_numpy())
-    log_obs = np.log(model_df['observed_pt'].astype('float64').to_numpy())
-
-    # SSOT log-uplift TARGET: log1p(feat_implied_upside) == log_obs - log_last, computed
-    # once robustly in SQL. Per-row fallback keeps the script runnable before the MV is
-    # refreshed with the column.
-    if 'feat_implied_upside' in model_df.columns:
-        _iu = model_df['feat_implied_upside'].astype('float64').to_numpy()
-        log_uplift_obs = np.where(
-            np.isfinite(_iu), np.log1p(np.clip(_iu, -0.999, None)), log_obs - log_last
-        )
-        _src = 'feat_implied_upside (SSOT)'
-    else:
-        log_uplift_obs = log_obs - log_last
-        _src = 'log_obs - log_last (fallback; feat_implied_upside absent)'
-    print(f'log_last: {log_last.shape}, log_obs: {log_obs.shape}, '
-          f'log_uplift_obs: {log_uplift_obs.shape} [{_src}]')
-
-    # 4.1 Standardised drift-feature matrix (state-transition mean inputs).
-    x_drift_raw = model_df[drift_features].astype(float)
-    x_drift_std = (x_drift_raw - x_drift_raw.mean()) / x_drift_raw.std(ddof=0).replace(0, 1.0)
-    x_drift = x_drift_std.fillna(0.0).to_numpy()
-    print(f'Drift matrix X_drift: {x_drift.shape}  ({drift_features})')
-
-    # 4.2 Non-negative observation-noise drivers (shared helper, model contract).
-    _nw = build_noise_wideners(model_df, fillna=True)
-    range_norm_xs = _nw['range']
-    noise_cv_xs = _nw['cv']
-    vol_xs = _nw['vol_drift']
-    sqrt_n_xs = _nw['sqrt_n']
-    print(f'noise drivers (mean) — range:{range_norm_xs.mean():.3f}  '
-          f'cv:{noise_cv_xs.mean():.3f}  vol_drift:{vol_xs.mean():.3f}')
-
-    group_effects = [c for c in _CANDIDATE_GROUPS if c in coord_idx]
-
-    return ModelData(
-        model_df=model_df, isin_labels=isin_labels, drift_features=drift_features,
-        group_effects=group_effects, categorical_coords=categorical_coords,
-        coord_uniques=coord_uniques, coord_idx=coord_idx,
-        log_last=log_last, log_obs=log_obs, log_uplift_obs=log_uplift_obs,
-        x_drift=x_drift, range_norm_xs=range_norm_xs, noise_cv_xs=noise_cv_xs,
-        vol_xs=vol_xs, sqrt_n_xs=sqrt_n_xs,
-    )
-
-
-# =============================================================================
-# 5. Cross-sectional state-space model (log-space Kalman update)
-# =============================================================================
-def build_kalman_pt_model(data: ModelData, *, robust: bool = True) -> "pm.Model":
-    """Cross-sectional log-space state-space price-target model.
-
-    One observation per ISIN: ``log(observed_pt)`` is a noisy measurement of a latent
-    log fair-value state anchored at ``log(last_price)`` and shifted by a hierarchical,
-    drift-feature-driven log-uplift. The posterior ``expected_pt`` is the Kalman-smoothed
-    price target — a shrinkage between the drift-implied prior and the noisy consensus.
-
-    Parameters
-    ----------
-    data
-        Containers from :func:`build_model_data`.
-    robust
-        ``True`` -> Student-t measurement likelihood (default; absorbs analyst
-        outliers). ``False`` -> Normal-likelihood twin.
-    """
-    coords = {'isin': data.isin_labels, 'drift_feature': data.drift_features}
-    for col in data.group_effects:
-        coords[col] = data.coord_uniques[col]
-
-    with pm.Model(coords=coords) as model:
-        log_last_d = pm.Data('log_last_price', data.log_last, dims='isin')
-        Xd = pm.Data('drift_features', data.x_drift, dims=('isin', 'drift_feature'))
-        rng_d = pm.Data('feat_pt_range_norm', data.range_norm_xs, dims='isin')
-        cv_d = pm.Data('feat_pt_noise_cv', data.noise_cv_xs, dims='isin')
-        vol_d = pm.Data('feat_vol_drift', data.vol_xs, dims='isin')
-        sqn = pm.Data('sqrt_n_analysts', data.sqrt_n_xs, dims='isin')
-        log_uplift_obs_d = pm.Data('log_uplift_observed', data.log_uplift_obs, dims='isin')
-        idx_data = {col: pm.Data(f'{col}_idx', data.coord_idx[col], dims='isin')
-                    for col in data.group_effects}
-
-        # --- State-transition mean: hierarchical drift regression on log-uplift.
-        # Data-informed anchor: centre the global log-uplift on the cross-sectional
-        # MEDIAN observed uplift (an aggregate over ISINs -> no leakage).
-        mu_anchor = float(np.median(data.log_uplift_obs))
-        mu_global = pm.Normal('mu_global', mu_anchor, 0.25)
-        beta = pm.Normal('beta', 0.0, 0.25, dims='drift_feature')
-        eta = mu_global + pt.dot(Xd, beta)
-        for col in data.group_effects:
-            sigma_g = pm.HalfNormal(f'sigma_{col}', 0.10)
-            z_g = pm.Normal(f'z_{col}', 0.0, 1.0, dims=col)
-            ge = pm.Deterministic(f'{col}_effect', sigma_g * z_g, dims=col)
-            eta = eta + ge[idx_data[col]]
-
-        # --- Latent log state (non-centred GRW-style innovation; HalfNormal sigma).
-        sigma_state = pm.HalfNormal('sigma_state', 0.15)
-        z_state = pm.Normal('z_state', 0.0, 1.0, dims='isin')
-        log_uplift = pm.Deterministic('log_uplift', eta + sigma_state * z_state, dims='isin')
-        log_state = pm.Deterministic('log_state', log_last_d + log_uplift, dims='isin')
-
-        # --- Observation noise (Kalman measurement variance), HalfNormal base.
-        sigma_obs_base = pm.HalfNormal('sigma_obs_base', 0.10)
-        sigma_obs = pm.Deterministic(
-            'sigma_obs',
-            sigma_obs_base * (1.0 + rng_d + cv_d + 0.5 * vol_d) / sqn,
-            dims='isin')
-
-        # --- Measurement likelihood in log space. We observe the log-UPLIFT directly
-        #     (SSOT: log1p(feat_implied_upside)), so the likelihood mean is `log_uplift`.
-        if robust:
-            nu = pm.Gamma('nu', alpha=2.0, beta=0.1)
-            pm.StudentT('log_uplift_obs', nu=nu, mu=log_uplift, sigma=sigma_obs,
-                        observed=log_uplift_obs_d, dims='isin')
-        else:
-            pm.Normal('log_uplift_obs', mu=log_uplift, sigma=sigma_obs,
-                      observed=log_uplift_obs_d, dims='isin')
-
-        # --- Screening outputs on the price scale.
-        pm.Deterministic('expected_pt', pt.exp(log_state), dims='isin')
-        pm.Deterministic('expected_upside', pt.exp(log_uplift) - 1.0, dims='isin')
-    return model
-
-
-# =============================================================================
 # 5b. Fused MvGRW panel model (Model A + Model B)
 # =============================================================================
+# The legacy §4/§5 single-observation cross-sectional model (``ModelData`` /
+# ``build_model_data`` / ``build_kalman_pt_model``) was superseded by the fused
+# panel path below (``prepare_kalman_panel_inputs`` + ``build_panel_model``)
+# and removed in 0.9.9.10.
 # D-dimensional joint response series broadcast across the T fiscal anchors.
 # Mirrors PANEL_RESPONSE_COLS in _price_target_mc.py, re-homed onto the kalman MV.
 KALMAN_PANEL_RESPONSE_COLS: tuple[str, ...] = (
@@ -2600,7 +2937,9 @@ KALMAN_PANEL_RESPONSE_COLS: tuple[str, ...] = (
     # With a single response the coregion collapses to a clean hierarchical
     # cross-sectional regression (empirically: 0 divergences, R-hat → ~1.0). The
     # rank-1 ICM remains available for a genuine multi-signal panel (a DISTINCT 2nd
-    # series not already in X_drift, with collapse_time=False); add it here then.
+    # series not already in X_drift); add it here then. The TIME dimension is
+    # populated from the *_ago trails via ``history_lookbacks`` (T > 1) in
+    # ``prepare_kalman_panel_inputs``.
     'feat_log_uplift',
 )
 
@@ -2621,9 +2960,8 @@ def prepare_kalman_panel_inputs(
         drift_features: Optional[list[str]] = None,
         *,
         classification_coords: Optional[Sequence[str]] = None,
-        fiscal_anchor_cols: Sequence[str] = FISCAL_CALENDAR_COLS_ALL,
         response_cols: Sequence[str] = KALMAN_PANEL_RESPONSE_COLS,
-        collapse_time: bool = True,
+        history_lookbacks: Optional[Sequence[str]] = None,
         time_covariate_cols: Sequence[str] = DAY_COUNT_COLS_ALL,
 ) -> KalmanPanelInputs:
     """Assemble the 3-D MvGRW panel tensors for :func:`build_fused_kalman_pt_model`.
@@ -2650,10 +2988,20 @@ def prepare_kalman_panel_inputs(
         :func:`map_state_space_features`). Required — derived by the caller.
     classification_coords : Sequence[str], optional
         Explicit categorical group-effect coords. Overrides ``roles`` when given.
-    fiscal_anchor_cols : Sequence[str]
-        Ordered DATE columns defining the ``T`` random-walk anchors.
     response_cols : Sequence[str]
-        ``D`` response series columns (broadcast across the ``T`` anchors).
+        ``D`` response series columns.
+    history_lookbacks : Sequence[str], optional
+        ``*_ago`` suffixes (e.g. ``('6m', '3m', '1m')``) building a **genuine**
+        ``(isin, time)`` log-uplift panel from the MV's
+        ``price_target_{lb}_ago`` / ``price_{lb}_ago`` trails, ordered oldest →
+        newest with the current snapshot as the final time step (``T =
+        len(lookbacks) + 1``). Empty / ``None`` (the default) keeps the
+        collapsed single-slice cross-section (``T = 1``). Lookbacks whose
+        column pair is absent from the frame are dropped with a logged message.
+        This replaces the earlier ``collapse_time=False`` branch, which merely
+        **tiled** the snapshot across the fiscal anchors — time-invariant data
+        that double-counted every observation ``T``-fold and ill-conditioned
+        the posterior.
 
     Returns
     -------
@@ -2707,15 +3055,12 @@ def prepare_kalman_panel_inputs(
         raise ValueError('No modelling rows after filtering observed_pt / last_price.')
 
     # --- Time axis + response tensor (n_isin, T, D) standardised --------------
-    # The source MV (pml.mv_pymc_kalman_pt) is one row per ISIN, so the response
-    # columns carry NO genuine per-anchor variation. The previous build tiled them
-    # identically across the T fiscal anchors (np.tile), feeding the MvGRW spine
-    # time-invariant data — the dominant cause of the ill-conditioned (0-divergence
-    # but max-tree-depth, ~0.001 step) posterior, a T-fold likelihood blow-up, and
-    # T-fold observation double-counting. With ``collapse_time`` (default) we model
-    # a single cross-sectional slice (T=1); the MvGRW degenerates to a
-    # well-conditioned cross-section and reactivates automatically when a genuine
-    # (isin, time) response panel is later supplied via ``collapse_time=False``.
+    # ``history_lookbacks`` builds a GENUINE (isin, time) log-uplift panel from
+    # the MV's ``price_target_{lb}_ago`` / ``price_{lb}_ago`` trails; without it
+    # we model a single collapsed cross-sectional slice (T=1). The old
+    # ``collapse_time=False`` branch that np.tile-d the snapshot across the
+    # fiscal anchors (time-invariant data, T-fold observation double-counting,
+    # the ill-conditioned max-tree-depth posterior) was removed with it.
     resp_all = [c for c in response_cols if c in model_df.columns]
     if not resp_all:
         raise KeyError(f'None of the response columns {list(response_cols)} present.')
@@ -2742,7 +3087,66 @@ def prepare_kalman_panel_inputs(
         resp.append(c)
     D = len(resp)
 
-    if collapse_time:
+    # Resolve the usable history lookbacks: both trail columns must exist and
+    # the suffix must have a calendar day-count (period-to-date suffixes are
+    # data-dependent and excluded). Ordered oldest -> newest so the model's
+    # zero-anchored GRW deviation anchors at the OLDEST step; the snapshot is
+    # the final time step.
+    lookbacks: list[str] = []
+    if history_lookbacks:
+        for lb in history_lookbacks:
+            pt_col, px_col = f'price_target_{lb}_ago', f'price_{lb}_ago'
+            if lb not in _AGO_APPROX_DAYS:
+                logger.warning('history lookback %r has no calendar day count; dropped.', lb)
+            elif pt_col not in model_df.columns or px_col not in model_df.columns:
+                logger.warning('history lookback %r dropped (missing %s / %s).',
+                               lb, pt_col, px_col)
+            else:
+                lookbacks.append(lb)
+        lookbacks.sort(key=lambda s: -_AGO_APPROX_DAYS[s])
+
+    if lookbacks:
+        # Genuine (n_isin, T, D) history panel. Each lookback's implied uplift
+        # (price_target_lb_ago / price_lb_ago - 1) gets the same [-95%, +500%]
+        # winsorisation-then-log1p treatment as the snapshot response, so all T
+        # slices live on one scale. Missing history cells are filled with the
+        # name's OWN snapshot log-uplift — a repeated observation for that
+        # minority of names (never a fake cross-sectional-mean observation,
+        # which the post-standardisation nan->0 fill would create).
+        T = len(lookbacks) + 1
+        offsets = np.asarray(
+            [-float(_AGO_APPROX_DAYS[lb]) for lb in lookbacks] + [0.0], dtype='float64')
+        t_std = float(np.std(offsets)) or 1.0
+        t_scaled = np.tile((offsets - float(np.mean(offsets))) / t_std, (n_isin, 1))
+
+        snap_uplift = model_df['feat_log_uplift'].to_numpy(dtype='float64')
+        hist_cols: list[np.ndarray] = []
+        n_filled = 0
+        for lb in lookbacks:
+            pt_l = pd.to_numeric(model_df[f'price_target_{lb}_ago'], errors='coerce')
+            px_l = pd.to_numeric(model_df[f'price_{lb}_ago'], errors='coerce')
+            uplift = (pt_l / px_l.where(px_l > 0) - 1.0).clip(lower=-0.95, upper=5.0)
+            col = np.log1p(uplift).to_numpy(dtype='float64', copy=True)
+            missing = ~np.isfinite(col)
+            n_filled += int(missing.sum())
+            col[missing] = snap_uplift[missing]
+            hist_cols.append(col)
+        primary_panel = np.stack([*hist_cols, snap_uplift], axis=1)  # (n_isin, T)
+
+        # Non-primary series carry no *_ago trail: observed at the snapshot step
+        # only; their history cells stay NaN (-> series mean 0 after the
+        # nan-aware standardisation below).
+        per_series = [primary_panel]
+        for c in resp[1:]:
+            vals = model_df[c].astype('float64').to_numpy()
+            filled = np.full((n_isin, T), np.nan, dtype='float64')
+            filled[:, -1] = vals
+            per_series.append(filled)
+        Y = np.stack(per_series, axis=-1)
+        print(f'  history panel: lookbacks={lookbacks} -> T={T}; '
+              f'{n_filled} missing history cells filled with the snapshot uplift '
+              f'({n_filled / max(n_isin * (T - 1), 1):.1%} of history cells).')
+    else:
         T = 1
         # A single standardised time-to-event covariate keeps the beta_t slope a
         # meaningful cross-sectional tilt instead of multiplying by an all-zero
@@ -2759,26 +3163,6 @@ def prepare_kalman_panel_inputs(
         # Response tensor (n_isin, 1, D) — per-ISIN scalar values, no tiling.
         Y = np.stack(
             [model_df[c].astype('float64').to_numpy()[:, None] for c in resp],
-            axis=-1,
-        )
-    else:
-        # Full (n_isin, T, D) panel — for a genuine time-varying response source.
-        anchors = [c for c in fiscal_anchor_cols if c in model_df.columns]
-        if not anchors:
-            raise KeyError(f'None of the fiscal-anchor columns {list(fiscal_anchor_cols)} present.')
-        t0 = pd.to_datetime(model_df[anchors[0]], errors='coerce')
-        t_days = np.stack(
-            [(pd.to_datetime(model_df[c], errors='coerce') - t0).dt.days.to_numpy(dtype='float64')
-             for c in anchors],
-            axis=1,
-        )
-        t_mean = np.nanmean(t_days) if np.isfinite(t_days).any() else 0.0
-        t_std = np.nanstd(t_days)
-        t_std = t_std if t_std and np.isfinite(t_std) else 1.0
-        t_scaled = np.nan_to_num((t_days - t_mean) / t_std, nan=0.0)
-        T = t_scaled.shape[1]
-        Y = np.stack(
-            [np.tile(model_df[c].astype('float64').to_numpy()[:, None], (1, T)) for c in resp],
             axis=-1,
         )
 
@@ -2878,13 +3262,12 @@ FUSED_SCALAR_VARS: tuple[str, ...] = (
     # corresponding penalty prior scale is > 0; run_diagnostics skips absent vars.
     'risk_loading', 'size_loading',
 )
-# Vector hyper-parameters (have a non-sample dim): drift slopes, the per-series
-# coregion level/slope/loading/noise terms, and (genuine time panels only) the GRW
-# innovation scales. run_diagnostics skips any that are absent for the fitted shape
-# (e.g. ``sigma_*_innov`` exist only when T > 1; ``sigma_series`` only when D > 1).
+# Vector hyper-parameters (have a non-sample dim): drift slopes and the
+# per-series coregion level/slope/loading/noise terms. run_diagnostics skips any
+# that are absent for the fitted shape (``beta_slope`` exists only when t_scaled
+# varies across ISINs; ``sigma_series`` / ``mu_isin_loading`` only when D > 1).
 FUSED_VECTOR_VARS: tuple[str, ...] = (
     'beta', 'alpha_level', 'beta_slope', 'mu_isin_loading', 'sigma_series',
-    'sigma_alpha_innov', 'sigma_beta_innov',
 )
 
 
@@ -3041,7 +3424,7 @@ def panel_posterior_upside(
     return eu, ept
 
 
-@dataclass
+@dataclass(frozen=True, eq=False)
 class ScreenContext:
     """Screening artifacts derived from the fused-panel posterior.
 
@@ -3066,7 +3449,8 @@ class ScreenContext:
 # =============================================================================
 # 6. Prior predictive checks
 # =============================================================================
-def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs):
+def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs,
+                         config: Optional[KalmanRunConfig] = None):
     """Sample the fused-model prior and sanity-check the implied-upside / risk scale.
 
     The fused MvGRW baseline ``risk_adj_return`` is de-standardised onto the primary
@@ -3080,13 +3464,14 @@ def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs):
     # posterior marginals (azp.plot_prior_posterior) — only vars the fitted
     # parameterization actually materialises (e.g. risk_loading exists only
     # when its penalty prior scale is > 0).
+    cfg = config if config is not None else get_run_config()
     _hyper = [v for v in (*FUSED_SCALAR_VARS, 'beta') if v in model.named_vars]
     var_names = ['expected_return', 'risk_adj_return', 'achieve_prob', 'sigma_isin',
                  *_hyper]
     with model:
         prior_idata = pm.sample_prior_predictive(
-            draws=1000, var_names=var_names,
-            random_seed=RANDOM_SEED, return_inferencedata=True,
+            draws=cfg.prior_draws, var_names=var_names,
+            random_seed=cfg.random_seed, return_inferencedata=True,
             compile_kwargs=get_pytensor_compile_kwargs(),
         )
 
@@ -3099,38 +3484,47 @@ def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs):
         subplot_titles=('Prior implied upside vs empirical',
                         'Prior achieve_prob (sigmoid risk-adj return)',
                         'Prior sigma_isin  (heteroscedastic scale)'))
+    # Percent boundary: prior/empirical upside are decimals — scale ×100 here so
+    # this panel matches every other upside axis in the module (0.9.9.11 fix of
+    # the sole decimal-scale figure).
     fig.add_trace(go.Histogram(
-        x=np.clip(prior_up, -1, 2), histnorm='probability density', nbinsx=80,
-        marker=dict(color=_hex_to_rgba('#56b4e9', 0.6)),
+        x=np.clip(prior_up, -1, 2) * 100.0, histnorm='probability density', nbinsx=80,
+        marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.6)),
+        hovertemplate='prior upside = %{x:.0f}%<extra></extra>',
         name='prior expected_upside'), row=1, col=1)
     # Empirical distribution as a stepped outline (matplotlib ``histtype='step'`` analogue).
-    _emp = np.clip(emp_up[np.isfinite(emp_up)], -1, 2)
+    _emp = np.clip(emp_up[np.isfinite(emp_up)], -1, 2) * 100.0
     _eh, _ee = np.histogram(_emp, bins=80, density=True)
     _ec = 0.5 * (_ee[:-1] + _ee[1:])
     fig.add_trace(go.Scatter(
-        x=_ec, y=_eh, mode='lines', line=dict(color='#ffb000', width=1.5, shape='hvh'),
+        x=_ec, y=_eh, mode='lines', line=dict(color=C_OBSERVED, width=1.5, shape='hvh'),
+        hovertemplate='empirical upside = %{x:.0f}%<extra></extra>',
         name='empirical observed_pt/last_price − 1'), row=1, col=1)
-    fig.add_vline(x=0, line=dict(color='#bbbbbb', dash='dash', width=1.0), row=1, col=1)
-    fig.update_xaxes(title_text='implied upside (decimal)', row=1, col=1)
+    fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0), row=1, col=1)
+    fig.update_xaxes(title_text='implied upside (%)', ticksuffix='%', row=1, col=1)
+    fig.update_yaxes(title_text='density', row=1, col=1)
 
     # Model-A achievement probability prior (= sigmoid(risk_adj_return)).
     ap = prior_idata.prior['achieve_prob'].values.reshape(-1)
     fig.add_trace(go.Histogram(
         x=ap, histnorm='probability density', nbinsx=60,
-        marker=dict(color=_hex_to_rgba('#cc79a7', 0.7)),
+        marker=dict(color=_hex_to_rgba(C_FORECAST, 0.7)),
+        hovertemplate='P(achieve) = %{x:.0%}<extra></extra>',
         name='achieve_prob', showlegend=False), row=1, col=2)
-    fig.update_xaxes(title_text='P(achieve)', range=[0, 1], row=1, col=2)
+    fig.update_xaxes(title_text='P(achieve)', range=[0, 1], tickformat='.0%',
+                     row=1, col=2)
 
     # Heteroscedastic measurement scale sigma_isin = sigma_base * (1 + cv) / sqrt(n).
     si = prior_idata.prior['sigma_isin'].values.reshape(-1)
     si = si[np.isfinite(si)]
     fig.add_trace(go.Histogram(
         x=np.clip(si, 0, np.nanpercentile(si, 99)), histnorm='probability density',
-        nbinsx=60, marker=dict(color=_hex_to_rgba('#2ca02c', 0.7)),
+        nbinsx=60, marker=dict(color=_hex_to_rgba(C_ACCENT, 0.7)),
+        hovertemplate='σ_isin = %{x:.3f}<extra></extra>',
         name='sigma_isin', showlegend=False), row=1, col=3)
-    fig.update_xaxes(title_text='sigma_isin', row=1, col=3)
-    fig.update_layout(showlegend=True, legend=dict(font_size=8))
-    _render_plotly(fig, height=380)
+    fig.update_xaxes(title_text='sigma_isin (standardised scale)', row=1, col=3)
+    fig.update_layout(showlegend=True, legend=dict(font_size=_LEGEND_FONT_SIZE))
+    _render_plotly(fig, height=H_SHORT)
 
     print(f'Prior expected_upside: median={np.nanmedian(prior_up):.3f}, '
           f'p01/p99=({np.nanpercentile(prior_up, 1):.2f}, {np.nanpercentile(prior_up, 99):.2f}); '
@@ -3141,8 +3535,9 @@ def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs):
 # =============================================================================
 # 7. Posterior inference (NUTS)
 # =============================================================================
-def sample_posterior(model: "pm.Model", prior_idata, *, cores: int = 1,
-                     panel: Optional[KalmanPanelInputs] = None):
+def sample_posterior(model: "pm.Model", prior_idata, *, cores: Optional[int] = None,
+                     panel: Optional[KalmanPanelInputs] = None,
+                     config: Optional[KalmanRunConfig] = None):
     """Sample the posterior, trying nutpie -> numpyro -> pymc in priority order.
 
     Merges the prior groups into the posterior idata for one-object downstream access.
@@ -3158,8 +3553,13 @@ def sample_posterior(model: "pm.Model", prior_idata, *, cores: int = 1,
         catalogue metadata are stamped onto ``constant_data['drift_features']``
         via ``stamp_feature_provenance`` (best-effort; the ``pm.Data`` container
         of the same name lands in ``constant_data`` automatically).
+    config
+        Optional :class:`KalmanRunConfig` supplying the NUTS budget
+        (``draws`` / ``tune`` / ``chains`` / ``cores`` / ``target_accept`` /
+        ``random_seed``); defaults to :func:`get_run_config`.
     cores
-        Number of chains to run in parallel. Defaults to ``1`` (kernel-safe,
+        Number of chains to run in parallel; overrides ``config.cores`` when
+        given. The config default is ``1`` (kernel-safe,
         chains run sequentially); pass ``cores=4`` on the standalone script /
         CLI path, where the native (nutpie numba/rust) sampler runs
         happily in parallel. **Keep ``cores=1`` in an IDE-managed Jupyter kernel
@@ -3186,18 +3586,24 @@ def sample_posterior(model: "pm.Model", prior_idata, *, cores: int = 1,
     # fixed that, since a single collapsed slice (T=1) cannot identify a
     # between-group variance. With the model well-conditioned the cross-section
     # adapts fast: draws=1000, tune=1000, target_accept=0.90, chains=4, cores=4
-    # (all chains in parallel) clears ESS > 400 comfortably. When a genuine
-    # (isin, time) panel is later supplied (collapse_time=False), raise tune≈2000
-    # for the richer GRW geometry.
+    # (all chains in parallel) clears ESS > 400 comfortably. Since the per-time
+    # direct-intercept reparameterisation a genuine (isin, time) panel
+    # (history_lookbacks, T > 1) shares this geometry and needs no extra tune.
     # ``draws=1000`` clears the ESS > 400 gate with margin; ``target_accept`` is
     # relaxed 0.97 → 0.9 now that the degenerate-series ICM ridge is removed (the
     # coverage guard in ``prepare_kalman_panel_inputs`` + the sign-fixed
     # ``mu_isin_loading`` prior). The 0.97 setting was a band-aid that, against that
     # ridge, drove the step size toward 0 and froze every chain; with a
     # well-conditioned posterior the default-ish 0.9 mixes fast.
+    cfg = config if config is not None else get_run_config()
+    # No extra tune budget for T > 1: since the per-time direct-intercept
+    # reparameterisation (2026-08-01) the genuine (isin, time) panel shares the
+    # T=1 geometry — the former tune >= 2000 bump targeted the removed
+    # GRW-deviation ridge and only added wall-clock.
     sample_kwargs = dict(
-        draws=1000, tune=1000, chains=4, cores=cores,
-        target_accept=0.9, random_seed=RANDOM_SEED,
+        draws=cfg.draws, tune=cfg.tune, chains=cfg.chains,
+        cores=cores if cores is not None else cfg.cores,
+        target_accept=cfg.target_accept, random_seed=cfg.random_seed,
         progressbar=True, return_inferencedata=True,
         idata_kwargs={"log_likelihood": False},
     )
@@ -3287,16 +3693,8 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
             compile_kwargs=get_pytensor_compile_kwargs(),
         )
 
-    # (a) arviz distributional overlay — replicated draws vs the observed ECDF.
-    try:
-        pc_ppc = azp.plot_ppc_dist(
-            idata, group="posterior_predictive", var_names=["target_pct_obs"],
-            kind="ecdf", num_samples=1500, backend="plotly",
-            figure_kwargs=_azp_figure_kwargs(480),
-        )
-        _safe_show(pc_ppc)
-    except Exception as e:  # pragma: no cover - arviz multidim PPC is best-effort
-        print(f"arviz plot_ppc_dist skipped: {e!r}")
+    # (The former arviz plot_ppc_dist ECDF overlay was removed as a duplicate of
+    # the pooled hand-built ECDF overlay below — 0.9.9.11 consolidation.)
 
     # (a2) t-stat calibration (gallery: plot_ppc_tstat) — where the observed
     # summary statistic sits inside the replicated T(y_rep) distribution. The
@@ -3327,7 +3725,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
     ecdf_y = np.linspace(0, 1, len(obs_sorted))
 
     fig = go.Figure()
-    _pp_rgba = _hex_to_rgba('#56b4e9', 0.12)
+    _pp_rgba = _hex_to_rgba(C_POSTERIOR, 0.12)
     for s in pick:
         rep = np.asarray(pp_stack.isel(sample=s).values).reshape(-1)
         rep = np.sort(rep[np.isfinite(rep)])
@@ -3335,29 +3733,50 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
                                  line=dict(color=_pp_rgba, width=0.8),
                                  hoverinfo='skip', showlegend=False))
     fig.add_trace(go.Scatter(x=obs_sorted, y=ecdf_y, mode='lines',
-                             line=dict(color='#ffb000', width=2.2), name='observed'))
+                             line=dict(color=C_OBSERVED, width=2.2), name='observed',
+                             hovertemplate=('standardised response = %{x:.2f}<br>'
+                                            'ECDF = %{y:.0%}<extra></extra>')))
     fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines',
-                             line=dict(color='#56b4e9', width=1.2),
+                             line=dict(color=C_POSTERIOR, width=1.2),
                              name='posterior-predictive draws'))
     fig.update_xaxes(range=[float(np.nanpercentile(obs_flat, 0.5)),
                             float(np.nanpercentile(obs_flat, 99.5))],
                      title_text='standardised response  (target_pct_obs)')
     fig.update_yaxes(title_text='ECDF')
     fig.update_layout(title='Posterior-predictive ECDF overlay — fused MvGRW panel')
-    _render_plotly(fig, height=440)
+    _render_plotly(fig, height=H_STD)
 
-    # (c) Per-y_series 94% predictive-interval coverage.
-    lo = pp.quantile(0.03, dim=('chain', 'draw'))
-    hi = pp.quantile(0.97, dim=('chain', 'draw'))
+    # (c) Per-y_series 94% predictive-interval coverage — printed AND charted
+    # against the 0.94 target so miscalibration is visible at a glance.
+    lo = pp.quantile(_HDI_LO, dim=('chain', 'draw'))
+    hi = pp.quantile(_HDI_HI, dim=('chain', 'draw'))
     inside = ((obs >= lo) & (obs <= hi))
     cover = inside.mean(('isin', 'time'))
     print('Per-y_series 94% posterior-predictive coverage (target ≈ 0.94):')
+    _cov_names, _cov_vals = [], []
     for name in panel.response_names:
         try:
             c = float(cover.sel(y_series=name).values)
             print(f'  - {name:<24s}: {c:.2%}')
+            _cov_names.append(str(name))
+            _cov_vals.append(c)
         except Exception:
             continue
+    if _cov_names:
+        _target = _HDI_HI - _HDI_LO
+        figc = go.Figure(go.Bar(
+            x=_cov_vals, y=_cov_names, orientation='h',
+            marker=dict(color=[C_POSTERIOR if abs(v - _target) <= 0.03
+                               else C_HIGHLIGHT for v in _cov_vals]),
+            hovertemplate='%{y}<br>coverage = %{x:.1%}<extra></extra>',
+            name='94% PI coverage'))
+        figc.add_vline(x=_target, line=dict(color=C_REF, dash='dash', width=1.2),
+                       annotation_text=f'target {_target:.0%}')
+        figc.update_xaxes(title_text='share of observations inside the 94% PI',
+                          range=[0, 1], tickformat='.0%')
+        figc.update_layout(title='Posterior-predictive coverage by response series',
+                           showlegend=False)
+        _render_plotly(figc, height=max(240, 60 * len(_cov_names) + 160))
 
     # (d) PIT calibration ECDF (best-effort; band-hugging = calibrated).
     # ``azp.plot_ppc_pit`` cannot digest the multi-dim (isin, time, y_series)
@@ -3406,8 +3825,8 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
 
     Targets the fused-model hyper-parameters: the global scalars
     (:data:`FUSED_SCALAR_VARS`), the per-coord hierarchical scales ``sigma_<coord>``,
-    the drift slopes ``beta`` and the GRW innovation scales
-    ``sigma_alpha_innov`` / ``sigma_beta_innov``.
+    the drift slopes ``beta`` and the per-series coregion terms
+    (:data:`FUSED_VECTOR_VARS`).
     """
     group_effects = present_group_effects(idata)
     posterior = idata.posterior
@@ -3504,6 +3923,27 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
             for name, m in partition.items():
                 share = f'  ({m / denom * 100:4.0f}%)' if denom > 0 else ''
                 print(f'  - {name:>34s}: {m:7.4f}{share}')
+            # Same partition as a single stacked bar — the share of the total
+            # posterior-mean scale attributable to each between-group coord vs
+            # the residual/measurement base.
+            if denom > 0 and _HAS_PLOTLY:
+                figv = go.Figure()
+                for _i, (name, m) in enumerate(
+                        sorted(partition.items(), key=lambda kv: -kv[1])):
+                    figv.add_trace(go.Bar(
+                        x=[m / denom * 100.0], y=['scale share'], orientation='h',
+                        name=name,
+                        hovertemplate=(f'{name}<br>share = %{{x:.0f}}%'
+                                       f'<br>scale = {m:.4f}<extra></extra>')))
+                figv.update_layout(
+                    barmode='stack',
+                    title='Variance partition — between-group scales vs sigma_base',
+                    legend=dict(font_size=_LEGEND_FONT_SIZE, title_text='scale'),
+                    height=220)
+                figv.update_xaxes(title_text='share of total posterior-mean scale (%)',
+                                  ticksuffix='%', range=[0, 100])
+                figv.update_yaxes(showticklabels=False)
+                _render_plotly(figv)
 
     # Flag parameters whose draws collapsed to a constant / non-finite spike: these
     # are exactly the slices that would otherwise emit arviz-stats' single-value KDE
@@ -3544,6 +3984,10 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
                 idata, var_names=_vars, backend='plotly',
                 figure_kwargs=_diag_figure_kwargs(post_trace, _vars),
             )
+            with contextlib.suppress(Exception):
+                pc.add_title('Trace + marginal density — '
+                             + ', '.join(str(v) for v in _vars[:4])
+                             + (' …' if len(_vars) > 4 else ''))
             _polish_facet_axes(pc)
             _safe_show(pc)
 
@@ -3682,8 +4126,8 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
     exp_up = eu.mean(('chain', 'draw')).values
     exp_pt = ept.mean(('chain', 'draw')).values
     _ept_s = ept.stack(s=('chain', 'draw'))
-    pt_lo = _ept_s.quantile(0.03, dim='s').values
-    pt_hi = _ept_s.quantile(0.97, dim='s').values
+    pt_lo = _ept_s.quantile(_HDI_LO, dim='s').values
+    pt_hi = _ept_s.quantile(_HDI_HI, dim='s').values
     prob_pos = (eu > 0).mean(('chain', 'draw')).values
     risk_adj = post['risk_adj_return'].mean(('chain', 'draw')).values
 
@@ -3777,24 +4221,10 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
 
     model_df = frame
 
-    # Shrinkage view: fused-panel expected_pt vs raw consensus observed_pt.
-    hi = float(np.nanquantile(results['observed_pt'], 0.99))
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=results['observed_pt'], y=results['expected_pt'], mode='markers',
-        marker=dict(size=5, opacity=0.4, color='#56b4e9'),
-        text=results.get('ticker'), name='ISIN'))
-    fig.add_trace(go.Scatter(x=[0, hi], y=[0, hi], mode='lines',
-                             line=dict(color='#888888', dash='dash', width=1),
-                             name='y = x'))
-    fig.update_xaxes(range=[0, hi], title_text='consensus observed_pt')
-    # Equal-scale axes (y = x must render at 45°) without freezing the figure
-    # width: scaleanchor keeps the aspect while autosize tracks the editor pane.
-    fig.update_yaxes(range=[0, hi], title_text='fused-panel expected_pt',
-                     scaleanchor='x', scaleratio=1)
-    fig.update_layout(title='Fused-panel expected target vs raw consensus',
-                      height=560, showlegend=False)
-    _render_plotly(fig)
+    # (The former price-space shrinkage scatter was removed as redundant with
+    # the percent-space shrinkage view in ``_plot_comparative_returns`` and the
+    # signed-log ``create_kalman_vs_raw_scatter`` reused in §10c — 0.9.9.11
+    # consolidation.)
 
     # Per-industry expected_upside posterior — arviz_plots forest with HDIs.
     eu_pct = eu * 100.0
@@ -3810,6 +4240,11 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
             _forest_height_px(expected_upside_by_industry.sizes.get('industry', 1))),
     )
     pc.add_title('Per-industry expected upside (%) — posterior mean and 94% HDI')
+    with contextlib.suppress(Exception):
+        _fx = _plotly_figure_of(pc)
+        if _fx is not None:
+            _fx.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+            _fx.update_xaxes(title_text='expected upside (%)', ticksuffix='%')
     _safe_show(pc)
 
     # §5b model internals (Model A risk discount + Model B GRW components).
@@ -3854,22 +4289,28 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
         x=er, y=rar, mode='markers',
         marker=dict(color=avg_beta, colorscale='Viridis', size=6, opacity=0.75,
                     colorbar=dict(title='avg β', len=0.42, y=0.79, x=0.455, thickness=12)),
-        name='(a)', showlegend=False), row=1, col=1)
+        customdata=np.c_[avg_beta],
+        hovertemplate=('ER = %{x:.2f}  RAR = %{y:.2f}'
+                       '<br>avg β = %{customdata[0]:.2f}<extra></extra>'),
+        name='beta discount', showlegend=False), row=1, col=1)
     _lim = [float(np.nanmin([er.min(), rar.min()])), float(np.nanmax([er.max(), rar.max()]))]
     fig.add_trace(go.Scatter(x=_lim, y=_lim, mode='lines',
-                             line=dict(color='#bbbbbb', dash='dash', width=1.1),
+                             line=dict(color=C_REF, dash='dash', width=1.1),
                              showlegend=False, hoverinfo='skip'), row=1, col=1)
     fig.update_xaxes(title_text='expected_return (latent)', row=1, col=1)
     fig.update_yaxes(title_text='risk_adj_return = ER − λ·z(β) − γ·z(size)', row=1, col=1)
 
     # (b) Achievement probability vs risk-adjusted return.
     fig.add_trace(go.Scatter(x=rar, y=ap, mode='markers',
-                             marker=dict(color='#cc79a7', size=6, opacity=0.6),
+                             marker=dict(color=C_FORECAST, size=6, opacity=0.6),
+                             name='achieve_prob',
+                             hovertemplate=('RAR = %{x:.2f}<br>'
+                                            'P(achieve) = %{y:.0%}<extra></extra>'),
                              showlegend=False), row=1, col=2)
-    fig.add_hline(y=0.5, line=dict(color='#bbbbbb', dash='dash', width=1.0), row=1, col=2)
-    fig.update_xaxes(title_text='risk_adj_return', row=1, col=2)
+    fig.add_hline(y=0.5, line=dict(color=C_REF, dash='dash', width=1.0), row=1, col=2)
+    fig.update_xaxes(title_text='risk_adj_return (standardised latent)', row=1, col=2)
     fig.update_yaxes(title_text='achieve_prob (sigmoid risk-adj return)', range=[0, 1],
-                     row=1, col=2)
+                     tickformat='.0%', row=1, col=2)
 
     # (c) Heteroscedastic measurement scale (log analyst axis).
     fig.add_trace(go.Scatter(
@@ -3878,7 +4319,10 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
                     size=6, opacity=0.75,
                     colorbar=dict(title='dispersion CV', len=0.42, y=0.21, x=0.455,
                                   thickness=12)),
-        name='(c)', showlegend=False), row=2, col=1)
+        customdata=np.c_[cv],
+        hovertemplate=('n = %{x:.0f}<br>σ_isin = %{y:.3f}'
+                       '<br>cv = %{customdata[0]:.3f}<extra></extra>'),
+        name='sigma_isin', showlegend=False), row=2, col=1)
     fig.update_xaxes(title_text='n_analysts (log)', type='log', row=2, col=1)
     fig.update_yaxes(title_text='sigma_isin', row=2, col=1)
 
@@ -3894,12 +4338,13 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
                     legendgroup='beta_t'), row=2, col=2)
             except Exception:
                 continue
-        fig.add_hline(y=0, line=dict(color='#bbbbbb', dash='dash', width=1.0), row=2, col=2)
+        fig.add_hline(y=0, line=dict(color=C_REF, dash='dash', width=1.0), row=2, col=2)
         fig.update_xaxes(title_text='time index (fiscal anchor)', row=2, col=2)
         fig.update_yaxes(title_text='beta_t (GRW slope)', row=2, col=2)
 
-    fig.update_layout(showlegend=True, legend=dict(font_size=8))
-    _render_plotly(fig, height=760)
+    fig.update_layout(showlegend=True,
+                      legend=dict(font_size=_LEGEND_FONT_SIZE, title_text='y_series'))
+    _render_plotly(fig, height=H_PANEL)
 
 
 def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame) -> None:
@@ -3920,37 +4365,33 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=_comp['implied_upside_pct'], y=_comp['expected_upside_pct'], mode='markers',
-        marker=dict(size=6, opacity=0.45, color='#56b4e9'),
-        text=_comp.get('ticker'), name='ISIN'))
+        marker=dict(size=6, opacity=0.45, color=C_POSTERIOR),
+        text=_comp.get('ticker'), name='ISIN',
+        hovertemplate=('%{text}<br>implied = %{x:.1f}%<br>'
+                       'expected = %{y:.1f}%<extra></extra>')))
     fig.add_trace(go.Scatter(x=[_lo, _hi], y=[_lo, _hi], mode='lines',
-                             line=dict(color='#bbbbbb', dash='dash', width=1.1),
-                             name='y = x (no shrinkage)'))
-    fig.add_hline(y=0, line=dict(color='#555555', width=0.8))
-    fig.add_vline(x=0, line=dict(color='#555555', width=0.8))
-    fig.update_xaxes(range=[_lo, _hi], title_text='raw implied upside  feat_implied_upside (%)')
-    fig.update_yaxes(range=[_lo, _hi], title_text='Kalman-smoothed expected upside (%)',
+                             line=dict(color=C_REF, dash='dash', width=1.1),
+                             name='y = x (no shrinkage)', hoverinfo='skip'))
+    fig.add_hline(y=0, line=dict(color=C_REF, width=0.8))
+    fig.add_vline(x=0, line=dict(color=C_REF, width=0.8))
+    fig.update_xaxes(range=[_lo, _hi], ticksuffix='%',
+                     title_text='raw implied upside  feat_implied_upside (%)')
+    fig.update_yaxes(range=[_lo, _hi], ticksuffix='%',
+                     title_text='Kalman-smoothed expected upside (%)',
                      scaleanchor='x', scaleratio=1)
     fig.update_layout(title='Posterior shrinkage of analyst-implied upside',
-                      height=560)
+                      height=H_TALL)
     _render_plotly(fig)
 
-    # (2) arviz_plots KDE of the posterior cross-sectional-average expected upside.
+    # (2) Overlaid KDEs. (The former cross-sectional-average posterior KDE was
+    # removed as redundant: §14's cohort-vs-universe KDE is the canonical view
+    # of that quantity — see 0.9.9.11 consolidation.)
     eu_pct = eu * 100.0
-    try:
-        _dist = xr.Dataset({'expected_upside_pct': eu_pct.mean('isin')})
-        pc_d = azp.plot_dist(_dist, kind='kde', var_names=['expected_upside_pct'],
-                             sample_dims=['chain', 'draw'], backend='plotly',
-                             figure_kwargs=_azp_figure_kwargs(420, width_frac=0.7))
-        pc_d.add_title('Cross-sectional avg expected upside (%) - posterior')
-        _safe_show(pc_d)
-    except Exception as _e:
-        print(f'plot_dist KDE skipped: {_e!r}')
-
     fig = go.Figure()
     for _col, _lab, _c in [
-        ('implied_upside_pct', 'raw implied upside (consensus)', '#ffb000'),
-        ('expected_upside_pct', 'Kalman-smoothed expected upside', '#56b4e9'),
-        ('total_return_ytd_pct', 'realised total return YTD', '#cc79a7'),
+        ('implied_upside_pct', 'raw implied upside (consensus)', C_OBSERVED),
+        ('expected_upside_pct', 'Kalman-smoothed expected upside', C_POSTERIOR),
+        ('total_return_ytd_pct', 'realised total return YTD', C_FORECAST),
     ]:
         _v = pd.to_numeric(_comp.get(_col), errors='coerce').to_numpy()
         _v = _v[np.isfinite(_v)]
@@ -3960,13 +4401,15 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
         if _xs is not None:
             fig.add_trace(go.Scatter(x=_xs, y=_ys, mode='lines', fill='tozeroy',
                                      line=dict(color=_c, width=1.8),
-                                     fillcolor=_hex_to_rgba(_c, 0.18), name=_lab))
-    fig.add_vline(x=0, line=dict(color='#bbbbbb', dash='dash', width=1.0))
-    fig.update_xaxes(title_text='return / upside (%)')
+                                     fillcolor=_hex_to_rgba(_c, 0.18), name=_lab,
+                                     hovertemplate=(f'{_lab}<br>'
+                                                    'return = %{x:.1f}%<extra></extra>')))
+    fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+    fig.update_xaxes(title_text='return / upside (%)', ticksuffix='%')
     fig.update_yaxes(title_text='density')
     fig.update_layout(title='Expected vs implied vs realised returns - distributional comparison',
-                      legend=dict(font_size=9))
-    _render_plotly(fig, height=400)
+                      legend=dict(font_size=_LEGEND_FONT_SIZE))
+    _render_plotly(fig, height=H_SHORT)
 
     # (3) Per-sector forest-style comparison.
     _sector_da = xr.DataArray(
@@ -3977,8 +4420,8 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
     _stack = eu_by_sector.stack(s=('chain', 'draw'))
     _sec = [str(s) for s in eu_by_sector['sector'].values]
     _mean = _stack.mean('s').values
-    _q_lo = _stack.quantile(0.03, 's').values
-    _q_hi = _stack.quantile(0.97, 's').values
+    _q_lo = _stack.quantile(_HDI_LO, 's').values
+    _q_hi = _stack.quantile(_HDI_HI, 's').values
     _ref = (_comp.assign(sector=_comp['sector'].fillna('Unknown').astype(str))
             .groupby('sector')[['implied_upside_pct', 'total_return_ytd_pct']].mean()
             .reindex(_sec))
@@ -3988,31 +4431,39 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=_mean[_order], y=_labels, mode='markers',
-        marker=dict(color='#56b4e9', size=9),
+        marker=dict(color=C_POSTERIOR, size=9),
         error_x=dict(type='data', symmetric=False,
                      array=(_q_hi - _mean)[_order], arrayminus=(_mean - _q_lo)[_order],
-                     color='#56b4e9', thickness=1.4, width=4),
+                     color=C_POSTERIOR, thickness=1.4, width=4),
+        customdata=np.c_[_q_lo[_order], _q_hi[_order]],
+        hovertemplate=('%{y}<br>expected = %{x:.1f}%<br>94% HDI = '
+                       '[%{customdata[0]:.1f}%, %{customdata[1]:.1f}%]<extra></extra>'),
         name='expected upside (posterior mean, 94% HDI)'))
-    fig.add_trace(go.Scatter(
-        x=_ref['implied_upside_pct'].to_numpy()[_order], y=_labels, mode='markers',
-        marker=dict(color='#ffb000', size=9, symbol='square'),
-        name='raw implied upside (mean)'))
-    fig.add_trace(go.Scatter(
-        x=_ref['total_return_ytd_pct'].to_numpy()[_order], y=_labels, mode='markers',
-        marker=dict(color='#cc79a7', size=11, symbol='x'),
-        name='realised total return YTD (mean)'))
-    fig.add_vline(x=0, line=dict(color='#bbbbbb', dash='dash', width=1.0))
-    fig.update_xaxes(title_text='return / upside (%)')
+    # Reference markers: mask sectors with no coverage so hovers never show null.
+    for _col, _lab2, _c2, _sym, _sz in [
+        ('implied_upside_pct', 'raw implied upside (mean)', C_OBSERVED, 'square', 9),
+        ('total_return_ytd_pct', 'realised total return YTD (mean)', C_FORECAST, 'x', 11),
+    ]:
+        _vals = _ref[_col].to_numpy()[_order]
+        _ok = np.isfinite(_vals)
+        fig.add_trace(go.Scatter(
+            x=_vals[_ok], y=_labels[_ok], mode='markers',
+            marker=dict(color=_c2, size=_sz, symbol=_sym),
+            hovertemplate=(f'%{{y}}<br>{_lab2} = %{{x:.1f}}%<extra></extra>'),
+            name=_lab2))
+    fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+    fig.update_xaxes(title_text='return / upside (%)', ticksuffix='%')
     fig.update_layout(title='Per-sector: expected vs implied vs realised returns',
                       height=int(max(320, 34 * len(_sec) + 140)),
-                      legend=dict(font_size=9))
+                      legend=dict(font_size=_LEGEND_FONT_SIZE,
+                                  title_text='series'))
     _render_plotly(fig)
 
 
 # =============================================================================
 # 10b. CVaR-aware risk analytics + sizing (SSOT for §10c export and §14b screen)
 # =============================================================================
-@dataclass
+@dataclass(frozen=True, eq=False)
 class RiskBook:
     """CVaR-aware sizing artifacts shared by the §10c export and §14b screen.
 
@@ -4084,8 +4535,9 @@ def _cap_normalize_weights(w: np.ndarray, cap: float) -> np.ndarray:
 
 def compute_cvar_aware_book(
         idata, panel: KalmanPanelInputs, screen: ScreenContext, results: pd.DataFrame,
-        *, alpha: float = 0.05, cap: float = 0.08, k_book: int = 50,
-        p_long: float = 0.67,
+        *, alpha: Optional[float] = None, cap: Optional[float] = None,
+        k_book: Optional[int] = None, p_long: Optional[float] = None,
+        config: Optional[KalmanRunConfig] = None,
 ) -> RiskBook:
     """Build the CVaR-aware long book and per-name risk analytics (SSOT).
 
@@ -4110,13 +4562,16 @@ def compute_cvar_aware_book(
     results
         The §10 per-ISIN screening table.
     alpha
-        CVaR / expected-shortfall tail probability (default 0.05).
+        CVaR / expected-shortfall tail probability. ``None`` (the default)
+        resolves to ``config.cvar_alpha`` (0.05).
     cap
-        Maximum single-name weight (default 0.08).
+        Maximum single-name weight; ``None`` -> ``config.weight_cap`` (0.08).
     k_book
-        Target book breadth — number of STARR-ranked longs held (default 25).
+        Target book breadth — number of STARR-ranked longs held; ``None`` ->
+        ``config.k_book`` (50).
     p_long
-        Nominal minimum ``P(upside>0)`` for long eligibility (default 0.80). The
+        Nominal minimum ``P(upside>0)`` for long eligibility; ``None`` ->
+        ``config.p_long`` (0.67). The
         gate is applied on the *conditional* scale: eligibility requires
         ``p_upside_pos_cond >= p_long * univ_gain`` where ``p_upside_pos_cond`` is
         ``mc_prob_pos * kalman_gain`` and ``univ_gain`` is the universe-mean
@@ -4128,6 +4583,12 @@ def compute_cvar_aware_book(
     RiskBook
         Analytics frame, sized book and portfolio summary.
     """
+    cfg = config if config is not None else get_run_config()
+    alpha = cfg.cvar_alpha if alpha is None else alpha
+    cap = cfg.weight_cap if cap is None else cap
+    k_book = cfg.k_book if k_book is None else k_book
+    p_long = cfg.p_long if p_long is None else p_long
+
     eu = screen.eu  # expected upside draws (chain, draw, isin), decimal
     nm = results.copy()
 
@@ -4262,8 +4723,15 @@ def compute_cvar_aware_book(
     return RiskBook(analytics=nm, book=_book, summary=summary)
 
 
-def plot_kalman_results_overview(kalman_results: pd.DataFrame) -> None:
+def plot_kalman_results_overview(kalman_results: pd.DataFrame,
+                                 book_summary: Optional[dict] = None) -> None:
     """Decision dashboard over the exported ``kalman_results`` row-set (§10c).
+
+    ``book_summary`` (optional :attr:`RiskBook.summary`) supplies the aggregate
+    portfolio ``port_up`` / ``port_vol`` / ``port_cvar`` / ``starr_book``
+    (decimal returns, scaled here at the display boundary); when given, panels
+    (a)/(d) carry the portfolio point and (a) adds the held-name upper-hull
+    efficient line.
 
     Four linked views of the ``analytics.kalman_filtered_price_targets`` columns
     (DDL: ``sql_scripts/analytics/kalman_filtered_price_targets.sql``) that read
@@ -4336,34 +4804,75 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame) -> None:
             hovertemplate=('%{text}<br>E[r]=%{y:.1f}%  vol=%{x:.1f}%'
                            '<br>weight=%{customdata[0]:.1f}%  '
                            'CVaR5=%{customdata[1]:.1f}%<extra></extra>'),
-            showlegend=False), row=1, col=1)
-        fig.add_hline(y=0, line=dict(color='#bbbbbb', dash='dash', width=1.0),
+            name='universe', showlegend=False), row=1, col=1)
+        # Upper-hull efficient line over the HELD names: sort by vol and keep
+        # the running-max return staircase (no held name above-left of it).
+        _hm = _m & held
+        if _hm.sum() >= 2:
+            _hv = exp_vol_pct[_hm].to_numpy()
+            _hr = er_mean_pct[_hm].to_numpy()
+            _hs = np.argsort(_hv)
+            _hull_v, _hull_r, _best = [], [], -np.inf
+            for _v, _r in zip(_hv[_hs], _hr[_hs]):
+                if _r > _best:
+                    _hull_v.append(_v)
+                    _hull_r.append(_r)
+                    _best = _r
+            fig.add_trace(go.Scatter(
+                x=_hull_v, y=_hull_r, mode='lines',
+                line=dict(color=C_HIGHLIGHT, width=1.6, dash='dot', shape='hv'),
+                name='held-name efficient hull',
+                hovertemplate='hull: E[r]=%{y:.1f}% @ vol=%{x:.1f}%<extra></extra>',
+            ), row=1, col=1)
+        if book_summary:
+            _pv = float(book_summary.get('port_vol', float('nan'))) * 100.0
+            _pu = float(book_summary.get('port_up', float('nan'))) * 100.0
+            _st = float(book_summary.get('starr_book', float('nan')))
+            if np.isfinite(_pv) and np.isfinite(_pu):
+                fig.add_trace(go.Scatter(
+                    x=[_pv], y=[_pu], mode='markers',
+                    marker=dict(color=C_HIGHLIGHT, size=16, symbol='star',
+                                line=dict(color='#1e1e1e', width=1)),
+                    name='CVaR book (portfolio)',
+                    hovertemplate=(f'portfolio<br>E[r]=%{{y:.1f}}%  '
+                                   f'vol=%{{x:.1f}}%<br>STARR={_st:.2f}'
+                                   '<extra></extra>')), row=1, col=1)
+        fig.add_hline(y=0, line=dict(color=C_REF, dash='dash', width=1.0),
                       row=1, col=1)
         fig.update_xaxes(title_text='expected volatility  expected_vol_kalman (%)',
-                         row=1, col=1)
-        fig.update_yaxes(title_text='MC expected return  er_mean (%)', row=1, col=1)
+                         ticksuffix='%', row=1, col=1)
+        fig.update_yaxes(title_text='MC expected return  er_mean (%)',
+                         ticksuffix='%', row=1, col=1)
 
-    # (b) MC return fan for the largest sized positions.
-    _book = df.index[held]
+    # (b) MC return fan for the largest sized positions. Mask names with a
+    # missing MC summary so the fan never renders gapped bars with null hovers.
+    _fan_ok = held & er_p05_pct.notna() & er_p50_pct.notna() & er_p95_pct.notna()
+    _book = df.index[_fan_ok]
     if len(_book):
         _ord = weight.loc[_book].sort_values(ascending=True).tail(20).index
         _y = label.loc[_ord].to_numpy(dtype=object)
         fig.add_trace(go.Scatter(
             x=er_p50_pct.loc[_ord], y=_y, mode='markers',
-            marker=dict(color='#56b4e9', size=9, symbol='line-ns-open',
+            marker=dict(color=C_POSTERIOR, size=9, symbol='line-ns-open',
                         line=dict(width=2)),
             error_x=dict(type='data', symmetric=False,
                          array=(er_p95_pct - er_p50_pct).loc[_ord],
                          arrayminus=(er_p50_pct - er_p05_pct).loc[_ord],
-                         color=_hex_to_rgba('#56b4e9', 0.55), thickness=2.4),
+                         color=_hex_to_rgba(C_POSTERIOR, 0.55), thickness=2.4),
+            customdata=np.c_[er_p05_pct.loc[_ord], er_p95_pct.loc[_ord]],
+            hovertemplate=('%{y}<br>p50 = %{x:.1f}%<br>p05/p95 = '
+                           '[%{customdata[0]:.1f}%, %{customdata[1]:.1f}%]'
+                           '<extra></extra>'),
             name='MC p05–p95 (| = p50)', legendgroup='fan'), row=1, col=2)
         fig.add_trace(go.Scatter(
             x=exp_ret_pct.loc[_ord], y=_y, mode='markers',
-            marker=dict(color='#ffb000', size=8, symbol='diamond'),
+            marker=dict(color=C_OBSERVED, size=8, symbol='diamond'),
+            hovertemplate='%{y}<br>posterior E[r] = %{x:.1f}%<extra></extra>',
             name='posterior expected return', legendgroup='fan'), row=1, col=2)
-        fig.add_vline(x=0, line=dict(color='#bbbbbb', dash='dash', width=1.0),
+        fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0),
                       row=1, col=2)
-        fig.update_xaxes(title_text='simulated return distribution (%)', row=1, col=2)
+        fig.update_xaxes(title_text='simulated return distribution (%)',
+                         ticksuffix='%', row=1, col=2)
 
     # (c) Conditioning: raw MC P(>0) vs the gain-conditioned probability.
     _c = mc_pos.notna() & p_cond.notna()
@@ -4376,21 +4885,22 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame) -> None:
             text=label[_c],
             hovertemplate=('%{text}<br>MC P(>0)=%{x:.0%}  '
                            'conditional=%{y:.0%}<extra></extra>'),
-            showlegend=False), row=2, col=1)
+            name='conditioning', showlegend=False), row=2, col=1)
         fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines',
-                                 line=dict(color='#bbbbbb', dash='dash', width=1.1),
-                                 showlegend=False, hoverinfo='skip'), row=2, col=1)
+                                 line=dict(color=C_REF, dash='dash', width=1.1),
+                                 name='y = x', showlegend=False,
+                                 hoverinfo='skip'), row=2, col=1)
         fig.update_xaxes(title_text='mc_prob_pos (unconditional)', range=[0, 1],
-                         row=2, col=1)
+                         tickformat='.0%', row=2, col=1)
         fig.update_yaxes(title_text='p_upside_pos_cond (× kalman_gain)',
-                         range=[0, 1], row=2, col=1)
+                         range=[0, 1], tickformat='.0%', row=2, col=1)
 
     # (d) Tail asymmetry: reward vs expected shortfall, held names highlighted.
     _t = cvar_pct.notna() & exp_ret_pct.notna()
     if _t.any():
         for _mask, _name, _color, _size in (
-                (_t & ~held, 'not held', '#7f7f7f', 5),
-                (_t & held, 'CVaR book', '#e69f00', 8)):
+                (_t & ~held, 'not held', C_MUTED, 5),
+                (_t & held, 'CVaR book', C_HIGHLIGHT, 8)):
             if not _mask.any():
                 continue
             fig.add_trace(go.Scatter(
@@ -4400,18 +4910,30 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame) -> None:
                 hovertemplate=('%{text}<br>CVaR5=%{x:.1f}%  '
                                'E[r]=%{y:.1f}%<extra></extra>'),
                 name=_name, legendgroup='tail'), row=2, col=2)
-        fig.add_hline(y=0, line=dict(color='#bbbbbb', dash='dash', width=1.0),
+        if book_summary:
+            _pc = float(book_summary.get('port_cvar', float('nan'))) * 100.0
+            _pu = float(book_summary.get('port_up', float('nan'))) * 100.0
+            if np.isfinite(_pc) and np.isfinite(_pu):
+                fig.add_trace(go.Scatter(
+                    x=[_pc], y=[_pu], mode='markers',
+                    marker=dict(color=C_HIGHLIGHT, size=16, symbol='star',
+                                line=dict(color='#1e1e1e', width=1)),
+                    name='CVaR book (portfolio)', showlegend=False,
+                    hovertemplate=('portfolio<br>CVaR5=%{x:.1f}%  '
+                                   'E[r]=%{y:.1f}%<extra></extra>')), row=2, col=2)
+        fig.add_hline(y=0, line=dict(color=C_REF, dash='dash', width=1.0),
                       row=2, col=2)
-        fig.add_vline(x=0, line=dict(color='#bbbbbb', dash='dash', width=1.0),
+        fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0),
                       row=2, col=2)
         fig.update_xaxes(title_text='cvar_5pct_kalman — 5% expected shortfall (%)',
-                         row=2, col=2)
-        fig.update_yaxes(title_text='expected_return_kalman (%)', row=2, col=2)
+                         ticksuffix='%', row=2, col=2)
+        fig.update_yaxes(title_text='expected_return_kalman (%)',
+                         ticksuffix='%', row=2, col=2)
 
     fig.update_layout(
         title='kalman_filtered_price_targets — expected return / volatility / tail overview',
-        legend=dict(font_size=9))
-    _render_plotly(fig, height=900)
+        legend=dict(font_size=_LEGEND_FONT_SIZE))
+    _render_plotly(fig, height=H_GRID)
 
 
 # =============================================================================
@@ -4597,7 +5119,7 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     # §14b screen share a single computation), otherwise recompute it from the screen —
     # exactly as the docstring promises. ``RiskBook.analytics`` carries the per-ISIN
     # book_weight / cvar05 / starr keyed on isin.
-    rb = risk_book if risk_book is not None else compute_cvar_aware_book(idata, panel, screen, screen.results)
+    rb = _resolve_risk_book(risk_book, idata, panel, screen, screen.results)
     _sized = (rb.analytics[['isin', 'book_weight', 'cvar05', 'starr', 'exp_vol',
                             'expected_sharpe', 'p_upside_pos_cond']]
               .rename(columns={'book_weight': 'cvar_book_weight',
@@ -4620,9 +5142,25 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     # gain conditioning, tail asymmetry). Display-only and best-effort — a plot
     # failure must never block the DB export below.
     try:
-        plot_kalman_results_overview(kalman_results)
+        plot_kalman_results_overview(kalman_results, book_summary=rb.summary)
     except Exception as exc:  # pragma: no cover - display-only
         print(f'kalman_results overview dashboard skipped: {exc!r}')
+
+    # Shrinkage view via the shared package builder (signed-log axes handle the
+    # analyst fat tails; replaces the former in-script price-space scatter —
+    # 0.9.9.11 consolidation). Guarded import: the visualizations package uses
+    # Python-3.14-only multi-exception syntax and may be absent/broken on older
+    # interpreters; the figure is display-only either way.
+    try:
+        from probabilistic_ml_model.visualizations.expected_returns_viz import (
+            create_kalman_vs_raw_scatter,
+        )
+        # The shared builder keys on ``implied_return_kalman``; the export
+        # names the same decimal quantity ``expected_return_kalman``.
+        _render_plotly(create_kalman_vs_raw_scatter(kalman_results.rename(
+            columns={'expected_return_kalman': 'implied_return_kalman'})))
+    except Exception as exc:  # pragma: no cover - optional reuse
+        print(f'kalman-vs-raw shrinkage scatter skipped: {exc!r}')
 
     # Curate the top-25 preview so the fiscal-calendar date columns surface up front
     # (after the identifiers) rather than being buried at the right edge. Round only
@@ -4632,9 +5170,11 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
                               'next_earnings_status', *DAY_COUNT_COLS_ALL)
                   if c in kalman_results.columns]
     _id_cols = [c for c in
-                ('isin', 'ticker', 'name', 'trading_region', 'trading_country','trading_country_name', 'region', 'country', 'unit', 'exchange'
-                     , 'exchange_name', 'unit_name', 'country_name',
-                            'sector', 'industry', 'size_class', 'style_class') if c in kalman_results.columns]
+                ('isin', 'ticker', 'name', 'trading_region', 'trading_country',
+                 'trading_country_name', 'region', 'country', 'unit', 'exchange',
+                 'exchange_name', 'unit_name', 'country_name',
+                 'sector', 'industry', 'size_class', 'style_class')
+                if c in kalman_results.columns]
     _other_cols = [c for c in kalman_results.columns
                    if c not in (*_id_cols, *_date_cols)]
     _preview_cols = [*_id_cols, *_date_cols, *_other_cols]
@@ -4660,6 +5200,19 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
 # single-ISIN, §12 mingled cohort, and the §11b/§12b stochastic-volatility twins)
 # shares one instantiate -> fit -> build_forecast_specs -> forecast chain rather
 # than re-inlining it per call site.
+
+# Posterior variables summarised after every single-series fit (§10K/§11/§12);
+# SV twins report / trace the volatility-walk subset.
+_KF_SUMMARY_VARS: tuple[str, ...] = (
+    'sigma_state', 'sigma_obs', 'beta_trend', 'log_state_init',
+    'vol_step_size', 'nu_obs', 'vol_anchor_offset',
+)
+_SV_SUMMARY_VARS: tuple[str, ...] = (
+    'sigma_state', 'vol_step_size', 'nu_obs', 'vol_anchor_offset', 'beta_trend',
+)
+_SV_TRACE_VARS: tuple[str, ...] = ('vol_step_size', 'nu_obs', 'vol_anchor_offset')
+
+
 @dataclass
 class KalmanFitResult:
     """Bundle returned by :func:`fit_kalman_model`.
@@ -4719,6 +5272,51 @@ class KalmanFitResult:
         return self.pred is not None
 
 
+def _forecast_table(res: "KalmanFitResult",
+                    last_price: Optional[float] = None) -> pd.DataFrame:
+    """Tidy per-fiscal-event forecast table from a fitted :class:`KalmanFitResult`.
+
+    Shared by §10K/§11/§12 so the three sections render byte-identical forecast
+    tables. ``implied_upside_pct`` is appended only when a spot price is given
+    (display-boundary percent scaling).
+    """
+    _pg = res.pred.predictions
+    tbl = pd.DataFrame({
+        'fiscal_event': res.labels,
+        'date': [d.strftime('%Y-%m-%d') for d in res.fiscal_dates],
+        'horizon_days': res.horizons_days,
+        'forecast_pt': _pg['forecast_pt'].mean(('chain', 'draw')).values,
+        'forecast_pt_lo': _pg['forecast_pt'].quantile(_HDI_LO, dim=('chain', 'draw')).values,
+        'forecast_pt_hi': _pg['forecast_pt'].quantile(_HDI_HI, dim=('chain', 'draw')).values,
+    })
+    if last_price:
+        tbl['implied_upside_pct'] = (tbl['forecast_pt'] / last_price - 1.0) * 100
+    return tbl
+
+
+def _plot_sigma_obs_path(dates, so, *, color: str, title: str) -> None:
+    """Render the posterior mean + 94% band of a time-varying ``sigma_obs`` path.
+
+    Shared by the §11b/§12b stochastic-volatility twins (identical apart from
+    accent color and title).
+    """
+    _mean = so.mean(('chain', 'draw')).values
+    _lo = so.quantile(_HDI_LO, dim=('chain', 'draw')).values
+    _hi = so.quantile(_HDI_HI, dim=('chain', 'draw')).values
+    fig = go.Figure()
+    _plotly_band(fig, dates, _lo, _hi, color=color, alpha=0.25,
+                 name='94% HDI', showlegend=True)
+    fig.add_trace(go.Scatter(x=dates, y=_mean, mode='lines',
+                             line=dict(color=color, width=2),
+                             hovertemplate=('%{x|%Y-%m-%d}<br>'
+                                            'σ_obs = %{y:.4f}<extra></extra>'),
+                             name='posterior mean σ_obs(t)', legendgroup='sigma'))
+    fig.update_yaxes(title_text='σ_obs (log-price scale)')
+    fig.update_xaxes(title_text='asof_date', tickformat='%b %y')
+    fig.update_layout(title=title, legend=dict(font_size=_LEGEND_FONT_SIZE))
+    _render_plotly(fig, height=360, hovermode='x unified')
+
+
 def _resolve_forecast_anchor(
         forecast_df: Optional[pd.DataFrame],
         dates: Optional[pd.DatetimeIndex],
@@ -4772,7 +5370,7 @@ def fit_kalman_model(
         random_seed: int = RANDOM_SEED,
         trend: bool = True,
         trend_sigma: float = 0.5,
-stochastic_volatility: bool = False,
+        stochastic_volatility: bool = False,
         realized_vol: Optional[np.ndarray] = None,
         parameterization: str = 'marginalized',
         nuts_sampler: Optional[str] = None,
@@ -5007,9 +5605,7 @@ def report_universe_kalman_fit(res: KalmanFitResult,
           f'{(dates.max() - dates.min()).days}d span, divergences={res.n_divergences}.')
     display(azs.summary(
         res.idata,
-        var_names=_present_vars(res.idata, ['sigma_state', 'sigma_obs', 'beta_trend',
-                                            'log_state_init', 'vol_step_size', 'nu_obs',
-                                            'vol_anchor_offset']),
+        var_names=_present_vars(res.idata, _KF_SUMMARY_VARS),
         round_to=4))
 
     _safe_show(plot_price_target_path(
@@ -5018,19 +5614,11 @@ def report_universe_kalman_fit(res: KalmanFitResult,
     ))
 
     if res.has_forecast:
-        fig_fc, _ = plot_kalman_forecast(
+        fig_fc, _ = plot_kalman_forecast_returns(
             res.idata, res.pred, observed=observed, dates=dates,
             last_price=last_price, ticker=label)
         _show_fig(fig_fc)
-        _pg = res.pred.predictions
-        fc_tbl = pd.DataFrame({
-            'fiscal_event': res.labels,
-            'date': [d.strftime('%Y-%m-%d') for d in res.fiscal_dates],
-            'horizon_days': res.horizons_days,
-            'forecast_pt': _pg['forecast_pt'].mean(('chain', 'draw')).values,
-            'forecast_pt_lo': _pg['forecast_pt'].quantile(0.03, dim=('chain', 'draw')).values,
-            'forecast_pt_hi': _pg['forecast_pt'].quantile(0.97, dim=('chain', 'draw')).values,
-        })
+        fc_tbl = _forecast_table(res, last_price=last_price)
         print(f'Universe structural forecast to {len(res.horizons_days)} fiscal '
               f'event(s) beyond {res.last_obs:%Y-%m-%d}:')
         display(fc_tbl.round(3))
@@ -5044,8 +5632,8 @@ def report_universe_kalman_fit(res: KalmanFitResult,
         'n_isin': universe.consensus['n_isin'].to_numpy(),
         'observed_pt': observed,
         'expected_pt': _post.mean(('chain', 'draw')).values,
-        'expected_pt_hdi_lo': _stk.quantile(0.03, dim='s').values,
-        'expected_pt_hdi_hi': _stk.quantile(0.97, dim='s').values,
+        'expected_pt_hdi_lo': _stk.quantile(_HDI_LO, dim='s').values,
+        'expected_pt_hdi_hi': _stk.quantile(_HDI_HI, dim='s').values,
         'last_price': last_price,
     })
     comparison['expected_vs_observed_pct'] = (
@@ -5108,7 +5696,8 @@ def run_universe_kalman_fit(kalman_df: pd.DataFrame,
 # =============================================================================
 # 11. Single-ISIN time-series Kalman filter (+ 11b stochastic volatility)
 # =============================================================================
-def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
+def run_single_isin_filter(frame: pd.DataFrame, engine,
+                           config: Optional[KalmanRunConfig] = None) -> Optional[dict]:
     """Fit the literal single-security GRW filter on the richest ``*_ago`` history.
 
     The time axis is reconstructed from the embedded ``*_ago`` price-target cohort,
@@ -5119,6 +5708,7 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
     (or ``None`` when no ISIN has >=2 ``*_ago`` observations / DB is unavailable).
     """
     model_df = frame
+    cfg = config if config is not None else get_run_config()
     try:
         keep = ('isin', 'ticker', 'name', 'last_price', 'price_target', 'market_cap','market_cap_country_r', 'enterprise_value',
                 'income_statement_report_date', 'next_earnings', 'fy_end_date', 'next_fiscal_quarter', 'last_updated',
@@ -5135,12 +5725,14 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
                     f'SELECT {col_sql} FROM pml.pml_df '
                     'WHERE isin = ANY(:isins) '
                     '  AND next_earnings IS NOT NULL '
-                    '  AND market_cap_country_r > 95 '
+                    '  AND market_cap_country_r > :min_rank '
                     'ORDER BY ABS(next_earnings - CURRENT_DATE) , '
                     '         market_cap DESC '
-                    'LIMIT 50'
+                    'LIMIT :lim'
                 ),
-                conn, params={'isins': cohort},
+                conn, params={'isins': cohort,
+                              'min_rank': cfg.min_mcap_country_rank,
+                              'lim': cfg.candidate_limit},
             )
         n_ago = sum(c.endswith('_ago') for c in hist_cols)
         print(f'Pulled pml.pml_df history frame: {snap.shape}  ({n_ago} *_ago columns).')
@@ -5188,9 +5780,7 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
               f'{dates.max().year - dates.min().year}y span, divergences={res.n_divergences}.')
         display(azs.summary(
             kf_idata,
-            var_names=_present_vars(kf_idata, ['sigma_state', 'sigma_obs', 'beta_trend',
-                                               'log_state_init', 'vol_step_size', 'nu_obs',
-                                               'vol_anchor_offset']),
+            var_names=_present_vars(kf_idata, _KF_SUMMARY_VARS),
             round_to=4))
 
         _safe_show(plot_price_target_path(
@@ -5203,24 +5793,13 @@ def run_single_isin_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         # the days_* aliases on pml.mv_pymc_kalman_pt), so every label matches its
         # own date column instead of the previously mislabelled hand-built tuples.
         if res.has_forecast:
-            _horizons, _fdates, _labels = res.horizons_days, res.fiscal_dates, res.labels
-            pred = res.pred
-            fig_fc, _ = plot_kalman_forecast(
-                kf_idata, pred, observed=observed, dates=dates,
+            fig_fc, _ = plot_kalman_forecast_returns(
+                kf_idata, res.pred, observed=observed, dates=dates,
                 last_price=last_price, ticker=ticker)
             _show_fig(fig_fc)
-            _pg = pred.predictions
-            fc_tbl = pd.DataFrame({
-                'fiscal_event': _labels,
-                'date': [d.strftime('%Y-%m-%d') for d in _fdates],
-                'horizon_days': _horizons,
-                'forecast_pt': _pg['forecast_pt'].mean(('chain', 'draw')).values,
-                'forecast_pt_lo': _pg['forecast_pt'].quantile(0.03, dim=('chain', 'draw')).values,
-                'forecast_pt_hi': _pg['forecast_pt'].quantile(0.97, dim=('chain', 'draw')).values,
-            })
-            if last_price:
-                fc_tbl['implied_upside_pct'] = (fc_tbl['forecast_pt'] / last_price - 1.0) * 100
-            print(f'Structural forecast to {len(_horizons)} fiscal event(s) for {ticker}:')
+            fc_tbl = _forecast_table(res, last_price=last_price)
+            print(f'Structural forecast to {len(res.horizons_days)} fiscal event(s) '
+                  f'for {ticker}:')
             display(fc_tbl.round(3))
         else:
             print(f'No future fiscal event beyond the last observation for {chosen}; '
@@ -5259,9 +5838,7 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
         kf_sv, kf_sv_idata = res_sv.kf, res_sv.idata
 
         print(f'Stochastic-volatility fit: {len(observed)} obs, divergences={res_sv.n_divergences}.')
-        _sv_vars = [v for v in ('sigma_state', 'vol_step_size', 'nu_obs',
-                                'vol_anchor_offset', 'beta_trend')
-                    if v in kf_sv_idata.posterior]
+        _sv_vars = [v for v in _SV_SUMMARY_VARS if v in kf_sv_idata.posterior]
         display(azs.summary(kf_sv_idata, var_names=_sv_vars, round_to=4))
 
         # Structural forecast to the next fiscal events (human-labelled horizons from
@@ -5272,37 +5849,29 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
         # posterior volatility below).
         if res_sv.has_forecast:
             pred_sv = res_sv.pred
-            fig_sv, _ = plot_kalman_forecast(
+            fig_sv, _ = plot_kalman_forecast_returns(
                 kf_sv_idata, pred_sv, observed=observed, dates=dates,
                 last_price=last_price, ticker=f'{ticker} (SV)')
             _show_fig(fig_sv)
         else:
             # No future fiscal event beyond the last observation: still surface the
             # standalone posterior observation-volatility path.
-            _so = kf_sv_idata.posterior['sigma_obs']
-            _mean = _so.mean(('chain', 'draw')).values
-            _lo = _so.quantile(0.03, dim=('chain', 'draw')).values
-            _hi = _so.quantile(0.97, dim=('chain', 'draw')).values
-            fig_sv = go.Figure()
-            _plotly_band(fig_sv, dates, _lo, _hi, color='#ff7f0e', alpha=0.25,
-                         name='94% HDI', showlegend=True)
-            fig_sv.add_trace(go.Scatter(x=dates, y=_mean, mode='lines',
-                                        line=dict(color='#ff7f0e', width=2),
-                                        name='posterior mean σ_obs(t)'))
-            fig_sv.update_yaxes(title_text='σ_obs (log-price scale)')
-            fig_sv.update_xaxes(title_text='asof_date')
-            fig_sv.update_layout(
+            _plot_sigma_obs_path(
+                dates, kf_sv_idata.posterior['sigma_obs'], color=C_VOL,
                 title=f'Stochastic volatility - time-varying observation noise ({ticker})')
-            _render_plotly(fig_sv, height=360)
 
-        _trace_vars = [v for v in _sv_vars
-                       if v in ('vol_step_size', 'nu_obs', 'vol_anchor_offset')]
+        _trace_vars = [v for v in _sv_vars if v in _SV_TRACE_VARS]
         if _trace_vars:
-            _safe_show(azp.plot_trace(
+            _pc_sv = azp.plot_trace(
                 kf_sv_idata, var_names=_trace_vars,
                 figure_kwargs=_azp_figure_kwargs(
                     _forest_height_px(len(_trace_vars), per_row=210, base=110)),
-            ))
+            )
+            with contextlib.suppress(Exception):
+                _pc_sv.add_title('SV fit — volatility-walk trace ('
+                                 + ', '.join(_trace_vars) + ')')
+            _polish_facet_axes(_pc_sv)
+            _safe_show(_pc_sv)
     except Exception as e:  # pragma: no cover - optional / environment-dependent
         print(f'Section 11b (stochastic volatility) skipped: {e!r}')
 
@@ -5310,10 +5879,12 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
 # =============================================================================
 # 12. Mingle-ISIN earnings-window Kalman filter (+ 12b stochastic volatility)
 # =============================================================================
-def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
+def run_mingled_cohort_filter(frame: pd.DataFrame, engine,
+                              config: Optional[KalmanRunConfig] = None) -> Optional[dict]:
     """Mingle the recent-earnings cohort into one consensus series and refit the filter.
 
-    For every ISIN whose ``next_earnings`` lands in the ±10-day window the embedded
+    For every ISIN whose ``next_earnings`` lands in the ±``earnings_window_days``
+    window (:class:`KalmanRunConfig`, default ±5 days) the embedded
     ``*_ago`` cohort is unpivoted and the cross-sectional **median** price target taken at
     each shared ``asof_date`` — a single earnings-cohort consensus over time. Fit with the
     marginalized GRW (+trend). ``frame`` is the fused panel's modelling frame
@@ -5321,6 +5892,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
     for §12b and §14, or ``None`` when the window yields fewer than 2 observations.
     """
     model_df = frame
+    cfg = config if config is not None else get_run_config()
     try:
         keep = ('isin', 'name', 'ticker', 'last_price', 'price_target', 'market_cap', 'market_cap_country_r', 'enterprise_value',
                 'income_statement_report_date', 'next_earnings', 'fy_end_date', 'next_fiscal_quarter', 'last_updated',
@@ -5331,14 +5903,14 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
                 text(f"""
                     SELECT {col_sql}
                     FROM pml.pml_df
-                    WHERE next_earnings >= '2026-01-01'
-                      AND income_statement_report_date >= '2025-01-01'
-                      AND next_earnings >= current_date - INTERVAL '5 days'
-                      AND next_earnings <= current_date + INTERVAL '5 days'
-                      AND market_cap_country_r > 95
-                    ORDER BY market_cap DESC 
-                """),
-                conn,
+                    WHERE next_earnings >= '{cfg.min_next_earnings}'
+                      AND income_statement_report_date >= '{cfg.min_report_date}'
+                      AND next_earnings >= current_date - INTERVAL ':w days'
+                      AND next_earnings <= current_date + INTERVAL ':w days'
+                      AND market_cap_country_r > :min_rank
+                    ORDER BY market_cap DESC
+                """.replace(':w', str(int(cfg.earnings_window_days)))),
+                conn, params={'min_rank': cfg.min_mcap_country_rank},
             )
         n_ago = sum(c.endswith('_ago') for c in hist_cols)
         n_cohort = snap['isin'].nunique() if 'isin' in snap.columns else 0
@@ -5385,9 +5957,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
               f'{(dates.max() - dates.min()).days}d span, divergences={res.n_divergences}.')
         display(azs.summary(
             kf_idata,
-            var_names=_present_vars(kf_idata, ['sigma_state', 'sigma_obs', 'beta_trend',
-                                               'log_state_init', 'vol_step_size', 'nu_obs',
-                                               'vol_anchor_offset']),
+            var_names=_present_vars(kf_idata, _KF_SUMMARY_VARS),
             round_to=4))
 
         # (a) Headline composition.
@@ -5401,23 +5971,16 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         # map (SSOT = the days_* aliases on pml.mv_pymc_kalman_pt), so each label
         # tracks its own date column rather than the old mislabelled tuples.
         if res.has_forecast:
-            _horizons, _fdates, _labels = res.horizons_days, res.fiscal_dates, res.labels
-            pred = res.pred
-            fig_fc, _ = plot_kalman_forecast(
-                kf_idata, pred, observed=observed, dates=dates,
+            fig_fc, _ = plot_kalman_forecast_returns(
+                kf_idata, res.pred, observed=observed, dates=dates,
                 last_price=last_price, ticker=label)
             _show_fig(fig_fc)
-            _pg = pred.predictions
-            fc_tbl = pd.DataFrame({
-                'fiscal_event': _labels,
-                'date': [d.strftime('%Y-%m-%d') for d in _fdates],
-                'horizon_days': _horizons,
-                'forecast_pt': _pg['forecast_pt'].mean(('chain', 'draw')).values,
-                'forecast_pt_lo': _pg['forecast_pt'].quantile(0.03, dim=('chain', 'draw')).values,
-                'forecast_pt_hi': _pg['forecast_pt'].quantile(0.97, dim=('chain', 'draw')).values,
-            })
-            print(f'Cohort structural forecast to {len(_horizons)} fiscal event(s):')
+            fc_tbl = _forecast_table(res, last_price=last_price)
+            print(f'Cohort structural forecast to {len(res.horizons_days)} fiscal event(s):')
             display(fc_tbl.round(3))
+        else:
+            print('No future fiscal event beyond the cohort\'s last observation; '
+                  'structural forecast skipped.')
 
         # (b) ArviZ forest of the per-as-of-date expected_pt posterior HDIs.
         _state = kf_idata.posterior['state']
@@ -5429,7 +5992,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         _ax_state = pc_state.viz['plot'].sel(column='forest').item()  # PlotlyPlot
         if last_price is not None:
             _ax_state.add_vline(x=last_price,
-                                line=dict(color='#bbbbbb', dash='dash', width=1.2),
+                                line=dict(color=C_REF, dash='dash', width=1.2),
                                 annotation_text='cohort last_price')
         _ax_state.update_xaxes(title_text='expected_pt (price)')
         pc_state.add_title(f'Expected price target (Kalman state) per as-of date - {label}')
@@ -5439,8 +6002,8 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine) -> Optional[dict]:
         _post = kf_idata.posterior['state']
         _mean = _post.mean(('chain', 'draw')).values
         _stk = _post.stack(s=('chain', 'draw'))
-        _lo = _stk.quantile(0.03, dim='s').values
-        _hi = _stk.quantile(0.97, dim='s').values
+        _lo = _stk.quantile(_HDI_LO, dim='s').values
+        _hi = _stk.quantile(_HDI_HI, dim='s').values
         comparison = pd.DataFrame({
             'asof_date': dates.strftime('%Y-%m-%d'),
             'n_isin': mingled['n_isin'].to_numpy(),
@@ -5492,35 +6055,25 @@ def run_mingled_cohort_stochastic_vol(frame: pd.DataFrame, ctx: Optional[dict]) 
 
         print(f'Mingled-cohort stochastic-volatility fit: {len(_observed_sv)} obs, '
               f'divergences={res_sv.n_divergences}.')
-        _sv_vars = [v for v in ('sigma_state', 'vol_step_size', 'nu_obs',
-                                'vol_anchor_offset', 'beta_trend')
-                    if v in kf_sv_idata.posterior]
+        _sv_vars = [v for v in _SV_SUMMARY_VARS if v in kf_sv_idata.posterior]
         display(azs.summary(kf_sv_idata, var_names=_sv_vars, round_to=4))
 
-        _so = kf_sv_idata.posterior['sigma_obs']
-        _mean = _so.mean(('chain', 'draw')).values
-        _lo = _so.quantile(0.03, dim=('chain', 'draw')).values
-        _hi = _so.quantile(0.97, dim=('chain', 'draw')).values
-        fig_sv = go.Figure()
-        _plotly_band(fig_sv, _dates_sv, _lo, _hi, color='#9467bd', alpha=0.25,
-                     name='94% HDI', showlegend=True)
-        fig_sv.add_trace(go.Scatter(x=_dates_sv, y=_mean, mode='lines',
-                                    line=dict(color='#9467bd', width=2),
-                                    name='posterior mean σ_obs(t)'))
-        fig_sv.update_yaxes(title_text='σ_obs (log-price scale)')
-        fig_sv.update_xaxes(title_text='asof_date')
-        fig_sv.update_layout(
+        _plot_sigma_obs_path(
+            _dates_sv, kf_sv_idata.posterior['sigma_obs'], color=C_VOL,
             title=f'Stochastic volatility - mingled cohort observation noise ({label})')
-        _render_plotly(fig_sv, height=360)
 
-        _trace_vars = [v for v in _sv_vars
-                       if v in ('vol_step_size', 'nu_obs', 'vol_anchor_offset')]
+        _trace_vars = [v for v in _sv_vars if v in _SV_TRACE_VARS]
         if _trace_vars:
-            _safe_show(azp.plot_trace(
+            _pc_sv = azp.plot_trace(
                 kf_sv_idata, var_names=_trace_vars,
                 figure_kwargs=_azp_figure_kwargs(
                     _forest_height_px(len(_trace_vars), per_row=210, base=110)),
-            ))
+            )
+            with contextlib.suppress(Exception):
+                _pc_sv.add_title('SV fit — volatility-walk trace ('
+                                 + ', '.join(_trace_vars) + ')')
+            _polish_facet_axes(_pc_sv)
+            _safe_show(_pc_sv)
     except Exception as e:  # pragma: no cover - optional / environment-dependent
         print(f'Section 12b (stochastic volatility) skipped: {e!r}')
 
@@ -5529,7 +6082,8 @@ def run_mingled_cohort_stochastic_vol(frame: pd.DataFrame, ctx: Optional[dict]) 
 # 13. Granular earnings-cohort posterior-predictive forest (+ 13.1 further views)
 # =============================================================================
 def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
-                        screen: ScreenContext, engine) -> Optional[dict]:
+                        screen: ScreenContext, engine,
+                        config: Optional[KalmanRunConfig] = None) -> Optional[dict]:
     """Per-ISIN forest of the fused-panel expected-price posterior for the cohort.
 
     Keeps the same earnings-cohort definition as §12 but stays per-ISIN granular and
@@ -5547,22 +6101,23 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
                            'income_statement_report_date', 'next_income_statement_report_date', 'next_fy_end_date')
         _hist_cols, col_sql = fetch_history_columns(engine, keep_cols_tuple)
         # Earnings-window bounds (single source of truth for both the SQL filter and
-        # the print label): names whose next_earnings lands within -PAST_DAYS ..
-        # +FUTURE_DAYS of today.
-        earnings_past_days = 5
-        earnings_future_days = 5
+        # the print label): names whose next_earnings lands within the
+        # ±earnings_window_days window around today (KalmanRunConfig).
+        cfg = config if config is not None else get_run_config()
+        earnings_past_days = int(cfg.earnings_window_days)
+        earnings_future_days = int(cfg.earnings_window_days)
         with engine.connect() as conn:
             cohort_meta = pd.read_sql(
                 text(f"""
                         SELECT {col_sql}
                         FROM pml.pml_df
-                        WHERE income_statement_report_date >= '2025-01-01'
+                        WHERE income_statement_report_date >= '{cfg.min_report_date}'
                           AND next_earnings >= current_date - INTERVAL ':past_days days'
                           AND next_earnings <= current_date + INTERVAL ':future_days days'
-                          AND market_cap_country_r > 95
+                          AND market_cap_country_r > :min_rank
                     """.replace(':past_days', str(earnings_past_days))
                      .replace(':future_days', str(earnings_future_days))),
-                conn,
+                conn, params={'min_rank': cfg.min_mcap_country_rank},
             )
         cohort_isins_all = cohort_meta['isin'].astype(str).unique().tolist()
         print(f'Recent-earnings cohort (next_earnings +{earnings_future_days}/-{earnings_past_days}d): '
@@ -5606,7 +6161,7 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
         # Reference bands from the POSTERIOR HDIs of pooled expected_pt.
         exp_pt_pool = ept.sel(isin=forest_isins).stack(s=('chain', 'draw', 'isin'))
         _q = lambda p: float(exp_pt_pool.quantile(p).values)
-        band94 = (_q(0.03), _q(0.97))
+        band94 = (_q(_HDI_LO), _q(_HDI_HI))
         band50 = (_q(0.25), _q(0.75))
         cohort_last_price = float(np.nanmedian(
             cohort_meta.loc[cohort_meta['isin'].isin(forest_isins), 'last_price']
@@ -5618,17 +6173,17 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
             figure_kwargs=_azp_figure_kwargs(_forest_height_px(len(forest_isins))),
         )
         pc.map(azv.scatter_x, 'observations', data=ppc_tree.observed_data.ds,
-               coords={'column': 'forest'}, color='#ffb000')
+               coords={'column': 'forest'}, color=C_OBSERVED)
         pc.map(azv.labelled_x, 'xlabel', coords={'column': 'forest'},
                text='expected price (simulated)  -  points = observed analyst target',
                ignore_aes='y')
         pc.coords = {'column': 'forest'}
         pc = azp.add_bands(pc, values=[band94],
-                           visuals={'ref_band': {'color': '#56b4e9', 'alpha': 0.12}})
+                           visuals={'ref_band': {'color': C_POSTERIOR, 'alpha': 0.12}})
         pc = azp.add_bands(pc, values=[band50],
-                           visuals={'ref_band': {'color': '#56b4e9', 'alpha': 0.24}})
+                           visuals={'ref_band': {'color': C_POSTERIOR, 'alpha': 0.24}})
         pc = azp.add_lines(pc, values=cohort_last_price,
-                           visuals={'ref_line': {'color': '#bbbbbb',
+                           visuals={'ref_line': {'color': C_REF,
                                                  'linestyle': 'dash', 'width': 1.3}})
         _safe_show(pc)
         print(f'Cohort expected_pt 94% HDI band: ({band94[0]:.2f}, {band94[1]:.2f});  '
@@ -5674,7 +6229,7 @@ def run_granular_further_views(prior_idata, panel: KalmanPanelInputs,
                           figure_kwargs=_azp_figure_kwargs(
                               _forest_height_px(len(forest_isins))))
     pc2.map(azv.scatter_x, 'observations', data=ppc_tree.observed_data.ds,
-            coords={'column': 'forest'}, color='#ffb000')
+            coords={'column': 'forest'}, color=C_OBSERVED)
     pc2.map(azv.labelled_x, 'xlabel', coords={'column': 'forest'},
             text='expected price (simulated)  -  band = cohort-median results HDI '
                  '[expected_pt_hdi_lo, expected_pt_hdi_hi]',
@@ -5685,7 +6240,7 @@ def run_granular_further_views(prior_idata, panel: KalmanPanelInputs,
     pc2 = azp.add_lines(pc2, values=band_med,
                         visuals={'ref_line': {'color': '#9b59b6', 'width': 1.4}})
     pc2 = azp.add_lines(pc2, values=cohort_last_price,
-                        visuals={'ref_line': {'color': '#bbbbbb',
+                        visuals={'ref_line': {'color': C_REF,
                                               'linestyle': 'dash', 'width': 1.3}})
     _safe_show(pc2)
     print(f'results-df cohort-median 94% HDI band: ({band_lo:.2f}, {band_hi:.2f});  '
@@ -5715,7 +6270,7 @@ def run_granular_further_views(prior_idata, panel: KalmanPanelInputs,
     cons_da = xr.DataArray(_cons.to_numpy(), dims='isin',
                            coords={'isin': _cons.index.to_numpy()}).rename(VAR)
 
-    _C_POST, _C_PRIOR, _C_CONS, _C_REF = '#1f77b4', '#ff7f0e', '#2ca02c', '#bbbbbb'
+    _C_POST, _C_PRIOR, _C_CONS, _C_REF = C_POSTERIOR, C_VOL, C_ACCENT, C_REF
     # Styles carry Plotly line vocabulary (``width`` / ``linestyle`` dash names) so the
     # same dict feeds both the ``plot_dist`` ``dist`` visual and the proxy legend traces.
     series = [
@@ -5788,23 +6343,301 @@ def run_granular_further_views(prior_idata, panel: KalmanPanelInputs,
 # =============================================================================
 # 14. Comprehensive summary + actionable recommendations
 # =============================================================================
+def _fmt_or_na(x, nd: int = 1, suf: str = '') -> str:
+    """Nan-safe fixed-point formatter shared by §14/§14b (``'n/a'`` fallback)."""
+    try:
+        if x is None or (isinstance(x, float) and not np.isfinite(x)):
+            return 'n/a'
+        return f'{x:.{nd}f}{suf}'
+    except Exception:
+        return 'n/a'
+
+
+def _display_label(row) -> str:
+    """Company display name with ISIN fallback, shared by §14/§14b."""
+    t = row.get('name')
+    return t if isinstance(t, str) and t.strip() else str(row['isin'])
+
+
+def _resolve_risk_book(risk_book, idata, panel, screen,
+                       results: pd.DataFrame) -> RiskBook:
+    """Reuse the shared §10b :class:`RiskBook` or recompute it from the screen.
+
+    Guard shared by :func:`export_analytics` and :func:`run_recommendations` so
+    the exported and displayed sizing always come from a single computation.
+    """
+    if risk_book is not None:
+        return risk_book
+    return compute_cvar_aware_book(idata, panel, screen, results)
+
+
+_VERDICT_COLORS = {'OVERWEIGHT': C_ACCENT, 'UNDERWEIGHT': C_HIGHLIGHT,
+                   'NEUTRAL': C_MUTED}
+
+
+def plot_group_signal_forest(payload: dict[str, dict[str, Any]]) -> None:
+    """Stacked shrunk-excess forest over the model's group-effect coords (§14b.4).
+
+    Visual twin of the ``run_recommendations`` block-4 prints: one subplot per
+    coord, x = the hierarchically **shrunk excess return vs the universe
+    posture** (pp), point + 94% CI (the raw group-mean CI mapped into excess
+    space via the group's shrinkage factor λ), the per-coord ±1-sd OW/UW band
+    shaded, marker colour by verdict. Hover carries the raw upside, CI,
+    conditional P(>0|K) and group size.
+    """
+    coords = [c for c in payload if payload[c].get('rows')]
+    if not coords or not _HAS_PLOTLY:
+        return
+    row_counts = [len(payload[c]['rows']) for c in coords]
+    total = sum(row_counts)
+    fig = make_subplots(
+        rows=len(coords), cols=1, shared_xaxes=True,
+        vertical_spacing=min(0.08, 24.0 / max(total * 24, 1)),
+        row_heights=[n / total for n in row_counts],
+        subplot_titles=[f'{c}  (±{payload[c]["band"]:.2f}pp OW/UW band)'
+                        for c in coords])
+    for i, col in enumerate(coords, start=1):
+        rows = payload[col]['rows']
+        verdicts = payload[col].get('verdicts') or ['NEUTRAL'] * len(rows)
+        band = float(payload[col]['band'])
+        # rows are sorted by raw upside desc; plot bottom-up so best sits on top.
+        names = [r[0] for r in rows][::-1]
+        ex = np.array([r[4] for r in rows])[::-1]
+        m = np.array([r[1] for r in rows])[::-1]
+        lo = np.array([r[2] for r in rows])[::-1]
+        hi = np.array([r[3] for r in rows])[::-1]
+        pc = np.array([r[5] for r in rows])[::-1]
+        n = np.array([r[6] for r in rows])[::-1]
+        lam = np.array([r[7] for r in rows])[::-1]
+        vcol = [_VERDICT_COLORS.get(v, C_MUTED) for v in verdicts[::-1]]
+        if np.isfinite(band) and band > 0:
+            fig.add_vrect(x0=-band, x1=band, fillcolor=_hex_to_rgba(C_REF, 0.08),
+                          line_width=0, row=i, col=1)
+        fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0),
+                      row=i, col=1)
+        fig.add_trace(go.Scatter(
+            x=ex, y=names, mode='markers',
+            marker=dict(color=vcol, size=9),
+            error_x=dict(type='data', symmetric=False,
+                         array=np.clip(lam * (hi - m), 0, None),
+                         arrayminus=np.clip(lam * (m - lo), 0, None),
+                         color=_hex_to_rgba(C_POSTERIOR, 0.5), thickness=1.4),
+            customdata=np.c_[m, lo, hi, pc, n],
+            hovertemplate=('%{y}<br>shrunk excess = %{x:.2f}pp<br>'
+                           'upside = %{customdata[0]:.1f}% '
+                           '[%{customdata[1]:.1f}%, %{customdata[2]:.1f}%]<br>'
+                           'P(>0|K) = %{customdata[3]:.0%}  '
+                           'n = %{customdata[4]:.0f}<extra></extra>'),
+            name=col, showlegend=False), row=i, col=1)
+    fig.update_xaxes(title_text='shrunk excess return vs universe (pp)',
+                     row=len(coords), col=1)
+    # Long group labels: automargin overrides _render_plotly's fixed l=60 margin.
+    fig.update_yaxes(automargin=True)
+    fig.update_layout(
+        title=('Group allocation signals — shrunk excess return forest '
+               '(green = OVERWEIGHT, orange = UNDERWEIGHT)'),
+        showlegend=False)
+    _render_plotly(fig, height=int(np.clip(26 * total + 90 * len(coords) + 120,
+                                           420, 1800)))
+
+
+def plot_book_composition(rb: RiskBook) -> None:
+    """CVaR-book composition — weights vs per-name tail risk (§14b.10 visual).
+
+    Left: the STARR-ranked book weights (with the per-name cap line). Right:
+    each held name's 5% expected shortfall (CVaR) — the risk budget the weight
+    is spending. The title annotation carries the portfolio-level aggregates
+    (``port_up`` / ``port_cvar`` / ``starr_book`` / ``div`` from
+    :attr:`RiskBook.summary`) — numbers that previously appeared only in the
+    §14b.10 prints.
+    """
+    if not _HAS_PLOTLY or rb is None or rb.book is None or len(rb.book) == 0:
+        return
+    book = rb.book.sort_values('weight', ascending=True)
+    _tk = book.get('ticker', pd.Series(index=book.index, dtype=object))
+    labels = [t if isinstance(t, str) and t.strip() else str(i)[:8]
+              for t, i in zip(_tk, book['isin'])]
+    w_pct = pd.to_numeric(book['weight'], errors='coerce') * 100.0
+    cvar_pct = pd.to_numeric(book.get('cvar05'), errors='coerce') * 100.0
+    eu_pct = pd.to_numeric(book.get('expected_upside'), errors='coerce') * 100.0
+    s = rb.summary or {}
+    cap = float(s.get('cap', float('nan')))
+
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.04,
+                        subplot_titles=('book weight', '5% expected shortfall'))
+    fig.add_trace(go.Bar(
+        x=w_pct, y=labels, orientation='h',
+        marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.85)),
+        customdata=np.c_[eu_pct],
+        hovertemplate=('%{y}<br>weight = %{x:.1f}%<br>'
+                       'E[upside] = %{customdata[0]:.1f}%<extra></extra>'),
+        name='weight'), row=1, col=1)
+    if np.isfinite(cap):
+        fig.add_vline(x=cap * 100.0, line=dict(color=C_REF, dash='dash', width=1.2),
+                      annotation_text=f'cap {cap:.0%}', row=1, col=1)
+    fig.add_trace(go.Bar(
+        x=cvar_pct, y=labels, orientation='h',
+        marker=dict(color=_hex_to_rgba(C_HIGHLIGHT, 0.85)),
+        hovertemplate='%{y}<br>CVaR5 = %{x:.1f}%<extra></extra>',
+        name='CVaR5'), row=1, col=2)
+    fig.update_xaxes(title_text='weight (%)', ticksuffix='%', row=1, col=1)
+    fig.update_xaxes(title_text='CVaR5 (%)', ticksuffix='%', row=1, col=2)
+    fig.update_yaxes(automargin=True)
+
+    _fmt = _fmt_or_na
+    fig.update_layout(
+        title=('CVaR-aware book composition — portfolio: '
+               f'E[upside]={_fmt(s.get("port_up", float("nan")) * 100.0, 1, "%")}  '
+               f'CVaR5={_fmt(s.get("port_cvar", float("nan")) * 100.0, 1, "%")}  '
+               f'reward/CVaR={_fmt(s.get("starr_book", float("nan")), 2)}  '
+               f'diversification={_fmt(s.get("div", float("nan")), 2)}'),
+        showlegend=False)
+    _render_plotly(fig, height=int(np.clip(22 * len(book) + 180, 360, 1400)))
+
+
+def plot_screen_overview(results_df: pd.DataFrame, *, top_n: int = 15) -> None:
+    """Screen distribution + top-N ranked recommendations (promoted from the
+    former notebook §14.1 inline cell — SSOT now lives here).
+
+    Left: the cross-sectional expected-upside distribution with median and
+    break-even reference lines. Right: the top-``top_n`` names ranked by
+    expected upside with their 94% HDI (derived from the ``expected_pt`` HDI
+    over ``last_price``).
+    """
+    if not _HAS_PLOTLY or results_df is None or len(results_df) == 0:
+        return
+    eu_pct = pd.to_numeric(results_df['expected_upside'], errors='coerce') * 100.0
+    eu_pct = eu_pct[np.isfinite(eu_pct)]
+    fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.09,
+                        subplot_titles=('Cross-sectional expected-upside '
+                                        'distribution',
+                                        f'Top {top_n} by expected upside '
+                                        '(94% HDI)'))
+    fig.add_trace(go.Histogram(
+        x=eu_pct.clip(*np.nanpercentile(eu_pct, [0.5, 99.5])), nbinsx=60,
+        marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.8)),
+        hovertemplate='upside = %{x:.0f}%<extra></extra>',
+        name='expected upside', showlegend=False), row=1, col=1)
+    fig.add_vline(x=float(eu_pct.median()),
+                  line=dict(color=C_HIGHLIGHT, dash='dash', width=1.5),
+                  annotation_text=f'median {eu_pct.median():.1f}%', row=1, col=1)
+    fig.add_vline(x=0, line=dict(color=C_REF, dash='dot', width=1.2), row=1, col=1)
+    fig.update_xaxes(title_text='expected upside (%)', ticksuffix='%', row=1, col=1)
+    fig.update_yaxes(title_text='ISIN count', row=1, col=1)
+
+    top = (results_df.dropna(subset=['expected_upside'])
+           .sort_values('expected_upside', ascending=False).head(top_n)
+           .iloc[::-1])
+    _tk = top.get('ticker', pd.Series(index=top.index, dtype=object))
+    lbl = [t if isinstance(t, str) and t.strip() else str(i)[:6]
+           for t, i in zip(_tk, top['isin'])]
+    mid = pd.to_numeric(top['expected_upside'], errors='coerce') * 100.0
+    _lp = pd.to_numeric(top['last_price'], errors='coerce')
+    lo = (pd.to_numeric(top['expected_pt_hdi_lo'], errors='coerce') / _lp - 1.0) * 100.0
+    hi = (pd.to_numeric(top['expected_pt_hdi_hi'], errors='coerce') / _lp - 1.0) * 100.0
+    fig.add_trace(go.Scatter(
+        x=mid, y=lbl, mode='markers',
+        marker=dict(color=C_ACCENT, size=8),
+        error_x=dict(type='data', symmetric=False,
+                     array=np.clip(hi - mid, 0, None),
+                     arrayminus=np.clip(mid - lo, 0, None),
+                     color=_hex_to_rgba(C_ACCENT, 0.55), thickness=1.6),
+        customdata=np.c_[lo, hi],
+        hovertemplate=('%{y}<br>upside = %{x:.1f}%<br>94% HDI = '
+                       '[%{customdata[0]:.1f}%, %{customdata[1]:.1f}%]'
+                       '<extra></extra>'),
+        name='top names', showlegend=False), row=1, col=2)
+    fig.add_vline(x=0, line=dict(color=C_REF, dash='dot', width=1.2), row=1, col=2)
+    fig.update_xaxes(title_text='expected upside (%)', ticksuffix='%', row=1, col=2)
+    fig.update_layout(title='Screen overview — distribution and ranked '
+                            'recommendations', showlegend=False)
+    _render_plotly(fig, height=H_FORECAST)
+
+
+def plot_risk_return_scatter(results_df: pd.DataFrame, *,
+                             max_points: int = 7000) -> None:
+    """Interactive expected-upside vs posterior-uncertainty screen (promoted
+    from the former notebook §14.2 inline cell — SSOT now lives here).
+
+    Uncertainty = the 94% HDI band width of ``expected_pt`` as a fraction of
+    ``last_price``; colour = sector, size = market cap.
+    """
+    if not _HAS_PLOTLY or results_df is None or len(results_df) == 0:
+        return
+    need = ['expected_upside', 'expected_pt_hdi_lo', 'expected_pt_hdi_hi',
+            'last_price', 'market_cap']
+    df = results_df.dropna(subset=[c for c in need if c in results_df.columns]).copy()
+    if df.empty:
+        return
+    df['uncertainty_pct'] = ((df['expected_pt_hdi_hi'] - df['expected_pt_hdi_lo'])
+                             / df['last_price']) * 100.0
+    df['expected_upside_pct'] = df['expected_upside'] * 100.0
+    _tk = df.get('ticker', pd.Series(index=df.index, dtype=object))
+    df['label'] = [t if isinstance(t, str) and t.strip() else str(i)[:6]
+                   for t, i in zip(_tk, df['isin'])]
+    if len(df) > max_points:
+        df = df.nlargest(max_points, 'expected_upside')
+    fig = px.scatter(
+        df, x='uncertainty_pct', y='expected_upside_pct',
+        color=df['sector'].fillna('Unknown').astype(str), size='market_cap',
+        size_max=22, hover_name='label',
+        hover_data={'isin': True, 'name': True, 'industry': True,
+                    'expected_upside_pct': ':.1f', 'uncertainty_pct': ':.1f',
+                    'market_cap': ':.0f', 'label': False},
+        labels={'uncertainty_pct': 'posterior uncertainty — 94% HDI width / '
+                                   'last price (%)',
+                'expected_upside_pct': 'expected upside (%)',
+                'color': 'sector'},
+        title='Expected upside vs posterior uncertainty (94% HDI width)')
+    fig.add_hline(y=0, line_dash='dot', line_color=C_REF)
+    fig.update_xaxes(ticksuffix='%')
+    fig.update_yaxes(ticksuffix='%')
+    fig.update_layout(legend_title_text='sector',
+                      legend=dict(font_size=_LEGEND_FONT_SIZE))
+    _render_plotly(fig, height=650)
+
+
+def plot_top_candidate_forest(screen_ctx: ScreenContext,
+                              results_df: pd.DataFrame, *,
+                              top_n: int = 20) -> None:
+    """Posterior expected-upside forest of the top screen candidates (promoted
+    from the former notebook §14.3 inline cell — SSOT now lives here)."""
+    top = (results_df.dropna(subset=['expected_upside'])
+           .sort_values('expected_upside', ascending=False).head(top_n))
+    eu_isins = set(np.asarray(screen_ctx.eu['isin'].values).astype(str))
+    top = top[top['isin'].astype(str).isin(eu_isins)]
+    top_isins = top['isin'].astype(str).tolist()
+    if not top_isins:
+        print('No top candidates overlap the posterior draws — nothing to plot.')
+        return
+    eu = screen_ctx.eu.sel(isin=top_isins) * 100.0
+    _tk = top.get('ticker', pd.Series(index=top.index, dtype=object))
+    labels = [t if isinstance(t, str) and t.strip() else str(i)[:6]
+              for t, i in zip(_tk, top['isin'])]
+    eu = eu.assign_coords(isin=labels)
+    _ds = xr.Dataset({'expected_upside_pct': eu})
+    pc = azp.plot_forest(_ds, var_names=['expected_upside_pct'], combined=True,
+                         backend='plotly',
+                         figure_kwargs=_azp_figure_kwargs(
+                             _forest_height_px(len(labels), per_row=30)))
+    pc.add_title(f'Top {len(labels)} candidates — posterior expected upside '
+                 '(%) with 94% HDI')
+    with contextlib.suppress(Exception):
+        _fx = _plotly_figure_of(pc)
+        if _fx is not None:
+            _fx.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+            _fx.update_xaxes(title_text='expected upside (%)', ticksuffix='%')
+    _safe_show(pc)
+
+
 def run_summary(results: pd.DataFrame, screen: ScreenContext,
                 cohort_ctx: Optional[dict], mingled_ctx: Optional[dict]) -> None:
     """Consolidate the screen into a decision-oriented earnings-cohort vs baseline read."""
     cohort_meta = cohort_ctx.get('cohort_meta') if cohort_ctx else None
     comparison = mingled_ctx.get('comparison') if mingled_ctx else None
 
-    def _fmt(x, nd=1, suf=''):
-        try:
-            if x is None or (isinstance(x, float) and not np.isfinite(x)):
-                return 'n/a'
-            return f'{x:.{nd}f}{suf}'
-        except Exception:
-            return 'n/a'
-
-    def _label(row):
-        t = row.get('name')
-        return t if isinstance(t, str) and t.strip() else str(row['isin'])
+    _fmt = _fmt_or_na
+    _label = _display_label
 
     def _band_width_pct(df):
         denom = df['expected_pt'].replace(0, np.nan)
@@ -5852,6 +6685,33 @@ def run_summary(results: pd.DataFrame, screen: ScreenContext,
     print('Cross-sectional summary - expected price targets by group:')
     display(summary_tbl)
 
+    # A-viz. Cohort vs baseline vs universe on the three decision metrics —
+    # grouped bars (visual twin of the table above; best-effort, display only).
+    try:
+        if _HAS_PLOTLY and len(summary_tbl):
+            _metrics = [('median_upside_%', 'median expected upside'),
+                        ('positive_upside_%', 'share with positive upside'),
+                        ('median_band_width_%', 'median 94% band width')]
+            _metrics = [(c, lab) for c, lab in _metrics if c in summary_tbl.columns]
+            figs = make_subplots(rows=1, cols=len(_metrics), shared_yaxes=True,
+                                 horizontal_spacing=0.05,
+                                 subplot_titles=[lab for _, lab in _metrics])
+            _grp_colors = [C_HIGHLIGHT, C_MUTED, C_POSTERIOR]
+            for j, (c, lab) in enumerate(_metrics, start=1):
+                figs.add_trace(go.Bar(
+                    x=pd.to_numeric(summary_tbl[c], errors='coerce'),
+                    y=summary_tbl.index.astype(str), orientation='h',
+                    marker=dict(color=_grp_colors[:len(summary_tbl)]),
+                    hovertemplate=f'%{{y}}<br>{lab} = %{{x:.1f}}%<extra></extra>',
+                    name=lab, showlegend=False), row=1, col=j)
+                figs.add_vline(x=0, line=dict(color=C_REF, width=0.8), row=1, col=j)
+                figs.update_xaxes(ticksuffix='%', row=1, col=j)
+            figs.update_layout(title='Earnings cohort vs baseline vs universe — '
+                                     'decision metrics', showlegend=False)
+            _render_plotly(figs, height=320)
+    except Exception as exc:  # pragma: no cover - display-only
+        print(f'summary decision panel skipped: {exc!r}')
+
     if cohort is not None and len(cohort) and 'sector' in cohort.columns:
         sector_mix = (cohort.assign(sector=cohort['sector'].fillna('Unknown'))
                       .groupby('sector')
@@ -5860,6 +6720,33 @@ def run_summary(results: pd.DataFrame, screen: ScreenContext,
                       .sort_values('n', ascending=False).round(2))
         print('\nEarnings-cohort sector tilt:')
         display(sector_mix.head(10))
+
+        # A2-viz. Cohort sector tilt vs the universe sector mix — diverging bar
+        # of the share-of-names difference (positive = cohort over-represents).
+        try:
+            if _HAS_PLOTLY and universe is not None and 'sector' in universe.columns:
+                _u_mix = (universe.assign(sector=universe['sector'].fillna('Unknown'))
+                          .groupby('sector')['isin'].size())
+                _c_share = sector_mix['n'] / max(float(sector_mix['n'].sum()), 1.0)
+                _u_share = (_u_mix / max(float(_u_mix.sum()), 1.0)).reindex(
+                    _c_share.index).fillna(0.0)
+                _tilt = ((_c_share - _u_share) * 100.0).sort_values()
+                figt = go.Figure(go.Bar(
+                    x=_tilt.to_numpy(), y=_tilt.index.astype(str), orientation='h',
+                    marker=dict(color=[C_ACCENT if v >= 0 else C_HIGHLIGHT
+                                       for v in _tilt.to_numpy()]),
+                    hovertemplate=('%{y}<br>tilt = %{x:+.1f}pp of names'
+                                   '<extra></extra>'),
+                    name='sector tilt'))
+                figt.add_vline(x=0, line=dict(color=C_REF, width=1.0))
+                figt.update_xaxes(title_text='cohort share − universe share '
+                                             '(pp of names)')
+                figt.update_layout(title='Earnings-cohort sector tilt vs universe',
+                                   showlegend=False)
+                _render_plotly(figt, height=int(np.clip(24 * len(_tilt) + 160,
+                                                        300, 900)))
+        except Exception as exc:  # pragma: no cover - display-only
+            print(f'sector-tilt chart skipped: {exc!r}')
 
     # ---- B. Time-series: recent vs historical mingled cohort trail ----
     hist_drift = implied_now = first = last = None
@@ -5927,7 +6814,7 @@ def run_summary(results: pd.DataFrame, screen: ScreenContext,
                                  '(posterior cross-sectional average)')
                 pc_sum = azp.add_lines(
                     pc_sum, values=0.0,
-                    visuals={'ref_line': {'color': '#bbbbbb',
+                    visuals={'ref_line': {'color': C_REF,
                                           'linestyle': 'dash', 'width': 1.3}},
                 )
                 _safe_show(pc_sum)
@@ -6007,7 +6894,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     MIN_GROUP_N = 15
 
     # Shared CVaR-aware analytics + sized book (SSOT with the §10c export).
-    rb = risk_book if risk_book is not None else compute_cvar_aware_book(idata, panel, screen, results)
+    rb = _resolve_risk_book(risk_book, idata, panel, screen, results)
 
     def _verdict(excess_shrunk, p_cond, ow_thr, uw_thr):
         """Posture verdict from the shrunk excess return and conditional P(>0)."""
@@ -6018,12 +6905,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
         return 'NEUTRAL'
 
     def _na(x, nd=0, suf=''):
-        try:
-            if x is None or (isinstance(x, float) and not np.isfinite(x)):
-                return 'n/a'
-            return f'{x:.{nd}f}{suf}'
-        except Exception:
-            return 'n/a'
+        return _fmt_or_na(x, nd, suf)
 
     print('=' * 88)
     print('KALMAN PRICE-TARGET SCREEN - ACTIONABLE INVESTMENT RECOMMENDATIONS')
@@ -6065,12 +6947,16 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
           f'x mean gain). Groups with n<{MIN_GROUP_N} names are excluded from '
           f'the group signals below.')
 
-    # 4. Group allocation signals (hierarchical coords).
+    # 4. Group allocation signals (hierarchical coords). The prints remain the
+    # full record; the model's actual group-effect coords additionally feed the
+    # stacked shrunk-excess forest rendered after the loop.
     _coords = [c for c in
                ('region', 'trading_region', 'exchange_name', 'unit_name', 'country_name', 'sector', 'industry',
                 'size_class',
                 'style_class')
                if c in model_df.columns]
+    _forest_coords = ('region', 'trading_region', 'sector', 'size_class', 'style_class')
+    _forest_payload: dict[str, dict[str, Any]] = {}
     for col in _coords:
         lab = model_df[col].fillna('Unknown').astype(str).to_numpy()
         da = xr.DataArray(lab, dims='isin', coords={'isin': isin_dim})
@@ -6091,8 +6977,8 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
         grp = grp_all.sel({col: eligible})
         stk = grp.stack(s=('chain', 'draw'))
         gmean = stk.mean('s')
-        glo = stk.quantile(0.03, 's')
-        ghi = stk.quantile(0.97, 's')
+        glo = stk.quantile(_HDI_LO, 's')
+        ghi = stk.quantile(_HDI_HI, 's')
         gpos = (grp > 5).mean(('chain', 'draw'))
         ggain = gain_da.groupby(da.rename(col)).mean('isin').sel({col: eligible})
 
@@ -6116,15 +7002,21 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
                  float(ghi.sel({col: g})),
                  float(shrunk.sel({col: g})),
                  float(gpos.sel({col: g})) * float(ggain.sel({col: g})),
-                 int(counts.get(str(g), 0)))
+                 int(counts.get(str(g), 0)),
+                 float(lam.sel({col: g})) if hasattr(lam, 'sel') else 0.0)
                 for g in grp[col].values]
         rows.sort(key=lambda r: r[1], reverse=True)
+        if col in _forest_coords:
+            _forest_payload[col] = {
+                'rows': rows, 'band': _band,
+                'verdicts': [_verdict(r[4], r[5], ow_thr, uw_thr) for r in rows],
+            }
         print(f'\n4.{col.upper()} SIGNALS  ({len(rows)} groups, '
               f'{n_dropped} dropped n<{MIN_GROUP_N})  '
               f'OW/UW band=±{_band:.2f}pp shrunk excess')
 
         def _emit(r):
-            gs, m, lo, hi, ex, pc, n = r
+            gs, m, lo, hi, ex, pc, n, _lam = r
             print(f'   {_verdict(ex, pc, ow_thr, uw_thr):>11s}  {gs:<26.26s}  '
                   f'upside={m:6.2f}%  CI=[{lo:6.2f},{hi:6.2f}]  xs={ex:5.2f}pp  '
                   f'P(>0|K)={pc:4.0%}  n={n}')
@@ -6139,6 +7031,13 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
             for r in rows:
                 _emit(r)
 
+    # 4-viz. Stacked shrunk-excess forest over the model's group-effect coords
+    # (visual twin of the prints above; best-effort, display only).
+    try:
+        plot_group_signal_forest(_forest_payload)
+    except Exception as exc:  # pragma: no cover - display-only
+        print(f'group-signal forest skipped: {exc!r}')
+
     # 5. Name-level action list. ``nm`` carries the §8-§10 risk analytics + book
     # weights from the shared RiskBook (p_upside_pos, band_width, cvar05, ...).
     # The RiskBook frame stores raw decimals — build local percent columns here
@@ -6148,9 +7047,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
         nm[f'{_c}_pct'] = pd.to_numeric(nm.get(_c), errors='coerce') * 100.0
     _wide = float(np.nanpercentile(nm['band_width_pct'], 95)) if len(nm) else float('inf')
 
-    def _nm_label(r):
-        t = r.get('name')
-        return t if isinstance(t, str) and t.strip() else str(r['isin'])
+    _nm_label = _display_label
 
     # High-conviction gates on the conditional scale: 95% / 5% nominal thresholds
     # rescaled by the universe-mean kalman gain, compared against
@@ -6285,6 +7182,12 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
               f'(tail lift x{_na(_s["div"], 2)}); weights inverse to expected shortfall, so '
               f'the analyst-target outliers are capped, not chased. Persisted to '
               f'analytics.kalman_filtered_price_targets as cvar_book_weight.')
+        # 10-viz. Book composition + portfolio aggregates (best-effort visual
+        # twin of the sizing table above).
+        try:
+            plot_book_composition(rb)
+        except Exception as exc:  # pragma: no cover - display-only
+            print(f'book-composition chart skipped: {exc!r}')
     else:
         print('   [~]  Insufficient long book or posterior draws for CVaR-aware sizing.')
 
@@ -6299,7 +7202,8 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
 # Entry point
 # =============================================================================
 def main(*, run_eda_section: bool = True, write_analytics: bool = True,
-         robust: bool = False, export_results: bool = True) -> dict:
+         robust: bool = False, export_results: bool = True,
+         config: Optional[KalmanRunConfig] = None) -> dict[str, Any]:
     """Run the full Kalman price-target workflow end-to-end on the fused panel model.
 
     The cross-sectional spine is the §5b fused MvGRW + volatility-conditioned model
@@ -6314,12 +7218,16 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     write_analytics
         When ``True``, append the §10c screen to ``analytics.kalman_filtered_price_targets``.
     robust
-        When ``True`` (default), use the Student-t panel likelihood (absorbs analyst
-        outliers); ``False`` selects the Normal-likelihood twin.
+        When ``True``, use the Student-t panel likelihood (absorbs analyst
+        outliers); ``False`` (default) selects the Normal-likelihood twin.
     export_results
         When ``True`` (default), persist every rendered figure / displayed table
         (via the :func:`_safe_show` / :func:`display` hooks) and the bulk data
         artifacts (:func:`export_all_artifacts`) under ``KALMAN_PT_RESULTS_DIR``.
+    config
+        Optional :class:`KalmanRunConfig` overriding the env-resolved defaults
+        (sampling budget, screen / risk-book knobs, universe-query dates).
+        Installed as the module run config for the duration of the call.
 
     Returns
     -------
@@ -6327,7 +7235,19 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
         Key artifacts (``idata``, ``results``, ``kalman_results``, ``panel``,
         ``screen``, ``universe_fit``) for programmatic reuse.
     """
-    logging.basicConfig(level=os.environ.get('LOG_LEVEL', 'INFO'))
+    if config is not None:
+        set_run_config(config)
+    cfg = get_run_config()
+    logging.basicConfig(level=cfg.log_level)
+    # Headless / redirected-stdout runs on Windows default to cp1252, which
+    # cannot encode the Unicode used by the samplers' console output (nutpie
+    # emits U+2009; several prints use '≈'/'σ'). A cp1252 UnicodeEncodeError
+    # destroyed an otherwise-complete 36-minute nutpie run (2026-07-31), so
+    # make stdout/stderr lossy-safe instead of fatal.
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, 'reconfigure'):
+            with contextlib.suppress(Exception):
+                _stream.reconfigure(errors='replace')
     setup_plotting()
     if export_results:
         enable_artifact_export()
@@ -6337,7 +7257,7 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
 
     # Data load + role resolution.
     with export_section('01_data'):
-        kalman_df = load_kalman_df(engine)
+        kalman_df = load_kalman_df(engine, cfg)
         feature_catalogue = load_feature_catalogue(engine)
         roles = resolve_feature_roles(kalman_df, feature_catalogue)
 
@@ -6349,14 +7269,15 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     # §3 state-space feature mapping + §4 fused-panel data containers.
     with export_section('03_features'):
         drift_features, _mapping = map_state_space_features(kalman_df, feature_catalogue)
-        panel = prepare_kalman_panel_inputs(kalman_df, roles, drift_features)
+        panel = prepare_kalman_panel_inputs(kalman_df, roles, drift_features,
+                                            history_lookbacks=cfg.panel_lookbacks)
 
     # §5b fused model -> §6 prior -> §7 posterior -> §8 PPC.
     model = build_panel_model(panel, robust=robust)
     with export_section('06_prior'):
-        prior_idata = run_prior_predictive(model, panel)
+        prior_idata = run_prior_predictive(model, panel, cfg)
     with export_section('07_posterior'):
-        idata = sample_posterior(model, prior_idata, panel=panel)
+        idata = sample_posterior(model, prior_idata, panel=panel, config=cfg)
     with export_section('08_ppc'):
         run_posterior_predictive(model, idata, panel)
 
@@ -6364,10 +7285,11 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     with export_section('09_diagnostics'):
         run_diagnostics(idata, panel)
     with export_section('10_screen'):
-        screen = summarize_panel_screen(idata, panel)
+        screen = summarize_panel_screen(idata, panel,
+                                        horizon=cfg.mc_horizon, rho=cfg.mc_rho)
         results = screen.results
     with export_section('10b_risk_book'):
-        risk_book = compute_cvar_aware_book(idata, panel, screen, results)
+        risk_book = compute_cvar_aware_book(idata, panel, screen, results, config=cfg)
     with export_section('10c_analytics'):
         kalman_results = export_analytics(idata, panel, screen, risk_book=risk_book,
                                           write=write_analytics)
@@ -6379,21 +7301,21 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
 
     # §11 single-ISIN filter (+11b SV).
     with export_section('11_single_isin'):
-        single_ctx = run_single_isin_filter(panel.frame, engine)
+        single_ctx = run_single_isin_filter(panel.frame, engine, cfg)
         _export_context(single_ctx, '11_single_isin_ctx')
     with export_section('11b_single_sv'):
         run_single_isin_stochastic_vol(single_ctx)
 
     # §12 mingled cohort (+12b SV).
     with export_section('12_mingled'):
-        mingled_ctx = run_mingled_cohort_filter(panel.frame, engine)
+        mingled_ctx = run_mingled_cohort_filter(panel.frame, engine, cfg)
         _export_context(mingled_ctx, '12_mingled_ctx')
     with export_section('12b_mingled_sv'):
         run_mingled_cohort_stochastic_vol(panel.frame, mingled_ctx)
 
     # §13 granular forest (+13.1 further views).
     with export_section('13_forest'):
-        forest_ctx = run_granular_forest(idata, results, panel, screen, engine)
+        forest_ctx = run_granular_forest(idata, results, panel, screen, engine, cfg)
         _export_context(forest_ctx, '13_forest_ctx')
     with export_section('13b_further_views'):
         run_granular_further_views(prior_idata, panel, screen, forest_ctx)

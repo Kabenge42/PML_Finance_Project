@@ -3,7 +3,7 @@
 A comprehensive platform for probabilistic equity screening, feature engineering, and machine learning modeling across global financial markets.
 
 [![Python Version](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue)](https://www.python.org/)
-[![Package Version](https://img.shields.io/badge/version-0.9.9.2-green)](pyproject.toml)
+[![Package Version](https://img.shields.io/badge/version-0.9.9.5-green)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
@@ -20,7 +20,7 @@ feature engineering, and reliable model evaluation, followed by a **Portfolio Op
   Plotly visualizations.
 - **SQL Database Integration**: Centralized data storage using PostgreSQL with schema-driven feature catalogs.
 - **7-Phase Portfolio Optimization**: Stock selection, return prediction, risk-adjusted optimization (Efficient Frontier), backtesting, and interactive dashboards.
-- **Interactive Dashboards**: Integrated Streamlit, Dash, and Plotly applications for market monitoring, earnings analytics, and portfolio visualization.
+- **Interactive Dashboards**: Dash + Plotly GEIB dashboard for market monitoring, risk metrics, and portfolio visualization (a Streamlit extra is declared but no Streamlit app ships yet).
 
 ### Quick Start
 
@@ -29,8 +29,16 @@ python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 . .\set_env.ps1
+
+# Full expected-returns pipeline (8-phase ML workflow + portfolio optimization)
 python expected_returns_v3.py
+
+# Or the Bayesian Kalman price-target workflow
+python pymc_kalman_filter_pt.py
 ```
+
+Both pipelines read from PostgreSQL, so a reachable `DB_URL` is required (see
+[Environment Variables](#environment-variables)).
 
 See [Setup](#setup), [Execution & Entry Points](#execution--entry-points), and [Testing](#testing) for details.
 
@@ -70,6 +78,46 @@ notebook helpers are backed by a new shared module
 `load_feature_metadata_from_db`) used by all seven model
 `_align_*_features(use_typed_coercion=True)` paths and stamped onto
 `idata.constant_data[...].attrs` after every `*Model.fit(...)` call.
+
+### Kalman Price-Target Workflow (`pymc_kalman_filter_pt.py`)
+
+The largest standalone workflow in the repository (~6.4k lines) and the script
+counterpart of `pymc_kalman_filter_pt.ipynb` / `pymc_kalman_filter_pt_v2.ipynb`.
+It runs an end-to-end fused MvGRW + volatility-conditioned panel model built on
+`probabilistic_ml_model/pymc_models/KalmanFilterModel.py`
+(`KalmanFilterPriceTarget`, `KalmanPanelInputs`, `build_fused_kalman_pt_model`):
+
+1. §1 data load from PostgreSQL + feature-catalogue role resolution
+2. §2 EDA panels (Plotly / matplotlib / `arviz-plots`)
+3. §3–4 state-space feature mapping and panel container construction
+4. §5b–8 fused panel model → prior predictive → NUTS posterior → posterior predictive
+5. §9–10c diagnostics, cross-sectional screen, CVaR-aware risk book, analytics export
+6. §10K–13 universe consensus fit, single-ISIN filter, mingled cohort, granular forest (all with optional stochastic-volatility twins)
+7. §14 summary and actionable recommendations
+
+Run it directly, or import `main()` for programmatic control:
+
+```powershell
+python pymc_kalman_filter_pt.py
+```
+
+```python
+from pymc_kalman_filter_pt import main
+
+artifacts = main(
+    run_eda_section=True,    # render the §2 EDA panels
+    write_analytics=True,    # append the §10c screen to analytics.kalman_filtered_price_targets
+    robust=False,            # True = Student-t panel likelihood, False = Normal twin
+    export_results=True,     # persist figures/tables/NetCDF under KALMAN_PT_RESULTS_DIR
+)
+# -> {'idata', 'results', 'kalman_results', 'panel', 'screen', 'universe_fit'}
+```
+
+Artifacts (PNG/CSV/JSON/NetCDF) are written to `KALMAN_PT_RESULTS_DIR`. The
+script resolves `DB_URL` from the environment and falls back to parsing
+`environment_variables.txt`. Set `KALMAN_PT_EXPORT_DRAWS=1` to additionally
+bundle the raw `eu` / `ept` posterior draws (large, ~200 MB per array), and
+`PML_FIG_WIDTH_PX` to match figure width to your display.
 
 ### Multi-Level Hierarchical Shrinkage (`probabilistic_ml_model/pymc_models/_hierarchy.py`)
 
@@ -145,9 +193,9 @@ Managed via a unified `PipelineRunner` in `probabilistic_ml_model/pipeline_runne
 ### Python-Version-Gated Dependencies
 
 Some packages are restricted to `python_version < '3.14'` because they do not yet ship Python 3.14 wheels:
-`catboost`, `streamlit`, `tensorflow`, `scikeras`.
+`streamlit`, `tensorflow`, `scikeras`.
 
-`shap` (>=0.50.0) and `numba` (>=0.63.0) are now Python 3.14-compatible and are no longer gated.
+`catboost` (>=1.2.10), `shap` (>=0.52.0), and `numba` (>=0.65.0) are now Python 3.14-compatible and are no longer gated.
 
 ## Setup
 
@@ -191,7 +239,7 @@ pip install -e ".[dev,dashboards,database,performance,tensorflow,notebooks,extra
 
 | File                        | Purpose                                                 |
 |:----------------------------|:--------------------------------------------------------|
-| `pyproject.toml`            | Build system, project metadata, tool configs (v0.9.9.2) |
+| `pyproject.toml`            | Build system, project metadata, tool configs (v0.9.9.5) |
 | `CHANGELOG.md`              | Release notes (Keep a Changelog / SemVer)               |
 | `requirements.txt`          | Full dependency list (core + optional)                  |
 | `Pipfile`                   | Pipenv dependency management                            |
@@ -207,9 +255,13 @@ pip install -e ".[dev,dashboards,database,performance,tensorflow,notebooks,extra
 # v3 pipeline (8-phase ML workflow + portfolio optimization)
 python expected_returns_v3.py
 
-# v4 pipeline
-python expected_returns_v4.py
+# Bayesian Kalman price-target workflow (fused panel model + screening + export)
+python pymc_kalman_filter_pt.py
 ```
+
+<!-- TODO: A v4 pipeline script (expected_returns_v4.py) is declared as the
+     `finance-ml-v4` entry point in pyproject.toml but is not present in the
+     repository yet. -->
 
 ### CLI Entry Points
 
@@ -222,27 +274,41 @@ The package provides command-line entry points (defined in `pyproject.toml`):
 | `finance-ml-validate` | `cli:validate`             | Data validation and schema check    |
 | `finance-ml-v4`       | `expected_returns_v4:main` | v4 expected-returns pipeline        |
 
-> **Note**: The `cli.py` module for `finance-ml`, `finance-ml-analyze`, and `finance-ml-validate` is currently under
-> development.
+> **Note**: The `cli.py` module (backing `finance-ml`, `finance-ml-analyze`,
+> and `finance-ml-validate`) and the `expected_returns_v4.py` module (backing
+> `finance-ml-v4`) are declared in `pyproject.toml` but are not yet present in
+> the repository. These entry points will not resolve until those modules are
+> added.
 
 ### Interactive Dashboards
 
-| Dashboard          | Run Command                          | Status |
-|:-------------------|:-------------------------------------|:-------|
-| **GEIB Dashboard** | `python dashboards\geib_dash_app.py` | ✅ Live |
+| Dashboard                        | Run Command                                              | Status    |
+|:---------------------------------|:---------------------------------------------------------|:----------|
+| **GEIB Dashboard** (modular)     | `python dashboards\geib_dash_app.py`                     | ✅ Live    |
+| **GEIB Dashboard** (single-file) | `python dashboards\global_equity_investment_dashboard.py` | ⚠️ Legacy |
 
-<!-- TODO: Add Streamlit / Equities / Dash apps under finance_ml/dashboards/ (not yet implemented). -->
+The modular app lives in `dashboards/geib/` (`app.py`, `data.py`, `metrics.py`,
+`theme.py`, plus `charts/` and `components/` sub-packages); `geib_dash_app.py`
+is its thin launcher. Set `GEIB_DASHBOARD=true` before launching.
+
+<!-- TODO: No Streamlit / Dash apps exist under finance_ml/dashboards/ — remove
+     or implement if the Streamlit entry point is still planned. -->
 
 ## Scripts & Utilities
 
 | Script / File            | Description                                        |
 |:-------------------------|:---------------------------------------------------|
-| `expected_returns_v3.py` | Automated expected-returns pipeline v3.1           |
-| `expected_returns_v4.py` | Next-generation expected-returns pipeline          |
-| `pml_pipeline_v1.py`     | Standalone PML pipeline driver (v1)                |
-| `main.py`                | Top-level entry point / smoke runner               |
-| `eda_visualizations.py`  | Ad-hoc EDA visualization helpers                   |
-| `set_env.ps1`            | Set environment variables for a PowerShell session |
+| `expected_returns_v3.py`                | Automated expected-returns pipeline (module header: v3.6) |
+| `pymc_kalman_filter_pt.py`              | Kalman price-target workflow (fused panel model, ~6.4k lines) |
+| `dashboards\geib_dash_app.py`           | GEIB equities dashboard launcher (live)            |
+| `feature_factory\eda_visualizations.py` | Ad-hoc EDA visualization helpers                   |
+| `feature_factory\dcf_calculator.py`     | Standalone DCF feature calculator                  |
+| `screening_etf_dw_transformations.py`   | ETF / data-warehouse screening transformations     |
+| `set_env.ps1`                           | Set environment variables for a PowerShell session |
+| `main.py`                               | PyCharm-generated sample stub (no project logic)   |
+
+<!-- TODO: `main.py` is still the default PyCharm "print_hi" template — either
+     implement a real top-level entry point or delete it. -->
 
 ### Feature Factory (`feature_factory/`)
 
@@ -277,15 +343,18 @@ Exploratory and reproducible analysis notebooks live at the repository root. Ins
 |:----------------------------------------------|:-----------------------------------------------------------|
 | `pymc_expected_returns_model.ipynb`           | End-to-end PyMC + ArviZ workflow for the 7 Bayesian models |
 | `pymc_expected_returns_v2.ipynb`              | v2 PyMC expected-returns experiments                       |
+| `pymc_kalman_filter_pt.ipynb`                 | Kalman price-target workflow (notebook twin of the script) |
+| `pymc_kalman_filter_pt_v2.ipynb`              | v2 Kalman price-target workflow                            |
 | `pymc_pml_model.ipynb`                        | PyMC PML model exploration                                 |
 | `pymc_dcf.ipynb`                              | PyMC DCF price-target model walkthrough                    |
 | `pymc_earnings_beat.ipynb`                    | PyMC earnings-beat model walkthrough                       |
 | `pymc_price_target.ipynb`                     | PyMC price-target model walkthrough                        |
+| `pymc_price_target_v2.ipynb` / `_v3.ipynb`    | Later price-target model iterations                        |
+| `bayesian_expected_returns_var_model.ipynb`   | Bayesian VaR / expected-returns model                      |
+| `pml_df_eda.ipynb`                            | Exploratory analysis of the PML dataframe                  |
 | `expected_returns_v3.ipynb`                   | v3 expected-returns pipeline notebook companion            |
 | `exp_returns_v3_analytics.ipynb`              | v3 analytics exploration                                   |
 | `expected_returns_analytics.ipynb`            | Expected-returns analytics exploration                     |
-| `expected_returns_ds.ipynb`                   | Expected-returns data-science scratchpad                   |
-| `pml_workflow_v4.ipynb`                       | v4 PML workflow walkthrough                                |
 | `pml_finance_model.ipynb`                     | PML finance model exploration                              |
 | `pml_model_analysis.ipynb`                    | PML model analysis & diagnostics                           |
 | `pml_bonds.ipynb`                             | PML bonds exploration                                      |
@@ -306,14 +375,20 @@ Set via `set_env.ps1` (dot-source to persist in session: `. .\set_env.ps1`). Ref
 | `MODEL_DIR`                | `models`                                                     | Saved model artifacts (`set_env.ps1` currently sets `regression`) |
 | `CACHE_DIR`                | `.cache`                                                     | Cache directory                                                   |
 | `OUTPUT_DIR`               | `outputs`                                                    | Generated reports / visualizations                                |
+| `KALMAN_PT_RESULTS_DIR`    | `pymc_kalman_filter_pt_results`                             | Kalman price-target workflow artifact exports (figures/CSV/JSON/NetCDF) |
+| `KALMAN_PT_EXPORT_DRAWS`   | `0`                                                          | `1` also exports the raw `eu` / `ept` posterior draws as NetCDF (large) |
+| `PML_FIG_WIDTH_PX`         | *(unset)*                                                    | Target Plotly / matplotlib figure width (px) for the Kalman panels |
+| `PML_STRICT_STREAK_MERGE`  | *(unset)*                                                    | Truthy = fail fast on missing EPS streak-merge columns (CI guard) |
 | `DB_URL`                   | `postgresql+psycopg2://postgres:...@localhost:5432/postgres` | SQLAlchemy DB connection URL                                      |
 | `DB_EQUITIES_SCHEMA`       | `public`                                                     | PostgreSQL schema for equities tables                             |
 | `DB_TABLE`                 | `equities`                                                   | Source equities table name                                        |
+| `DB_PML_SCHEMA`            | `pml`                                                        | PostgreSQL schema for PML tables                                  |
 | `DB_ANALYTICS_SCHEMA`      | `analytics`                                                  | PostgreSQL schema for analytics outputs                           |
-| `MODEL_VERSION`            | `v9_11`                                                      | Active model version tag                                          |
-| `RANDOM_SEED`              | `42` (commented out)                                         | Reproducibility seed (set explicitly to override stochastic ops)  |
+| `MODEL_VERSION`            | `v9_10` (`set_env.ps1`) / `v9_11` (`environment_variables.txt`) | Active model version tag                                      |
+| `RANDOM_SEED`              | `42`                                                        | Reproducibility seed                                              |
 | `N_JOBS`                   | `-1`                                                         | Parallel job count (`-1` = all cores)                             |
-| `PYTENSOR_FLAGS`           | `device=cpu,floatX=float64,cxx=`                             | PyTensor configuration (C backend disabled on Win/Python 3.14)    |
+| `PML_ENABLE_PYTENSOR_C`    | `1`                                                         | Opt-in flag to enable PyTensor's g++ C backend (MSYS2 UCRT64)     |
+| `PYTENSOR_FLAGS`           | `floatX=float64,cxx=`                                       | PyTensor configuration (default: pure-Python/numba VM; C backend enabled only when `PML_ENABLE_PYTENSOR_C=1`) |
 | `GEIB_DASHBOARD`           | `true`                                                       | Enable GEIB equities dashboard                                    |
 | `ENABLE_INTERACTIVE_PLOTS` | `true`                                                       | Toggle interactive visualizations                                 |
 
@@ -330,6 +405,9 @@ pytest -v
 
 # Specific file
 pytest tests\test_pml_workflow_v4.py
+
+# Single test
+pytest tests\test_kalman_filter_pt.py -k panel
 
 # With coverage (requires the [dev] extra)
 pytest --cov=probabilistic_ml_model --cov-report=term-missing
@@ -348,6 +426,7 @@ pytest --cov=probabilistic_ml_model --cov-report=term-missing
 | `test_data_loading_refactoring.py`        | 27      | Data loading & preprocessing refactoring     |
 | `test_catalog_consolidation.py`           | 26      | Catalog consolidation & consistency          |
 | `test_feature_catalog.py`                 | 26      | FeatureViewCatalog registry & resolution     |
+| `test_kalman_filter_pt.py`                | 24      | Kalman price-target workflow & panel model   |
 | `test_v35_earnings_beat.py`               | 22      | v3.5 earnings beat model tests               |
 | `test_ensemble_risk_adj_return.py`        | 21      | Ensemble risk-adjusted return scoring        |
 | `test_arviz_migration.py`                 | 18      | ArviZ 1.0 API migration                      |
@@ -355,6 +434,7 @@ pytest --cov=probabilistic_ml_model --cov-report=term-missing
 | `test_arviz_improvements.py`              | 17      | ArviZ diagnostic improvements                |
 | `test_pipeline_statistical_fixes.py`      | 17      | Pipeline statistical fix validations         |
 | `test_dcf_pt_nb_integration.py`           | 15      | DCF price-target notebook integration        |
+| `test_price_target_panel.py`              | 14      | Price-target panel inputs & coords           |
 | `test_hierarchical_mcmc_refactor.py`      | 11      | Hierarchical MCMC refactoring                |
 | `test_hierarchical_pymc_models.py`        | 11      | Hierarchical PyMC model shrinkage            |
 | `test_new_columns.py`                     | 9       | New column definitions & schema              |
@@ -362,7 +442,10 @@ pytest --cov=probabilistic_ml_model --cov-report=term-missing
 | `test_v35_anomaly_enhancements.py`        | 7       | v3.5 accounting anomaly enhancements         |
 | `test_distribution_fitting.py`            | 6       | Distribution fitting models                  |
 | `test_plr_idata_kwargs.py`                | 3       | ProbabilisticLinearRegression idata args     |
-| **Total**                                 | **527** | All 23 test modules covered                  |
+| **Total**                                 | **565** | All 25 test modules covered                  |
+
+> Counts are `def test_*` functions per module (parametrized cases expand at
+> runtime). Tests that need PostgreSQL are skipped when `DB_URL` is unreachable.
 
 ### Adding New Tests
 
@@ -420,26 +503,34 @@ PML_Finance_Project/
 │   └── ml_workflow/                # ML workflow phases
 │       └── v3/                     # v3 workflow utilities (cache, config, enrichment, I/O)
 ├── dashboards/                     # Standalone dashboards
-│   └── geib_dash_app.py            # GEIB equities dashboard (live)
-├── feature_factory/                # Feature calculation utilities (Beta/CAPM, DCF, Monte Carlo)
+│   ├── geib_dash_app.py            # GEIB equities dashboard launcher (live)
+│   ├── global_equity_investment_dashboard.py  # Legacy single-file dashboard
+│   └── geib/                       # Modular GEIB app (app, data, metrics, theme)
+│       ├── charts/                 # Plotly chart builders (CAPM, MC, VaR, Kelly, …)
+│       ├── components/             # Reusable Dash components
+│       └── assets/                 # CSS assets
+├── feature_factory/                # Feature calculation utilities (Beta/CAPM, DCF, Monte Carlo, EDA viz)
 ├── analytics/                      # Legacy analytics helpers (screening, statistics, viz)
 ├── sql_scripts/                    # SQL setup and migration scripts
 │   ├── analytics/                  # Analytics schema SQL
 │   ├── information_schema/         # Information schema queries
+│   ├── pml/                        # PML schema SQL
 │   └── public/                     # Public schema SQL
-├── expected_returns_v3.py          # Automated expected-returns pipeline v3.1
-├── expected_returns_v4.py          # Next-generation expected-returns pipeline
-├── pml_pipeline_v1.py              # Standalone PML pipeline driver (v1)
-├── main.py                         # Top-level entry point / smoke runner
-├── eda_visualizations.py           # Ad-hoc EDA visualization helpers
+├── expected_returns_v3.py          # Automated expected-returns pipeline (v3.6)
+├── pymc_kalman_filter_pt.py        # Kalman price-target workflow (fused panel model)
+├── pymc_kalman_filter_pt_results/  # Kalman workflow artifact exports (KALMAN_PT_RESULTS_DIR)
+├── main.py                         # PyCharm sample stub (see TODO above)
 ├── *.sql                           # Root-level schema / materialized-view / metadata SQL
 ├── *.ipynb                         # Exploratory / reproducible analysis notebooks
-├── tests/                          # Unit and integration tests (527 tests, 23 modules)
+├── tests/                          # Unit and integration tests (565 tests, 25 modules)
 ├── data/                           # Local data storage
 ├── outputs/                        # Reports and visualizations
 ├── logs/                           # Pipeline execution logs
 ├── archive/                        # Archived files and prior outputs
-├── docs/                           # Documentation
+├── docs/                           # Documentation (architecture, ArviZ migration, PyMC guides)
+├── reference material/             # External reference notebooks and datasets
+├── CLAUDE.md                       # AI-assistant contributor guide
+├── CHANGELOG.md                    # Release history (Keep a Changelog / SemVer)
 ├── pyproject.toml
 ├── Pipfile
 ├── requirements.txt
@@ -522,6 +613,23 @@ Enforced by the following tools (configured in `pyproject.toml`):
 | Flake8 | Linting              | Standard rules                           |
 | Mypy   | Static type checking | `python_version = "3.14"`                |
 
+## Documentation
+
+Longer-form documentation lives in `docs/`:
+
+| Document                                | Contents                                              |
+|:----------------------------------------|:-------------------------------------------------------|
+| `docs/ARCHITECTURE.md`                  | System architecture overview                           |
+| `docs/ArviZ 1.0 migration.md`           | ArviZ 1.x migration notes                              |
+| `docs/pymc_kalman_filter_pt.md`         | Kalman price-target workflow walkthrough               |
+| `docs/PyMC_overview.md` / `PyMC_glossary.md` | PyMC concepts and terminology                     |
+| `docs/pml_features.md`                  | Feature catalogue reference                            |
+| `docs/pml_sql_queries_updates.md`       | SQL query / schema change log                          |
+| `docs/global_equity_investment_dashboard.md` | GEIB dashboard design notes                       |
+| `docs/expected_returns_v5_dev.md`       | Planned v5 pipeline design                             |
+| `CLAUDE.md`                             | Contributor guide for AI assistants (deep-dive on conventions) |
+| `finance_ml_analytics_guide.md`         | Analytics platform usage guide                         |
+
 ## Contributing
 
 - Format with `black .` and `isort .`; lint with `flake8`; type-check with `mypy`.
@@ -532,7 +640,17 @@ Enforced by the following tools (configured in `pyproject.toml`):
 
 This project is licensed under the **MIT License**, declared in `pyproject.toml` (`license = { text = "MIT" }`).
 
-> **TODO**: Add a top-level `LICENSE` file with the full MIT license text.
-> **TODO**: Implement the `cli.py` module backing the `finance-ml`, `finance-ml-analyze`, and `finance-ml-validate`
-> entry points declared in `pyproject.toml`.
-> **TODO**: Confirm and document copyright holder / authors (currently `Finance ML Team` in `pyproject.toml`).
+No top-level `LICENSE` file is present in the repository.
+
+### Open TODOs
+
+- **TODO**: Add a top-level `LICENSE` file with the full MIT license text.
+- **TODO**: Confirm and document the copyright holder / authors (currently `Finance ML Team` in `pyproject.toml`).
+- **TODO**: Implement the `cli.py` module backing the `finance-ml`, `finance-ml-analyze`, and `finance-ml-validate`
+  entry points declared in `pyproject.toml`.
+- **TODO**: Add `expected_returns_v4.py` backing the `finance-ml-v4` entry point, or drop the entry point.
+- **TODO**: Replace or remove the placeholder `main.py`.
+- **TODO**: Align `MODEL_DIR` between `set_env.ps1` (`regression`) and `environment_variables.txt` (`models`), and
+  `MODEL_VERSION` (`v9_10` vs `v9_11`).
+- **TODO**: `environment_variables.txt` contains a committed database password — rotate it and move secrets to an
+  untracked `.env`.

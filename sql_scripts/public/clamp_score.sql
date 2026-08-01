@@ -1,8 +1,9 @@
-CREATE FUNCTION public.clamp_score(val numeric, min_val numeric DEFAULT 0, max_val numeric DEFAULT 100) RETURNS numeric
+CREATE FUNCTION public.clamp_score(val numeric, min_val numeric default 0, max_val numeric default 100) RETURNS numeric
 	IMMUTABLE PARALLEL SAFE
 	LANGUAGE sql AS
-$$
-SELECT GREATEST(min_val, LEAST(max_val, val)) AS result;
+$$ BEGIN
+	-- missing source code
+END;
 $$;
 
-ALTER FUNCTION public.clamp_score(unknown, unknown, unknown) OWNER TO postgres;
+ALTER FUNCTION public.clamp_score(numeric, numeric, numeric) OWNER TO postgres;

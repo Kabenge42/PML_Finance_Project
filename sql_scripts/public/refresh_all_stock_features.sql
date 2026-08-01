@@ -2,8 +2,7 @@ CREATE FUNCTION public.refresh_all_stock_features() RETURNS void
 	LANGUAGE plpgsql AS
 $$
 BEGIN
-	REFRESH MATERIALIZED VIEW CONCURRENTLY mv_all_stock_features;
-	RAISE NOTICE 'mv_all_stock_features refreshed at %', NOW();
+	-- missing source code
 END;
 $$;
 

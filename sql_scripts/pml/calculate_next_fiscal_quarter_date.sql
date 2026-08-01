@@ -5,4 +5,4 @@ $$
 SELECT (income_statement_report_date + make_interval(months => 3))::DATE
 $$;
 
-ALTER FUNCTION calculate_next_fiscal_quarter_date(unknown) OWNER TO postgres;
+ALTER FUNCTION calculate_next_fiscal_quarter_date(date) OWNER TO postgres;

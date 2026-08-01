@@ -8,7 +8,7 @@ SELECT model_target,
        array_agg(feature_alias ORDER BY feature_alias)
        FILTER (WHERE pymc_role = 'constant_data'::text)                                                 AS constant_data_aliases,
        array_agg(feature_alias ORDER BY feature_alias) FILTER (WHERE pymc_role = 'coord'::text)         AS coord_aliases
-FROM vw_pymc_feature_catalogue
+FROM pml.vw_pymc_feature_catalogue
 GROUP BY model_target;
 
 ALTER TABLE vw_pymc_feature_aliases

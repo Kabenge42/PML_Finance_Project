@@ -208,10 +208,7 @@ _FIT_KW = dict(samples=40, tune=40, chains=1, nuts_sampler="pymc",
 @pytest.mark.parametrize("parameterization", ["marginalized", "non_centered"])
 def test_fit_emits_implied_upside_when_last_price_given(parameterization):
     kf = KalmanFilterPriceTarget()
-    idata, _ = kf.fit(
-        price_targets=_PTS, isin="TEST", last_price=100.0,
-        parameterization=parameterization, **_FIT_KW,
-    )
+    idata, _ = kf.fit(price_targets=_PTS, isin="TEST", last_price=100.0, parameterization=parameterization, **_FIT_KW)
     post = idata.posterior
     assert "implied_upside" in post
     assert "state" in post
@@ -224,9 +221,7 @@ def test_fit_emits_implied_upside_when_last_price_given(parameterization):
 
 def test_fit_without_last_price_omits_implied_upside():
     kf = KalmanFilterPriceTarget()
-    idata, _ = kf.fit(
-        price_targets=_PTS, isin="TEST", parameterization="marginalized", **_FIT_KW,
-    )
+    idata, _ = kf.fit(price_targets=_PTS, isin="TEST", parameterization="marginalized", **_FIT_KW)
     assert "implied_upside" not in idata.posterior
     assert "state" in idata.posterior  # unchanged baseline behaviour preserved
 
@@ -256,10 +251,8 @@ def test_fit_with_trend_emits_beta_trend_and_forecasts():
     """trend=True adds the beta_trend slope, and forecast() projects to fiscal dates."""
     kf = KalmanFilterPriceTarget()
     dates = pd.date_range("2025-01-01", periods=len(_PTS), freq="30D")
-    idata, _ = kf.fit(
-        price_targets=_PTS, isin="TEST", dates=dates, last_price=109.0,
-        trend=True, parameterization="marginalized", **_FIT_KW,
-    )
+    idata, _ = kf.fit(price_targets=_PTS, isin="TEST", dates=dates, last_price=109.0, trend=True,
+                      parameterization="marginalized", **_FIT_KW)
     assert "beta_trend" in idata.posterior
 
     pred = kf.forecast(
@@ -279,10 +272,8 @@ def test_sv_emits_per_time_sigma_obs_and_priors():
     """stochastic_volatility=True swaps the scalar sigma_obs for a per-time
     log-volatility walk feeding a Student-t likelihood."""
     kf = KalmanFilterPriceTarget()
-    idata, _ = kf.fit(
-        price_targets=_PTS, isin="TEST", last_price=100.0,
-        stochastic_volatility=True, parameterization="non_centered", **_FIT_KW,
-    )
+    idata, _ = kf.fit(price_targets=_PTS, isin="TEST", last_price=100.0, stochastic_volatility=True,
+                      parameterization="non_centered", **_FIT_KW)
     post = idata.posterior
     assert {"log_vol", "vol_step_size", "nu_obs"}.issubset(set(post.data_vars))
     assert "sigma_obs" in post and post["sigma_obs"].dims[-1] == "time"

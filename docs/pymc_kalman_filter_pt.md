@@ -1489,6 +1489,12 @@ print(f'noise drivers (mean) — range:{range_norm_xs.mean():.3f}  '
 
 ## 5. Cross-Sectional State-Space Model (log-space Kalman update)
 
+> **Superseded (0.9.9.10):** this single-observation cross-sectional builder
+> (`build_kalman_pt_model` / `build_model_data` / `ModelData`) was removed from
+> `pymc_kalman_filter_pt.py`. The current path is the §5b fused MvGRW panel
+> (`prepare_kalman_panel_inputs` + `build_fused_kalman_pt_model`). This section
+> is retained as a historical record of the earlier notebook run.
+
 Generative form, per ISIN $i$:
 
 $$\eta_i = \mu_0 + X^{\text{drift}}_i\,\beta + \sum_g u^{(g)}_{[i]} \qquad\text{(hierarchical drift mean)}$$

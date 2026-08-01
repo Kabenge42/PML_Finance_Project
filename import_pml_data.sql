@@ -843,8 +843,9 @@ $$
 		v_header TEXT;
 		v_cols   TEXT[];
 		v_col    TEXT;
-		v_ddl    TEXT    := 'CREATE TEMP TABLE staging_header_buf (';
-		v_first  BOOLEAN := TRUE;
+		v_ddl      TEXT    := 'CREATE TEMP TABLE staging_header_buf (';
+		v_first    BOOLEAN := TRUE;
+		v_has_isin BOOLEAN := FALSE;
 	BEGIN
 		SELECT header_line INTO v_header FROM staging_header_buf LIMIT 1;
 		IF v_header IS NULL THEN RAISE EXCEPTION 'Could not read header line from data/pml/pml_us.csv'; END IF;
@@ -872,9 +873,18 @@ $$
 
 				-- Quote the column name and declare it TEXT
 				v_ddl := v_ddl || quote_ident(v_col) || ' TEXT';
+
+				IF v_col = 'ISIN' THEN v_has_isin := TRUE; END IF;
 				END LOOP;
 
 		v_ddl := v_ddl || ')';
+
+		-- The \copy WHERE filters below reference "ISIN" by name; fail fast
+		-- here if the vendor ever renames or drops that header column so we
+		-- get a clear error instead of a broken filter at import time.
+		IF NOT v_has_isin THEN
+			RAISE EXCEPTION 'CSV header has no ISIN column. Found columns: %', v_cols;
+		END IF;
 
 		EXECUTE 'DROP TABLE IF EXISTS staging_header_buf';
 		EXECUTE v_ddl;
@@ -891,18 +901,25 @@ $$;
 -- with a divergent header, we want a hard, immediate failure rather
 -- than silent column misalignment -- which is exactly what \copy
 -- gives us, since it validates field count per row.
+--
+-- ROW FILTER: each \copy carries a WHERE clause (PostgreSQL 12+) that
+-- drops rows whose ISIN is missing -- e.g. `688825,,CXMT Corporation,`
+-- in pml_apac.csv. ISIN is the primary identifier / PyMC coord for
+-- pml.pml_df, so ISIN-less rows are unusable downstream. The predicate
+-- covers all three empty shapes: unquoted empty (NULL via the NULL ''
+-- option), quoted empty (""), and whitespace-only values.
 
 \echo 'Importing US data...'
-\copy staging_header_buf FROM 'data/pml/pml_us.csv'   WITH (FORMAT csv, HEADER true, NULL '', ENCODING 'UTF8', QUOTE '"', ESCAPE '"', DELIMITER ',', FORCE_NULL("Description"))
+\copy staging_header_buf FROM 'data/pml/pml_us.csv'   WITH (FORMAT csv, HEADER true, NULL '', ENCODING 'UTF8', QUOTE '"', ESCAPE '"', DELIMITER ',', FORCE_NULL("Description")) WHERE NULLIF(BTRIM("ISIN"), '') IS NOT NULL
 
 \echo 'Importing EU data...'
-\copy staging_header_buf FROM 'data/pml/pml_eu.csv'   WITH (FORMAT csv, HEADER true, NULL '', ENCODING 'UTF8', QUOTE '"', ESCAPE '"', DELIMITER ',', FORCE_NULL("Description"))
+\copy staging_header_buf FROM 'data/pml/pml_eu.csv'   WITH (FORMAT csv, HEADER true, NULL '', ENCODING 'UTF8', QUOTE '"', ESCAPE '"', DELIMITER ',', FORCE_NULL("Description")) WHERE NULLIF(BTRIM("ISIN"), '') IS NOT NULL
 
 \echo 'Importing APAC data...'
-\copy staging_header_buf FROM 'data/pml/pml_apac.csv' WITH (FORMAT csv, HEADER true, NULL '', ENCODING 'UTF8', QUOTE '"', ESCAPE '"', DELIMITER ',', FORCE_NULL("Description"))
+\copy staging_header_buf FROM 'data/pml/pml_apac.csv' WITH (FORMAT csv, HEADER true, NULL '', ENCODING 'UTF8', QUOTE '"', ESCAPE '"', DELIMITER ',', FORCE_NULL("Description")) WHERE NULLIF(BTRIM("ISIN"), '') IS NOT NULL
 
 \echo 'Importing ROTW data...'
-\copy staging_header_buf FROM 'data/pml/pml_rotw.csv' WITH (FORMAT csv, HEADER true, NULL '', ENCODING 'UTF8', QUOTE '"', ESCAPE '"', DELIMITER ',', FORCE_NULL("Description"))
+\copy staging_header_buf FROM 'data/pml/pml_rotw.csv' WITH (FORMAT csv, HEADER true, NULL '', ENCODING 'UTF8', QUOTE '"', ESCAPE '"', DELIMITER ',', FORCE_NULL("Description")) WHERE NULLIF(BTRIM("ISIN"), '') IS NOT NULL
 
 -- ===================================================================
 -- DATA VALIDATION (PRE-INSERT)
@@ -910,6 +927,24 @@ $$;
 \echo 'Validating imported data...'
 SELECT 'Total rows in staging:' AS info, COUNT(*) AS count
 FROM staging_header_buf;
+
+-- Assert the \copy WHERE filters did their job: no ISIN-less rows may
+-- reach pml_df. Runs BEFORE the TRUNCATE so a regression (e.g. a \copy
+-- line rewritten without its WHERE clause) aborts with the current
+-- pml_df contents intact.
+DO
+$$
+	DECLARE
+		v_missing_isin BIGINT;
+	BEGIN
+		SELECT COUNT(*) INTO v_missing_isin FROM staging_header_buf WHERE NULLIF(BTRIM("ISIN"), '') IS NULL;
+		IF v_missing_isin > 0 THEN
+			RAISE EXCEPTION '% staged row(s) have an empty ISIN; the \copy WHERE filters should have dropped them.',
+				v_missing_isin;
+		END IF;
+		RAISE NOTICE 'ISIN validation passed: no empty-ISIN rows in staging.';
+	END
+$$;
 
 TRUNCATE TABLE pml_df CASCADE;
 INSERT INTO pml_df (ticker, isin, name, description, trading_region, trading_country, trading_country_name, exchange,

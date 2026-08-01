@@ -11,21 +11,24 @@ PyMC 6.0), statistical analysis, and portfolio optimization.
 **Key Technologies:**
 
 - Python 3.12–3.14
-- **PyMC 6.0** + **PyTensor 3.0** + **ArviZ 1.0** — Bayesian inference and diagnostics
+- **PyMC 6.2** + **PyTensor 3.2** + **ArviZ 1.1** — Bayesian inference and diagnostics
+    - `pymc` ↔ `pytensor` are a coupled pair (pymc 6.2 requires pytensor >=3.2.2,<3.3) — bump them together.
     - ArviZ 1.x ships as three packages: `arviz-base` (data containers), `arviz-stats` (diagnostics), `arviz-plots` (
       visualization). The top-level `arviz` meta-package re-exports all three for backward-compatible imports.
     - ArviZ 1.x replaces `arviz.InferenceData` with `xarray.DataTree` as the canonical output type. Use the
       `InferenceLike` alias (defined in `probabilistic_ml_model/_pymc_arviz_compat.py`) for type annotations:
       `Union[arviz.InferenceData, xarray.DataTree]`.
-    - **nutpie 0.14+** — default high-performance sampler for PyMC 6.0 (numba backend)
-    - **JAX 0.4.30+ / jaxlib 0.4.30+**, **blackjax 1.2+**, **numpyro 0.16+** — alternative JAX-based samplers
-    - **bambi 0.16+** — formula-based GLM interface on top of PyMC 6.0
+    - **nutpie 0.16+** — default high-performance sampler (numba backend)
+    - **JAX 0.11+ / jaxlib 0.11+** (mutually pinned pair), **blackjax 1.6+**, **numpyro 0.18+** — alternative JAX-based samplers
+    - **bambi 0.19+** — formula-based GLM interface on top of PyMC
+    - **Blocked upgrades** (documented in-line in the dependency files): `numpy` stays <2.5 (numba 0.65/0.66 both
+      require it) and `numba` stays <=0.65.1 (pytensor 3.2.x cap) — numba is the project's default PyTensor backend.
 - PostgreSQL — centralized data storage with 17 feature views
 - pandas/NumPy/SciPy — data processing
 - scikit-learn, XGBoost, LightGBM, CatBoost — classical ML
 - Plotly, Matplotlib, Seaborn — visualization
 - Streamlit (Python < 3.14 only), Dash — interactive dashboards
-- pytest — 545 test cases across 25 test modules
+- pytest — 565 test cases across 25 test modules
 
 ## Development Setup
 
@@ -95,7 +98,7 @@ PML_Finance_Project/
 │   ├── visualizations/          # Per-model plot modules + ArviZ diagnostics
 │   ├── pipeline_runners.py      # 8-phase orchestration via PipelineConfig
 │   └── _pymc_arviz_compat.py    # InferenceLike type alias (arviz.InferenceData | xarray.DataTree)
-├── tests/                       # 545 pytest cases across 25 modules
+├── tests/                       # 565 pytest cases across 25 modules
 ├── sql_scripts/
 │   ├── pml/                     # Authoritative DDL: pml_df, metadata, MVs, helper fns (SSOT)
 │   ├── analytics/               # Output analytics tables/screens (kalman_filtered_price_targets, screens)
@@ -105,9 +108,11 @@ PML_Finance_Project/
 ├── docs/                        # Architecture guides (PyMC, ArviZ 1.0, SQL)
 ├── data/                        # Regional PML / screening CSV snapshots
 ├── reference material/          # MyST / notebook reference material
+├── archive/                     # Archived scripts/notebooks (expected_returns_v4.py, pml_workflow_v4.ipynb, …)
 ├── *.ipynb                      # PyMC model + analytics notebooks (see Key Notebooks)
+├── *.sql                        # Root-level schema/import/catalogue SQL (pml_feature_catalogue.sql, import_pml_data.sql, …)
 ├── expected_returns_v3.py       # Main v3 pipeline entry point
-├── expected_returns_v4.py       # v4 baseline pipeline (finance-ml-v4)
+├── pymc_kalman_filter_pt.py     # Kalman price-target workflow (~6.4k lines; fused panel model + screen + analytics export)
 ├── pyproject.toml / Pipfile / requirements.txt   # Dependency definitions (keep in sync)
 ├── set_env.ps1 / environment_variables.txt       # Environment configuration
 ├── CHANGELOG.md                 # Release notes (authoritative version source)
@@ -147,11 +152,7 @@ from probabilistic_ml_model import (
     build_hierarchy_indices,
 )
 
-idata, _ = model.fit(
-    data,
-    categories_df=df_categories,
-    hierarchy_levels=["exchange", "sector", "industry"],
-)
+idata, _ = model.fit(data, categories_df=df_categories, hierarchy_levels=["exchange", "sector", "industry"])
 ```
 
 ### 3. Feature Alignment & ArviZ (pymc_models/_feature_alignment.py)
@@ -176,7 +177,7 @@ from probabilistic_ml_model import (
 |---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | EarningsBeatBayesian      | Beat probability                                                                                                                                                                                                                                     |
 | PriceTargetAchievement    | Return expectation                                                                                                                                                                                                                                   |
-| KalmanFilterPriceTarget   | Smoothed signals (single-response hierarchical cross-section by default on the T=1 MV snapshot; learned risk/size tilts. Rank-1 ICM panel spine reserved for a genuine `collapse_time=False` (isin, time) panel — see `build_fused_kalman_pt_model`) |
+| KalmanFilterPriceTarget   | Smoothed signals (single-response hierarchical cross-section by default on the T=1 MV snapshot; learned risk/size tilts. Since 0.9.9.10 a genuine (isin, time) T=4 log-uplift panel from the `price_target_{6m,3m,1m}_ago` / `price_{6m,3m,1m}_ago` trails is available **opt-in** via `prepare_kalman_panel_inputs(history_lookbacks=…)` / `KalmanRunConfig.panel_lookbacks` (default `()` = T=1; T=4 is validated since the per-time direct-intercept reparameterisation — 0 divergences, worst r_hat 1.00, 15.7 min end-to-end — see CHANGELOG) — see `build_fused_kalman_pt_model`) |
 | DCFPriceTarget            | Fair-value bands                                                                                                                                                                                                                                     |
 | DividendSafetyBayesian    | Cut probability                                                                                                                                                                                                                                      |
 | CreditRiskBayesian        | Distress risk                                                                                                                                                                                                                                        |
@@ -250,21 +251,29 @@ from probabilistic_ml_model.visualizations import (
 # v3 pipeline (8 phases: data load → models → ensemble → MCMC → viz → export)
 python expected_returns_v3.py
 
-# v4 baseline pipeline (entry point: expected_returns_v4:main)
-python expected_returns_v4.py
+# Bayesian Kalman price-target workflow (fused panel model → screen → risk book → analytics export)
+python pymc_kalman_filter_pt.py
 ```
+
+`pymc_kalman_filter_pt.py` also exposes an importable `main(run_eda_section=…, write_analytics=…, robust=…,
+export_results=…, config=…)` returning `{'idata', 'results', 'kalman_results', 'panel', 'screen', 'universe_fit'}`;
+artifacts (PNG/CSV/JSON/NetCDF) go to `KALMAN_PT_RESULTS_DIR`. Workflow knobs (NUTS budget, screen/risk-book
+parameters, panel lookbacks, universe-query dates) live on the frozen `KalmanRunConfig` dataclass
+(`KalmanRunConfig.from_env()` / `get_run_config()`), passed via `main(config=…)`.
 
 Console-script entry points declared in `pyproject.toml` `[project.scripts]`:
 `finance-ml`, `finance-ml-analyze`, `finance-ml-validate` (→ `cli:*`) and
-`finance-ml-v4` (→ `expected_returns_v4:main`).
+`finance-ml-v4` (→ `expected_returns_v4:main`). **Note:** neither `cli.py` nor a root-level
+`expected_returns_v4.py` exists yet (the v4 script lives in `archive/`), so these entry points do not currently
+resolve — see the README TODOs.
 
 ### Key Notebooks
 
 - `pymc_expected_returns_model.ipynb` — End-to-end PyMC + ArviZ
 - `pymc_earnings_beat.ipynb` / `pymc_price_target_v3.ipynb` / `pymc_dcf.ipynb` — per-model PyMC workflows
-- `pymc_kalman_filter_pt_v2.ipynb` — Kalman price-target panel model
-- `pml_workflow_v4.ipynb` — v4 pipeline
+- `pymc_kalman_filter_pt_v3.ipynb` — Kalman price-target panel model (notebook twin of `pymc_kalman_filter_pt.py`; KalmanRunConfig-driven, T=4 opt-in toggle, return-space forecasts. Supersedes `pymc_kalman_filter_pt_v2.ipynb`)
 - `pml_model_analysis.ipynb` — Diagnostics
+- `pml_workflow_v4.ipynb` — v4 pipeline (archived under `archive/`)
 
 ### Dashboards
 
@@ -308,8 +317,8 @@ schema — not from Python variable names or notebook outputs.
 
 | Table                      | Purpose                                                                                                                                 |
 |----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
-| `pml.pml_df`               | Master ~590-column denormalized equity dataframe. All numeric columns are `double precision`; identifiers are `text`; dates are `date`. |
-| `pml.staging`              | Raw CSV/vendor landing zone with original vendor column names (mixed case). Mirrors `pml_df` structure.                                 |
+| `pml.pml_df`               | Master ~676-column denormalized equity dataframe. All numeric columns are `double precision`; identifiers are `text`; dates are `date`. |
+| `pml.staging`              | Raw CSV/vendor landing zone with original vendor column names (mixed case). Mirrors `pml_df` structure. `import_pml_data.sql` filters ISIN-less vendor rows at `\copy` time and asserts none reach `pml_df`. |
 | `pml.pml_df_metadata`      | Feature registry: one row per `pml_df` column with `pymc_role`, `feature_role`, `category`, `data_type`, `model_targets[]`.             |
 | `pml.pml_df_feature_alias` | Per-model alias overrides: `(column_name, model_target) → feature_alias`.                                                               |
 
@@ -346,8 +355,13 @@ altman_z_score_{fy,fq,ltm}, beta_{1y,2y,5y}
 ```
 eps_{adj,gaap,diluted}_*, ebitda_*, revenue_*, gross_profit_*,
 fcf_*, cfo_*, cfi_*, cff_*, capital_expenditure_*,
-roa_*, roe_*, gpm_*, ev_ebitda_*, ev_sales_*, pe_*, pb_*
+roa_*, roe_*, gpm_*, ev_ebitda_*, ev_sales_*, pe_*, pb_*,
+return_on_assets_roa_pct_*, asset_turnover_*, quick_ratio_*,
+current_ratio_*, long_term_debt_equity_*, net_income_*
 ```
+
+The last six families (levels plus `neg1..neg4` fy/fqfq lags) are the raw inputs to the `pml.piotroski_f_score()`
+9-signal composite consumed by `mv_pymc_kalman_pt`.
 
 **Time series / momentum** — lookback suffixes `_5d`, `_1w`, `_1m`, `_3m`, `_6m`, `_1y`, `_3y`, `_5y`:
 
@@ -440,11 +454,20 @@ catalogue roles are flipped via per-model overrides in
 `total_return_*` aliases → `observed`) — check
 `pml.vw_pymc_feature_catalogue` rather than assuming the base-row role.
 
+Since 0.9.9.9 `mv_pymc_kalman_pt` additionally computes four per-fiscal-year **Piotroski F-score** composites
+(`feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`, via `pml.piotroski_f_score()` over consecutive lag pairs) plus
+their median `feat_median_piotroski_f_score`. Only the median enters the fused drift design matrix as the
+fundamental-quality predictor; the four components are collinear with it and are excluded via
+`KALMAN_PIOTROSKI_COMPONENT_FEATURES` ⊂ `KALMAN_DRIFT_EXCLUDED_FEATURES` in
+`probabilistic_ml_model/pymc_models/KalmanFilterModel.py` (`select_drift_features()` applies the SSOT partition:
+leakage, noise wideners, tilt drivers, support counters, rating counts, collinear composition leg, Piotroski
+components, and `days_*` time covariates all stay out of the drift matrix — EDA / analytics export only).
+
 | MV                           | Observed column                                                                | Key `feat_` columns                                                                                                                                       |
 |------------------------------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `mv_pymc_earnings_beat`      | `n_total`, `n_beats`, `n_total_annual`, `n_beats_annual`                       | `feat_logit_beat_rate`, `feat_eps_fy1e`, `feat_rev_{1w,1m,3m,6m,1y}`, `feat_rev_accel_1m_6m`, `feat_last_q_surprise`                                      |
 | `mv_pymc_price_target`       | `observed_target_pct`, `observed_target_pct_med`, `price_target`, `n_analysts` | `feat_net_buy_sentiment`, `feat_implied_upside`, `feat_target_range_width`, `feat_pt_momentum_3m`, `feat_target_dispersion_cv`, `feat_52w_range_position` |
-| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_pt_drift`, `feat_price_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_pt_achievement_1y` |
+| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_pt_drift`, `feat_price_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_pt_achievement_1y`, `feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`, `feat_median_piotroski_f_score` |
 | `mv_pymc_dcf_pt`             | `observed_pt`                                                                  | `feat_fcf_growth_{1y,2y}`, `feat_fcf_terminal_growth`, `feat_reinvest_rate`, `feat_capex_to_fcf`, `feat_tr_cagr_{3y,10y}`                                 |
 | `mv_pymc_dividend_safety`    | `observed_div_yield`                                                           | `feat_fcf_coverage`, `feat_cfo_coverage`, `feat_eps_payout_ratio`, `feat_dps_growth_{1y,3y,5y}`, `feat_yield_spread_vs_5y`                                |
 | `mv_pymc_credit_risk`        | `observed_altman_z`                                                            | `feat_distress_zone`, `feat_z_trend_{1y,3y}`, `feat_cfo_capex_cov`, `feat_fcf_yield`, `feat_beta_2y`                                                      |
@@ -488,10 +511,15 @@ pml.coef_var(mu, sigma)                            -- sigma / ABS(mu)
 pml.fcf_dividend_coverage(fcf, dividends_paid)
 pml.altman_zone(z) → INT                           -- 1=distress (<1.81), 2=grey, 3=safe
 pml.accruals_ratio(ni, cfo, scale)                 -- (ni - cfo) / scale
+pml.piotroski_f_score(roa, roa_prev, cfo, ni, ltde, ltde_prev, cr, cr_prev,
+                      shrs, shrs_prev, gpm, gpm_prev, at, at_prev) → INT
+                                                   -- 9-signal 0-9 composite; NULL comparisons score 0
+pml.calc_piotroski_f_score(p_isin DEFAULT NULL)    -- → TABLE(isin, piotroski_f_score): LTM screener wrapper
 
 -- Date / fiscal
 pml.frequency_to_months(frequency TEXT, fy_end_date, next_fy_end_date) → INT
 pml.calculate_next_fiscal_quarter(next_earnings_date, ...) → INT    -- returns 1-4
+pml.calculate_next_fiscal_quarter_date(income_statement_report_date) → DATE  -- +3 months
 pml.ema_crossover_signal(fast_ema, slow_ema) → INT  -- 1 / -1 / 0
 ```
 
@@ -788,7 +816,7 @@ pytest --cov=probabilistic_ml_model --cov-report=term-missing tests/
 
 ### PyTensor Compilation (Windows)
 
-PyMC 6.0 + PyTensor 3.0 uses **numba** as the default backend (via nutpie). C++ compilation (`cxx`) is no longer the
+PyMC 6.2 + PyTensor 3.2 uses **numba** as the default backend (via nutpie). C++ compilation (`cxx`) is no longer the
 primary backend and is not required for normal operation.
 
 **The C backend is disabled project-wide by default.** Importing `probabilistic_ml_model` runs
@@ -806,21 +834,27 @@ compile **cache**. With `C:\msys64\ucrt64\bin` on `PATH`, the UCRT64 toolchain (
 is verified working on Python 3.14.6 + g++ 15.2.0 against a fresh compile cache.
 
 Opt back into the C backend by setting `PML_ENABLE_PYTENSOR_C=1` **before** import, and ensure
-`C:\msys64\ucrt64\bin` is first on `PATH` (`set_env.ps1` does both and sanity-compiles a probe before enabling).
-`set_env.ps1` honours the same flag (default: pure-Python/numba VM). Model
+`C:\msys64\ucrt64\bin` is first on `PATH` (`set_env.ps1` does both and sanity-compiles a probe before enabling;
+without the flag it falls back to the pure-Python/numba VM). The reference config in `environment_variables.txt`
+now ships with `PML_ENABLE_PYTENSOR_C=1` and the verified UCRT64 toolchain enabled. Model
 `fit()` / sampling paths should also pass `compile_kwargs=get_pytensor_compile_kwargs()` (from
 `probabilistic_ml_model.pymc_models._pytensor_compat`), which forces the `Mode(linker="py")` VM at the call site.
+
+**Use FORWARD slashes in the `cxx` path.** PyTensor parses `PYTENSOR_FLAGS` with posix shlex, which treats `\` as an
+escape character and strips it — `C:\msys64\ucrt64\bin\g++.exe` is mangled into the non-existent
+`C:msys64ucrt64bing++.exe`. Forward slashes survive the parser and g++/Windows accept them. (`device=` is also
+dropped: PyTensor does not recognise it and defaults to CPU.)
 
 If you see `FileNotFoundError: cxx not found` from a legacy code path:
 
 ```powershell
-$env:PYTENSOR_FLAGS = "device=cpu,floatX=float64,cxx=C:\msys64\ucrt64\bin\g++.exe"
+$env:PYTENSOR_FLAGS = "floatX=float64,cxx=C:/msys64/ucrt64/bin/g++.exe"
 ```
 
 Disable C++ compilation entirely (forces pure Python / numba path):
 
 ```powershell
-$env:PYTENSOR_FLAGS = "device=cpu,floatX=float64,cxx="
+$env:PYTENSOR_FLAGS = "floatX=float64,cxx="
 ```
 
 For JAX backend (blackjax / numpyro samplers):
@@ -856,6 +890,6 @@ catalog = get_feature_catalog(force_reload=True)
 
 ---
 
-**Version:** 0.9.9.8 (CHANGELOG; `pyproject.toml` lags at 0.9.9.5 pending the next packaging bump) | **Python:**
-3.12–3.14 | **PyMC:** >=6.2,<7 | **PyTensor:** >=3.2.2,<4 | **ArviZ:** >=1.0,<2 (arviz-base + arviz-stats + arviz-plots) |
-**JAX:** >=0.11,<1 | **License:** MIT | **DB:** PostgreSQL
+**Version:** 0.9.9.11 (CHANGELOG; `pyproject.toml` and README badge lag at 0.9.9.5 pending the next packaging bump) |
+**Python:** 3.12–3.14 | **PyMC:** >=6.2,<7 | **PyTensor:** >=3.2.2,<4 | **ArviZ:** >=1.1,<2 (arviz-base + arviz-stats +
+arviz-plots) | **JAX:** >=0.11,<1 | **License:** MIT | **DB:** PostgreSQL

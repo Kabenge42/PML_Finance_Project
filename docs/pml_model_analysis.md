@@ -18771,13 +18771,13 @@ pt_values = pml_df[pt_col].dropna().values
 if len(pt_values) >= 5:
     example_ticker = pml_df.loc[pml_df[pt_col].notna(), "ticker"].iloc[0]
     print(f"Running Kalman Filter for {example_ticker} ({len(pt_values)} observations)...")
-    kf_idata = kf_model.fit(,
+    kf_idata = kf_model.fit(),
 
-    # Plotting filtered state
+        # Plotting filtered state
     az.plot_posterior(kf_idata, var_names=["state"], coords={"time": [len(pt_values) - 1]})
     plt.title(f"Kalman Filtered Price Target Posterior (T={len(pt_values)}) for {example_ticker}")
     plt.show()
-else:
+    else:
     print(f"Insufficient price target data ({len(pt_values)} obs) — skipping Kalman Filter.")
 
 ```
