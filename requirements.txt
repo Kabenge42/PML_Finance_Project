@@ -3,7 +3,7 @@
 # ============================================================================
 # Install with: pip install -r requirements.txt
 # Python version: >=3.12,<3.15
-# Last updated: 2026-07-26
+# Last updated: 2026-08-02
 # Aligned with pyproject.toml v0.9.9.5
 # Upgraded to the PyMC 6.0 / PyTensor 3.0 / ArviZ 1.0 ecosystem
 # (https://www.pymc.io/blog/pymc_v6_ecosystem_updates.html).
@@ -112,6 +112,8 @@ dash>= 4.0.0, <7.0.0
 jupyter>= 1.0.0, <4.0.0
 notebook>= 7.2.0, <8.0.0
 ipykernel>= 6.29.0, <8.0.0
+# Required so tqdm.auto finds IProgress under Jupyter (silences TqdmWarning).
+ipywidgets>=8.1.0,<9.0.0
 
 # ============================================================================
 # Optional: Development Tools (uncomment as needed)
@@ -135,7 +137,8 @@ scikeras>=0.13.0,<1.0.0; python_version < '3.14'
 # ============================================================================
 networkx>= 3.3.0, <4.0.0
 Pillow>= 12.0.0, <15.0.0
-# numba 0.66 is blocked: pytensor 3.2.x requires numba<=0.65.1.
+# pytensor 3.2.4 raised its numba cap to <=0.66.0 (was <=0.65.1), unblocking
+# numba 0.66 + llvmlite 0.48. numpy must stay <2.5 (numba 0.66 requirement).
 numba>= 0.65.0, <1.0.0
 forex-python>= 1.8, <4.0.0
 requests>=2.32.0
@@ -145,6 +148,4 @@ dash-bootstrap-components>= 2.0.0, <4.0.0
 flask>= 3.1.0, <4.0.0
 ipython>= 8.28.0, <11.0.0
 python-dotenv
-cycler
-cycler
 cycler

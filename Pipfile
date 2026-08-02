@@ -71,13 +71,19 @@ dash-bootstrap-components = ">=2.0.0,<4.0.0"
 flask = ">=3.1.0,<4.0.0"
 # --- Now Python 3.14-compatible (ungated) ---
 shap = ">=0.52.0,<1.0.0"
-# numba 0.66 is blocked: pytensor 3.2.x requires numba<=0.65.1.
+# pytensor 3.2.4 raised its numba cap to <=0.66.0 (was <=0.65.1), unblocking
+# numba 0.66 + llvmlite 0.48. numpy must stay <2.5 (numba 0.66 requirement).
 numba = ">=0.65.0,<1.0.0"
 # catboost 1.2.10 (Feb 2026) added cp314 wheels — no longer gated.
 # See https://github.com/catboost/catboost/issues/2943.
 catboost = ">=1.2.10"
 numpyro = ">=0.18.0"
 blackjax = ">=1.6.0"
+ipykernel = "*"
+# Required so tqdm.auto finds IProgress under Jupyter (silences TqdmWarning).
+ipywidgets = ">=8.1.0,<9.0.0"
+webcolors = "*"
+nbformat = "==5.10.4"
 
 [dev-packages]
 pytest = ">=9.0.0,<12.0.0"

@@ -22,7 +22,8 @@ PyMC 6.0), statistical analysis, and portfolio optimization.
     - **JAX 0.11+ / jaxlib 0.11+** (mutually pinned pair), **blackjax 1.6+**, **numpyro 0.18+** — alternative JAX-based samplers
     - **bambi 0.19+** — formula-based GLM interface on top of PyMC
     - **Blocked upgrades** (documented in-line in the dependency files): `numpy` stays <2.5 (numba 0.65/0.66 both
-      require it) and `numba` stays <=0.65.1 (pytensor 3.2.x cap) — numba is the project's default PyTensor backend.
+      require it) — numba is the project's default PyTensor backend. numba 0.66 + llvmlite 0.48 are allowed since
+      pytensor 3.2.4 raised its numba cap to <=0.66.0 (0.65.1 was the ceiling under pytensor <=3.2.3).
 - PostgreSQL — centralized data storage with 17 feature views
 - pandas/NumPy/SciPy — data processing
 - scikit-learn, XGBoost, LightGBM, CatBoost — classical ML

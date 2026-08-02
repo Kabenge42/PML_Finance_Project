@@ -122,7 +122,8 @@ tensorflow = [
 ]
 
 # Performance optimizations (numba 0.65.0+ supports Python 3.14).
-# numba 0.66 is blocked: pytensor 3.2.x requires numba<=0.65.1.
+# pytensor 3.2.4 raised its numba cap to <=0.66.0 (was <=0.65.1), unblocking
+# numba 0.66 + llvmlite 0.48. numpy must stay <2.5 (numba 0.66 requirement).
 performance = [
     "numba>=0.65.0,<1.0.0",
 ]
@@ -132,6 +133,8 @@ notebooks = [
     "jupyter>=1.0.0,<4.0.0",
     "notebook>=7.2.0,<8.0.0",
     "ipykernel>=6.29.0,<8.0.0",
+    # Required so tqdm.auto finds IProgress under Jupyter (silences TqdmWarning).
+    "ipywidgets>=8.1.0,<9.0.0",
     "ipython>=8.28.0,<11.0.0",
 ]
 
