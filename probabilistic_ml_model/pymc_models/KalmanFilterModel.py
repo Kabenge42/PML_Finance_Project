@@ -212,11 +212,13 @@ KALMAN_NOISE_WIDENER_FEATURES: frozenset[str] = frozenset({
 })
 
 # Named tilt drivers with dedicated ``pm.Data`` containers + sign-fixed loadings
-# in ``build_fused_kalman_pt_model`` (risk / size adjustments on
+# in ``build_fused_kalman_pt_model`` (risk / size / volume adjustments on
 # ``risk_adj_return``); folding them into the generic ``beta`` block as well
 # would double-count them. The ordered tuple backs display frames; the
 # frozenset backs the drift-exclusion union.
-KALMAN_TILT_FEATURE_ORDER: tuple[str, ...] = ("feat_avg_beta", "feat_mcap_country_r")
+KALMAN_TILT_FEATURE_ORDER: tuple[str, ...] = (
+    "feat_avg_beta", "feat_mcap_country_r", "feat_rel_volume",
+)
 KALMAN_TILT_FEATURES: frozenset[str] = frozenset(KALMAN_TILT_FEATURE_ORDER)
 
 # Valid-pair counters behind the ``target_drift_n`` SQL helper
@@ -1883,13 +1885,13 @@ class KalmanFilterPriceTarget:
 # :data:`GROUP_EFFECT_SCALE` in ``build_fused_kalman_pt_model`` (the group SD is
 # fixed, not learned — see that builder's docstring for why).
 _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
-    "trading_region",
-    "region",
-    "sector",
     "size_class",
     "style_class",
     "exchange",
     "unit",
+    "country",
+    "industry",
+
 )
 
 # Fixed (non-learned) scale for the crossed group-intercept ``ZeroSumNormal``
@@ -1973,11 +1975,15 @@ class KalmanPanelInputs:
         ``beta_{1y,2y,5y}``). The systematic-risk (CAPM) driver of the
         ``exp(-risk_penalty * z(avg_beta))`` risk adjustment.
     size_ratio : numpy.ndarray
-        Per-ISIN size ratio (``feat_mcap_country_r`` = ``market_cap /
-        market_cap_3yavg``): current market cap relative to its own 3-year
-        average. Carried raw and z-scored inside
+        Per-ISIN country market-cap rank ratio (``feat_mcap_country_r`` =
+        ``(100 - market_cap_country_r) / 100``): ~0 for the largest name in
+        its country, larger for smaller caps. Carried raw and z-scored inside
         :func:`build_fused_kalman_pt_model`, where it discounts ``risk_adj_return``
-        multiplicatively via ``exp(-size_penalty * z(size_ratio))``.
+        additively via ``- size_loading * z(size_ratio)``.
+    volume_ratio : numpy.ndarray
+        Per-ISIN relative trading volume (``feat_rel_volume``). Carried raw and
+        z-scored inside :func:`build_fused_kalman_pt_model`, where it discounts
+        ``risk_adj_return`` additively via ``- volume_loading * z(volume_ratio)``.
     dispersion_cv : numpy.ndarray
         Per-ISIN consensus noise coefficient of variation
         (``feat_pt_noise_sigma / last_price``); widens ``sigma_isin``.
@@ -2000,6 +2006,7 @@ class KalmanPanelInputs:
     dispersion_cv: np.ndarray
     avg_beta: np.ndarray
     size_ratio: np.ndarray
+    volume_ratio: np.ndarray
     drift_names: list[str]
     response_names: list[str]
     coord_uniques: dict[str, np.ndarray]
@@ -2012,6 +2019,7 @@ def build_fused_kalman_pt_model(
         group_effects: Optional[tuple[str, ...]] = None,
         risk_penalty: float = 0.1,
         size_penalty: float = 0.1,
+        volume_penalty: float = 0.2,
         robust: bool = True,
 ) -> "pm_typing.Model":
     """Build the fused coregionalised cross-sectional Kalman price-target model.
@@ -2054,16 +2062,26 @@ def build_fused_kalman_pt_model(
     premium — a mean-reversion / "don't chase the re-rating" tilt — exactly
     parallel to the systematic-risk (beta) discount.
 
-    Both tilts are **additive** in the standardised log-uplift return space, not the
-    earlier multiplicative ``exp(-penalty · z)`` factors. ``expected_return`` is a
+    A third **volume tilt** discounts ``risk_adj_return`` by the per-ISIN average
+    relative trading volume (``feat_rel_volume``): ``- volume_loading *
+    z(feat_rel_volume)``. Elevated relative volume (e.g. distribution, event-driven
+    churn) discounts the risk-adjusted return the same way an elevated beta or an
+    above-average size does; ``volume_penalty`` defaults to ``0.2`` — enabled by
+    default (twice the ``risk_penalty`` / ``size_penalty`` prior scale) — so the
+    factor is identified from the cross-section on every run unless explicitly
+    disabled.
+
+    All three tilts are **additive** in the standardised log-uplift return space, not
+    the earlier multiplicative ``exp(-penalty · z)`` factors. ``expected_return`` is a
     zero-mean cross-sectional *deviation*, so a multiplicative factor only rescaled
     its magnitude and inverted the discount direction for below-average names (a
     high-beta, below-average name was lifted toward zero, not penalised); the
     additive form ``- loading · z`` is monotone in the feature for either sign of
-    ``expected_return``. ``risk_loading`` / ``size_loading`` are **learned**
-    sign-fixed (``HalfNormal``) loadings whose prior scale is ``risk_penalty`` /
-    ``size_penalty`` (``0.0`` disables the factor), so the penalty magnitude is
-    identified from the cross-section while its direction stays a discount.
+    ``expected_return``. ``risk_loading`` / ``size_loading`` / ``volume_loading`` are
+    **learned** sign-fixed (``HalfNormal``) loadings whose prior scale is
+    ``risk_penalty`` / ``size_penalty`` / ``volume_penalty`` (``0.0`` disables the
+    factor), so the penalty magnitude is identified from the cross-section while its
+    direction stays a discount.
 
     NUTS-inplace-safety constraints (preserved from the notebook):
 
@@ -2152,6 +2170,11 @@ def build_fused_kalman_pt_model(
         ``feat_mcap_country_r`` (z-scored) as an additive tilt
         ``- size_loading * z(feat_mcap_country_r)`` — discounting names trading above
         their 3-year average size. ``0.0`` disables the size factor entirely.
+    volume_penalty : float
+        Prior scale (``HalfNormal`` sigma) of the learned, sign-fixed
+        ``volume_loading`` applied to ``expected_return`` via the per-ISIN average
+        rel_volume (z-scored relative volume) as an additive tilt
+        ``- volume_loading * z(feat_rel_volume)``. ``0.0`` disables the factor.
     robust : bool
         ``True`` (default) → Student-t panel likelihood (absorbs analyst
         outliers); ``False`` → Normal-likelihood twin.
@@ -2259,6 +2282,17 @@ def build_fused_kalman_pt_model(
         np.asarray(panel.size_ratio, dtype="float64"), nan=_size_mu
     )
 
+    # Standardised relative trading volume for the learned volume tilt on
+    # ``risk_adj_return``. ``panel.volume_ratio`` is ``feat_rel_volume``; z-scoring
+    # keeps the tilt a *relative* cross-sectional factor, exactly as for
+    # ``avg_beta`` / ``size_ratio``. Missing entries (NaN) map to a 0 tilt via the
+    # z-scored container; the raw container is filled with the cross-sectional mean
+    # for an honest provenance record (PyMC 6.0 rejects NaN in ``pm.Data``).
+    volume_ratio_z, _volume_mu = _nan_zscore(panel.volume_ratio)
+    volume_ratio_filled = np.nan_to_num(
+        np.asarray(panel.volume_ratio, dtype="float64"), nan=_volume_mu
+    )
+
     # Standardised realized-vol drift, retained for provenance only.
     # ``feat_vol_drift`` is a winsorised [-1, 1] drift; it is z-scored here so the
     # stored ``feat_vol_drift_z`` container carries the cross-sectional relative
@@ -2293,11 +2327,17 @@ def build_fused_kalman_pt_model(
         # provenance; the math consumes the standardised ``beta_z``.
         pm.Data("feat_avg_beta", avg_beta_filled, dims="isin")
         beta_z = pm.Data("feat_avg_beta_z", avg_beta_z, dims="isin")
-        # Size driver (feat_mcap_country_r = market_cap / market_cap_3yavg): the
-        # learned additive size tilt on ``expected_return`` below. Raw container
-        # retained for provenance; the math consumes the standardised ``size_z``.
+        # Size driver (feat_mcap_country_r = (100 - market_cap_country_r) / 100,
+        # ~0 = largest in country): the learned additive size tilt on
+        # ``expected_return`` below. Raw container retained for provenance; the
+        # math consumes the standardised ``size_z``.
         pm.Data("feat_mcap_country_r", size_ratio_filled, dims="isin")
         size_z = pm.Data("feat_mcap_country_r_z", size_ratio_z, dims="isin")
+        # Volume driver (feat_rel_volume, relative trading volume): the learned
+        # additive volume tilt on ``risk_adj_return`` below. Raw container retained
+        # for provenance; the math consumes the standardised ``volume_z``.
+        pm.Data("feat_rel_volume", volume_ratio_filled, dims="isin")
+        volume_z = pm.Data("feat_rel_volume_z", volume_ratio_z, dims="isin")
         # Realized-vol drift (feat_vol_drift) retained as a provenance container
         # only — it does not drive the risk adjustment.
         # ``build_noise_wideners(..., fillna=True)`` already 0-fills these for the
@@ -2450,11 +2490,18 @@ def build_fused_kalman_pt_model(
             size_loading = pm.HalfNormal("size_loading", sigma=float(size_penalty))
         else:
             size_loading = pt.constant(0.0)
+        if volume_penalty > 0:
+            volume_loading = pm.HalfNormal("volume_loading", sigma=float(volume_penalty))
+        else:
+            volume_loading = pt.constant(0.0)
         risk_tilt = pm.Deterministic("risk_tilt", -risk_loading * beta_z, dims="isin")
         size_tilt = pm.Deterministic("size_tilt", -size_loading * size_z, dims="isin")
+        volume_tilt = pm.Deterministic(
+            "volume_tilt", -volume_loading * volume_z, dims="isin"
+        )
         risk_adj_return = pm.Deterministic(
             "risk_adj_return",
-            expected_return + risk_tilt + size_tilt,
+            expected_return + risk_tilt + size_tilt + volume_tilt,
             dims="isin",
         )
         # The risk- and size-adjusted return is the GRW baseline.

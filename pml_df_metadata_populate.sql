@@ -1534,6 +1534,18 @@ UPDATE pml.pml_df_metadata
 SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
 WHERE column_name IN ('one_day_pct', 'price_chg_pct_3m');
 
+-- 7h.3c KalmanFilterPriceTarget: relative trading volume. rel_volume ->
+--       feat_rel_volume is emitted by mv_pymc_kalman_pt as a named tilt driver
+--       (build_fused_kalman_pt_model's volume_loading / volume_penalty, additive
+--       on risk_adj_return — KALMAN_TILT_FEATURE_ORDER, not the generic drift
+--       matrix). Extend its model_targets so it surfaces in
+--       vw_pymc_feature_catalogue for kalman_pt (the alias is registered in
+--       pml.pml_df_feature_alias below; without this model_targets entry the
+--       alias row alone never reaches the catalogue's unnest fan-out).
+UPDATE pml.pml_df_metadata
+SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
+WHERE column_name IN ('rel_volume');
+
 -- 7h.3a KalmanFilterPriceTarget: fiscal-calendar anchors + derived day-count
 --       horizons (mirrors the price_target wiring in 7h.2). These give the
 --       marginalized GaussianRandomWalk a real, irregular time axis so the
@@ -1910,7 +1922,7 @@ FROM (VALUES ('feat_implied_upside', 'double precision', 'Consensus implied upsi
              ('feat_mcap_trend_1y', 'double precision', '1y market-cap change ratio: (market_cap - market_cap_neg1fy) / market_cap_neg1fy'),
              ('feat_mcap_vs_3yavg', 'double precision', 'Market cap relative to its own 3y average'),
              ('feat_ev_vs_3yavg', 'double precision', 'Enterprise value relative to its own 3y average'),
-             ('feat_mcap_country_r', 'double precision', 'Country market-cap rank score: (100 - market_cap_country_r) / 100, 1 = largest in country'),
+             ('feat_mcap_country_r', 'double precision', 'Country market-cap rank ratio: (100 - market_cap_country_r) / 100, ~0 = largest in country (smaller = larger cap)'),
              ('feat_buys', 'integer', 'Buy-side analyst rating count (strong buy + buy)'),
              ('feat_sells', 'integer', 'Sell-side analyst rating count (strong sell + sell)'),
              ('feat_pt_achievement_1y', 'double precision', 'Realised achievement of the 1y-ago mean target: 1.0 if reached, else last_price / price_target_1y_ago'),
@@ -2082,6 +2094,8 @@ VALUES
 	-- Short-term momentum: one_day_pct (last day's price change) -> feat_one_day_return.
 	                                 ('one_day_pct',                       'kalman_pt',          'feat_one_day_return',               'mutable_predictor'),
 	                                 ('price_chg_pct_3m',                       'kalman_pt',          'feat_price_chg_pct_3m',               'mutable_predictor'),
+	-- Relative trading volume: rel_volume -> feat_rel_volume (named tilt driver).
+	                                 ('rel_volume',                       'kalman_pt',          'feat_rel_volume',                   'mutable_predictor'),
 	-- Raw beta windows: emitted un-prefixed by mv_pymc_kalman_pt as the
 	-- systematic-risk inputs to feat_avg_beta (the NULL-aware mean), which is the
 	-- model-facing risk-adjustment driver. Aliased == column name (present-check)

@@ -282,6 +282,14 @@ class KalmanRunConfig:
         :func:`prepare_kalman_panel_inputs`.
     cvar_alpha, weight_cap, k_book, p_long
         CVaR-aware book parameters (:func:`compute_cvar_aware_book`).
+    mcap_country_r_max
+        Market-cap pre-selection gate for the long book: candidates must have
+        ``mcap_country_r < mcap_country_r_max``, where ``mcap_country_r`` is
+        the MV-derived ``feat_mcap_country_r = (100 - market_cap_country_r) /
+        100`` ratio (smaller = larger cap). The 0.02 default keeps the top 2%
+        of each country by market cap — the ratio-scale mirror of
+        ``min_mcap_country_rank`` (98). Names with a missing rank are
+        excluded (strict, matching the SQL ``> 98`` candidate filters).
     min_next_earnings, min_report_date
         ISO-date universe filters in :func:`kalman_df_query` (previously
         hardcoded ``'2026-01-01'`` / ``'2025-01-01'`` — roll these forward with
@@ -315,9 +323,10 @@ class KalmanRunConfig:
     mc_rho: float = 0.85
     # Risk book
     cvar_alpha: float = 0.05
-    weight_cap: float = 0.08
-    k_book: int = 50
-    p_long: float = 0.67
+    weight_cap: float = 0.15
+    k_book: int = 25
+    p_long: float = 0.50
+    mcap_country_r_max: float = 0.03
     # Fused-panel time axis: *_ago lookbacks building the genuine (isin, time)
     # log-uplift panel (oldest -> newest is resolved automatically; the current
     # snapshot is always the final step, so T = len(panel_lookbacks) + 1).
@@ -335,7 +344,7 @@ class KalmanRunConfig:
     # Universe query
     min_next_earnings: str = '2026-01-01'
     min_report_date: str = '2025-01-01'
-    min_mcap_country_rank: float = 95.0
+    min_mcap_country_rank: float = 97.0
     candidate_limit: int = 50
     earnings_window_days: int = 5
     # Plumbing
@@ -2289,6 +2298,7 @@ def resolve_feature_roles(kalman_df: pd.DataFrame,
 _EDA_DRIVER_SPECS: tuple[tuple[str, str], ...] = (
     ('feat_avg_beta', 'avg beta — systematic-risk penalty'),
     ('feat_mcap_country_r', 'mcap country rank — size discount'),
+    ('feat_rel_volume', 'relative volume — liquidity tilt'),
     ('feat_one_day_return', 'one-day return — short-horizon momentum'),
     ('feat_price_chg_pct_3m', 'three-month return — mid-horizon momentum'),
     ('noise_cv', 'consensus noise CV — sigma_obs widener'),
@@ -3215,6 +3225,17 @@ def prepare_kalman_panel_inputs(
     else:
         size_ratio = np.full(n_isin, np.nan, dtype='float64')
 
+    # --- Volume driver (feat_rel_volume) ---------------------------------------
+    # feat_rel_volume == relative trading volume (mv_pymc_kalman_pt). Carried raw
+    # here and z-scored inside build_fused_kalman_pt_model, where it discounts
+    # risk_adj_return additively via - volume_loading * z(volume). Falls back to
+    # NaN (-> neutral 0.0 tilt after the model's nan_to_num) when the column is
+    # absent.
+    if 'feat_rel_volume' in model_df.columns:
+        volume_ratio = pd.to_numeric(model_df['feat_rel_volume'], errors='coerce').to_numpy('float64')
+    else:
+        volume_ratio = np.full(n_isin, np.nan, dtype='float64')
+
     # --- Categorical group-effect coords (classification coords only) ---------
     # Resolve the coord source: explicit arg > roles object > module default.
     if classification_coords is not None:
@@ -3236,6 +3257,7 @@ def prepare_kalman_panel_inputs(
     print(f'Fused panel — isins:{n_isin}  T:{T}  D:{D} ({resp})')
     print(f'  drift_features:{len(drift_features)}  avg_beta(mean):{np.nanmean(avg_beta):.3f}'
           f'  size_ratio(mean):{np.nanmean(size_ratio):.3f}'
+          f'  volume_ratio(mean):{np.nanmean(volume_ratio):.3f}'
           f'  vol_drift(mean):{np.nanmean(vol_drift):.3f}'
           f'  cv(mean):{np.nanmean(dispersion_cv):.3f}')
 
@@ -3243,7 +3265,7 @@ def prepare_kalman_panel_inputs(
         frame=model_df, isins=isin_labels, Y=Y_std, t_scaled=t_scaled,
         X_drift=x_std, n_analysts=n_analysts, sqrt_n_analysts=sqrt_n,
         vol_drift=vol_drift, dispersion_cv=dispersion_cv, avg_beta=avg_beta,
-        size_ratio=size_ratio,
+        size_ratio=size_ratio, volume_ratio=volume_ratio,
         drift_names=list(drift_features), response_names=list(resp),
         coord_uniques=coord_uniques, coord_idx=coord_idx,
     )
@@ -3319,9 +3341,11 @@ def _max_posterior_rhat(posterior: "xr.Dataset",
         return float('nan')
 
 
-def build_panel_model(panel: KalmanPanelInputs, *, robust: bool = True) -> "pm.Model":
+def build_panel_model(
+        panel: KalmanPanelInputs, *, robust: bool = True, volume_penalty: float = 0.2,
+) -> "pm.Model":
     """Build the fused MvGRW + volatility-conditioned model and render its graph."""
-    model = build_fused_kalman_pt_model(panel, robust=robust)
+    model = build_fused_kalman_pt_model(panel, robust=robust, volume_penalty=volume_penalty)
     try:
         pm.model_to_graphviz(model)
     except Exception:  # pragma: no cover - graphviz optional
@@ -4176,6 +4200,9 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
         'size_class': frame.get('size_class'),
         'style_class': frame.get('style_class'),
         'market_cap': frame.get('market_cap'),
+        # (100 - market_cap_country_r) / 100 — smaller = larger cap in country;
+        # feeds the compute_cvar_aware_book mcap pre-selection gate.
+        'mcap_country_r': frame.get('feat_mcap_country_r'),
         'enterprise_value': frame.get('enterprise_value'),
         'last_price': frame['last_price'].to_numpy(),
         'observed_pt': frame['observed_pt'].to_numpy(),
@@ -4470,7 +4497,8 @@ class RiskBook:
     Attributes
     ----------
     analytics : pandas.DataFrame
-        Per-ISIN copy of the §10 ``results`` table augmented with the risk columns
+        Per-ISIN copy of the §10 ``results`` table (including the
+        ``mcap_country_r`` size-rank ratio) augmented with the risk columns
         ``p_upside_pos``, ``kalman_gain``, ``p_upside_pos_cond``, ``band_width``,
         ``exp_vol``, ``cvar05``, ``ret_vol_ratio``, ``tail_risk``, ``starr``,
         ``expected_sharpe`` and the normalised ``book_weight`` (0 for names outside
@@ -4487,8 +4515,10 @@ class RiskBook:
         Portfolio-level metrics (``port_up``, ``port_cvar``, ``wavg_cvar``,
         ``port_vol`` — decimal returns; ``starr_book``, ``div``, ``n_book``
         dimensionless) and the sizing parameters
-        (``alpha``, ``cap``, ``k_book``, ``p_long``, plus the derived ``univ_gain``
-        and conditional-scale gate ``p_long_cond = p_long * univ_gain``).
+        (``alpha``, ``cap``, ``k_book``, ``p_long``, ``mcap_r_max``, plus the
+        derived ``univ_gain``, the conditional-scale gate
+        ``p_long_cond = p_long * univ_gain`` and ``n_mcap_eligible`` — the count
+        of names passing the market-cap pre-selection gate).
     """
 
     analytics: pd.DataFrame
@@ -4537,6 +4567,7 @@ def compute_cvar_aware_book(
         idata, panel: KalmanPanelInputs, screen: ScreenContext, results: pd.DataFrame,
         *, alpha: Optional[float] = None, cap: Optional[float] = None,
         k_book: Optional[int] = None, p_long: Optional[float] = None,
+        mcap_r_max: Optional[float] = None,
         config: Optional[KalmanRunConfig] = None,
 ) -> RiskBook:
     """Build the CVaR-aware long book and per-name risk analytics (SSOT).
@@ -4577,6 +4608,16 @@ def compute_cvar_aware_book(
         ``mc_prob_pos * kalman_gain`` and ``univ_gain`` is the universe-mean
         ``kalman_gain`` — so the threshold keeps its nominal strictness after
         conditioning on the filter's confidence.
+    mcap_r_max
+        Market-cap pre-selection gate: long-book candidates must have
+        ``mcap_country_r < mcap_r_max``; ``None`` ->
+        ``config.mcap_country_r_max`` (0.02). ``mcap_country_r`` is the
+        MV-derived ``feat_mcap_country_r = (100 - market_cap_country_r) / 100``
+        ratio, so 0.02 keeps the top 2% of each country by market cap (the
+        ratio-scale mirror of the §11–§13 ``market_cap_country_r > 98``
+        candidate filters). Names with a missing rank fail the gate (strict,
+        matching the SQL ``> 98`` NULL semantics). If ``results`` predates the
+        ``mcap_country_r`` column, the gate is skipped with a warning.
 
     Returns
     -------
@@ -4588,6 +4629,7 @@ def compute_cvar_aware_book(
     cap = cfg.weight_cap if cap is None else cap
     k_book = cfg.k_book if k_book is None else k_book
     p_long = cfg.p_long if p_long is None else p_long
+    mcap_r_max = cfg.mcap_country_r_max if mcap_r_max is None else mcap_r_max
 
     eu = screen.eu  # expected upside draws (chain, draw, isin), decimal
     nm = results.copy()
@@ -4676,17 +4718,30 @@ def compute_cvar_aware_book(
         _md_disp.to_numpy(), _mc_loss.to_numpy(), np.full(len(nm), 0.01)])
     nm['starr'] = nm['expected_upside'] / nm['tail_risk']
 
+    # Market-cap pre-selection: only top-of-country names (mcap_country_r <
+    # mcap_r_max, i.e. raw market_cap_country_r > 98 at the 0.02 default) are
+    # long-book eligible. Strict on missing ranks — NaN < x is False — matching
+    # the NULL semantics of the §11–§13 SQL candidate filters.
+    if 'mcap_country_r' in nm.columns:
+        _mcap_r = pd.to_numeric(nm['mcap_country_r'], errors='coerce')
+        _mcap_ok = (_mcap_r < mcap_r_max).fillna(False).to_numpy(dtype=bool)
+    else:  # pre-0.9.9.12 results frame
+        logger.warning('results frame lacks mcap_country_r — the market-cap '
+                       'pre-selection gate (mcap_r_max=%.4f) is skipped.', mcap_r_max)
+        _mcap_ok = np.ones(len(nm), dtype=bool)
+
     # Sized long book: STARR-ranked, cap-and-spill normalised to 100% gross.
     nm['book_weight'] = 0.0
     summary: dict[str, float] = {
         'alpha': alpha, 'cap': cap, 'k_book': float(k_book), 'p_long': p_long,
         'p_long_cond': p_long_cond, 'univ_gain': univ_gain,
+        'mcap_r_max': mcap_r_max, 'n_mcap_eligible': float(_mcap_ok.sum()),
         'n_book': 0.0, 'port_up': float('nan'), 'port_cvar': float('nan'),
         'wavg_cvar': float('nan'), 'port_vol': float('nan'),
         'starr_book': float('nan'), 'div': float('nan'),
     }
     _book = nm[(nm['expected_upside'] > 0) & (nm['p_upside_pos_cond'] >= p_long_cond)
-               & np.isfinite(nm['starr'])].copy()
+               & np.isfinite(nm['starr']) & _mcap_ok].copy()
     if len(_book):
         _book = _book.sort_values('starr', ascending=False).head(k_book)
         _w = _cap_normalize_weights(_book['starr'].to_numpy(), cap)
@@ -5052,7 +5107,7 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
         'days_since_fy_end': _idcol('days_since_fy_end'),
         'market_cap': model_df['market_cap'].to_numpy(),
         'enterprise_value': model_df['enterprise_value'].to_numpy(),
-        'mcap_country_r': model_df['feat_mcap_country_r'].to_numpy(),
+        'mcap_country_r': _numcol('feat_mcap_country_r'),
         'beta': model_df['feat_avg_beta'].to_numpy(),
         'original_price': model_df['last_price'].to_numpy(),
         'original_target': model_df['observed_pt'].to_numpy(),
@@ -5725,7 +5780,7 @@ def run_single_isin_filter(frame: pd.DataFrame, engine,
                     f'SELECT {col_sql} FROM pml.pml_df '
                     'WHERE isin = ANY(:isins) '
                     '  AND next_earnings IS NOT NULL '
-                    '  AND market_cap_country_r > :min_rank '
+                    '  AND market_cap_country_r >= :min_rank '
                     'ORDER BY ABS(next_earnings - CURRENT_DATE) , '
                     '         market_cap DESC '
                     'LIMIT :lim'
@@ -6883,7 +6938,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     univ_gain = float(gain_da.mean())
     if not np.isfinite(univ_gain) or univ_gain <= 0:
         univ_gain = 1.0
-    P_HI_BASE, P_LO_BASE = 0.67, 0.33
+    P_HI_BASE, P_LO_BASE = 0.80, 0.20
     P_HI, P_LO = P_HI_BASE * univ_gain, P_LO_BASE * univ_gain
 
     # Minimum-coverage gate for the §4 group allocation signals: coord groups
@@ -6951,11 +7006,11 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     # full record; the model's actual group-effect coords additionally feed the
     # stacked shrunk-excess forest rendered after the loop.
     _coords = [c for c in
-               ('region', 'trading_region', 'exchange_name', 'unit_name', 'country_name', 'sector', 'industry',
+               ('region', 'trading_region', 'exchange_name', 'unit_name', 'country_name','trading_country_name', 'sector', 'industry',
                 'size_class',
                 'style_class')
                if c in model_df.columns]
-    _forest_coords = ('region', 'trading_region', 'sector', 'size_class', 'style_class')
+    _forest_coords = ('region', 'trading_region','sector', 'industry','size_class','style_class')
     _forest_payload: dict[str, dict[str, Any]] = {}
     for col in _coords:
         lab = model_df[col].fillna('Unknown').astype(str).to_numpy()
@@ -7167,7 +7222,9 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     for _c in ('expected_upside', 'exp_vol', 'cvar05'):
         _book[f'{_c}_pct'] = pd.to_numeric(_book.get(_c), errors='coerce') * 100.0
     print(f'\n10. CVaR-AWARE SIZING  (top {int(_s["k_book"])} reward-to-CVaR longs, '
-          f'{_s["cap"]:.0%} name cap, 100% gross)')
+          f'{_s["cap"]:.0%} name cap, '
+          f'mcap rank < {_s.get("mcap_r_max", float("nan")):.0%} of country, '
+          f'100% gross)')
     if len(_book):
         print(f'   {"NAME":<14}  {"wt":>6}  {"upside":>8}  {"vol":>7}  {"CVaR5":>8}  {"STARR":>6}')
         for _, r in _book.iterrows():
@@ -7189,7 +7246,8 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
         except Exception as exc:  # pragma: no cover - display-only
             print(f'book-composition chart skipped: {exc!r}')
     else:
-        print('   [~]  Insufficient long book or posterior draws for CVaR-aware sizing.')
+        print(f'   [~]  Insufficient long book or posterior draws for CVaR-aware sizing '
+              f'({_na(_s.get("n_mcap_eligible"), 0)} names passed the mcap gate).')
 
     print('\n' + '=' * 88)
     print('Signals are model-implied screens from analyst-target dynamics, NOT investment '
@@ -7202,7 +7260,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
 # Entry point
 # =============================================================================
 def main(*, run_eda_section: bool = True, write_analytics: bool = True,
-         robust: bool = False, export_results: bool = True,
+         robust: bool = False, volume_penalty: float = 0.2, export_results: bool = True,
          config: Optional[KalmanRunConfig] = None) -> dict[str, Any]:
     """Run the full Kalman price-target workflow end-to-end on the fused panel model.
 
@@ -7220,6 +7278,11 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     robust
         When ``True``, use the Student-t panel likelihood (absorbs analyst
         outliers); ``False`` (default) selects the Normal-likelihood twin.
+    volume_penalty
+        Prior scale (``HalfNormal`` sigma) of the learned ``volume_loading``
+        tilt on ``risk_adj_return`` via the per-ISIN relative trading volume
+        (``feat_rel_volume``, z-scored). Defaults to ``0.2`` (enabled); ``0.0``
+        disables the factor.
     export_results
         When ``True`` (default), persist every rendered figure / displayed table
         (via the :func:`_safe_show` / :func:`display` hooks) and the bulk data
@@ -7273,7 +7336,7 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
                                             history_lookbacks=cfg.panel_lookbacks)
 
     # §5b fused model -> §6 prior -> §7 posterior -> §8 PPC.
-    model = build_panel_model(panel, robust=robust)
+    model = build_panel_model(panel, robust=robust, volume_penalty=volume_penalty)
     with export_section('06_prior'):
         prior_idata = run_prior_predictive(model, panel, cfg)
     with export_section('07_posterior'):
