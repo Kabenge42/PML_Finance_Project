@@ -15,6 +15,12 @@ from dash import Input, Output, callback, dcc, html
 
 from ._common import empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
+from ..components.probability_filter import (
+    apply_probability_filter,
+    probability_controls,
+    probability_inputs,
+    register as register_probability_filter,
+)
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import quantile_return_volatility
@@ -61,14 +67,10 @@ min_market_cap_options = [
 ]
 min_market_cap_default = "5000"
 
-min_prob_positive_id = f"{component_id}_min_prob_positive"
-min_prob_positive_options = [
-    {"label": "50%", "value": "0.5"},
-    {"label": "70%", "value": "0.7"},
-    {"label": "80%", "value": "0.8"},
-    {"label": "90%", "value": "0.9"},
-]
-min_prob_positive_default = "0.7"
+# Probability metric + band (shared control pair). The low handle defaults to the
+# 0.7 threshold this card's former "Min Prob Positive" dropdown applied.
+min_prob_positive_default = 0.7
+register_probability_filter(component_id)
 
 num_stocks_id = f"{component_id}_num_stocks"
 num_stocks_options = [
@@ -110,9 +112,7 @@ def component() -> "object":
                     control("Min Market Cap (M):", dcc.Dropdown(
                         id=min_market_cap_id, options=min_market_cap_options,
                         value=min_market_cap_default, searchable=False, style={"minWidth": "160px"})),
-                    control("Min Prob Positive:", dcc.Dropdown(
-                        id=min_prob_positive_id, options=min_prob_positive_options,
-                        value=min_prob_positive_default, searchable=False, style={"minWidth": "160px"})),
+                    *probability_controls(component_id, lo=min_prob_positive_default),
                     control("Number of Stocks:", dcc.Dropdown(
                         id=num_stocks_id, options=num_stocks_options,
                         value=num_stocks_default, searchable=False, style={"minWidth": "140px"})),
@@ -148,18 +148,21 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         empty = empty_figure("No data is available to display")
         return empty, empty
 
-    df = df[["name", "sector", "market_cap", "p_upside_pos_cond",
+    # Gate on the selected probability metric *before* the projection below —
+    # three of the four selectable metrics are not in that column list.
+    df = apply_probability_filter(df, component_id, kwargs)
+
+    df = df[["name", "sector", "market_cap",
              "expected_return_kalman", "reward_to_cvar", "er_p05", "er_p95"]].copy()
     logger.debug(schema(df))
 
     confidence_level = str(kwargs.get(confidence_level_id) or confidence_level_default)
     sort_metric = kwargs.get(sort_metric_id) or sort_metric_default
     min_market_cap = float(kwargs.get(min_market_cap_id) or min_market_cap_default)
-    min_prob_positive = float(kwargs.get(min_prob_positive_id) or min_prob_positive_default)
     num_stocks = str(kwargs.get(num_stocks_id) or num_stocks_default)
     sector_filter = kwargs.get(sector_filter_id) or []
 
-    df = df[(df["market_cap"] >= min_market_cap) & (df["p_upside_pos_cond"] >= min_prob_positive)]
+    df = df[df["market_cap"] >= min_market_cap]
     if len(df) == 0:
         empty = empty_figure("No stocks match the selected criteria")
         return empty, empty
@@ -232,7 +235,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         confidence_level_id: Input(confidence_level_id, "value"),
         sort_metric_id: Input(sort_metric_id, "value"),
         min_market_cap_id: Input(min_market_cap_id, "value"),
-        min_prob_positive_id: Input(min_prob_positive_id, "value"),
+        **probability_inputs(component_id),
         num_stocks_id: Input(num_stocks_id, "value"),
         sector_filter_id: Input(sector_filter_id, "value"),
         **FILTER_CALLBACK_INPUTS,
