@@ -1,7 +1,30 @@
 """Value at Risk (VaR): Downside Risk Assessment.
 
-CVaR bar by stock/sector + a risk-return scatter coloured by reward-to-CVaR.
-Ported from ``feature_factory/var.pyi``.
+Grouped VaR bars at the 90% / 95% / 99% confidence levels plus a per-name VaR
+analysis table (expected dollar loss for a configurable position size).
+
+All VaR quantities are derived in decimal return space from the exported MC
+forward-return distribution and scaled to percent only at the figure / table
+boundary (project unit contract, CHANGELOG 0.9.9.7):
+
+* **Parametric** — ``VaR_c = -z_c * sigma`` with ``sigma`` implied by the
+  ``er_p05`` / ``er_p95`` posterior return spread (see
+  ``quantile_return_volatility``; ``expected_vol_kalman`` is deliberately NOT
+  used — it is the std of the posterior *expected-upside* draws, i.e.
+  parameter/estimation uncertainty, not forward asset volatility).
+* **Historical / Monte Carlo** — anchored on the exported MC 5% quantile:
+  ``VaR_95 = min(er_p05, 0)``; the 90% / 99% levels are scaled by the normal
+  z-ratios (1.28 / 1.645 and 2.33 / 1.645) because only the 5% quantile is
+  exported.
+
+All levels are clipped at zero so a name whose entire return distribution sits
+positive shows zero loss rather than a "negative loss".
+
+NOTE: the table's CVaR column is the normal-approximation expected shortfall
+``er_mean - 2.0627 * sigma`` — NOT ``cvar_5pct_kalman``, which is the tail mean
+of the posterior *upside* draws (estimation uncertainty of the mean, the STARR
+denominator input; stored in decimal return units), so it is frequently
+positive and cannot be reported as a return-space CVaR.
 """
 
 from __future__ import annotations
@@ -9,86 +32,94 @@ from __future__ import annotations
 import traceback
 from typing import Tuple
 
-import plotly.express as px
+import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, callback, dcc, html
+from dash import Input, Output, callback, dash_table, dcc, html
+from dash.dash_table.Format import Format, Scheme
 
 from ._common import empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
-from ..components.probability_filter import (
-    apply_probability_filter,
-    probability_controls,
-    probability_inputs,
-    register as register_probability_filter,
-)
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import quantile_return_volatility
-from ..theme import DUAL_GRAPH_STYLE, control
+from ..theme import BACKGROUND_CONTENT, BODY_TEXT, BORDER, COLORWAY, DUAL_GRAPH_STYLE, GOLD, NAVY
 from ..theme import card as theme_card
+from ..theme import control
 
 component_id = "value_at_risk_downside_assessment"
 
 confidence_level_id = f"{component_id}_confidence_level"
 confidence_level_options = [
-    {"label": "5%", "value": "5"},
-    {"label": "10%", "value": "10"},
-    {"label": "25%", "value": "25"},
-    {"label": "50%", "value": "50"},
+    {"label": "90%", "value": "90"},
+    {"label": "95%", "value": "95"},
+    {"label": "99%", "value": "99"},
 ]
-confidence_level_default = "5"
+confidence_level_default = "95"
 
-# Expected-shortfall multipliers ``phi(Phi^-1(a)) / a`` of a standard normal at
-# each selectable tail probability *a*, so ``CVaR_a = mu - factor * sigma`` (the
-# mean return conditional on landing in the worst a% of outcomes). The pipeline
-# does not export return-space CVaR at any level, so every level is derived
-# under this normal approximation of the MC return distribution.
-_ES_FACTORS = {
-    "5": 2.0627128,
-    "10": 1.7550151,
-    "25": 1.2711055,
-    "50": 0.7978846,
-}
-
-sort_metric_id = f"{component_id}_sort_metric"
-sort_metric_options = [
-    {"label": "Highest Reward-to-CVaR", "value": "reward_to_cvar"},
-    {"label": "Least Tail Risk (CVaR)", "value": "cvar_lowest"},
-    {"label": "Highest Expected Return", "value": "expected_return"},
+position_size_id = f"{component_id}_position_size"
+position_size_options = [
+    {"label": "1,000 shares", "value": "1000"},
+    {"label": "5,000 shares", "value": "5000"},
+    {"label": "10,000 shares", "value": "10000"},
+    {"label": "50,000 shares", "value": "50000"},
 ]
-sort_metric_default = "reward_to_cvar"
+position_size_default = "10000"
 
-min_market_cap_id = f"{component_id}_min_market_cap"
-min_market_cap_options = [
-    {"label": "1,000M", "value": "1000"},
-    {"label": "5,000M", "value": "5000"},
-    {"label": "10,000M", "value": "10000"},
-    {"label": "50,000M", "value": "50000"},
+top_n_id = f"{component_id}_top_n"
+top_n_options = [
+    {"label": "Top 10", "value": "10"},
+    {"label": "Top 20", "value": "20"},
+    {"label": "Top 30", "value": "30"},
+    {"label": "Top 50", "value": "50"},
 ]
-min_market_cap_default = "5000"
+top_n_default = "20"
 
-# Probability metric + band (shared control pair). The low handle defaults to the
-# 0.7 threshold this card's former "Min Prob Positive" dropdown applied.
-min_prob_positive_default = 0.7
-register_probability_filter(component_id)
-
-num_stocks_id = f"{component_id}_num_stocks"
-num_stocks_options = [
-    {"label": "20", "value": "20"},
-    {"label": "50", "value": "50"},
-    {"label": "100", "value": "100"},
-    {"label": "All", "value": "all"},
+var_method_id = f"{component_id}_var_method"
+var_method_options = [
+    {"label": "Historical", "value": "historical"},
+    {"label": "Parametric", "value": "parametric"},
+    {"label": "Monte Carlo", "value": "monte_carlo"},
 ]
-num_stocks_default = "50"
+var_method_default = "parametric"
 
 sector_filter_id = f"{component_id}_sector_filter"
 
+# One-sided standard-normal quantiles per confidence level, so
+# ``VaR_c = -z_c * sigma`` (parametric) and the Historical / Monte-Carlo levels
+# scale off the exported 5% quantile by z-ratio.
+_Z_SCORES = {"90": 1.28, "95": 1.645, "99": 2.33}
+_CONFIDENCE_LEVELS = ("90", "95", "99")
+
+# Expected-shortfall multiplier ``phi(Phi^-1(a)) / a`` of a standard normal at
+# a = 5%, so the table's ``CVaR = er_mean - factor * sigma`` (the mean return
+# conditional on landing in the worst 5% of outcomes).
+_ES_FACTOR_5PCT = 2.0627128
+
+# Names must carry at least this many covering analysts to enter the card —
+# thin coverage makes the consensus-derived return distribution unreliable.
+_MIN_ANALYSTS = 5
+
 title = "Value at Risk (VaR): Downside Risk Assessment"
 description = (
-    "Calculates the expected loss in the worst outcomes at different tail "
-    "probabilities using Conditional Value at Risk (CVaR), expressed as a "
-    "signed return — less negative means less downside risk."
+    "Calculate the maximum expected loss at different confidence levels to "
+    "understand downside risk exposure. Compare VaR across stocks to identify "
+    "positions with the most tail risk."
 )
+
+
+def _table_columns() -> list[dict]:
+    pct = Format(precision=2, scheme=Scheme.fixed)
+    money = Format(precision=2, scheme=Scheme.fixed).group(True)
+    return [
+        {"name": "Stock Name", "id": "name"},
+        {"name": "Current Price", "id": "original_price", "type": "numeric", "format": money},
+        {"name": "VaR (95%)", "id": "var_95_pct", "type": "numeric", "format": pct},
+        {"name": "VaR (99%)", "id": "var_99_pct", "type": "numeric", "format": pct},
+        {"name": "CVaR", "id": "cvar_pct", "type": "numeric", "format": pct},
+        {"name": "Expected Loss ($)", "id": "expected_loss_dollars", "type": "numeric",
+         "format": Format(precision=0, scheme=Scheme.fixed).group(True)},
+        {"name": "Prob. Positive Return", "id": "prob_pos_pct", "type": "numeric", "format": pct},
+    ]
 
 
 def component() -> "object":
@@ -105,143 +136,173 @@ def component() -> "object":
                 children=[
                     control("Confidence Level:", dcc.Dropdown(
                         id=confidence_level_id, options=confidence_level_options,
-                        value=confidence_level_default, searchable=False, style={"minWidth": "160px"})),
-                    control("Sort By:", dcc.Dropdown(
-                        id=sort_metric_id, options=sort_metric_options,
-                        value=sort_metric_default, searchable=False, style={"minWidth": "200px"})),
-                    control("Min Market Cap (M):", dcc.Dropdown(
-                        id=min_market_cap_id, options=min_market_cap_options,
-                        value=min_market_cap_default, searchable=False, style={"minWidth": "160px"})),
-                    *probability_controls(component_id, lo=min_prob_positive_default),
-                    control("Number of Stocks:", dcc.Dropdown(
-                        id=num_stocks_id, options=num_stocks_options,
-                        value=num_stocks_default, searchable=False, style={"minWidth": "140px"})),
+                        value=confidence_level_default, searchable=False, clearable=False,
+                        style={"minWidth": "150px"})),
+                    control("Position Size:", dcc.Dropdown(
+                        id=position_size_id, options=position_size_options,
+                        value=position_size_default, searchable=False, clearable=False,
+                        style={"minWidth": "170px"})),
+                    control("Top N by VaR:", dcc.Dropdown(
+                        id=top_n_id, options=top_n_options,
+                        value=top_n_default, searchable=False, clearable=False,
+                        style={"minWidth": "140px"})),
+                    control("VaR Method:", dcc.Dropdown(
+                        id=var_method_id, options=var_method_options,
+                        value=var_method_default, searchable=False, clearable=False,
+                        style={"minWidth": "170px"})),
                     control("Sectors:", dcc.Dropdown(
                         id=sector_filter_id, options=sector_opts, value=[], multi=True,
-                        style={"minWidth": "200px"})),
+                        placeholder="All Sectors", style={"minWidth": "200px"})),
                 ],
             ),
-            html.Div(
-                className="geib-dual-graph",
-                children=[
-                    html.Div(className="geib-graph-pane", children=[
-                        html.Label("CVaR by Stock and Sector", className="geib-graph-label"),
-                        dcc.Loading(type="circle", children=[
-                            dcc.Graph(id=f"{component_id}_graph_1", style=DUAL_GRAPH_STYLE)]),
-                        html.Pre(id=f"{component_id}_error_1", className="geib-error"),
-                    ]),
-                    html.Div(className="geib-graph-pane", children=[
-                        html.Label("Risk-Return Profile", className="geib-graph-label"),
-                        dcc.Loading(type="circle", children=[
-                            dcc.Graph(id=f"{component_id}_graph_2", style=DUAL_GRAPH_STYLE)]),
-                        html.Pre(id=f"{component_id}_error_2", className="geib-error"),
-                    ]),
-                ],
-            ),
+            html.Label("VaR by Confidence Level", className="geib-graph-label"),
+            dcc.Loading(type="circle", children=[
+                dcc.Graph(id=f"{component_id}_graph", style=DUAL_GRAPH_STYLE)]),
+            html.Label("VaR Analysis Table", className="geib-graph-label"),
+            dcc.Loading(type="circle", children=[
+                dash_table.DataTable(
+                    id=f"{component_id}_table",
+                    columns=_table_columns(),
+                    data=[],
+                    sort_action="native",
+                    page_size=25,
+                    style_as_list_view=True,
+                    style_table={"overflowX": "auto", "width": "100%"},
+                    style_header={
+                        "backgroundColor": NAVY,
+                        "color": "#FFFFFF",
+                        "fontWeight": "bold",
+                        "borderBottom": f"2px solid {GOLD}",
+                        "fontFamily": "monospace",
+                    },
+                    style_cell={
+                        "backgroundColor": BACKGROUND_CONTENT,
+                        "color": BODY_TEXT,
+                        "fontFamily": "monospace",
+                        "fontSize": "12px",
+                        "padding": "8px",
+                        "borderBottom": f"1px solid {BORDER}",
+                        "textAlign": "left",
+                    },
+                    style_cell_conditional=[
+                        {"if": {"column_id": col["id"]}, "textAlign": "right"}
+                        for col in _table_columns() if col.get("type") == "numeric"
+                    ],
+                    style_data_conditional=[
+                        {"if": {"row_index": "odd"}, "backgroundColor": NAVY},
+                    ],
+                )
+            ]),
+            html.Pre(id=f"{component_id}_error", className="geib-error"),
         ],
     )
 
 
-def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
+def _compute_var_frame(df: pd.DataFrame, var_method: str) -> pd.DataFrame:
+    """Attach ``var_90`` / ``var_95`` / ``var_99`` + ``cvar`` (decimal, <= 0 loss).
+
+    Every level is clamped to ``[-1, 0]``: a long equity position cannot lose
+    more than 100%, and names with degenerate ``er_p05``/``er_p95`` spreads
+    would otherwise dominate the worst-VaR sort with impossible losses.
+    """
+    sigma = quantile_return_volatility(df["er_p05"], df["er_p95"])
+    if var_method == "parametric":
+        var_95_raw = (-_Z_SCORES["95"] * sigma).clip(upper=0.0)
+    else:  # historical / monte_carlo: anchor on the exported MC 5% quantile
+        var_95_raw = df["er_p05"].clip(upper=0.0)
+    for level in _CONFIDENCE_LEVELS:
+        df[f"var_{level}"] = (
+            var_95_raw * (_Z_SCORES[level] / _Z_SCORES["95"])
+        ).clip(lower=-1.0)
+    # Unclamped sort key so severity ordering survives the -100% saturation.
+    df["var_95_raw"] = var_95_raw
+    # Table CVaR: normal-approx 5% expected shortfall of the return
+    # distribution (see module docstring for why not ``cvar_5pct_kalman``).
+    df["cvar"] = (df["er_mean"] - _ES_FACTOR_5PCT * sigma).clip(lower=-1.0)
+    return df
+
+
+def _update_logic(**kwargs) -> Tuple[go.Figure, list[dict]]:
     df = filter_data(get_data(), **kwargs)
     if df is None or len(df) == 0:
-        empty = empty_figure("No data is available to display")
-        return empty, empty
+        return empty_figure("No data is available to display"), []
 
-    # Gate on the selected probability metric *before* the projection below —
-    # three of the four selectable metrics are not in that column list.
-    df = apply_probability_filter(df, component_id, kwargs)
-
-    df = df[["name", "sector", "market_cap",
-             "expected_return_kalman", "reward_to_cvar", "er_p05", "er_p95"]].copy()
+    df = df[["name", "sector", "original_price", "er_mean", "er_p05", "er_p95",
+             "mc_prob_pos", "n_analysts", "market_cap"]].copy()
     logger.debug(schema(df))
 
     confidence_level = str(kwargs.get(confidence_level_id) or confidence_level_default)
-    sort_metric = kwargs.get(sort_metric_id) or sort_metric_default
-    min_market_cap = float(kwargs.get(min_market_cap_id) or min_market_cap_default)
-    num_stocks = str(kwargs.get(num_stocks_id) or num_stocks_default)
+    if confidence_level not in _Z_SCORES:
+        confidence_level = confidence_level_default
+    position_size = float(kwargs.get(position_size_id) or position_size_default)
+    top_n = int(kwargs.get(top_n_id) or top_n_default)
+    var_method = kwargs.get(var_method_id) or var_method_default
     sector_filter = kwargs.get(sector_filter_id) or []
 
-    df = df[df["market_cap"] >= min_market_cap]
-    if len(df) == 0:
-        empty = empty_figure("No stocks match the selected criteria")
-        return empty, empty
+    df = df[df["n_analysts"].fillna(0) >= _MIN_ANALYSTS]
     if sector_filter:
         df = df[df["sector"].isin(sector_filter)]
+    df = df.dropna(subset=["er_p05", "er_p95"])
     if len(df) == 0:
-        empty = empty_figure("No stocks match the selected sectors")
-        return empty, empty
+        return empty_figure("No stocks match the selected criteria"), []
 
-    # --- CVaR at the selected tail probability (decimal return space) -------
-    # Expected shortfall under a normal approximation of the MC *return*
-    # distribution: ``CVaR_a = mu - factor * sigma`` with ``mu`` the Kalman
-    # expected return and ``sigma`` implied by the ``er_p05``/``er_p95``
-    # posterior return spread (see ``quantile_return_volatility``).
-    # NOTE: ``cvar_5pct_kalman`` is NOT this quantity — it is the tail mean of
-    # the posterior *upside* draws (estimation uncertainty of the mean, the
-    # STARR denominator input; stored in decimal return units), so it is
-    # frequently positive and cannot be charted as a return-space CVaR.
-    sigma = quantile_return_volatility(df["er_p05"], df["er_p95"])
-    factor = _ES_FACTORS.get(confidence_level, _ES_FACTORS[confidence_level_default])
-    df["cvar_value"] = df["expected_return_kalman"] - factor * sigma
+    df = _compute_var_frame(df, var_method)
+    df["expected_loss_dollars"] = (
+        df[f"var_{confidence_level}"].abs() * df["original_price"] * position_size
+    )
 
-    if sort_metric == "cvar_lowest":
-        # ``cvar_value`` is a signed return (loss = negative): least tail risk
-        # first means the highest (least negative) values lead.
-        df = df.sort_values("cvar_value", ascending=False)
-    elif sort_metric == "expected_return":
-        df = df.sort_values("expected_return_kalman", ascending=False)
-    else:
-        df = df.sort_values("reward_to_cvar", ascending=False)
-
-    if num_stocks != "all":
-        df = df.head(int(num_stocks))
+    # Worst tail loss first (signed return, loss = negative); the unclamped
+    # key keeps ordering meaningful among names saturated at -100%.
+    df = df.sort_values("var_95_raw", ascending=True).head(top_n)
     logger.debug(tbl(df))
 
-    fig1 = px.bar(
-        df, x="name", y="cvar_value", color="sector",
-        title=f"CVaR — Expected Return in the Worst {confidence_level}% of Outcomes",
-        labels={"name": "Stock", "cvar_value": f"CVaR ({confidence_level}%)", "sector": "Sector"},
-        hover_data={"name": True, "sector": True, "cvar_value": ":.2%", "market_cap": ":.0f"},
+    fig = go.Figure()
+    for color, level in zip(COLORWAY, _CONFIDENCE_LEVELS):
+        fig.add_trace(go.Bar(
+            x=df["name"],
+            y=df[f"var_{level}"] * 100.0,
+            name=f"{level}%",
+            marker_color=color,
+            hovertemplate="%{x}<br>VaR (" + level + "%): %{y:.2f}%<extra></extra>",
+        ))
+    fig.update_layout(
+        barmode="group",
+        hovermode="x unified",
+        legend_title_text="Confidence Level",
     )
-    fig1.update_xaxes(tickangle=-45)
-    fig1.update_layout(hovermode="closest")
+    fig.update_xaxes(title_text="Company", tickangle=-45)
+    fig.update_yaxes(title_text="Value at Risk (% Loss)")
 
-    fig2 = px.scatter(
-        df, x="expected_return_kalman", y="cvar_value", size="market_cap", color="reward_to_cvar",
-        hover_data={"name": True, "sector": True, "expected_return_kalman": ":.3f",
-                    "cvar_value": ":.2%", "reward_to_cvar": ":.2f", "market_cap": ":.0f"},
-        labels={"expected_return_kalman": "Expected Return (Kalman)",
-                "cvar_value": f"CVaR ({confidence_level}%)", "reward_to_cvar": "Reward-to-CVaR",
-                "market_cap": "Market Cap (M)"},
-        title="Risk-Return Profile",
+    table_df = df.assign(
+        var_95_pct=df["var_95"] * 100.0,
+        var_99_pct=df["var_99"] * 100.0,
+        cvar_pct=df["cvar"] * 100.0,
+        prob_pos_pct=df["mc_prob_pos"] * 100.0,
     )
-    fig2.update_traces(marker=dict(sizemin=6))
-    fig2.update_layout(hovermode="closest")
-    return fig1, fig2
+    table_cols = ["name", "original_price", "var_95_pct", "var_99_pct", "cvar_pct",
+                  "expected_loss_dollars", "prob_pos_pct"]
+    return fig, table_df[table_cols].to_dict("records")
 
 
 @callback(
     output=[
-        Output(f"{component_id}_graph_1", "figure"),
-        Output(f"{component_id}_error_1", "children"),
-        Output(f"{component_id}_graph_2", "figure"),
-        Output(f"{component_id}_error_2", "children"),
+        Output(f"{component_id}_graph", "figure"),
+        Output(f"{component_id}_table", "data"),
+        Output(f"{component_id}_error", "children"),
         Output(sector_filter_id, "options"),
         Output(sector_filter_id, "value"),
     ],
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
         confidence_level_id: Input(confidence_level_id, "value"),
-        sort_metric_id: Input(sort_metric_id, "value"),
-        min_market_cap_id: Input(min_market_cap_id, "value"),
-        **probability_inputs(component_id),
-        num_stocks_id: Input(num_stocks_id, "value"),
+        position_size_id: Input(position_size_id, "value"),
+        top_n_id: Input(top_n_id, "value"),
+        var_method_id: Input(var_method_id, "value"),
         sector_filter_id: Input(sector_filter_id, "value"),
         **FILTER_CALLBACK_INPUTS,
     },
 )
-def update(**kwargs) -> Tuple[go.Figure, str, go.Figure, str, list, list]:
+def update(**kwargs) -> Tuple[go.Figure, list, str, list, list]:
     # Scope the local Sectors filter to the globally-filtered universe.
     df_all = filter_data(get_data(), **kwargs)
     sector_opts, sector_val = scoped_filter(
@@ -249,10 +310,9 @@ def update(**kwargs) -> Tuple[go.Figure, str, go.Figure, str, list, list]:
     )
     kwargs[sector_filter_id] = sector_val
     try:
-        fig1, fig2 = _update_logic(**kwargs)
-        return fig1, "", fig2, "", sector_opts, sector_val
+        fig, table_data = _update_logic(**kwargs)
+        return fig, table_data, "", sector_opts, sector_val
     except Exception as exc:
         msg = f"Error updating chart: {exc}\n{traceback.format_exc()}"
         logger.error(msg)
-        empty = empty_figure("An error occurred")
-        return empty, msg, empty, msg, sector_opts, sector_val
+        return empty_figure("An error occurred"), [], msg, sector_opts, sector_val
