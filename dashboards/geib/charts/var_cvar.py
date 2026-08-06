@@ -39,6 +39,12 @@ from dash.dash_table.Format import Format, Scheme
 
 from ._common import empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
+from ..components.probability_filter import (
+    apply_probability_filter,
+    probability_controls,
+    probability_inputs,
+    register as register_probability_filter,
+)
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import quantile_return_volatility
@@ -83,6 +89,13 @@ var_method_options = [
 var_method_default = "parametric"
 
 sector_filter_id = f"{component_id}_sector_filter"
+
+# Probability metric + band (shared control pair). Unlike the other cards this
+# one carries no pre-existing probability gate, so the band opens at the metric's
+# full width: the control is opt-in and the card's default universe is unchanged.
+# A downside-risk view should not silently hide names behind a probability floor.
+min_prob_default = 0.0
+register_probability_filter(component_id)
 
 # One-sided standard-normal quantiles per confidence level, so
 # ``VaR_c = -z_c * sigma`` (parametric) and the Historical / Monte-Carlo levels
@@ -150,6 +163,7 @@ def component() -> "object":
                         id=var_method_id, options=var_method_options,
                         value=var_method_default, searchable=False, clearable=False,
                         style={"minWidth": "170px"})),
+                    *probability_controls(component_id, lo=min_prob_default),
                     control("Sectors:", dcc.Dropdown(
                         id=sector_filter_id, options=sector_opts, value=[], multi=True,
                         placeholder="All Sectors", style={"minWidth": "200px"})),
@@ -227,6 +241,10 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, list[dict]]:
     if df is None or len(df) == 0:
         return empty_figure("No data is available to display"), []
 
+    # Gate on the selected probability metric *before* the projection below —
+    # three of the four selectable metrics are not in that column list.
+    df = apply_probability_filter(df, component_id, kwargs)
+
     df = df[["name", "sector", "original_price", "er_mean", "er_p05", "er_p95",
              "mc_prob_pos", "n_analysts", "market_cap"]].copy()
     logger.debug(schema(df))
@@ -298,6 +316,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, list[dict]]:
         position_size_id: Input(position_size_id, "value"),
         top_n_id: Input(top_n_id, "value"),
         var_method_id: Input(var_method_id, "value"),
+        **probability_inputs(component_id),
         sector_filter_id: Input(sector_filter_id, "value"),
         **FILTER_CALLBACK_INPUTS,
     },
