@@ -1,7 +1,10 @@
 """High Conviction Opportunities table.
 
-Securities with expected return > 30% and probability of positive return > 95%,
-ranked by Kalman-filtered metrics. Spec-only component (no reference stub).
+Securities with expected return > 30% whose selected probability metric falls in
+a user-chosen band, ranked by Kalman-filtered metrics. The band replaces what was
+a hard-coded ``p_upside_pos_cond > 0.67`` gate; it defaults to that same
+threshold, so the table is unchanged on load. Spec-only component (no reference
+stub).
 """
 
 from __future__ import annotations
@@ -14,6 +17,12 @@ from dash.dash_table.Format import Format, Scheme
 
 from ._common import column_values, scoped_filter
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
+from ..components.probability_filter import (
+    apply_probability_filter,
+    probability_controls,
+    probability_inputs,
+    register as register_probability_filter,
+)
 from ..data import get_data
 from ..logger import logger
 from ..theme import BACKGROUND_CONTENT, BODY_TEXT, BORDER, GOLD, NAVY, control
@@ -45,6 +54,13 @@ row_limit_options = [
 ]
 row_limit_default = 500
 
+# Minimum expected return this card screens on (unchanged, not user-tunable).
+min_expected_return = 0.3
+# Probability metric + band (shared control pair). The low handle reproduces the
+# former hard-coded ``p_upside_pos_cond > 0.67`` gate.
+min_prob_default = 0.67
+register_probability_filter(component_id)
+
 _COLUMNS = [
     ("ticker", "Ticker", None),
     ("name", "Name", None),
@@ -66,8 +82,8 @@ _COLUMNS = [
 
 title = "High Conviction Opportunities"
 description = (
-    "Securities with expected return > 30% and probability of positive return "
-    "> 67%, ranked by Kalman-filtered metrics"
+    "Securities with expected return > 30%, gated by a user-selected probability "
+    "metric and band, ranked by Kalman-filtered metrics"
 )
 
 
@@ -97,6 +113,7 @@ def component() -> "object":
                     control("Country:", dcc.Dropdown(
                         id=country_id, options=country_opts, value=country_default,
                         searchable=True, style={"minWidth": "150px"})),
+                    *probability_controls(component_id, lo=min_prob_default),
                     control("Sort By:", dcc.Dropdown(
                         id=sort_by_id, options=sort_by_options, value=sort_by_default,
                         multi=True, style={"minWidth": "300px"})),
@@ -159,7 +176,10 @@ def _update_logic(**kwargs) -> list[dict]:
         sort_by = [sort_by]
     row_limit = kwargs.get(row_limit_id, row_limit_default)
 
-    df = df[(df["expected_return_kalman"] > 0.3) & (df["p_upside_pos_cond"] > 0.67)]
+    # The probability band is inclusive at both ends, so a name sitting exactly on
+    # the low handle now qualifies (the former gate was a strict ``> 0.67``).
+    df = df[df["expected_return_kalman"] > min_expected_return]
+    df = apply_probability_filter(df, component_id, kwargs)
     if country_name != "All":
         df = df[df["country_name"] == country_name]
     if len(df) == 0:
@@ -185,6 +205,7 @@ def _update_logic(**kwargs) -> list[dict]:
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
         country_id: Input(country_id, "value"),
+        **probability_inputs(component_id),
         sort_by_id: Input(sort_by_id, "value"),
         row_limit_id: Input(row_limit_id, "value"),
         **FILTER_CALLBACK_INPUTS,

@@ -22,6 +22,12 @@ from dash import Input, Output, callback, dcc, html
 
 from ._common import coalesce, column_values, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
+from ..components.probability_filter import (
+    apply_probability_filter,
+    probability_controls,
+    probability_inputs,
+    register as register_probability_filter,
+)
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import PRICE_TARGET_HORIZON_YEARS, quantile_return_volatility
@@ -43,14 +49,10 @@ risk_free_rate_default = 0.03
 
 sector_filter_id = f"{component_id}_sector_filter"
 
-min_prob_id = f"{component_id}_min_prob"
-min_prob_options = [
-    {"label": "0.5", "value": 0.5},
-    {"label": "0.7", "value": 0.7},
-    {"label": "0.8", "value": 0.8},
-    {"label": "0.9", "value": 0.9},
-]
+# Probability metric + band (shared control pair). The low handle defaults to the
+# 0.8 threshold this card's former "Min Probability" dropdown applied.
 min_prob_default = 0.8
+register_probability_filter(component_id)
 
 portfolio_size_id = f"{component_id}_portfolio_size"
 portfolio_size_options = [
@@ -126,9 +128,7 @@ def component() -> "object":
                     control("Sectors:", dcc.Dropdown(
                         id=sector_filter_id, options=sector_opts, value=[], multi=True,
                         style={"minWidth": "220px"})),
-                    control("Min Probability:", dcc.Dropdown(
-                        id=min_prob_id, options=min_prob_options,
-                        value=min_prob_default, searchable=False, style={"minWidth": "150px"})),
+                    *probability_controls(component_id, lo=min_prob_default),
                     control("Portfolio Size:", dcc.Dropdown(
                         id=portfolio_size_id, options=portfolio_size_options,
                         value=portfolio_size_default, searchable=False, style={"minWidth": "150px"})),
@@ -219,20 +219,22 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if df is None or len(df) == 0:
         return empty_figure("No data is available to display"), html.Div()
 
-    df = df[["ticker", "name", "sector", "unit_name", "market_cap", "p_upside_pos_cond",
+    # Gate on the selected probability metric *before* the projection below —
+    # three of the four selectable metrics are not in that column list.
+    df = apply_probability_filter(df, component_id, kwargs)
+
+    df = df[["ticker", "name", "sector", "unit_name", "market_cap",
              "expected_return_kalman", "er_p05", "er_p95"]].copy()
     logger.debug(schema(df))
 
     rf = coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default)
     sector_filter = kwargs.get(sector_filter_id) or []
-    min_prob = coalesce(kwargs.get(min_prob_id), min_prob_default)
     portfolio_size = int(coalesce(kwargs.get(portfolio_size_id), portfolio_size_default))
     min_market_cap = coalesce(kwargs.get(min_market_cap_id), min_market_cap_default)
     n_portfolios = int(coalesce(kwargs.get(num_portfolios_id), num_portfolios_default))
     investment_amount = float(coalesce(kwargs.get(investment_amount_id), investment_amount_default))
     currency = coalesce(kwargs.get(currency_id), currency_default)
 
-    df = df[df["p_upside_pos_cond"] >= min_prob]
     df = df[df["market_cap"] >= min_market_cap]
     if sector_filter:
         df = df[df["sector"].isin(sector_filter)]
@@ -404,7 +406,7 @@ def _build_table(mu, cov, rets, vols, sharpe, weights, tickers, names,
         "refresh_trigger": Input("refresh_trigger", "data"),
         risk_free_rate_id: Input(risk_free_rate_id, "value"),
         sector_filter_id: Input(sector_filter_id, "value"),
-        min_prob_id: Input(min_prob_id, "value"),
+        **probability_inputs(component_id),
         portfolio_size_id: Input(portfolio_size_id, "value"),
         min_market_cap_id: Input(min_market_cap_id, "value"),
         num_portfolios_id: Input(num_portfolios_id, "value"),

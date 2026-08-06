@@ -17,6 +17,12 @@ from dash import Input, Output, callback, dcc, html
 
 from ._common import coalesce, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
+from ..components.probability_filter import (
+    apply_probability_filter,
+    probability_controls,
+    probability_inputs,
+    register as register_probability_filter,
+)
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import annualized_return_pct, quantile_volatility_pct
@@ -26,7 +32,6 @@ from ..theme import card as theme_card
 component_id = "sharpe_ratio_risk_adjusted_return"
 
 risk_free_rate_id = f"{component_id}_risk_free_rate"
-prob_pos_threshold_id = f"{component_id}_prob_pos_threshold"
 min_market_cap_id = f"{component_id}_min_market_cap"
 top_stocks_id = f"{component_id}_top_stocks"
 sector_filter_id = f"{component_id}_sector_filter"
@@ -40,14 +45,10 @@ risk_free_rate_options = [
 ]
 risk_free_rate_default = 0.03
 
-prob_pos_threshold_options = [
-    {"label": "0.5", "value": 0.5},
-    {"label": "0.7", "value": 0.7},
-    {"label": "0.8", "value": 0.8},
-    {"label": "0.9", "value": 0.9},
-    {"label": "0.95", "value": 0.95},
-]
+# Probability metric + band (shared control pair). The low handle defaults to the
+# 0.7 threshold this card's former "Min Prob Positive" dropdown applied.
 prob_pos_threshold_default = 0.7
+register_probability_filter(component_id)
 
 min_market_cap_options = [
     {"label": "1,000", "value": 1000},
@@ -98,12 +99,7 @@ def component() -> "object":
                                      value=risk_free_rate_default, searchable=False,
                                      style={"minWidth": "150px"}),
                     ),
-                    control(
-                        "Min Prob Positive:",
-                        dcc.Dropdown(id=prob_pos_threshold_id, options=prob_pos_threshold_options,
-                                     value=prob_pos_threshold_default, searchable=False,
-                                     style={"minWidth": "150px"}),
-                    ),
+                    *probability_controls(component_id, lo=prob_pos_threshold_default),
                     control(
                         "Min Market Cap:",
                         dcc.Dropdown(id=min_market_cap_id, options=min_market_cap_options,
@@ -154,14 +150,17 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         empty = empty_figure("No data is available to display")
         return empty, empty
 
+    # Gate on the selected probability metric *before* the projection below —
+    # three of the four selectable metrics are not in that column list.
+    df = apply_probability_filter(df, component_id, kwargs)
+
     df = df[[
         "name", "sector", "market_cap",
-        "expected_return_kalman", "er_p05", "er_p95", "p_upside_pos_cond",
+        "expected_return_kalman", "er_p05", "er_p95",
     ]].copy()
     logger.debug(schema(df))
 
     risk_free_rate = coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default)
-    prob_pos_threshold = coalesce(kwargs.get(prob_pos_threshold_id), prob_pos_threshold_default)
     min_market_cap = coalesce(kwargs.get(min_market_cap_id), min_market_cap_default)
     top_stocks = kwargs.get(top_stocks_id, top_stocks_default)
     if top_stocks is None:
@@ -172,7 +171,6 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
 
     df = _annualized_risk_metrics(df, risk_free_rate)
 
-    df = df[df["p_upside_pos_cond"] >= prob_pos_threshold]
     df = df[df["market_cap"] >= min_market_cap]
     if len(sector_filter) > 0:
         df = df[df["sector"].isin(sector_filter)]
@@ -255,7 +253,7 @@ def _annualized_risk_metrics(df: pd.DataFrame, risk_free_rate: float) -> pd.Data
     inputs={
         "refresh_trigger": Input("refresh_trigger", "data"),
         risk_free_rate_id: Input(risk_free_rate_id, "value"),
-        prob_pos_threshold_id: Input(prob_pos_threshold_id, "value"),
+        **probability_inputs(component_id),
         min_market_cap_id: Input(min_market_cap_id, "value"),
         top_stocks_id: Input(top_stocks_id, "value"),
         sector_filter_id: Input(sector_filter_id, "value"),

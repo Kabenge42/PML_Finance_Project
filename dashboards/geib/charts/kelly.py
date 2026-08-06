@@ -16,6 +16,12 @@ from dash import Input, Output, callback, dcc, html
 
 from ._common import coalesce, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
+from ..components.probability_filter import (
+    apply_probability_filter,
+    probability_controls,
+    probability_inputs,
+    register as register_probability_filter,
+)
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..theme import GRAPH_STYLE, control
@@ -45,17 +51,13 @@ max_position_size_options = [
 ]
 max_position_size_default = 0.10
 
-min_prob_id = f"{component_id}_min_prob"
-# "No Limit" == 0% floor; ``p_upside_pos_cond >= 0`` admits every name (rows with a
-# zero/NaN probability still drop out at the positive-Kelly-fraction filter).
-min_prob_options = [
-    {"label": "60%", "value": 0.6},
-    {"label": "70%", "value": 0.7},
-    {"label": "80%", "value": 0.8},
-    {"label": "90%", "value": 0.9},
-    {"label": "No Limit", "value": 0.0},
-]
+# Probability metric + band (shared control pair). The low handle defaults to the
+# 0.7 threshold this card's former "Min Win Probability" dropdown applied; the
+# old "No Limit" option is subsumed by dragging the low handle to the floor
+# (rows with a zero/NaN probability still drop out at the positive-Kelly-fraction
+# filter below).
 min_prob_default = 0.7
+register_probability_filter(component_id)
 
 top_n_id = f"{component_id}_top_n"
 # Sentinel value for the "No Limit" Top-N option (keep every qualifying name).
@@ -84,7 +86,7 @@ min_market_cap_default = 5000
 # restricted to the CVaR optimiser's allocated longs — names with a non-zero
 # ``cvar_book_weight`` in ``analytics.kalman_filtered_price_targets`` — and the
 # chosen Top-N of reward-to-CVaR names governs the book (a 100%-gross long book,
-# still subject to the Min Win Probability and Max Position Size controls).
+# still subject to the Probability Range and Max Position Size controls).
 # Defaults to "Off" so the chart is unchanged until the user opts in.
 cvar_sizing_id = f"{component_id}_cvar_sizing"
 cvar_sizing_off = "off"
@@ -123,9 +125,7 @@ def component() -> "object":
                     control("Max Position Size:", dcc.Dropdown(
                         id=max_position_size_id, options=max_position_size_options,
                         value=max_position_size_default, searchable=False, style={"minWidth": "160px"})),
-                    control("Min Win Probability:", dcc.Dropdown(
-                        id=min_prob_id, options=min_prob_options,
-                        value=min_prob_default, searchable=False, style={"minWidth": "160px"})),
+                    *probability_controls(component_id, lo=min_prob_default),
                     control("Top N Stocks:", dcc.Dropdown(
                         id=top_n_id, options=top_n_options,
                         value=top_n_default, searchable=False, style={"minWidth": "140px"})),
@@ -149,6 +149,9 @@ def component() -> "object":
 
 
 def _calculate_kelly_fraction(row) -> float:
+    # ``p`` is always ``p_upside_pos_cond``: the Kelly edge needs the probability
+    # of a positive return given state confidence. The Probability Metric control
+    # selects what the book is *screened* on, it does not restate the Kelly maths.
     p = row["p_upside_pos_cond"]
     q = 1 - p
     if p <= 0 or p >= 1:
@@ -193,6 +196,10 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if df is None or len(df) == 0:
         return empty_figure("No data is available to display"), html.Div()
 
+    # Gate on the selected probability metric *before* the projection below —
+    # three of the four selectable metrics are not in that column list.
+    df = apply_probability_filter(df, component_id, kwargs)
+
     df = df[["ticker", "name", "sector", "market_cap", "p_upside_pos_cond",
              "expected_return_kalman", "cvar_5pct_kalman",
              "cvar_book_weight", "reward_to_cvar"]].copy()
@@ -200,7 +207,6 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
 
     kelly_multiplier = coalesce(kwargs.get(kelly_multiplier_id), kelly_multiplier_default)
     max_position_size = coalesce(kwargs.get(max_position_size_id), max_position_size_default)
-    min_prob = coalesce(kwargs.get(min_prob_id), min_prob_default)
     top_n = coalesce(kwargs.get(top_n_id), top_n_default)
     sector_filter = kwargs.get(sector_filter_id)
     if not sector_filter:
@@ -221,7 +227,6 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
 
     df = df[df["sector"].isin(sector_filter)]
     df = df[df["market_cap"] >= min_market_cap]
-    df = df[df["p_upside_pos_cond"] >= min_prob]
     if len(df) == 0:
         return empty_figure("No stocks meet the filtering criteria"), html.Div()
 
@@ -264,7 +269,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
         "refresh_trigger": Input("refresh_trigger", "data"),
         kelly_multiplier_id: Input(kelly_multiplier_id, "value"),
         max_position_size_id: Input(max_position_size_id, "value"),
-        min_prob_id: Input(min_prob_id, "value"),
+        **probability_inputs(component_id),
         top_n_id: Input(top_n_id, "value"),
         cvar_sizing_id: Input(cvar_sizing_id, "value"),
         sector_filter_id: Input(sector_filter_id, "value"),
