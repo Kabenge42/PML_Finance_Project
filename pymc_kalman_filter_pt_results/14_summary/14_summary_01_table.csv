@@ -1,0 +1,4 @@
+group,n_names,median_upside_%,mean_upside_%,positive_upside_%,median_band_width_%,median_shrink_vs_consensus_%,median_n_analysts
+Earnings cohort (+/-10d),56,20.89,20.38,92.86,4.88,4.25,16.0
+Historical baseline (not reporting),6333,25.5,28.97,96.31,4.46,3.41,8.0
+Full universe,6389,25.43,28.89,96.27,4.46,3.43,8.0

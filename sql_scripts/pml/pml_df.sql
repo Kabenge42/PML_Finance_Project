@@ -13,7 +13,8 @@ CREATE TABLE pml_df
 	unit                              text,
 	unit_name                         text,
 	region                            text,
-	country                           text,
+	country                           text
+		CONSTRAINT pml_df_country_mapping_fk REFERENCES country_mapping (country) NOT ENFORCED,
 	country_name                      text,
 	sector                            text,
 	industry                          text,

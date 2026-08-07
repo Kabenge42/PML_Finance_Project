@@ -20,7 +20,7 @@ WITH mv_map(mv_name, model_target) AS (VALUES ('mv_pymc_earnings_beat'::text, 'e
      cat                           AS (SELECT vw_pymc_feature_catalogue.model_target,
                                               vw_pymc_feature_catalogue.feature_alias,
                                               count(*) AS n_rows
-                                       FROM pml.vw_pymc_feature_catalogue
+                                       FROM vw_pymc_feature_catalogue
                                        WHERE vw_pymc_feature_catalogue.feature_alias ~~ 'feat\_%'::text
 	                                      OR vw_pymc_feature_catalogue.feature_alias ~~ 'observed\_%'::text
 	                                      OR vw_pymc_feature_catalogue.feature_alias ~~ 'n\_%'::text

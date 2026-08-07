@@ -42,6 +42,17 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
     "stamp_feature_provenance": ("._feature_alignment", "stamp_feature_provenance"),
     "validate_oos_shape": ("._feature_alignment", "validate_oos_shape"),
     "get_pytensor_compile_kwargs": ("._pytensor_compat", "get_pytensor_compile_kwargs"),
+    # Bayesian-workflow stage helpers (see _workflow.py)
+    "MIN_ESS_GATE": ("._workflow", "MIN_ESS_GATE"),
+    "attach_log_likelihood": ("._workflow", "attach_log_likelihood"),
+    "build_sample_kwargs": ("._workflow", "build_sample_kwargs"),
+    "log_sample_diagnostics": ("._workflow", "log_sample_diagnostics"),
+    "posterior_dataset": ("._workflow", "posterior_dataset"),
+    "posterior_predictive_check": ("._workflow", "posterior_predictive_check"),
+    "prior_predictive_check": ("._workflow", "prior_predictive_check"),
+    # Decision analysis — CVaR-aware risk book (see RiskBookModel.py)
+    "RiskBook": (".RiskBookModel", "RiskBook"),
+    "compute_cvar_aware_book": (".RiskBookModel", "compute_cvar_aware_book"),
     # Multi-level hierarchical shrinkage infrastructure (see _hierarchy.py)
     "HIERARCHICAL_CATEGORY_COLS": ("._hierarchy", "HIERARCHICAL_CATEGORY_COLS"),
     "PARENT_MAP": ("._hierarchy", "PARENT_MAP"),

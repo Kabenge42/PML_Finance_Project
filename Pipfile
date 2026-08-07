@@ -25,8 +25,12 @@ seaborn = ">=0.13.0,<1.0.0"
 plotly = ">=6.0.0,<7.0.0"
 # kaleido v1: static Plotly PNG export (`plotly_get_chrome -y` for Chromium).
 kaleido = ">=1.0.0,<2.0.0"
-# NetCDF engine for the Kalman-workflow DataTree artifact exports.
+# NetCDF engine for the Kalman-workflow DataTree artifact exports. h5py is
+# the actual HDF5 backend h5netcdf drives (h5netcdf only declares it as an
+# optional "h5py" extra, so it is NOT pulled in transitively) and must be
+# pinned explicitly or DataTree.to_netcdf() raises ImportError at runtime.
 h5netcdf = ">=1.4.0,<2.0.0"
+h5py = ">=3.13.0,<4.0.0"
 # --- Utilities & Performance ---
 tqdm = ">=4.67.0,<5.0.0"
 joblib = ">=1.5.0,<4.0.0"
@@ -84,6 +88,7 @@ ipykernel = "*"
 ipywidgets = ">=8.1.0,<9.0.0"
 webcolors = "*"
 nbformat = "==5.10.4"
+pympler = "*"
 
 [dev-packages]
 pytest = ">=9.0.0,<12.0.0"

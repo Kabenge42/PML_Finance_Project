@@ -29,7 +29,7 @@ PyMC 6.0), statistical analysis, and portfolio optimization.
 - scikit-learn, XGBoost, LightGBM, CatBoost — classical ML
 - Plotly, Matplotlib, Seaborn — visualization
 - Streamlit (Python < 3.14 only), Dash — interactive dashboards
-- pytest — 565 test cases across 25 test modules
+- pytest — 569 test cases across 25 test modules
 
 ## Development Setup
 
@@ -63,7 +63,9 @@ Key environment variables (full list in `environment_variables.txt`):
 | `PML_STRICT_STREAK_MERGE`                               | Fail-fast on missing EPS streak-merge columns (CI/regression)    |
 | `PML_ENABLE_PYTENSOR_C`                                 | `1` opts back into the PyTensor C backend (default: numba/py VM) |
 | `PML_FIG_WIDTH_PX`                                      | Target Plotly/mpl figure width (px) for the Kalman notebook panels |
-| `KALMAN_PT_RESULTS_DIR` / `KALMAN_PT_EXPORT_DRAWS`      | Kalman workflow artifact-export directory (PNG/CSV/JSON/NetCDF) / `1` also exports raw eu/ept draws |
+| `KALMAN_PT_RESULTS_DIR` / `KALMAN_PT_EXPORT_DRAWS`      | Kalman artifact-export root (per-section subdirectories; PNG/CSV/SQL/JSON/NetCDF) / `1` also exports raw eu/ept draws |
+| `KALMAN_PT_SQL_EXPORT` / `KALMAN_PT_CLEAN_RESULTS`      | `0` skips the analytics-schema write (DDL + CSV only) / `1` purges each section subdirectory on first entry |
+| `DB_ANALYTICS_OWNER`                                    | Owner emitted in generated analytics DDL (default `postgres`)     |
 
 ### Code Quality & Testing
 
@@ -93,15 +95,17 @@ pytest --cov=probabilistic_ml_model --cov-report=term-missing tests/
 ```
 PML_Finance_Project/
 ├── probabilistic_ml_model/      # Core package (lazy-loaded PyMC/ArviZ)
-│   ├── pymc_models/             # 7 Bayesian models + _hierarchy / _feature_alignment / compat shims
+│   ├── pymc_models/             # 7 Bayesian models + _workflow / _hierarchy / _feature_alignment
+│   │                            #   + RiskBookModel / _price_target_mc (decision analysis)
 │   ├── statistical_functions/   # Hierarchical MCMC, probability & ensemble models
 │   ├── data_utils/              # DB loading, feature_catalog, inference_schema, export
 │   ├── visualizations/          # Per-model plot modules + ArviZ diagnostics
 │   ├── pipeline_runners.py      # 8-phase orchestration via PipelineConfig
+│   ├── _pytensor_env.py         # Forces the PyTensor VM before any pytensor import
 │   └── _pymc_arviz_compat.py    # InferenceLike type alias (arviz.InferenceData | xarray.DataTree)
-├── tests/                       # 565 pytest cases across 25 modules
+├── tests/                       # 569 pytest cases across 25 modules
 ├── sql_scripts/
-│   ├── pml/                     # Authoritative DDL: pml_df, metadata, MVs, helper fns (SSOT)
+│   ├── pml/                     # pg_dump EXTRACT — tables + vw_pml_df_* only; MV/function files are stubs
 │   ├── analytics/               # Output analytics tables/screens (kalman_filtered_price_targets, screens)
 │   └── public/                  # Legacy public-schema views
 ├── dashboards/                  # geib/ package (Dash GEIB board, :8050) + launcher; legacy geib_dash_app.py
@@ -111,9 +115,12 @@ PML_Finance_Project/
 ├── reference material/          # MyST / notebook reference material
 ├── archive/                     # Archived scripts/notebooks (expected_returns_v4.py, pml_workflow_v4.ipynb, …)
 ├── *.ipynb                      # PyMC model + analytics notebooks (see Key Notebooks)
-├── *.sql                        # Root-level schema/import/catalogue SQL (pml_feature_catalogue.sql, import_pml_data.sql, …)
+├── pml_feature_catalogue.sql    # SSOT: pml.* functions, all 7 mv_pymc_* MVs, catalogue views, coverage check
+├── pml_df_metadata.sql          # SSOT: metadata/alias table DDL + CHECK-enforced vocabularies
+├── pml_df_metadata_populate.sql # SSOT: pymc_role / model_targets assignment (+ §7i coverage reconciliation)
+├── *.sql                        # Other root-level schema/import SQL (import_pml_data.sql, …)
 ├── expected_returns_v3.py       # Main v3 pipeline entry point
-├── pymc_kalman_filter_pt.py     # Kalman price-target workflow (~6.4k lines; fused panel model + screen + analytics export)
+├── pymc_kalman_filter_pt.py     # Kalman price-target workflow (~8.1k lines; fused panel model + screen + analytics export)
 ├── pyproject.toml / Pipfile / requirements.txt   # Dependency definitions (keep in sync)
 ├── set_env.ps1 / environment_variables.txt       # Environment configuration
 ├── CHANGELOG.md                 # Release notes (authoritative version source)
@@ -170,6 +177,14 @@ from probabilistic_ml_model import (
 )
 ```
 
+Two helpers in this module are **exported but called by nothing** — treat them as the intended contract for new code,
+not as dead weight to imitate:
+
+| Helper                                   | What it guards                                                              |
+|------------------------------------------|-----------------------------------------------------------------------------|
+| `validate_oos_shape(new_arr, aliases)`   | `new_arr.shape[1] == len(feature_aliases)` before any `pm.set_data(...)` swap |
+| `assert_disjoint_features(idata, …)`     | a model's feature set does not collide with another model's on the same idata |
+
 ### 4. PyMC Models (pymc_models/)
 
 7 Bayesian models with unified interface:
@@ -178,7 +193,7 @@ from probabilistic_ml_model import (
 |---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | EarningsBeatBayesian      | Beat probability                                                                                                                                                                                                                                     |
 | PriceTargetAchievement    | Return expectation                                                                                                                                                                                                                                   |
-| KalmanFilterPriceTarget   | Smoothed signals (single-response hierarchical cross-section by default on the T=1 MV snapshot; learned risk/size tilts. Since 0.9.9.10 a genuine (isin, time) T=4 log-uplift panel from the `price_target_{6m,3m,1m}_ago` / `price_{6m,3m,1m}_ago` trails is available **opt-in** via `prepare_kalman_panel_inputs(history_lookbacks=…)` / `KalmanRunConfig.panel_lookbacks` (default `()` = T=1; T=4 is validated since the per-time direct-intercept reparameterisation — 0 divergences, worst r_hat 1.00, 15.7 min end-to-end — see CHANGELOG) — see `build_fused_kalman_pt_model`) |
+| KalmanFilterPriceTarget   | Smoothed signals. Single-response hierarchical panel with learned risk/size/volume tilts. **The genuine `(isin, time)` T=4 log-uplift panel is now the DEFAULT** — built from the `price_target_{6m,3m,1m}_ago` / `price_{6m,3m,1m}_ago` trails via `KalmanRunConfig.panel_lookbacks = ('6m','3m','1m')`. Validated 2026-08-01 since the per-time direct-intercept reparameterisation: 0 divergences, worst r_hat 1.00, 15.7 min end-to-end. Collapse to the T=1 MV snapshot with `replace(cfg, panel_lookbacks=())`. See `build_fused_kalman_pt_model` |
 | DCFPriceTarget            | Fair-value bands                                                                                                                                                                                                                                     |
 | DividendSafetyBayesian    | Cut probability                                                                                                                                                                                                                                      |
 | CreditRiskBayesian        | Distress risk                                                                                                                                                                                                                                        |
@@ -188,18 +203,87 @@ Each returns `InferenceLike` (i.e. `arviz.InferenceData | xarray.DataTree`) with
 provenance attrs), and diagnostics. Use the compat shim in `_pymc_arviz_compat.py` for type annotations instead of
 importing `arviz.InferenceData` directly, as ArviZ 1.x uses `xarray.DataTree` internally.
 
+Also in this package, but **not** `fit()`-style models:
+
+| Module                             | Role                                                                    |
+|------------------------------------|-------------------------------------------------------------------------|
+| `_workflow.py`                     | Bayesian-workflow helper SSOT (§9 below)                                |
+| `_hierarchy.py` / `_feature_alignment.py` / `_pytensor_compat.py` | Shared model plumbing            |
+| `_price_target_mc.py`              | Decision analysis (§10 below)                                           |
+| `RiskBookModel.py`                 | Decision analysis — CVaR-aware sizing (§11 below)                       |
+| `MonteCarloSimulation.py`          | Module-level `fit()` + `MonteCarloReturnSimulation`                     |
+| `ProbabilisticLinearRegressionModel.py` | Bayesian linear regression                                         |
+| `BaselineProbabilityModel.py`      | **Not a PyMC model** — a `PipelineConfig` dataclass + `main()` orchestrator |
+| `PortfolioOptimizationModel.py`    | 0-byte stub, unimplemented since 2025-07-02                             |
+
 ### 5. Pipeline Runner (pipeline_runners.py)
 
-Orchestrates all 8 phases via PipelineConfig:
+Orchestrates all 8 phases via `PipelineConfig` (`pipeline_runners.py:34-224`). The field groups, rather than a
+count:
+
+| Group                | Representative fields                                                                            |
+|----------------------|--------------------------------------------------------------------------------------------------|
+| MC / MCMC budget     | `mc_simulations=10_000`, `mc_max_stocks`, `mcmc_chains=8`, `mcmc_samples=5_000`, `mcmc_burn_in`  |
+| Likelihood & tails   | `use_student_t`, `student_t_df_floor`, `use_mixture_likelihood`, `tail_risk_metric`, `cvar_alpha` |
+| Volatility           | `use_garch_volatility`, `garch_p/q`, `use_stochastic_vol`, `vol_regime_window`                   |
+| Ensemble & BMA       | `use_bayesian_model_averaging`, `bma_prior_weights`, `bma_log_score_window`, `ensemble_shrinkage_kappa` |
+| Macro                | `use_macro_covariates`, `macro_covariates`, `macro_hierarchy_level`                              |
+| Rolling backtest     | `enable_rolling_backtest`, `backtest_window_months`, `backtest_step_months`, `ci_coverage_target` |
+| Screening thresholds | `screening_min_pct`, `screening_quality_roe_min`, `screening_quality_piotroski_min`, …           |
+| Cache / perf         | `n_jobs`, `enable_result_caching`, `enable_mcmc_caching`, `cache_ttl_hours`, `export_max_workers` |
+
+> **Trap:** `PipelineConfig.from_env()` (`:127`) does **not** reproduce the dataclass defaults. `ER_MC_SIMULATIONS`
+> defaults to `50_000` (vs `10_000`) and `ER_MCMC_SAMPLES` to `10_000` (vs `5_000`), so a config built from the
+> environment samples ~2–5× more than one built directly. Check which constructor you are on before comparing runs.
+
+BMA weighting and `compute_cross_model_correlation()` (`:2136`) are the *only* cross-model machinery here — there is
+no ELPD/LOO comparison (see the Bayesian Workflow section).
+
+### 9. Workflow Helpers (pymc_models/_workflow.py)
+
+The SSOT for the sampling / diagnostics / predictive-check stages shared by every model — see
+**The Bayesian Workflow — Stage Contract** below for what each one is for.
 
 ```python
-@dataclass
-class PipelineConfig:
-    mc_simulations: int = 10_000
-    mcmc_chains: int = 8
-    use_bayesian_model_averaging: bool = True
-    # 20+ more tunable parameters
+from probabilistic_ml_model.pymc_models._workflow import (
+    MIN_ESS_GATE,             # 400 — project convergence gate
+    build_sample_kwargs,      # canonical pm.sample() kwargs assembly
+    log_sample_diagnostics,   # divergences + bulk-ESS warnings from code
+    prior_predictive_check,   # pm.sample_prior_predictive wrapper
+    posterior_predictive_check,  # pm.sample_posterior_predictive wrapper
+    attach_log_likelihood,    # post-hoc log_likelihood -> enables az.loo/az.compare
+    posterior_dataset,        # DataTree/InferenceData -> flat xarray.Dataset
+)
 ```
+
+### 10. Price-Target Monte Carlo (pymc_models/_price_target_mc.py)
+
+The forward-return decision layer feeding both the analytics export and the GEIB dashboard:
+
+```python
+from probabilistic_ml_model.pymc_models._price_target_mc import (
+    prepare_price_target_inputs, prepare_price_target_panel_inputs,
+    simulate_lagged_risk_adjusted_returns,  # AR-damped structural-TS forward draws
+    summarize_mc_returns,                   # -> er_mean, er_sd, er_p05, er_p50, er_p95, prob_pos
+)
+```
+
+`summarize_mc_returns` produces the `er_*` / `prob_pos` columns persisted in
+`analytics.kalman_filtered_price_targets`; `expected_sharpe_ratio = er_mean / er_sd`.
+
+### 11. CVaR Risk Book (pymc_models/RiskBookModel.py)
+
+```python
+from probabilistic_ml_model.pymc_models.RiskBookModel import RiskBook, compute_cvar_aware_book
+
+rb = compute_cvar_aware_book(idata, screen.eu, results, alpha=0.05, cap=0.08, k_book=25)
+rb.analytics   # per-name risk columns incl. cvar05, exp_vol, starr, book_weight
+rb.book        # STARR-ranked, cap-and-spill sized long book (weights sum to 1)
+rb.summary     # port_up, port_cvar, wavg_cvar, starr_book, div, n_book, sizing params
+```
+
+`pymc_kalman_filter_pt.compute_cvar_aware_book(idata, panel, screen, results, config=…)` is a thin wrapper that
+resolves the sizing knobs from `KalmanRunConfig` and delegates here. All columns are raw decimals.
 
 ### 6. Data Loading (data_utils.py)
 
@@ -244,6 +328,111 @@ from probabilistic_ml_model.visualizations import (
 )
 ```
 
+PPC plotting exists (`create_screening_ppc_rootogram`, `create_screening_ppc_continuous`, plus `azp.plot_ppc_dist` /
+`plot_ppc_tstat` call sites in `arviz_diagnostics.py`). There is **no** prior-predictive plot helper and **no**
+LOO/WAIC/`az.compare` plot anywhere in `visualizations/`.
+
+> `visualizations/__init__.py:60-176` builds `__all__` by dynamic import and **swallows `ImportError`**, so a broken
+> submodule silently disappears instead of failing. `earnings_quality.py` has no `_IMPORT_REGISTRY` entry at all —
+> import it directly from the submodule.
+
+## The Bayesian Workflow — Stage Contract
+
+The project follows the PyMC *Bayesian workflow*. This section is normative: new and modified models are expected to
+reach every stage, using the shared helper for each rather than a local reimplementation.
+
+The reference implementation is **`pymc_kalman_filter_pt.py`**, not the model package — §6 prior predictive, §8
+posterior predictive and §9 diagnostics there are the standard to match.
+
+### Stage → canonical API
+
+| Stage                        | Use this                                                                                          | Reference                                                        |
+|------------------------------|---------------------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| Conceptual model building    | `pml.vw_pymc_feature_catalogue` → `select_drift_features()` / `_resolve_*_feature_aliases()`. Never hand-list columns | `KalmanFilterModel.select_drift_features` + `KALMAN_DRIFT_EXCLUDED_FEATURES` |
+| Prior predictive             | `_workflow.prior_predictive_check(model, var_names=…, draws=…)`, then de-standardise onto an interpretable scale and compare to the empirical distribution | `run_prior_predictive` (`pymc_kalman_filter_pt.py:4009`)          |
+| Computational implementation | `pm.Model(coords=…)` + `pm.Data`; `_hierarchy` helpers; `coerce_by_data_type`                     | `build_fused_kalman_pt_model`                                     |
+| Fitting & diagnostics        | `_workflow.build_sample_kwargs()` → `pm.sample` → `_workflow.log_sample_diagnostics()`            | `run_diagnostics` (`:4378`); gate `MIN_ESS_GATE = 400`            |
+| Model evaluation (PPC)       | `_workflow.posterior_predictive_check()` **plus ≥1 calibration statistic** (ECDF, t-stat, coverage, PIT) | `run_posterior_predictive` (`:4237`)                        |
+| Model comparison             | `_workflow.attach_log_likelihood(idata, model)` → `az.compare` — see below                        | *(no in-repo example yet)*                                        |
+| Expansion / simplification   | Record it in the builder docstring: what was tried, its divergence / R-hat counts, why it was dropped | `KalmanFilterModel.py:2134-2145`, `:2373`, `:2450`, `:2535`   |
+| Decision analysis            | `_price_target_mc.summarize_mc_returns`; `RiskBookModel.compute_cvar_aware_book`                  | §10 screen / §10b risk book                                       |
+
+The artifact tree mirrors the stages: `_EXPORT_SECTION_DIRS` **is** the workflow (`06_prior`, `08_ppc`,
+`09_diagnostics`, …). A new stage means a new section directory resolved through `_export_dir_for` — never a
+hand-built path.
+
+### Current coverage
+
+✅ implemented · ⚠️ partial · ❌ absent
+
+| Module                          | Prior pred. | PPC                        | Diagnostics | Comparison | Decision analysis |
+|---------------------------------|-------------|----------------------------|-------------|------------|-------------------|
+| `pymc_kalman_filter_pt.py`      | ✅ `run_prior_predictive` | ✅ `run_posterior_predictive` | ✅ `run_diagnostics` | ❌ | ✅ screen + risk book |
+| KalmanFilterPriceTarget         | ❌          | ⚠️ `forecast()` hand-rolls predictions | ✅ `log_sample_diagnostics` | ❌ | ✅ `implied_upside_from_state` |
+| EarningsBeatBayesian            | ❌          | ❌                         | ✅          | ❌         | ❌                |
+| PriceTargetAchievement          | ❌          | ❌                         | ✅          | ❌         | ⚠️ `achieve_prob` latent |
+| DCFPriceTarget                  | ❌          | ❌                         | ✅          | ❌         | ❌                |
+| DividendSafetyBayesian          | ❌          | ❌                         | ✅          | ❌         | ❌                |
+| CreditRiskBayesian              | ❌          | ❌                         | ✅          | ❌         | ❌                |
+| AccountingAnomalyBayesian       | ❌          | ❌                         | ✅          | ❌         | ⚠️ `threshold`   |
+| MonteCarloSimulation            | ❌          | ⚠️ post-hoc NumPy group    | ✅          | ❌         | ⚠️ `sim_returns` |
+| ProbabilisticLinearRegression   | ❌          | ⚠️ opt-in, default off     | ✅          | ❌         | ❌                |
+
+Diagnostics became universal when `log_sample_diagnostics` was lifted into `_workflow.py`; **prior predictive is the
+largest remaining gap** in the model package — `prior_predictive_check()` now makes it a one-liner.
+
+### `log_likelihood` and why comparison is unavailable
+
+`log_likelihood` is **off by default** everywhere. It roughly doubles `InferenceData` size and adds materially to
+wall-clock on a ~5k-ISIN cross-section, and no pipeline path consumes it. That is a deliberate trade-off, not an
+oversight — but the consequence is that **`az.loo` / `az.waic` / `az.compare` raise on every idata this repo
+produces**, and no test exercises ELPD comparison.
+
+Two escape hatches, one of which is a trap:
+
+```python
+# (1) Sampler-dependent — works for pymc/numpyro/blackjax, SILENTLY IGNORED under nutpie,
+#     and DEPRECATED by PyMC itself (FutureWarning: "Passing `log_likelihood` via
+#     `idata_kwargs` is deprecated ... Call `pm.compute_log_likelihood(idata)` instead").
+idata, model = MyModel().fit(..., nuts_sampler="pymc", idata_kwargs={"log_likelihood": True})
+
+# (2) Sampler-independent — the recommended route, and what PyMC now steers you to.
+from probabilistic_ml_model.pymc_models._workflow import attach_log_likelihood
+attach_log_likelihood(idata, model)          # wraps pm.compute_log_likelihood
+az.compare({"a": idata_a, "b": idata_b})
+```
+
+**Reading the result:** ArviZ 1.x `ELPDData` exposes the value as **`.elpd`** — `.elpd_loo`, `.p_loo` and `.loo` are
+all gone, even though the object's `repr` still prints the row label `elpd_loo`. Reading the old attribute yields a
+silent `nan` via `getattr(loo, "elpd_loo", nan)` rather than an error:
+
+```python
+loo = az.loo(idata)
+print(loo.elpd, loo.se)      # -122.38  5.13   ✅
+print(loo.elpd_loo)          # AttributeError  ❌
+```
+
+Why (1) is a trap: `build_sample_kwargs` layers kwargs as `defaults → nuts_sampler → setdefault(idata_kwargs) →
+update(sample_kwargs) → nutpie strip`. The `setdefault`-before-`update` is what lets your override win; the nutpie
+strip afterwards discards `idata_kwargs` wholesale, because nutpie ignores it and warns. nutpie is the project
+default sampler, so on the default path your override vanishes. `build_sample_kwargs` logs an INFO line when it
+detects this.
+
+On the script path, `sample_posterior` (`pymc_kalman_filter_pt.py:4095`) hard-codes `log_likelihood: False` at `:4165`
+and takes no `**sample_kwargs` at all — use `attach_log_likelihood` on the returned idata.
+
+### Checklist for a new or modified model
+
+1. Resolve features from `pml.vw_pymc_feature_catalogue`, not Python literals.
+2. `coerce_by_data_type()`; `assert_disjoint_features()` when combining feature sets.
+3. Build with `pm.Data` + `coords`; hierarchy via `_hierarchy.py`.
+4. Ship a **prior predictive check** on an interpretable scale before any posterior run.
+5. Sample via `_workflow.build_sample_kwargs()` — never re-copy the kwargs block.
+6. Call `_workflow.log_sample_diagnostics()` — warn from code, never rely on console scraping.
+7. Ship a **posterior predictive check** with at least one calibration statistic.
+8. `stamp_feature_provenance()` after `pm.sample()`; `validate_oos_shape()` on any `pm.set_data` path.
+9. Docstring states what decision the model serves, and what alternatives were rejected and why.
+
 ## Entry Points & Workflows
 
 ### Main Pipeline
@@ -256,11 +445,75 @@ python expected_returns_v3.py
 python pymc_kalman_filter_pt.py
 ```
 
-`pymc_kalman_filter_pt.py` also exposes an importable `main(run_eda_section=…, write_analytics=…, robust=…,
-export_results=…, config=…)` returning `{'idata', 'results', 'kalman_results', 'panel', 'screen', 'universe_fit'}`;
-artifacts (PNG/CSV/JSON/NetCDF) go to `KALMAN_PT_RESULTS_DIR`. Workflow knobs (NUTS budget, screen/risk-book
-parameters, panel lookbacks, universe-query dates) live on the frozen `KalmanRunConfig` dataclass
-(`KalmanRunConfig.from_env()` / `get_run_config()`), passed via `main(config=…)`.
+`pymc_kalman_filter_pt.py` also exposes an importable `main()`:
+
+```python
+main(*, run_eda_section=True, write_analytics=True, robust=False,
+     volume_penalty=0.25, export_results=True, config=None) -> dict[str, Any]
+# -> {'idata', 'prior_idata', 'results', 'kalman_results',
+#     'panel', 'screen', 'risk_book', 'universe_fit'}       # 8 keys
+```
+
+`volume_penalty=0.25` overrides `build_fused_kalman_pt_model`'s own `0.2` default; `0.0` disables the tilt.
+
+Workflow knobs (NUTS budget, screen/risk-book parameters, panel lookbacks, universe-query dates) live on the frozen
+`KalmanRunConfig` dataclass, passed via `main(config=…)`. **`from_env()` reads only five variables** —
+`RANDOM_SEED`, `KALMAN_PT_RESULTS_DIR`, `KALMAN_PT_EXPORT_DRAWS`, `PML_FIG_WIDTH_PX`, `LOG_LEVEL`. Everything else
+keeps its dataclass default and is overridden programmatically:
+
+```python
+from dataclasses import replace
+cfg = replace(get_run_config(), panel_lookbacks=(), chains=8)   # T=1 cross-section, 8 chains
+```
+
+**Section map** (the file is ~8.1k lines; sections are keyed to the Bayesian-workflow stages):
+
+| §     | Line   | Content                                        |
+|-------|--------|------------------------------------------------|
+| 1/1c  | `:470` / `:1894` | Plot helpers · artifact export           |
+| 2     | `:2817` | EDA panels                                    |
+| 3     | `:3331` | State-space feature mapping                   |
+| 5b    | `:3437` | Fused MvGRW panel model (Model A / Model B)   |
+| **6** | `:4007` | **Prior predictive checks**                   |
+| 7     | `:4093` | Posterior inference (NUTS)                    |
+| **8** | `:4235` | **Posterior predictive checks**               |
+| **9** | `:4376` | **MCMC diagnostics**                          |
+| 10 / 10b / 10c | `:4662` / `:5027` / `:5527` | Screen · CVaR risk book · analytics export |
+| 10K–13 | `:5880`–`:6765` | Universe fit, single-ISIN, mingled cohort, forest (± SV twins) |
+| 14    | `:7029` | Summary + recommendations                     |
+
+There is **no §4 or §5** — `:3439` records that the legacy single-observation model was replaced by the §5b fused
+panel path.
+
+> **Split contract, know which side you are on.** `KalmanPanelInputs` (the dataclass) lives in the package at
+> `pymc_models/KalmanFilterModel.py`, but its constructor `prepare_kalman_panel_inputs(...)` — along with
+> `KALMAN_PANEL_RESPONSE_COLS`, `KALMAN_RESPONSE_COVERAGE_MIN`, `FeatureRoles` and `build_noise_wideners` — lives in
+> `pymc_kalman_filter_pt.py:3500`. Import the preparer from the script, not the package. Consolidating the two sides
+> is a known follow-up; it was left alone here because the move drags four coupled symbols across the boundary.
+
+**Artifact export (since 0.9.9.13).** Artifacts go to `KALMAN_PT_RESULTS_DIR` in a **per-section subdirectory**
+(`01_data/`, `02_eda/`, `03_features/`, `04_panel/`, `06_prior/`, `07_posterior/`, `08_ppc/`, `09_diagnostics/`,
+`10_screen/`, `10b_risk/`, `10c_analytics/`, `10k_universe/`, `11_single_isin/`, `11b_single_sv/`, `12_mingled/`,
+`12b_mingled_sv/`, `13_forest/`, `13b_further_views/`, `14_summary/`, `14b_recommendations/`, `00_misc/`). The
+directory is resolved from the artifact stem by `_export_dir_for` against the `_EXPORT_SECTION_DIRS` SSOT — do not
+build result paths by hand.
+
+- Figures → PNG (kaleido), self-contained HTML fallback.
+- DataFrames → the curated bulk frames in `_SQL_EXPORT_ARTIFACTS` (`04_panel_frame`, `09_diagnostics_01_table`,
+  `10_screen_results`, `10_screen_mc_summary`, `10b_risk_analytics`, `10b_risk_book`, `10c_kalman_results`) become
+  `analytics."<stem>"` tables **plus** a generated `<stem>.sql` DDL file; all other frames stay CSV. `KALMAN_PT_SQL_EXPORT=0`
+  — or an unreachable database — falls back to CSV while still emitting the DDL.
+- DataTrees → NetCDF + per-group JSON summary.
+
+Migrate a pre-0.9.9.13 flat results directory with `python pymc_kalman_filter_pt.py --migrate-layout` (dry run),
+then `--migrate-layout --apply`. Notebooks call `enable_artifact_export()` once and `set_export_section('<step>')`
+per cell (there is no enclosing `with` block per cell).
+
+**Figure theming.** One template (`_PLOTLY_TEMPLATE = 'arviz-tumma'`, with the ArviZ 1.x `arviz-variat` rename as
+fallback) applied in exactly one place — `_apply_dark_template`, called from the `_safe_show` funnel — so displayed
+and exported figures cannot diverge. Reference geometry (zero lines, break-even markers, y=x guides, now-boundaries,
+horizon markers) goes through `_add_ref_line` / `_add_ref_band` keyed on a role (`zero` / `anchor` / `emphasis`) from
+`_REF_LINE_KINDS`; never call `add_hline` / `add_vline` / `add_vrect` directly.
 
 Console-script entry points declared in `pyproject.toml` `[project.scripts]`:
 `finance-ml`, `finance-ml-analyze`, `finance-ml-validate` (→ `cli:*`) and
@@ -310,9 +563,38 @@ superseded by the `geib/` package above.
 
 ## SQL Schema — Authoritative Column & Dataframe Reference
 
-**The SQL DDL files in `sql_scripts/pml/` are the single source of truth for all column names, data types, and feature
-definitions.** When writing Python code that references dataframe columns, always derive column names from the SQL
-schema — not from Python variable names or notebook outputs.
+**The SQL DDL is the single source of truth for all column names, data types, and feature definitions.** When writing
+Python that references dataframe columns, derive the names from SQL — not from Python variable names or notebook
+outputs.
+
+**Which file, though — this matters.** `sql_scripts/pml/` is a pg_dump-style *extract*, not a source: 48 of its 64
+files carry a `-- missing source code` body, including **all 7 `mv_pymc_*.sql`, all 4 `vw_pymc_*.sql` and all 37
+function files**. They cannot recreate anything. The real SSOT files live at the repo root:
+
+| File                            | Authoritative for                                                                                     |
+|---------------------------------|--------------------------------------------------------------------------------------------------------|
+| `pml_feature_catalogue.sql`     | `pml.*` helper functions · **all 7 `mv_pymc_*` MV definitions** · catalogue views · coverage check · refresh procedure |
+| `pml_df_metadata.sql`           | `pml_df_metadata` / `pml_df_feature_alias` DDL + the CHECK-enforced vocabularies                        |
+| `pml_df_metadata_populate.sql`  | `pymc_role` / `model_targets` / alias assignment (incl. §7i coverage reconciliation)                   |
+| `sql_scripts/pml/pml_df.sql`, `staging.sql`, `vw_pml_df_*.sql` | The base tables and the five `vw_pml_df_*` views — the extract's valid part |
+
+Recreating `pml.pml_df` cascade-drops every dependent `mv_pymc_*`, so a `pml_df` rebuild **must** be followed by
+re-running `pml_feature_catalogue.sql`.
+
+### How a column becomes a model feature
+
+This resolution chain is what Python actually depends on, and every link can fail silently:
+
+```
+pml_df_metadata            (global pymc_role, model_targets[])
+  -> pml_df_feature_alias  (per-model feature_alias AND pymc_role override)
+  -> vw_pymc_feature_catalogue     COALESCE(fa.pymc_role, md.pymc_role); 'excluded' filtered out
+  -> vw_pymc_feature_aliases       the arrays _resolve_<model>_feature_aliases() consumes
+```
+
+An unrecognised role neither raises nor matches a consumer — the column simply vanishes from the model's feature list
+and is later zero-filled by the alignment layer. `pml_df_metadata.sql` now CHECK-constrains all three vocabularies at
+write time, and `pml.assert_pymc_catalogue_coverage()` catches MV↔catalogue divergence after the fact.
 
 ### Core Tables (pml schema)
 
@@ -436,13 +718,28 @@ ORDER BY ordinal_position;
 
 ### Materialized Views — Per-Model Feature Matrices (pml schema)
 
-Each MV is indexed on `isin` (UNIQUE). All use `feat_` prefix for engineered columns. Refresh with
-`CALL pml.refresh_pymc_materialized_views();`
+Each MV is indexed on `isin` (UNIQUE). All use `feat_` prefix for engineered columns. Definitions live in
+`pml_feature_catalogue.sql`. Refresh with:
+
+```sql
+CALL pml.refresh_pymc_materialized_views(
+         use_concurrently => TRUE,    -- REFRESH ... CONCURRENTLY
+         assert_coverage  => FALSE);  -- run pml.assert_pymc_catalogue_coverage() after
+```
+
+Both arguments are easy to miss. `assert_coverage => TRUE` fails the refresh loudly if any MV `feat_`/`observed_`/`n_`
+column is unregistered, duplicated or phantom in the catalogue — see *Refreshing MVs* under Common Development Tasks.
 
 All seven MVs additionally carry a shared market-cap/EV size-&-trend trio:
 `feat_mcap_trend_1y`, `feat_mcap_vs_3yavg`, `feat_ev_vs_3yavg` (derived from the
 `market_cap_neg{1..4}f{q,y}` lags and `market_cap`/`enterprise_value` `_{3,5}yavg`
-columns added to `pml_df`). `mv_pymc_kalman_pt` is a single time-slice snapshot.
+columns added to `pml_df`).
+
+> **`mv_pymc_kalman_pt` is not reproducible across refresh dates.** Its seven `days_*` horizons
+> (`days_to_next_earnings`, `days_since_last_report`, …) are computed against `CURRENT_DATE`, so refreshing on a
+> different day silently shifts every one. Fine for the live screen; unusable as-is for a point-in-time backtest,
+> which would need an as-of date parameter. It is also part of why the `days_*` family is excluded from the drift
+> matrix (`KALMAN_TIME_COVARIATE_PREFIX`).
 
 Since 0.9.9.6 `mv_pymc_kalman_pt` replaces the raw `feat_vol_{1m,3m,6m,1y}`
 columns with the winsorised realized-vol term-structure drift
@@ -468,11 +765,14 @@ components, and `days_*` time covariates all stay out of the drift matrix — ED
 |------------------------------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `mv_pymc_earnings_beat`      | `n_total`, `n_beats`, `n_total_annual`, `n_beats_annual`                       | `feat_logit_beat_rate`, `feat_eps_fy1e`, `feat_rev_{1w,1m,3m,6m,1y}`, `feat_rev_accel_1m_6m`, `feat_last_q_surprise`                                      |
 | `mv_pymc_price_target`       | `observed_target_pct`, `observed_target_pct_med`, `price_target`, `n_analysts` | `feat_net_buy_sentiment`, `feat_implied_upside`, `feat_target_range_width`, `feat_pt_momentum_3m`, `feat_target_dispersion_cv`, `feat_52w_range_position` |
-| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_pt_drift`, `feat_price_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_pt_achievement_1y`, `feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`, `feat_median_piotroski_f_score` |
+| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_log_uplift` (the panel response), `feat_pt_drift(_n)`, `feat_price_drift(_n)`, `feat_pt_{high,low,median,noise}_drift`, `feat_coverage_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_analyst_rating`, `feat_{holds,buys,sells,no_opinion}`, `feat_pt_achievement_1y`, `feat_pt_accuracy_1y`, `feat_pt_range_hit_rate`, `feat_rel_volume`, `feat_avg_beta`, `feat_mcap_country_r`, `feat_mv_ev_drift`, `feat_one_day_return`, `feat_price_chg_pct_3m`, `feat_total_return_*` (14 windows), `feat_tr_cagr_{1y,3y,5y,10y}`, `feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`, `feat_median_piotroski_f_score`, plus raw `days_*` horizons |
 | `mv_pymc_dcf_pt`             | `observed_pt`                                                                  | `feat_fcf_growth_{1y,2y}`, `feat_fcf_terminal_growth`, `feat_reinvest_rate`, `feat_capex_to_fcf`, `feat_tr_cagr_{3y,10y}`                                 |
 | `mv_pymc_dividend_safety`    | `observed_div_yield`                                                           | `feat_fcf_coverage`, `feat_cfo_coverage`, `feat_eps_payout_ratio`, `feat_dps_growth_{1y,3y,5y}`, `feat_yield_spread_vs_5y`                                |
 | `mv_pymc_credit_risk`        | `observed_altman_z`                                                            | `feat_distress_zone`, `feat_z_trend_{1y,3y}`, `feat_cfo_capex_cov`, `feat_fcf_yield`, `feat_beta_2y`                                                      |
 | `mv_pymc_accounting_anomaly` | `observed_eps_adj`                                                             | `feat_accruals_ratio`, `feat_gpm_change_1y`, `feat_eps_adj_gap`, `feat_cfi_to_cfo`, `feat_fcfps_vs_eps_gap`                                               |
+
+`feat_mcap_country_r = (100 - market_cap_country_r) / 100` — a **ratio where ≈0 means largest in country**. It is easy
+to invert by mistake; it drives `KalmanRunConfig.mcap_country_r_max` (0.02 keeps roughly the top 2% per country).
 
 ### Metadata & Catalogue Views (pml schema)
 
@@ -490,7 +790,10 @@ components, and `days_*` time covariates all stay out of the drift matrix — ED
 
 ### SQL Helper Functions (pml schema)
 
-All functions are `IMMUTABLE PARALLEL SAFE` with both `NUMERIC` and `DOUBLE PRECISION` overloads.
+Defined in `pml_feature_catalogue.sql`. **Most** are `IMMUTABLE PARALLEL SAFE` with paired `NUMERIC` +
+`DOUBLE PRECISION` overloads — but not all: `pml.calc_piotroski_f_score` is `STABLE` and single-overload (it reads
+`pml_df`), as are the `country_name` / `currency_name` / `exchange_name` lookups. Check the definition before
+assuming immutability in an index or generated column.
 
 ```sql
 -- Arithmetic
@@ -498,6 +801,7 @@ pml.safe_divide(numerator, denominator)            -- NULLIF-safe division
 pml.pct_change(current_val, previous_val)          -- (cur - prev) / prev * 100
 pml.calc_change_ratio(current_val, previous_val)   -- (cur - prev) / prev
 pml.target_drift(arr DOUBLE PRECISION[])           -- AVG of consecutive calc_change_ratio
+pml.target_drift(arr DOUBLE PRECISION[], min_points INT)  -- same, NULL unless >= min_points pairs
 pml.target_drift_n(arr DOUBLE PRECISION[]) → INT   -- count of valid consecutive pairs in target_drift
 
 -- Transforms
@@ -522,7 +826,52 @@ pml.frequency_to_months(frequency TEXT, fy_end_date, next_fy_end_date) → INT
 pml.calculate_next_fiscal_quarter(next_earnings_date, ...) → INT    -- returns 1-4
 pml.calculate_next_fiscal_quarter_date(income_statement_report_date) → DATE  -- +3 months
 pml.ema_crossover_signal(fast_ema, slow_ema) → INT  -- 1 / -1 / 0
+
+-- Date / fiscal (continued)
+pml.calculate_fiscal_info(reference_date, fy_end_date, frequency DEFAULT NULL)
+                        → record  -- OUT fiscal_month/quarter/year, next_quarter(_year),
+                                  --     reporting_interval, earnings_report_frequency,
+                                  --     next_earnings_report_type
+pml.calculate_expected_report_date(period_end_date, earnings_report_frequency) → DATE
+pml.calculate_next_income_statement_report_date(report_date, frequency) → DATE
+pml.calculate_next_fy_end_date(fy_end_date) → DATE
+pml.calculate_reporting_lag(next_earnings, report_date, frequency DEFAULT 'Quarterly') → INT
+pml.get_expected_reporting_lag_days(earnings_report_frequency) → INT
+pml.derive_earnings_report_frequency(report_date, fy_end_date) → TEXT
+pml.months_to_frequency(interval_months) → TEXT
+pml.month_abbrev_to_number(month_abbrev) → INT
+pml.parse_fiscal_year_end_date(fy_end_text) → DATE
+pml.validate_fiscal_dates(fy_end_date, report_date, reference_date DEFAULT CURRENT_DATE)
+                        → TABLE(issue TEXT, severity TEXT)
+
+-- Parsing / lookup (STABLE, single-overload)
+pml.text_to_date_safe(input_text, date_format DEFAULT 'AUTO') → DATE
+pml.text_to_numeric_safe(input_text) → NUMERIC
+pml.country_name(code_text) / pml.currency_name(code) / pml.exchange_name(code) → TEXT
+
+-- Catalogue integrity
+pml.assert_pymc_catalogue_coverage() → VOID   -- RAISES on any MV <-> catalogue divergence
+CALL pml.refresh_pymc_materialized_views(use_concurrently DEFAULT TRUE,
+                                         assert_coverage  DEFAULT FALSE);
 ```
+
+### Analytics Schema (pipeline outputs)
+
+The Kalman workflow writes seven curated frames (`_SQL_EXPORT_ARTIFACTS`), each landing as an `analytics."<stem>"`
+table **and** a generated `sql_scripts/analytics/<stem>.sql` DDL file:
+
+| Stem                      | Notable columns                                                                       |
+|---------------------------|----------------------------------------------------------------------------------------|
+| `04_panel_frame`          | the full 185-column model input frame — the de-facto reference for the Kalman MV surface |
+| `09_diagnostics_01_table` | `mean`, `sd`, `eti89_lb/ub`, `ess_bulk`, `ess_tail`, `r_hat`, `mcse_mean`, `mcse_sd`   |
+| `10_screen_results`       | per-ISIN screen: identity/geo → `observed_pt`, `expected_pt(_hdi_lo/hi)`, `expected_upside`, `risk_adj_return`, `prob_pos` |
+| `10_screen_mc_summary`    | `isin`, `er_mean`, `er_sd`, `er_p05`, `er_p50`, `er_p95`, `prob_pos`                   |
+| `10b_risk_analytics` / `10b_risk_book` | + `p_upside_pos(_cond)`, `band_width`, `kalman_gain`, `cvar05`, `exp_vol`, `ret_vol_ratio`, `expected_sharpe`, `tail_risk`, `starr`, `book_weight`, `weight` |
+| `10c_kalman_results`      | feeds `analytics.kalman_filtered_price_targets`                                        |
+
+`analytics.kalman_filtered_price_targets` (82 columns) is the GEIB dashboard's only source and the **only** file in
+`sql_scripts/analytics/` carrying `COMMENT ON COLUMN` documentation and the raw-decimal unit header — keep it that way.
+The other ~45 files there are hand-written screen/analysis scripts unmanaged by the pipeline.
 
 ## Key Architectural Patterns
 
@@ -531,7 +880,12 @@ pml.ema_crossover_signal(fast_ema, slow_ema) → INT  -- 1 / -1 / 0
 - Features: `feature_catalog.py` synced with SQL registry
 - Hierarchy: `_hierarchy.py` shared by all models
 - Identifiers: `DEFAULT_IDENTIFIER_COLUMNS` in feature_catalog.py
-- Schema: `pml.pml_df_metadata`
+- Schema: `pml.pml_df_metadata` (DDL `pml_df_metadata.sql`, population `pml_df_metadata_populate.sql`)
+- Functions / MVs / catalogue views: `pml_feature_catalogue.sql`
+- Sampling & diagnostics: `pymc_models/_workflow.py`
+- Drift-feature exclusions: `KALMAN_DRIFT_EXCLUDED_FEATURES` in `KalmanFilterModel.py`
+- Artifact sections: `_EXPORT_SECTION_DIRS` in `pymc_kalman_filter_pt.py`
+- Reference geometry: `_REF_LINE_KINDS` (`_add_ref_line` / `_add_ref_band`)
 
 ### 2. Lazy Loading
 
@@ -561,7 +915,33 @@ from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 
 ### 6. Configuration as Dataclass
 
-`PipelineConfig` centralizes magic numbers for CLI/env override.
+`PipelineConfig` and `KalmanRunConfig` centralize magic numbers for CLI/env override. Both expose `from_env()`; both
+are overridden programmatically with `dataclasses.replace(...)` rather than by mutation (`KalmanRunConfig` is frozen).
+
+### 7. Workflow Stage = Export Section
+
+The artifact tree is the workflow. Resolve every result path through `_export_dir_for` against the
+`_EXPORT_SECTION_DIRS` SSOT; scripts use `with export_section('08_ppc'):`, notebooks call
+`enable_artifact_export()` once then `set_export_section('<step>')` per cell. Never build a result path by hand.
+
+### 8. Diagnostics as Code Gates
+
+Fit quality is *self-reported*, never scraped from console output. `log_sample_diagnostics()` warns on divergences
+and on bulk-ESS below `MIN_ESS_GATE = 400`; `build_sample_kwargs()` warns when the effective chain count is `< 2`,
+because r-hat and between-chain ESS are undefined for a single chain and come back NaN.
+
+### 9. Layered Sample Kwargs
+
+`build_sample_kwargs()` composes in a load-bearing order:
+
+```
+defaults (incl. compile_kwargs) -> nuts_sampler/cores -> setdefault(idata_kwargs)
+  -> update(sample_kwargs)      -> nutpie idata_kwargs strip
+```
+
+`setdefault` before `update` is what lets a caller override `log_likelihood`; the nutpie strip afterwards is what
+silently defeats it on the default sampler. Do not reorder — and prefer `attach_log_likelihood()` (see the Bayesian
+Workflow section).
 
 ## Code Guidelines
 
@@ -641,18 +1021,30 @@ def fit(
 ) -> tuple[InferenceLike, "pm_typing.Model"]:
 ```
 
-Always pass `compile_kwargs=get_pytensor_compile_kwargs()` to `pm.sample()`:
+A `fit()` **must** carry a return annotation. Known deviations from the defaults above:
+`EarningsBeatBayesian` uses `samples=500`, and `cores` appears only on `PriceTargetAchievement` / `DCFPriceTarget`.
+
+**Never re-copy the sampling boilerplate.** Build the kwargs with the shared helper, then self-report quality:
 
 ```python
-from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._workflow import (
+    build_sample_kwargs, log_sample_diagnostics,
+)
 
 idata = pm.sample(
-    samples, tune=tune, chains=chains, target_accept=target_accept,
-    compile_kwargs=get_pytensor_compile_kwargs(),
-    nuts_sampler=nuts_sampler,
-    **sample_kwargs,
+    **build_sample_kwargs(
+        samples=samples, tune=tune, chains=chains,
+        target_accept=target_accept, random_seed=random_seed,
+        nuts_sampler=nuts_sampler, sample_kwargs=sample_kwargs,
+        model_name="MyModelBayesian",
+    )
 )
+log_sample_diagnostics(idata, model_name="MyModelBayesian")
 ```
+
+`build_sample_kwargs` already supplies `compile_kwargs=get_pytensor_compile_kwargs()`, the `log_likelihood` policy,
+the nutpie `idata_kwargs` strip and the `chains < 2` warning. Hand-rolling the block is how five of the eight
+modules ended up missing the nutpie strip (and emitting a spurious `UserWarning`) before it was centralized.
 
 ### PyMC Model Building
 
@@ -770,26 +1162,81 @@ accessed from multiple threads.
 
 ### Adding a New PyMC Model
 
+Follow the nine-point checklist in **The Bayesian Workflow — Stage Contract**. Mechanically:
+
 1. Create `probabilistic_ml_model/pymc_models/MyModelName.py`:
-    - `fit(...)` method with optional `categories_df` + `hierarchy_levels`
-    - Return `(idata, posterior_pred_or_none)`
-    - Call `stamp_feature_provenance(...)` to attach metadata
+    - `fit(...)` with optional `categories_df` + `hierarchy_levels`, and a return annotation
+    - Features from `pml.vw_pymc_feature_catalogue` via `_resolve_*_feature_aliases()`; `coerce_by_data_type()`
+    - `build_sample_kwargs()` → `pm.sample()` → `log_sample_diagnostics()`
+    - `stamp_feature_provenance(...)` after sampling
+    - A `prior_predictive_check()` and a `posterior_predictive_check()` with ≥1 calibration statistic
+    - Return `(idata, model)`
 
 2. Update `pymc_models/__init__.py`:
    ```python
    _LAZY_IMPORT_MAP["MyModel"] = (".pymc_models.MyModuleName", "MyModel")
    ```
 
+3. Register the model's columns in SQL (next task) — the catalogue, not Python, decides its feature list.
+
+### Enabling Model Comparison for a Fit
+
+```python
+from probabilistic_ml_model.pymc_models._workflow import attach_log_likelihood
+import arviz as az
+
+idata_a, model_a = ModelA().fit(...)
+idata_b, model_b = ModelB().fit(...)
+attach_log_likelihood(idata_a, model_a)      # post-hoc; works under nutpie
+attach_log_likelihood(idata_b, model_b)
+az.compare({"a": idata_a, "b": idata_b})
+```
+
+Do **not** rely on `fit(..., idata_kwargs={"log_likelihood": True})` alone — nutpie discards it (see the Bayesian
+Workflow section). Cost scales with `chains × draws × n_observations` and can exceed the fit itself, so keep it opt-in.
+
+### Auditing a Model Against the Bayesian Workflow
+
+1. Find its row in the coverage matrix; every ❌ is the work.
+2. Run its prior predictive and check the implied observations are on a plausible scale.
+3. Confirm `log_sample_diagnostics` output appears in the logs (divergences, bulk ESS vs `MIN_ESS_GATE`).
+4. Confirm the PPC ships at least one calibration statistic, not just a density overlay.
+
 ### Adding a New Feature View or MV Column
 
 1. Add column to `pml.pml_df` DDL and `pml.staging` (same column, same `double precision` type).
-2. Register in `pml.pml_df_metadata`: insert a row with `column_name`, `pymc_role`, `feature_role`, `category`,
-   `data_type`, and `model_targets[]`.
-3. If it's a PyMC feature, add `feat_` column to the relevant `pml.mv_pymc_*` MV definition in
-   `sql_scripts/pml/mv_pymc_*.sql` using a `pml.*` helper function.
-4. Refresh: `CALL pml.refresh_pymc_materialized_views();`
-5. Update `FEATURE_VIEW_REGISTRY` in `feature_catalog.py` to match.
-6. Column name in Python must exactly match the SQL column name (no renaming at the Python layer).
+2. Register in `pml.pml_df_metadata` via `pml_df_metadata_populate.sql`: `column_name`, `pymc_role`, `feature_role`,
+   `category`, `data_type`, `model_targets[]`. All three vocabularies are CHECK-constrained — an invalid value now
+   fails the insert instead of silently dropping the column.
+3. If it's a PyMC feature, add the `feat_` column to the relevant `pml.mv_pymc_*` definition in
+   **`pml_feature_catalogue.sql`** (not `sql_scripts/pml/`, whose MV files are stubs) using a `pml.*` helper.
+4. The MV column name and the catalogue `feature_alias` **must match exactly**, or the coverage check flags it.
+5. Refresh and verify: `CALL pml.refresh_pymc_materialized_views(assert_coverage => TRUE);`
+6. Update `FEATURE_VIEW_REGISTRY` in `feature_catalog.py` to match.
+7. Column name in Python must exactly match the SQL column name (no renaming at the Python layer).
+
+### Refreshing MVs and Checking Catalogue Coverage
+
+```sql
+CALL pml.refresh_pymc_materialized_views(use_concurrently => TRUE, assert_coverage => TRUE);
+
+-- If it raises, enumerate what diverged:
+SELECT model_target, status, count(*),
+       string_agg(feat_name, ', ' ORDER BY feat_name)
+FROM pml.vw_pymc_catalogue_coverage_check
+WHERE status <> 'OK' GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
+Three failure classes, all fixed in `pml_df_metadata_populate.sql` §7i:
+
+| Status                      | Meaning                                            | Fix                                                        |
+|-----------------------------|----------------------------------------------------|-------------------------------------------------------------|
+| `MISSING_FROM_CATALOGUE`    | MV emits it, catalogue doesn't know it — **the dangerous one**: the model reindexes the column to 0.0 | Add the catalogue row / extend `model_targets` |
+| `PHANTOM_CATALOGUE_ALIAS`   | Catalogue claims an alias the MV never emits       | Drop the stray model tag, or add the column to the MV      |
+| `DUPLICATE_CATALOGUE_ALIAS` | Two rows claim one alias — makes alias resolution order-dependent | Remove the non-canonical row                |
+
+`assert_coverage` still defaults to `FALSE`; flip it to `TRUE` in `pml_feature_catalogue.sql` once your database has
+the §7i reconciliation applied and the check returns clean.
 
 ### Modifying the Hierarchy
 
@@ -841,6 +1288,15 @@ now ships with `PML_ENABLE_PYTENSOR_C=1` and the verified UCRT64 toolchain enabl
 `fit()` / sampling paths should also pass `compile_kwargs=get_pytensor_compile_kwargs()` (from
 `probabilistic_ml_model.pymc_models._pytensor_compat`), which forces the `Mode(linker="py")` VM at the call site.
 
+> **This opt-in was inert before 2026-08-06.** `_pytensor_env.py:27` defined
+> `ENABLE_C_ENV_VAR = "PYTENSOR_FLAGS"`, so the guard compared the *flag string* against `"1"` and never matched:
+> importing the package stripped a perfectly valid `cxx=<g++>` on every run, and no amount of `set_env.ps1`
+> configuration could re-enable the C backend. Fixed to `"PML_ENABLE_PYTENSOR_C"`. Verify with:
+> ```powershell
+> python -c "import probabilistic_ml_model, os; print(os.environ['PYTENSOR_FLAGS'])"
+> ```
+> With the flag set the `cxx=` path must survive; with it unset the value must end in a bare `cxx=`.
+
 **Use FORWARD slashes in the `cxx` path.** PyTensor parses `PYTENSOR_FLAGS` with posix shlex, which treats `\` as an
 escape character and strips it — `C:\msys64\ucrt64\bin\g++.exe` is mangled into the non-existent
 `C:msys64ucrt64bing++.exe`. Forward slashes survive the parser and g++/Windows accept them. (`device=` is also
@@ -864,6 +1320,17 @@ For JAX backend (blackjax / numpyro samplers):
 $env:JAX_PLATFORM_NAME = "cpu"   # or "gpu" if CUDA available
 ```
 
+### Sampling & Diagnostics Gotchas
+
+| Symptom                                                        | Cause / fix                                                                                                   |
+|----------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
+| `az.loo` / `az.waic` / `az.compare` raise "log likelihood not found" | Expected: `log_likelihood` is off project-wide. Call `attach_log_likelihood(idata, model)` — see the Bayesian Workflow section. |
+| `az.loo(...)` result reads as `nan`                            | You read `.elpd_loo`. ArviZ 1.x renamed the accessor to **`.elpd`**; the old name is absent, so `getattr(loo, "elpd_loo", nan)` silently yields `nan`. The `repr` still prints the `elpd_loo` label — don't be fooled by it. |
+| `idata_kwargs` you passed had no effect                        | nutpie (the default sampler) ignores `idata_kwargs`, and `build_sample_kwargs` strips it to suppress the resulting `UserWarning`. Use `nuts_sampler="pymc"`, or the post-hoc helper. |
+| `r_hat` / `ess_bulk` come back `NaN`                           | Fewer than 2 chains. `cores=1` is fine (chains run sequentially); `chains=1` is not — both statistics are between-chain. `build_sample_kwargs` warns. |
+| Jupyter kernel dies with "Connection to IDE-Managed Server is lost" | nutpie's parallel native workers crash an IDE-embedded kernel on Windows. Keep `cores=1` in notebooks; raise it only on the CLI path. |
+| A `visualizations` function vanished from `__all__`            | `visualizations/__init__.py:60-176` swallows `ImportError`, so a broken submodule silently disappears (exactly how a Python-2 `except` in `_shared.py` hid until 0.9.9.13). Import the submodule directly to see the real traceback. `earnings_quality.py` is never registered — always import it directly. |
+
 ### Database Connection
 
 ```python
@@ -874,6 +1341,10 @@ with engine.connect() as conn:
     result = conn.execute(text("SELECT 1"))
     print(result.fetchone())
 ```
+
+**`psql` is not a shortcut here.** It cannot parse the SQLAlchemy-style `DB_URL`
+(`postgresql+psycopg2://…`) and will hang on a password prompt unless `PGPASSWORD` is set. For ad-hoc queries use a
+one-off SQLAlchemy script like the above rather than fighting the CLI.
 
 ### Feature Catalog Cache
 
@@ -891,6 +1362,6 @@ catalog = get_feature_catalog(force_reload=True)
 
 ---
 
-**Version:** 0.9.9.11 (CHANGELOG; `pyproject.toml` and README badge lag at 0.9.9.5 pending the next packaging bump) |
+**Version:** 0.9.9.13 (CHANGELOG; `pyproject.toml` and README badge lag at 0.9.9.5 pending the next packaging bump) |
 **Python:** 3.12–3.14 | **PyMC:** >=6.2,<7 | **PyTensor:** >=3.2.2,<4 | **ArviZ:** >=1.1,<2 (arviz-base + arviz-stats +
 arviz-plots) | **JAX:** >=0.11,<1 | **License:** MIT | **DB:** PostgreSQL

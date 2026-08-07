@@ -49,12 +49,15 @@ Usage::
 
 from __future__ import annotations
 
+import argparse
 import contextlib
+import datetime
 import importlib.util as _ilu
 import json
 import logging
 import os
 import re
+import shutil
 import sys
 import warnings
 from dataclasses import dataclass, field
@@ -126,6 +129,13 @@ from probabilistic_ml_model.pymc_models._price_target_mc import (
     summarize_mc_returns,
 )
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._workflow import (
+    posterior_dataset as _posterior_dataset,
+)
+from probabilistic_ml_model.pymc_models.RiskBookModel import (
+    RiskBook,
+    compute_cvar_aware_book as _compute_cvar_aware_book,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -276,9 +286,10 @@ class KalmanRunConfig:
         (:func:`summarize_panel_screen`).
     panel_lookbacks
         ``*_ago`` suffixes building the genuine ``(isin, time)`` fused-panel
-        response (``T = len + 1``). Default ``()`` = collapsed T=1
-        cross-section; the T=4 panel is opt-in pending a divergence-free
-        validation run (see the field comment). See
+        response (``T = len + 1``). Defaults to ``('6m', '3m', '1m')`` — the
+        validated **T=4** panel. Pass ``replace(cfg, panel_lookbacks=())`` to
+        collapse back to the T=1 cross-section (faster, no time axis). See
+        the field comment for the validation record and
         :func:`prepare_kalman_panel_inputs`.
     cvar_alpha, weight_cap, k_book, p_long
         CVaR-aware book parameters (:func:`compute_cvar_aware_book`).
@@ -323,28 +334,26 @@ class KalmanRunConfig:
     mc_rho: float = 0.85
     # Risk book
     cvar_alpha: float = 0.05
-    weight_cap: float = 0.15
+    weight_cap: float = 0.08
     k_book: int = 25
     p_long: float = 0.50
-    mcap_country_r_max: float = 0.03
+    mcap_country_r_max: float = 0.02
     # Fused-panel time axis: *_ago lookbacks building the genuine (isin, time)
     # log-uplift panel (oldest -> newest is resolved automatically; the current
     # snapshot is always the final step, so T = len(panel_lookbacks) + 1).
-    # Default ``()`` keeps the collapsed T=1 cross-section; T=4 is opt-in
-    # (e.g. replace(cfg, panel_lookbacks=('6m', '3m', '1m'))) per the
-    # 2026-07-31 decision, and is VALIDATED since the per-time direct-intercept
+    # T=4 is the DEFAULT, validated since the per-time direct-intercept
     # reparameterisation of build_fused_kalman_pt_model: the 2026-08-01
     # T=4 run (tune=1000, target_accept=0.9, nutpie, ~1.5% history cells
     # snapshot-filled) passed with 0 divergences, worst r_hat 1.00 and worst
     # bulk-ESS ~1.6k, in 15.7 min end-to-end. (Earlier failures — 315/190
     # divergences on 2026-07-31/08-01 — were the since-removed aliased
     # level/slope + GRW-innovation block; see build_fused_kalman_pt_model.)
-    # Flipping this default to ('6m', '3m', '1m') is now safe if desired.
+    # Use replace(cfg, panel_lookbacks=()) for the collapsed T=1 cross-section.
     panel_lookbacks: tuple[str, ...] = ('6m', '3m', '1m')
     # Universe query
     min_next_earnings: str = '2026-01-01'
     min_report_date: str = '2025-01-01'
-    min_mcap_country_rank: float = 97.0
+    min_mcap_country_rank: float = 98.0
     candidate_limit: int = 50
     earnings_window_days: int = 5
     # Plumbing
@@ -466,6 +475,28 @@ def display(obj: object, *, label: Optional[str] = None) -> None:
 # =============================================================================
 # 1. Plotting setup + reusable helpers
 # =============================================================================
+# --- Dark theme (single source of truth) --------------------------------------
+# One Plotly template governs every figure in this module. It is applied in
+# exactly one place at render time — :func:`_apply_dark_template`, called from
+# the :func:`_safe_show` funnel — so a displayed figure and its exported PNG can
+# never diverge. arviz-plots 1.x renamed the dark style, hence the candidate
+# list; :func:`setup_plotting` warns when neither resolves instead of silently
+# leaving PlotCollection figures on the light default.
+_PLOTLY_TEMPLATE = 'arviz-tumma'
+_ARVIZ_STYLE_CANDIDATES: tuple[str, ...] = ('arviz-tumma', 'arviz-variat')
+C_PANEL_BG = '#1e1e1e'     # figure / paper background (matplotlib + marker edges)
+C_AXES_BG = '#2a2a2a'      # axes (plot area) background
+
+# Continuous colour ramps. One sequential and one diverging ramp for the whole
+# module: panels had drifted across Viridis / Magma / flare (sequential) and vlag
+# (diverging), so two views of the same quantity read as different measurements.
+# ``*_MPL`` are the matplotlib / seaborn spellings of the same two ramps.
+CS_SEQ = 'Viridis'         # magnitude-only quantities (beta, STARR, kalman gain)
+CS_DIV = 'RdBu'            # signed quantities centred on zero
+CS_SEQ_MPL = 'viridis'
+CS_DIV_MPL = 'vlag'
+
+
 def setup_plotting() -> None:
     """Pin arviz-plots to the **Plotly** backend and install the dark notebook theme.
 
@@ -493,21 +524,31 @@ def setup_plotting() -> None:
     _az_rcparams['plot.backend'] = 'plotly'
     try:
         import plotly.io as _pio
-        _pio.templates.default = 'arviz-tumma'  # dark ArviZ Plotly template
+        _pio.templates.default = _PLOTLY_TEMPLATE  # dark ArviZ Plotly template
     except Exception:  # pragma: no cover - plotly optional / renderer-less env
         pass
 
     # Matplotlib / Seaborn dark theme for the residual hand-built (non-ArviZ) panels.
     plt.style.use('dark_background')
-    try:
-        azp.style.use('arviz-tumma')
-    except (OSError, ValueError, AttributeError):
-        pass
+    # A silent failure here used to leave arviz_plots on its light default while
+    # everything else went dark -- warn instead, and accept the 1.x rename.
+    for _style in _ARVIZ_STYLE_CANDIDATES:
+        try:
+            azp.style.use(_style)
+            break
+        except (OSError, ValueError, AttributeError):
+            continue
+    else:
+        logger.warning(
+            "No arviz-plots dark style available (tried %s); PlotCollection "
+            "figures fall back to the library default and are re-themed at "
+            "display time by _apply_dark_template.",
+            ', '.join(_ARVIZ_STYLE_CANDIDATES))
     sns.set_theme(style='darkgrid', context='notebook',
                   rc={
-                      'figure.facecolor': '#1e1e1e',
-                      'axes.facecolor': '#2a2a2a',
-                      'savefig.facecolor': '#1e1e1e',
+                      'figure.facecolor': C_PANEL_BG,
+                      'axes.facecolor': C_AXES_BG,
+                      'savefig.facecolor': C_PANEL_BG,
                       'axes.edgecolor': '#cccccc',
                       'axes.labelcolor': '#e6e6e6',
                       'xtick.color': '#e6e6e6',
@@ -733,24 +774,42 @@ def _autosize_plotly(obj) -> None:
         pass
 
 
+def _apply_dark_template(obj: object) -> None:
+    """Stamp the dark :data:`_PLOTLY_TEMPLATE` onto a figure or PlotCollection.
+
+    ``plotly.io.templates.default`` only applies to figures built *after* it is
+    pinned, and ``arviz_plots`` composes some collections against its own
+    default — so figures reaching the display funnel can still carry the stock
+    light template. Applying it here, in the one funnel every figure passes
+    through, is what keeps displayed and exported output identical. Best-effort:
+    any failure leaves the figure exactly as built.
+    """
+    try:
+        fig = _plotly_figure_of(obj)
+        if fig is not None:
+            fig.update_layout(template=_PLOTLY_TEMPLATE)
+    except Exception:  # pragma: no cover - cosmetic only
+        pass
+
+
 def _render_plotly(fig: object, *, height: Optional[int] = None,
                    label: Optional[str] = None,
                    hovermode: Optional[str] = None) -> None:
     """Render a Plotly figure in the notebook (side-effecting; dark theme).
 
-    Applies the ``arviz-tumma`` dark template so every hand-built Plotly panel matches
-    the ArviZ figures (which inherit it via ``plotly.io.templates.default``, pinned in
-    :func:`setup_plotting`). Mirrors the ``pc.show()`` convention used throughout the
-    module; falls back to :func:`display` and is a silent no-op when no renderer is
-    available, so a headless / plain-script run never raises. ``label`` is forwarded
-    to the artifact exporter via :func:`_safe_show`.
+    Sets the shared margins and forwards to :func:`_safe_show`, which applies the
+    dark template (:func:`_apply_dark_template`) for display *and* export alike.
+    Mirrors the ``pc.show()`` convention used throughout the module; falls back to
+    :func:`display` and is a silent no-op when no renderer is available, so a
+    headless / plain-script run never raises. ``label`` is forwarded to the
+    artifact exporter via :func:`_safe_show`.
 
     ``hovermode`` overrides Plotly's default ``'closest'`` — pass ``'x unified'``
     for time-series panels so all series report at the hovered date.
     """
     if fig is None:
         return
-    fig.update_layout(template='arviz-tumma', margin=dict(l=60, r=30, t=70, b=50))
+    fig.update_layout(margin=dict(l=60, r=30, t=70, b=50))
     if height is not None:
         fig.update_layout(height=height)
     if hovermode is not None:
@@ -772,7 +831,10 @@ def _safe_show(obj: object, *, label: Optional[str] = None,
 
     This is also the single auto-capture point for artifact export: every displayed
     figure is handed to :func:`_export_figure` *before* ``show()``, so a display
-    transport failure still yields the exported file.
+    transport failure still yields the exported file. The dark template is applied
+    here too — before both display and export — so the two can never diverge
+    (``arviz_plots`` PlotCollections reach this funnel still carrying the light
+    default, which is why several exported panels used to render white).
 
     Parameters
     ----------
@@ -787,6 +849,7 @@ def _safe_show(obj: object, *, label: Optional[str] = None,
     """
     if obj is None:
         return
+    _apply_dark_template(obj)  # displayed == exported theme
     _autosize_plotly(obj)  # width tracks the editor pane; heights stay explicit
     _export_figure(obj, label=label)
     try:
@@ -825,6 +888,89 @@ def _hover_price(label: str, *, date_x: bool = True, nd: int = 2) -> str:
 def _hover_prob(label: str, *, axis: str = 'y') -> str:
     """Hovertemplate for a decimal probability in [0, 1]."""
     return f'{label} = %{{{axis}:.0%}}<extra></extra>'
+
+
+# --- Reference geometry (single source of truth for every guide line) ---------
+# Zero lines, break-even markers, y=x guides, now-boundaries and horizon markers
+# all key on a ROLE here rather than on per-call-site hexes and widths. Every
+# guide draws with ``layer='below'`` so it sits behind the data it annotates.
+#
+# ``zero``     — the invariant of the panel: 0 return, break-even, y=x, p=0.5.
+# ``anchor``   — a datum from the data: last price, now-boundary, horizon edge.
+# ``emphasis`` — a highlighted cohort/universe statistic worth reading off.
+_REF_LINE_KINDS: dict[str, dict[str, Any]] = {
+    'zero': {'color': C_REF, 'dash': 'dash', 'width': 1.0},
+    'anchor': {'color': C_REF, 'dash': 'dot', 'width': 1.2},
+    'emphasis': {'color': C_HIGHLIGHT, 'dash': 'dash', 'width': 1.4},
+}
+_REF_LINE_OPACITY = 0.7
+_REF_BAND_ALPHA = 0.08
+
+
+def _add_ref_line(fig, *, x: Optional[float] = None, y: Optional[float] = None,
+                  kind: str = 'zero', color: Optional[str] = None,
+                  annotation_text: Optional[str] = None,
+                  row: Optional[int] = None, col: Optional[int] = None,
+                  **kwargs: Any) -> None:
+    """Draw a horizontal / vertical reference line under the shared spec.
+
+    Replaces the ad-hoc ``add_hline`` / ``add_vline`` calls that had grown seven
+    different widths, three dash treatments and two Plotly APIs for what is
+    semantically one piece of geometry.
+
+    Parameters
+    ----------
+    x, y
+        Vertical (``x``) or horizontal (``y``) position. Exactly one is given.
+    kind
+        Role key into :data:`_REF_LINE_KINDS` — ``'zero'``, ``'anchor'`` or
+        ``'emphasis'``.
+    color
+        Overrides the role colour (e.g. a per-series median marker).
+    annotation_text
+        Optional label, rendered at :data:`_LEGEND_FONT_SIZE` in the line colour.
+    row, col
+        Subplot target; both omitted applies to the whole figure.
+    **kwargs
+        Forwarded to Plotly (``opacity``, ``annotation_position``, …).
+
+    Raises
+    ------
+    ValueError
+        If neither or both of ``x`` / ``y`` are supplied, or ``kind`` is unknown.
+    """
+    if (x is None) == (y is None):
+        raise ValueError("Pass exactly one of x= / y= to _add_ref_line.")
+    if kind not in _REF_LINE_KINDS:
+        raise ValueError(f"Unknown reference-line kind {kind!r}. "
+                         f"Valid: {sorted(_REF_LINE_KINDS)}")
+
+    spec = dict(_REF_LINE_KINDS[kind])
+    if color is not None:
+        spec['color'] = color
+    opts: dict[str, Any] = {
+        'line': spec,
+        'layer': 'below',
+        'opacity': kwargs.pop('opacity', _REF_LINE_OPACITY),
+    }
+    if annotation_text is not None:
+        opts['annotation_text'] = annotation_text
+        opts['annotation_font'] = dict(size=_LEGEND_FONT_SIZE, color=spec['color'])
+    if row is not None or col is not None:
+        opts['row'], opts['col'] = row, col
+    opts.update(kwargs)
+
+    if y is not None:
+        fig.add_hline(y=y, **opts)
+    else:
+        fig.add_vline(x=x, **opts)
+
+
+def _add_ref_band(fig, *, x0: float, x1: float, color: str = C_REF,
+                  alpha: float = _REF_BAND_ALPHA, **kwargs: Any) -> None:
+    """Shade a vertical reference band (e.g. a tolerance corridor around zero)."""
+    fig.add_vrect(x0=x0, x1=x1, fillcolor=_hex_to_rgba(color, alpha),
+                  line_width=0, layer='below', **kwargs)
 
 
 def _fmt_axis(fig, *, x: Optional[str] = None, y: Optional[str] = None,
@@ -1056,12 +1202,11 @@ def plot_price_target_path(
         azv.scatter_xy(
             median, target, x=x, y=obs,
             color=observed_color, size=34,
-            edgecolor="#1e1e1e", width=0.6,
+            edgecolor=C_PANEL_BG, width=0.6,
         )
 
     if last_price is not None and np.isfinite(last_price):
-        target.add_hline(y=float(last_price),
-                         line=dict(color=C_REF, dash="dash", width=1.2))
+        _add_ref_line(target, y=float(last_price), kind='anchor')
 
     if use_dates:
         target.update_xaxes(tickformat="%b %y")
@@ -1091,7 +1236,7 @@ def plot_price_target_path(
             fig.add_trace(go.Scatter(
                 x=[None], y=[None], mode="markers",
                 marker=dict(color=observed_color, size=8,
-                            line=dict(color="#1e1e1e", width=1)),
+                            line=dict(color=C_PANEL_BG, width=1)),
                 name="observed price target"), row=_r, col=_c)
         if last_price is not None and np.isfinite(last_price):
             fig.add_trace(go.Scatter(
@@ -1180,7 +1325,7 @@ def _annotate_forecast_horizons(fig, fx, pg, *, color, row=1, col=1):
                                np.atleast_1d(pg['time_future'].values)
                                if np.isscalar(v) or True]))
     for xv, lb in zip(np.atleast_1d(fx), labels):
-        fig.add_vline(x=_xval(xv), line=dict(color=color, dash='dot', width=1.0),
+        _add_ref_line(fig, x=_xval(xv), kind='anchor', color=color,
                       opacity=0.4, row=row, col=col)
         fig.add_annotation(x=_xval(xv), y=1.0, yref='paper', yanchor='top',
                            text=str(lb), textangle=30, showarrow=False,
@@ -1295,7 +1440,7 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
     if observed is not None:
         fig.add_trace(go.Scatter(
             x=hx, y=np.asarray(observed, dtype=float), mode='markers',
-            marker=dict(color=observed_color, size=8, line=dict(color='#1e1e1e', width=0.6)),
+            marker=dict(color=observed_color, size=8, line=dict(color=C_PANEL_BG, width=0.6)),
             name='observed target'), row=1, col=1)
 
     # Posterior-predictive forecast spaghetti (canonical SV-example overlay): a
@@ -1327,10 +1472,9 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
         x=np.r_[hx[-1], fx], y=np.r_[hist_med[-1], f_med], mode='lines+markers',
         line=dict(color=fc_color, width=2.2, dash='dash'), marker=dict(size=6),
         name='forecast pt'), row=1, col=1)
-    fig.add_vline(x=_xval(hx[-1]), line=dict(color=C_REF, dash='dot', width=1.2),
-                  row=1, col=1)
+    _add_ref_line(fig, x=_xval(hx[-1]), kind='anchor', row=1, col=1)
     if last_price is not None and np.isfinite(last_price):
-        fig.add_hline(y=float(last_price), line=dict(color=C_REF, dash='dash', width=1.0),
+        _add_ref_line(fig, y=float(last_price), kind='anchor',
                       annotation_text='last price', row=1, col=1)
 
     # Human-labelled fiscal-event horizon markers (Next earnings / Next report / ...).
@@ -1346,8 +1490,7 @@ def plot_kalman_forecast(idata_fit, pred, *, observed=None, dates=None,
         fig.add_trace(go.Scatter(x=hx, y=v_med, mode='lines',
                                  line=dict(color=vol_color, width=2.0),
                                  name='posterior mean σ_obs(t)'), row=2, col=1)
-        fig.add_vline(x=_xval(hx[-1]), line=dict(color=C_REF, dash='dot', width=1.2),
-                      row=2, col=1)
+        _add_ref_line(fig, x=_xval(hx[-1]), kind='anchor', row=2, col=1)
         fig.update_yaxes(title_text='σ_obs', row=2, col=1)
 
     # Numeric (index) axis: pin an explicit finite window; datetime axes autorange.
@@ -1490,7 +1633,7 @@ def plot_kalman_forecast_returns(idata_fit, pred, *, observed=None, dates=None,
         fig.add_trace(go.Scatter(
             x=hx, y=_ret_pct(observed), mode='markers',
             marker=dict(color=observed_color, size=8,
-                        line=dict(color='#1e1e1e', width=0.6)),
+                        line=dict(color=C_PANEL_BG, width=0.6)),
             hovertemplate=_hover_pct('observed implied return', date_x=use_dates),
             name='observed target return', legendgroup='observed'), row=1, col=1)
 
@@ -1519,10 +1662,9 @@ def plot_kalman_forecast_returns(idata_fit, pred, *, observed=None, dates=None,
                            text=f'{_m:+.1f}%', showarrow=False,
                            font=dict(size=9, color=fc_color), row=1, col=1)
 
-    fig.add_vline(x=_xval(hx[-1]), line=dict(color=C_REF, dash='dot', width=1.2),
+    _add_ref_line(fig, x=_xval(hx[-1]), kind='anchor', row=1, col=1)
+    _add_ref_line(fig, y=0.0, kind='zero', annotation_text='break-even',
                   row=1, col=1)
-    fig.add_hline(y=0.0, line=dict(color=C_REF, dash='dash', width=1.0),
-                  annotation_text='break-even', row=1, col=1)
     _annotate_forecast_horizons(fig, fx, pg, color=fc_color, row=1, col=1)
     fig.update_yaxes(title_text='implied return over spot (%)', ticksuffix='%',
                      row=1, col=1)
@@ -1537,8 +1679,7 @@ def plot_kalman_forecast_returns(idata_fit, pred, *, observed=None, dates=None,
             x=hx, y=v_med, mode='lines', line=dict(color=vol_color, width=2.0),
             hovertemplate='σ_obs = %{y:.4f}<extra></extra>',
             name='posterior median σ_obs(t)', legendgroup='vol'), row=2, col=1)
-        fig.add_vline(x=_xval(hx[-1]), line=dict(color=C_REF, dash='dot', width=1.2),
-                      row=2, col=1)
+        _add_ref_line(fig, x=_xval(hx[-1]), kind='anchor', row=2, col=1)
         fig.update_yaxes(title_text='σ_obs', row=2, col=1)
 
     _vol_row = 2 if show_vol else 1
@@ -1762,22 +1903,69 @@ def fetch_history_columns(engine, keep: Sequence[str],
 # :func:`_render_plotly` / :func:`_show_fig`), every DataFrame routed through
 # :func:`display`, and the bulk data artifacts returned by :func:`main` are
 # persisted under ``KALMAN_PT_RESULTS_DIR`` (env / environment_variables.txt,
-# default ``pymc_kalman_filter_pt_results`` next to this script):
+# default ``pymc_kalman_filter_pt_results`` next to this script), in a
+# **per-section subdirectory** derived from the artifact stem (see
+# :data:`_EXPORT_SECTION_DIRS` / :func:`_export_dir_for`):
 #
 # * figures       -> PNG via plotly/kaleido or matplotlib; self-contained HTML
 #                    fallback when kaleido / Chromium is unavailable
-# * DataFrames    -> CSV (JSON additionally where requested)
+# * DataFrames    -> the curated bulk frames in :data:`_SQL_EXPORT_ARTIFACTS`
+#                    become ``analytics.<stem>`` tables plus a generated
+#                    ``{stem}.sql`` DDL file; every other frame (the
+#                    auto-numbered ``display()`` snapshots) stays CSV
 # * DataTrees     -> NetCDF (h5netcdf) + compact per-group JSON summary
 #
 # Exports are side effects in the same sense as rendering: every writer is
 # guarded and logs a warning instead of raising, so a failed export can never
-# abort the workflow (mirrors the ``_safe_show`` philosophy).
+# abort the workflow (mirrors the ``_safe_show`` philosophy). The SQL sink
+# additionally falls back to CSV when the database is unreachable, so an
+# offline run never loses a frame.
 _DEFAULT_RESULTS_DIRNAME = 'pymc_kalman_filter_pt_results'
 _DEFAULT_EXPORT_PNG_WIDTH = 1400
 _DEFAULT_EXPORT_PNG_HEIGHT = 780
 _DEFAULT_EXPORT_PNG_SCALE = 2.0
 _DEFAULT_EXPORT_DPI = 150
 _EXPORT_SLUG_MAXLEN = 48
+
+# Results-tree subdirectories, matched against an artifact stem by longest
+# prefix. The ``export_section`` labels in :func:`main` and the hard-coded bulk
+# stems in :func:`export_all_artifacts` both key off this one tuple. Two entries
+# deliberately differ from their section label so the bulk stems land correctly:
+# ``04_panel`` catches ``04_panel_frame`` (exported outside any section) and
+# ``10b_risk`` catches ``10b_risk_analytics`` / ``_book`` / ``_summary``
+# alongside the ``10b_risk_book_NN_*`` section stems.
+_EXPORT_SECTION_DIRS: tuple[str, ...] = (
+    '01_data', '02_eda', '03_features', '04_panel', '06_prior', '07_posterior',
+    '08_ppc', '09_diagnostics', '10_screen', '10b_risk', '10c_analytics',
+    '10k_universe', '11_single_isin', '11b_single_sv', '12_mingled',
+    '12b_mingled_sv', '13_forest', '13b_further_views', '14_summary',
+    '14b_recommendations', '00_misc',
+)
+_EXPORT_MISC_DIR = '00_misc'
+
+# Bulk stems whose prefix does not match their section directory. ``10c`` is the
+# only genuine mismatch: the section is ``10c_analytics`` but its bulk artifact
+# is ``10c_kalman_results``, so a plain prefix scan would file it under 00_misc.
+_EXPORT_DIR_ALIASES: dict[str, str] = {'10c_kalman': '10c_analytics'}
+
+# Artifact stems persisted to the analytics schema instead of CSV. Everything
+# else (the auto-numbered ``display()`` snapshots) stays CSV: their stems shift
+# between runs as sections gain or lose ``display()`` calls, which would churn
+# table names in the schema.
+_SQL_EXPORT_ARTIFACTS: frozenset[str] = frozenset({
+    '04_panel_frame',
+    '09_diagnostics_01_table',
+    '10_screen_results',
+    '10_screen_mc_summary',
+    '10b_risk_analytics',
+    '10b_risk_book',
+    '10c_kalman_results',
+})
+# ``10c_kalman_results`` is the same frame :func:`export_analytics` writes to
+# ``analytics.kalman_filtered_price_targets``; its SQL write is skipped while
+# that canonical write is active (see :func:`note_analytics_written`).
+_SQL_REDUNDANT_WHEN_ANALYTICS_WRITTEN = '10c_kalman_results'
+_DEFAULT_ANALYTICS_OWNER = 'postgres'
 # DataTree groups that get an ``azs.summary`` statistics table in the JSON
 # sidecar. ``posterior_predictive`` / ``observed_data`` are inventoried only:
 # a second full ESS/R-hat sweep over the (chain, draw, isin, y_series) PPC
@@ -1802,13 +1990,26 @@ class _ExportState:
     png_ok
         Memo flag — flips ``False`` after the first kaleido/Chromium failure so
         every subsequent Plotly figure goes straight to the HTML fallback.
+    sql_ok
+        Memo flag — flips ``False`` after the first analytics-schema write
+        failure so every subsequent curated frame goes straight to the CSV
+        fallback instead of re-attempting a doomed connection.
+    analytics_written
+        Set by :func:`note_analytics_written` once
+        ``analytics.kalman_filtered_price_targets`` has been written this run;
+        suppresses the redundant ``10c_kalman_results`` table.
+    cleaned
+        Section directories already purged this run (``KALMAN_PT_CLEAN_RESULTS``).
     """
 
     root: Path
     enabled: bool = False
-    section: str = '00_misc'
+    section: str = _EXPORT_MISC_DIR
     counters: dict[str, int] = field(default_factory=dict)
     png_ok: bool = True
+    sql_ok: bool = True
+    analytics_written: bool = False
+    cleaned: set[str] = field(default_factory=set)
 
 
 _export_state_instance: Optional[_ExportState] = None
@@ -1817,20 +2018,36 @@ _export_state_instance: Optional[_ExportState] = None
 def get_export_state() -> _ExportState:
     """Return the lazy export-state singleton, resolving the output directory once.
 
-    ``KALMAN_PT_RESULTS_DIR`` is resolved via :func:`_resolve_env_setting` (env →
-    ``environment_variables.txt`` → default). A relative value is anchored at this
+    Resolution order: :attr:`KalmanRunConfig.results_dir` (so ``main(config=…)``
+    actually redirects artifacts) → ``KALMAN_PT_RESULTS_DIR`` via
+    :func:`_resolve_env_setting` (env → ``environment_variables.txt``) → the
+    :data:`_DEFAULT_RESULTS_DIRNAME` default. A relative value is anchored at this
     script's directory, so the default lands at
     ``<project root>/pymc_kalman_filter_pt_results`` regardless of the CWD.
     """
     global _export_state_instance
     if _export_state_instance is None:
-        raw = _resolve_env_setting('KALMAN_PT_RESULTS_DIR',
-                                   default=_DEFAULT_RESULTS_DIRNAME)
-        root = Path(raw)
+        raw: Optional[str] = None
+        with contextlib.suppress(Exception):
+            raw = get_run_config().results_dir
+        if not raw:
+            raw = _resolve_env_setting('KALMAN_PT_RESULTS_DIR',
+                                       default=_DEFAULT_RESULTS_DIRNAME)
+        root = Path(raw or _DEFAULT_RESULTS_DIRNAME)
         if not root.is_absolute():
             root = Path(__file__).resolve().parent / root
         _export_state_instance = _ExportState(root=root)
     return _export_state_instance
+
+
+def note_analytics_written(written: bool = True) -> None:
+    """Record that ``analytics.kalman_filtered_price_targets`` was written this run.
+
+    :func:`export_analytics` calls this after its canonical write so the
+    :data:`_SQL_REDUNDANT_WHEN_ANALYTICS_WRITTEN` artifact does not duplicate the
+    same frame under a second table name.
+    """
+    get_export_state().analytics_written = bool(written)
 
 
 def reset_export_state() -> None:
@@ -1842,6 +2059,32 @@ def reset_export_state() -> None:
 def enable_artifact_export(enabled: bool = True) -> None:
     """Turn artifact export on (or off) for the current process."""
     get_export_state().enabled = enabled
+
+
+def set_export_section(label: str) -> str:
+    """Set the artifact-export section without a ``with`` block.
+
+    :func:`export_section` is the right tool inside :func:`main`, where sections
+    nest and unwind. A notebook has no enclosing block per cell, so this setter
+    lets each cell declare which section its figures and tables belong to —
+    otherwise every notebook artifact would land in ``00_misc``.
+
+    Parameters
+    ----------
+    label
+        Section prefix, e.g. ``'09_diagnostics'`` (see
+        :data:`_EXPORT_SECTION_DIRS`).
+
+    Returns
+    -------
+    str
+        The previous section, so a caller can restore it.
+    """
+    state = get_export_state()
+    prev = state.section
+    state.section = label
+    _clean_section_dir(label)
+    return prev
 
 
 @contextlib.contextmanager
@@ -1861,6 +2104,7 @@ def export_section(label: str):
     state = get_export_state()
     prev = state.section
     state.section = label
+    _clean_section_dir(label)
     try:
         yield
     finally:
@@ -1873,11 +2117,72 @@ def _slugify(raw: str) -> str:
     return '_'.join(parts)[:_EXPORT_SLUG_MAXLEN].strip('_')
 
 
-def _export_path(stem: str, ext: str) -> Path:
-    """Return ``root/stem.ext``, creating the results directory on first use."""
+def _export_dir_for(stem: str) -> str:
+    """Return the results subdirectory owning ``stem`` (longest-prefix match).
+
+    Matching is done on the **stem** rather than the active
+    :func:`export_section`, because :func:`export_all_artifacts` writes its bulk
+    stems after every section context has exited.
+
+    Parameters
+    ----------
+    stem
+        Artifact filename stem, e.g. ``'10b_risk_book'`` or ``'02_eda_07'``.
+
+    Returns
+    -------
+    str
+        A member of :data:`_EXPORT_SECTION_DIRS`; :data:`_EXPORT_MISC_DIR` when
+        no prefix matches.
+    """
+    for prefix, directory in _EXPORT_DIR_ALIASES.items():
+        if stem == prefix or stem.startswith(f'{prefix}_'):
+            return directory
+    matches = [d for d in _EXPORT_SECTION_DIRS if stem == d or stem.startswith(f'{d}_')]
+    if not matches:
+        return _EXPORT_MISC_DIR
+    return max(matches, key=len)
+
+
+def _clean_section_dir(label: str) -> None:
+    """Purge a section's subdirectory once per run when ``KALMAN_PT_CLEAN_RESULTS=1``.
+
+    Per-section counters restart on every run while title slugs drift, so stale
+    artifacts otherwise interleave with current ones under shifted indices. Now
+    that sections are partitioned into their own directories this is a safe,
+    surgical reset. Off by default so an interrupted run never destroys the
+    previous run's output.
+    """
     state = get_export_state()
-    state.root.mkdir(parents=True, exist_ok=True)
-    return state.root / f"{stem}.{ext}"
+    if not state.enabled:
+        return
+    if _resolve_env_setting('KALMAN_PT_CLEAN_RESULTS', default='0') != '1':
+        return
+    directory = _export_dir_for(label)
+    if directory in state.cleaned:
+        return
+    state.cleaned.add(directory)
+    target = state.root / directory
+    if not target.is_dir():
+        return
+    try:
+        shutil.rmtree(target)
+        logger.info("Cleared stale artifacts in %s", target)
+    except Exception as exc:  # pragma: no cover - best-effort hygiene
+        logger.warning("Could not clear %s: %r", target, exc)
+
+
+def _export_path(stem: str, ext: str) -> Path:
+    """Return ``root/<section-dir>/stem.ext``, creating the directory on first use.
+
+    The single filesystem touch point for every artifact writer, so the
+    per-section tree is applied uniformly to PNG / HTML / CSV / SQL / JSON /
+    NetCDF output without touching individual call sites.
+    """
+    state = get_export_state()
+    directory = state.root / _export_dir_for(stem)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{stem}.{ext}"
 
 
 def _next_stem(label: Optional[str] = None, obj: object = None) -> str:
@@ -1915,7 +2220,7 @@ def _write_plotly_figure(fig: object, stem: str) -> None:
     state = get_export_state()
     if state.png_ok:
         try:
-            fig.update_layout(template='arviz-tumma')  # exported == displayed theme
+            _apply_dark_template(fig)  # idempotent; guards the direct-call path
             fig.write_image(
                 str(_export_path(stem, 'png')),
                 width=int(fig.layout.width or _DEFAULT_EXPORT_PNG_WIDTH),
@@ -1936,9 +2241,11 @@ def _export_figure(obj: object, *, label: Optional[str] = None) -> None:
     """Persist any displayed figure object under the active export section.
 
     Handles a raw Plotly figure or an ``arviz_plots`` PlotCollection (both via
-    :func:`_plotly_figure_of`) and matplotlib figures (``savefig``; the dark
-    ``savefig.facecolor`` comes from :func:`setup_plotting`). No-op while export
-    is disabled; never raises.
+    :func:`_plotly_figure_of`) and matplotlib figures. The matplotlib branch pins
+    the figure's own facecolor explicitly rather than relying on the seaborn
+    ``savefig.facecolor`` rc surviving — ``bbox_inches='tight'`` otherwise lets a
+    light background leak into the exported PNG. No-op while export is disabled;
+    never raises.
     """
     state = get_export_state()
     if not state.enabled or obj is None:
@@ -1954,27 +2261,191 @@ def _export_figure(obj: object, *, label: Optional[str] = None) -> None:
             obj.savefig(str(_export_path(stem, ext)))
         elif hasattr(obj, 'savefig'):  # matplotlib Figure
             obj.savefig(_export_path(stem, 'png'),
-                        dpi=_DEFAULT_EXPORT_DPI, bbox_inches='tight')
+                        dpi=_DEFAULT_EXPORT_DPI, bbox_inches='tight',
+                        facecolor=obj.get_facecolor(), edgecolor='none')
         else:
             logger.debug("Figure export skipped (unrecognised type %s)", type(obj))
     except Exception as exc:
         logger.warning("Figure export skipped (%s): %r", label or '?', exc)
 
 
+def _analytics_schema() -> str:
+    """Return the analytics schema name (``DB_ANALYTICS_SCHEMA``, default ``analytics``)."""
+    return _resolve_env_setting('DB_ANALYTICS_SCHEMA', default='analytics') or 'analytics'
+
+
+def _sql_column_type(series: pd.Series) -> str:
+    """Return the PostgreSQL type ``series`` lands as under ``DataFrame.to_sql``.
+
+    ``pandas.io.sql.get_schema`` would need a live connectable to emit
+    PostgreSQL (it falls back to SQLite types otherwise), and DDL generation must
+    work offline. Object columns are probed for ``datetime.date`` payloads, which
+    is how the fiscal-calendar columns reach the analytics table as ``date``
+    rather than ``text``.
+    """
+    dtype = series.dtype
+    if pd.api.types.is_bool_dtype(dtype):
+        return 'boolean'
+    if pd.api.types.is_integer_dtype(dtype):
+        return 'bigint'
+    if pd.api.types.is_float_dtype(dtype):
+        return 'double precision'
+    if pd.api.types.is_datetime64_any_dtype(dtype):
+        return 'timestamp'
+    if pd.api.types.is_object_dtype(dtype):
+        non_null = series.dropna()
+        if len(non_null):
+            sample = non_null.iloc[0]
+            if isinstance(sample, datetime.datetime):
+                return 'timestamp'
+            if isinstance(sample, datetime.date):
+                return 'date'
+    return 'text'
+
+
+def _sql_table_ddl(frame: pd.DataFrame, table: str, *,
+                   schema: Optional[str] = None,
+                   quote_table: bool = True,
+                   comments: Optional[dict[str, str]] = None,
+                   header: Optional[str] = None) -> str:
+    """Render the ``CREATE TABLE`` DDL for ``frame`` in the analytics schema.
+
+    Reproduces the layout of the hand-written DDL already in
+    ``sql_scripts/analytics`` (tab-indented, name-aligned columns, trailing
+    ``ALTER TABLE … OWNER TO`` stanza) so generated and checked-in files diff
+    cleanly. Needs no database connection.
+
+    Parameters
+    ----------
+    frame
+        Frame whose schema is rendered.
+    table
+        Bare table name (no schema prefix).
+    schema
+        Target schema; defaults to :func:`_analytics_schema`.
+    quote_table
+        Double-quote the table name — required for the artifact stems, which
+        start with a digit. ``False`` for plain identifiers such as
+        ``kalman_filtered_price_targets``.
+    comments
+        Optional ``{column: comment}`` mapping rendered as ``COMMENT ON COLUMN``
+        statements — used to persist the decimal-unit convention.
+    header
+        Optional comment block prepended to the file.
+
+    Returns
+    -------
+    str
+        The complete DDL script, newline-terminated.
+    """
+    schema = schema or _analytics_schema()
+    owner = _resolve_env_setting('DB_ANALYTICS_OWNER',
+                                 default=_DEFAULT_ANALYTICS_OWNER)
+    ident = f'{schema}."{table}"' if quote_table else f'{schema}.{table}'
+    names = [str(c) for c in frame.columns]
+    pad = max((len(n) for n in names), default=0)
+
+    parts: list[str] = []
+    if header:
+        parts.append(header.rstrip() + '\n\n')
+    parts.append(f'CREATE TABLE {ident}\n(\n')
+    parts.append(',\n'.join(
+        f'\t{name:<{pad}} {_sql_column_type(frame[col])}'
+        for name, col in zip(names, frame.columns)))
+    parts.append('\n);\n')
+    if owner:
+        parts.append(f'\nALTER TABLE {ident}\n\tOWNER TO {owner};\n')
+    for column, comment in (comments or {}).items():
+        if column not in frame.columns:
+            continue
+        escaped = str(comment).replace("'", "''")
+        parts.append(f'\nCOMMENT ON COLUMN {ident}."{column}"\n'
+                     f"\tIS '{escaped}';\n")
+    return ''.join(parts)
+
+
+def _export_table(frame: pd.DataFrame, name: str) -> bool:
+    """Persist ``frame`` as ``analytics."{name}"`` plus a generated ``{name}.sql``.
+
+    The DDL file is written first because it needs no database connection: an
+    offline run still yields a reviewable schema. The table write reuses
+    :func:`export_to_analytics_db` (which resolves ``DB_URL`` /
+    ``DB_ANALYTICS_SCHEMA`` through the ``environment_variables.txt`` fallback);
+    ``KALMAN_PT_SQL_EXPORT=0`` skips it entirely.
+
+    A non-``RangeIndex`` index is materialised as a real column first — the
+    ``to_sql(index=False)`` used by :func:`export_to_analytics_db` would
+    otherwise silently drop the ``azs.summary`` variable-name index.
+
+    Parameters
+    ----------
+    frame
+        Frame to persist.
+    name
+        Artifact stem, used verbatim as the table name.
+
+    Returns
+    -------
+    bool
+        ``True`` when the analytics table was written; ``False`` when the caller
+        should fall back to CSV (export disabled, DB unreachable, or a prior
+        failure already flipped :attr:`_ExportState.sql_ok`).
+    """
+    state = get_export_state()
+    if not isinstance(frame.index, pd.RangeIndex):
+        frame = frame.reset_index()
+
+    with contextlib.suppress(Exception):
+        _export_path(name, 'sql').write_text(
+            _sql_table_ddl(frame, name), encoding='utf-8')
+
+    if _resolve_env_setting('KALMAN_PT_SQL_EXPORT', default='1') != '1':
+        logger.info("KALMAN_PT_SQL_EXPORT=0 -> %s written as CSV, DDL only", name)
+        return False
+    if name == _SQL_REDUNDANT_WHEN_ANALYTICS_WRITTEN and state.analytics_written:
+        logger.info(
+            "%s duplicates analytics.kalman_filtered_price_targets (already "
+            "written this run) -- table write skipped, DDL emitted", name)
+        return True
+    if not state.sql_ok:
+        return False
+    try:
+        export_to_analytics_db(frame, name, if_exists='replace')
+        logger.info("Exported table %s.%s (%d rows)",
+                    _analytics_schema(), name, len(frame))
+        return True
+    except Exception as exc:
+        state.sql_ok = False
+        logger.warning(
+            "Analytics-schema export unavailable (%s): %r -- falling back to CSV "
+            "for this and every later curated frame", name, exc)
+        return False
+
+
 def _export_dataframe(df: object, name: str, *,
                       index: Optional[bool] = None,
                       also_json: bool = False) -> None:
-    """Write a DataFrame / Series as ``{name}.csv`` (and optionally ``.json``).
+    """Persist a DataFrame / Series as an analytics table or as ``{name}.csv``.
+
+    Stems listed in :data:`_SQL_EXPORT_ARTIFACTS` — the curated bulk frames — are
+    written to ``analytics."{name}"`` alongside a generated ``{name}.sql`` DDL
+    file, mirroring how ``analytics.kalman_filtered_price_targets`` is produced.
+    Every other frame (the auto-numbered ``display()`` snapshots, whose stems
+    shift between runs) is written as ``{name}.csv``. A curated frame falls back
+    to CSV when the database is unreachable, so no frame is ever lost.
 
     Parameters
     ----------
     df
         Frame or Series to export (Series are exported via ``to_frame()``).
     name
-        Full filename stem (caller supplies any section prefix).
+        Full filename stem (caller supplies any section prefix); also the
+        analytics table name for curated frames.
     index
-        Include the index column; ``None`` auto-includes it whenever the index
-        is not a bare RangeIndex (e.g. ``azs.summary`` variable-name indexes).
+        Include the index column in the CSV path; ``None`` auto-includes it
+        whenever the index is not a bare RangeIndex (e.g. ``azs.summary``
+        variable-name indexes). Ignored on the SQL path, which always
+        materialises a non-RangeIndex index as a column.
     also_json
         Additionally write JSON records (``default_handler=str`` guards the
         Timestamp columns).
@@ -1986,7 +2457,11 @@ def _export_dataframe(df: object, name: str, *,
         frame = df.to_frame() if isinstance(df, pd.Series) else df
         if index is None:
             index = not isinstance(frame.index, pd.RangeIndex)
-        frame.to_csv(_export_path(name, 'csv'), index=index)
+        if name in _SQL_EXPORT_ARTIFACTS:
+            if not _export_table(frame, name):
+                frame.to_csv(_export_path(name, 'csv'), index=index)
+        else:
+            frame.to_csv(_export_path(name, 'csv'), index=index)
         if also_json:
             frame.to_json(_export_path(name, 'json'), orient='records',
                           date_format='iso', default_handler=str, indent=2)
@@ -2099,18 +2574,22 @@ def export_all_artifacts(artifacts: dict, *, results_dir: Optional[str] = None) 
     """Export the :func:`main` artifact dict to ``KALMAN_PT_RESULTS_DIR``.
 
     Persists the durable data artifacts (the render-time figure/table snapshots
-    are captured separately by the :func:`_safe_show` / :func:`display` hooks):
+    are captured separately by the :func:`_safe_show` / :func:`display` hooks),
+    each into its per-section subdirectory (:func:`_export_dir_for`):
 
     * ``prior_idata`` / ``idata`` DataTrees -> NetCDF + JSON summary
     * ``panel.frame``, ``results``, ``kalman_results``, ``screen.mc_summary``,
-      ``risk_book.analytics`` / ``.book`` -> CSV (``results`` also JSON)
+      ``risk_book.analytics`` / ``.book`` -> ``analytics."<stem>"`` tables plus a
+      generated ``<stem>.sql`` DDL file (:data:`_SQL_EXPORT_ARTIFACTS`);
+      ``results`` also JSON. These frames fall back to CSV when the analytics
+      schema is unreachable.
     * ``risk_book.summary`` and the ``universe_fit`` scalars -> JSON
     * ``universe_fit.idata`` / ``.pred.predictions`` -> NetCDF
 
     The raw ``screen.eu`` / ``screen.ept`` posterior draws (~200 MB each) are
     skipped unless ``KALMAN_PT_EXPORT_DRAWS=1``, in which case they are bundled
     into ``10_screen_posterior_draws.nc``; their decision content is already in
-    ``10_screen_results.csv`` and the posterior NetCDF.
+    ``analytics."10_screen_results"`` and the posterior NetCDF.
 
     Callable on ``main(export_results=False)`` output — export is force-enabled
     for the duration of this call only. Missing keys / ``None`` values are
@@ -2154,8 +2633,8 @@ def export_all_artifacts(artifacts: dict, *, results_dir: Optional[str] = None) 
                     "Raw eu/ept posterior draw export is off by default "
                     "(~200 MB per array); set KALMAN_PT_EXPORT_DRAWS=1 to bundle "
                     "them into 10_screen_posterior_draws.nc — screen decision "
-                    "content is already in 10_screen_results.csv and the "
-                    "posterior NetCDF.")
+                    "content is already in analytics.\"10_screen_results\" and "
+                    "the posterior NetCDF.")
 
         risk_book = artifacts.get('risk_book')
         if risk_book is not None:
@@ -2192,6 +2671,63 @@ def export_all_artifacts(artifacts: dict, *, results_dir: Optional[str] = None) 
         logger.warning("export_all_artifacts aborted early: %r", exc)
     finally:
         state.root, state.enabled = prev_root, prev_enabled
+
+
+def migrate_results_layout(root: Optional[str] = None, *,
+                           dry_run: bool = True) -> dict[str, str]:
+    """Move flat legacy artifacts into the per-section subdirectory tree.
+
+    Historic runs wrote every artifact into the top level of
+    ``KALMAN_PT_RESULTS_DIR``. This one-off migration re-files them using the
+    same :func:`_export_dir_for` rule the writers now apply, so the tree stays
+    consistent with what a fresh run produces. Idempotent: files already inside a
+    subdirectory are left alone, and a second invocation reports nothing to do.
+
+    Parameters
+    ----------
+    root
+        Results directory; defaults to the resolved
+        :attr:`_ExportState.root`.
+    dry_run
+        Report the planned moves without touching the filesystem (default).
+
+    Returns
+    -------
+    dict[str, str]
+        ``{filename: destination-subdirectory}`` for every file moved (or that
+        would be moved under ``dry_run``).
+    """
+    base = Path(root) if root is not None else get_export_state().root
+    if not base.is_dir():
+        logger.warning("Results directory does not exist: %s", base)
+        return {}
+
+    planned: dict[str, str] = {}
+    for path in sorted(base.iterdir()):
+        if not path.is_file():
+            continue
+        planned[path.name] = _export_dir_for(path.stem)
+
+    for filename, subdir in planned.items():
+        source = base / filename
+        target_dir = base / subdir
+        target = target_dir / filename
+        if dry_run:
+            logger.info("[dry-run] %s -> %s/", filename, subdir)
+            continue
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(source), str(target))
+        except Exception as exc:
+            logger.warning("Could not move %s -> %s/: %r", filename, subdir, exc)
+
+    if not planned:
+        logger.info("Results layout already migrated: %s", base)
+    else:
+        logger.info("%s %d artifact(s) into %d subdirectories under %s",
+                    'Would move' if dry_run else 'Moved',
+                    len(planned), len(set(planned.values())), base)
+    return planned
 
 
 # =============================================================================
@@ -2397,7 +2933,7 @@ def _plot_upside_vs_drivers_plotly(kalman_df: pd.DataFrame) -> None:
         a.update(text=f'{lab}{suffix}', font_size=10)
 
     fig.for_each_annotation(_facet_title)
-    fig.add_hline(y=0, line_dash='dash', line_color=C_REF, opacity=0.7)
+    _add_ref_line(fig, y=0, kind='zero')
     fig.update_layout(
         title='Implied upside vs fused-panel risk / return drivers (interactive)',
         legend_title_text='sector',
@@ -2496,7 +3032,7 @@ def _plot_momentum_signal_plotly(corr_df: pd.DataFrame) -> None:
         marker_color=colors, customdata=corr_df[['n']].to_numpy(),
         hovertemplate='%{y}<br>rho = %{x:.3f}<br>n = %{customdata[0]}<extra></extra>',
     ))
-    fig.add_vline(x=0, line_dash='dash', line_color=C_REF)
+    _add_ref_line(fig, x=0, kind='zero')
     fig.update_layout(
         title='Momentum / drift signal vs implied upside '
               '(Spearman rho; feat_one_day_return highlighted)',
@@ -2555,7 +3091,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
         with contextlib.suppress(Exception):
             _fx = _plotly_figure_of(pc)
             if _fx is not None:
-                _fx.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+                _add_ref_line(_fx, x=0, kind='zero')
                 _fx.update_xaxes(title_text='implied upside (%)', ticksuffix='%')
         _safe_show(pc)
         display(_d['upside_pct'].describe())
@@ -2633,7 +3169,8 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
         rows=1, cols=2, horizontal_spacing=0.09,
         subplot_titles=('Observation-noise wideners (raw, model-scaled → σ_obs)',
                         'Realised σ_obs multiplier  (1 + range + cv + ½·max(vol_drift, 0)) / √n'))
-    _pal = [_mcolors.to_hex(c) for c in sns.color_palette('flare', len(_widener_specs))]
+    _pal = [_mcolors.to_hex(c)
+            for c in sns.color_palette(CS_SEQ_MPL, len(_widener_specs))]
     _rows = []
     for (label, arr, is_signed), c in zip(_widener_specs, _pal):
         v = arr[np.isfinite(arr)]
@@ -2647,7 +3184,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
                 line=dict(color=c, width=1.7), fillcolor=_hex_to_rgba(c, 0.12),
                 name=f'{label}  (med={med:.2g}, p99={p99:.2g}, min={float(v.min()):.2g})'),
                 row=1, col=1)
-            fig.add_vline(x=med, line=dict(color=c, dash='dot', width=1.1),
+            _add_ref_line(fig, x=med, kind='anchor', color=c,
                           opacity=0.8, row=1, col=1)
         _rows.append((label, c, med, p99, float(v.min())))
     fig.update_xaxes(title_text='model-facing value (signed where applicable)', row=1, col=1)
@@ -2665,11 +3202,11 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
                                  line=dict(color=C_POSTERIOR, width=2.0),
                                  name='multiplier KDE', showlegend=False), row=1, col=2)
     _mult_med, _mult_p99 = float(np.nanmedian(mult)), float(np.nanpercentile(mult, 99))
-    fig.add_vline(x=1.0, line=dict(color=C_REF, dash='dash', width=1.2),
-                  annotation_text='×1 (=base)', row=1, col=2)
-    fig.add_vline(x=_mult_med, line=dict(color=C_OBSERVED, width=1.6),
+    _add_ref_line(fig, x=1.0, kind='zero', annotation_text='×1 (=base)',
+                  row=1, col=2)
+    _add_ref_line(fig, x=_mult_med, kind='emphasis', color=C_OBSERVED,
                   annotation_text=f'median={_mult_med:.2f}', row=1, col=2)
-    fig.add_vline(x=_mult_p99, line=dict(color=C_FORECAST, dash='dot', width=1.6),
+    _add_ref_line(fig, x=_mult_p99, kind='emphasis', color=C_FORECAST,
                   annotation_text=f'p99={_mult_p99:.2f}', row=1, col=2)
     fig.update_xaxes(title_text='σ_obs / σ_obs_base', row=1, col=2)
     fig.update_yaxes(title_text='density', row=1, col=2)
@@ -2694,8 +3231,8 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
         _corr = kalman_df[_corr_cols].astype('float64').corr(method='spearman')
         fig, ax = plt.subplots(figsize=_mpl_figsize(0.85, width_frac=0.75),
                                layout='constrained')
-        sns.heatmap(_corr, ax=ax, cmap='vlag', center=0.0, vmin=-1, vmax=1,
-                    square=True, linewidths=0.4, linecolor='#1e1e1e',
+        sns.heatmap(_corr, ax=ax, cmap=CS_DIV_MPL, center=0.0, vmin=-1, vmax=1,
+                    square=True, linewidths=0.4, linecolor=C_PANEL_BG,
                     cbar_kws={'shrink': 0.7, 'label': 'Spearman ρ'},
                     annot=True, fmt='.2f', annot_kws={'size': 6})
         ax.set_title('feat_* correlation — drift vs noise-widener blocks', pad=10)
@@ -2720,10 +3257,9 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     _fe['upside_pct'] = ((_fe['observed_pt'] / _fe['last_price'] - 1.0) * 100.0).clip(-100, 200)
     # Mirrors _FUSED_KALMAN_GROUP_EFFECTS minus the high-cardinality
     # exchange/unit coords (which drowned the preview and are model plumbing).
-    _group_preview = [c for c in ('region', 'trading_region', 'sector',
-                                  'size_class', 'style_class')
+    _group_preview = [c for c in ('exchange_name', 'unit_name', 'country_name', 'industry',)
                       if c in _fe.columns]
-    _min_per_level = 5
+    _min_per_level = 15
     _boot_draws = 4000
     _univ_median = float(_fe['upside_pct'].median())
     _facets: list[tuple[str, list, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
@@ -2770,11 +3306,8 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
                                '[%{customdata[0]:.1f}%, %{customdata[1]:.1f}%]'
                                '<br>n = %{customdata[2]:.0f}<extra></extra>'),
                 name=_coord, showlegend=False), row=i, col=1)
-            figf.add_vline(x=0, line=dict(color=C_REF, dash='dot', width=1.0),
-                           row=i, col=1)
-            figf.add_vline(x=_univ_median,
-                           line=dict(color=C_HIGHLIGHT, dash='dash', width=1.0),
-                           row=i, col=1)
+            _add_ref_line(figf, x=0, kind='zero', row=i, col=1)
+            _add_ref_line(figf, x=_univ_median, kind='emphasis', row=i, col=1)
         figf.update_xaxes(
             title_text=('implied upside vs last_price  '
                         '(observed_pt / last_price − 1, %); dashed = universe median'),
@@ -3254,12 +3787,18 @@ def prepare_kalman_panel_inputs(
         coord_uniques[col] = uniques
         coord_idx[col] = idx.astype('int64')
 
+    # avg_beta / size_ratio / volume_ratio are carried NaN-bearing (see above) when
+    # their source column is absent or fails numeric coercion for every row; guard
+    # each summary mean the same way as the tcov/gain reductions elsewhere in this
+    # module (np.isfinite(...).any()) so an all-missing driver logs 0.0 instead of
+    # tripping numpy's "Mean of empty slice" RuntimeWarning.
+    _safe_mean = lambda arr: float(np.nanmean(arr)) if np.isfinite(arr).any() else 0.0
     print(f'Fused panel — isins:{n_isin}  T:{T}  D:{D} ({resp})')
-    print(f'  drift_features:{len(drift_features)}  avg_beta(mean):{np.nanmean(avg_beta):.3f}'
-          f'  size_ratio(mean):{np.nanmean(size_ratio):.3f}'
-          f'  volume_ratio(mean):{np.nanmean(volume_ratio):.3f}'
-          f'  vol_drift(mean):{np.nanmean(vol_drift):.3f}'
-          f'  cv(mean):{np.nanmean(dispersion_cv):.3f}')
+    print(f'  drift_features:{len(drift_features)}  avg_beta(mean):{_safe_mean(avg_beta):.3f}'
+          f'  size_ratio(mean):{_safe_mean(size_ratio):.3f}'
+          f'  volume_ratio(mean):{_safe_mean(volume_ratio):.3f}'
+          f'  vol_drift(mean):{_safe_mean(vol_drift):.3f}'
+          f'  cv(mean):{_safe_mean(dispersion_cv):.3f}')
 
     return KalmanPanelInputs(
         frame=model_df, isins=isin_labels, Y=Y_std, t_scaled=t_scaled,
@@ -3282,7 +3821,7 @@ FUSED_SCALAR_VARS: tuple[str, ...] = (
     # Learned, sign-fixed risk / size loadings (additive tilts on the per-ISIN
     # baseline keyed on feat_avg_beta / feat_mcap_country_r). Present only when the
     # corresponding penalty prior scale is > 0; run_diagnostics skips absent vars.
-    'risk_loading', 'size_loading',
+    'risk_loading', 'size_loading', 'volume_loading',
 )
 # Vector hyper-parameters (have a non-sample dim): drift slopes and the
 # per-series coregion level/slope/loading/noise terms. run_diagnostics skips any
@@ -3291,19 +3830,6 @@ FUSED_SCALAR_VARS: tuple[str, ...] = (
 FUSED_VECTOR_VARS: tuple[str, ...] = (
     'beta', 'alpha_level', 'beta_slope', 'mu_isin_loading', 'sigma_series',
 )
-
-
-def _posterior_dataset(idata) -> "xr.Dataset":
-    """Return the ``posterior`` group as a plain :class:`xarray.Dataset`.
-
-    ArviZ 1.x stores inference results as :class:`xarray.DataTree`, whose group
-    nodes do not support list-of-name selection (``posterior[keys]``) the way
-    ``azs.rhat`` / ``azs.ess`` inputs require. Unwrap via ``.dataset`` on the
-    DataTree node, falling back to ``.to_dataset()`` for legacy
-    ``arviz.InferenceData`` groups.
-    """
-    posterior = idata.posterior
-    return posterior.dataset if hasattr(posterior, 'dataset') else posterior.to_dataset()
 
 
 def _max_posterior_rhat(posterior: "xr.Dataset",
@@ -3342,7 +3868,7 @@ def _max_posterior_rhat(posterior: "xr.Dataset",
 
 
 def build_panel_model(
-        panel: KalmanPanelInputs, *, robust: bool = True, volume_penalty: float = 0.2,
+        panel: KalmanPanelInputs, *, robust: bool = True, volume_penalty: float = 0.25,
 ) -> "pm.Model":
     """Build the fused MvGRW + volatility-conditioned model and render its graph."""
     model = build_fused_kalman_pt_model(panel, robust=robust, volume_penalty=volume_penalty)
@@ -3524,7 +4050,7 @@ def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs,
         x=_ec, y=_eh, mode='lines', line=dict(color=C_OBSERVED, width=1.5, shape='hvh'),
         hovertemplate='empirical upside = %{x:.0f}%<extra></extra>',
         name='empirical observed_pt/last_price − 1'), row=1, col=1)
-    fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0), row=1, col=1)
+    _add_ref_line(fig, x=0, kind='zero', row=1, col=1)
     fig.update_xaxes(title_text='implied upside (%)', ticksuffix='%', row=1, col=1)
     fig.update_yaxes(title_text='density', row=1, col=1)
 
@@ -3794,8 +4320,8 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
                                else C_HIGHLIGHT for v in _cov_vals]),
             hovertemplate='%{y}<br>coverage = %{x:.1%}<extra></extra>',
             name='94% PI coverage'))
-        figc.add_vline(x=_target, line=dict(color=C_REF, dash='dash', width=1.2),
-                       annotation_text=f'target {_target:.0%}')
+        _add_ref_line(figc, x=_target, kind='zero',
+                      annotation_text=f'target {_target:.0%}')
         figc.update_xaxes(title_text='share of observations inside the 94% PI',
                           range=[0, 1], tickformat='.0%')
         figc.update_layout(title='Posterior-predictive coverage by response series',
@@ -3878,7 +4404,10 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
         raise RuntimeError('No non-empty variables to summarise.')
 
     summary = azs.summary(idata, var_names=available, round_to=4)
-    display(summary.sort_values('r_hat', ascending=False).head(100))
+    # Explicit label: this frame is a curated SQL artifact
+    # (``_SQL_EXPORT_ARTIFACTS``), so its stem must not drift if the section
+    # gains or loses an earlier ``display()`` call.
+    display(summary.sort_values('r_hat', ascending=False).head(100), label='table')
 
     # 9.2 Divergences and aggregated R-hat / ESS.
     n_div = int(idata.sample_stats['diverging'].sum())
@@ -4270,7 +4799,7 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
     with contextlib.suppress(Exception):
         _fx = _plotly_figure_of(pc)
         if _fx is not None:
-            _fx.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+            _add_ref_line(_fx, x=0, kind='zero')
             _fx.update_xaxes(title_text='expected upside (%)', ticksuffix='%')
     _safe_show(pc)
 
@@ -4314,7 +4843,7 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
     # positioned over its own subplot (Plotly has no shared per-axes colourbar).
     fig.add_trace(go.Scatter(
         x=er, y=rar, mode='markers',
-        marker=dict(color=avg_beta, colorscale='Viridis', size=6, opacity=0.75,
+        marker=dict(color=avg_beta, colorscale=CS_SEQ, size=6, opacity=0.75,
                     colorbar=dict(title='avg β', len=0.42, y=0.79, x=0.455, thickness=12)),
         customdata=np.c_[avg_beta],
         hovertemplate=('ER = %{x:.2f}  RAR = %{y:.2f}'
@@ -4334,7 +4863,7 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
                              hovertemplate=('RAR = %{x:.2f}<br>'
                                             'P(achieve) = %{y:.0%}<extra></extra>'),
                              showlegend=False), row=1, col=2)
-    fig.add_hline(y=0.5, line=dict(color=C_REF, dash='dash', width=1.0), row=1, col=2)
+    _add_ref_line(fig, y=0.5, kind='zero', row=1, col=2)
     fig.update_xaxes(title_text='risk_adj_return (standardised latent)', row=1, col=2)
     fig.update_yaxes(title_text='achieve_prob (sigmoid risk-adj return)', range=[0, 1],
                      tickformat='.0%', row=1, col=2)
@@ -4342,7 +4871,7 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
     # (c) Heteroscedastic measurement scale (log analyst axis).
     fig.add_trace(go.Scatter(
         x=n_an, y=si, mode='markers',
-        marker=dict(color=np.clip(cv, 0, np.nanpercentile(cv, 99)), colorscale='Magma',
+        marker=dict(color=np.clip(cv, 0, np.nanpercentile(cv, 99)), colorscale=CS_SEQ,
                     size=6, opacity=0.75,
                     colorbar=dict(title='dispersion CV', len=0.42, y=0.21, x=0.455,
                                   thickness=12)),
@@ -4365,7 +4894,7 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
                     legendgroup='beta_t'), row=2, col=2)
             except Exception:
                 continue
-        fig.add_hline(y=0, line=dict(color=C_REF, dash='dash', width=1.0), row=2, col=2)
+        _add_ref_line(fig, y=0, kind='zero', row=2, col=2)
         fig.update_xaxes(title_text='time index (fiscal anchor)', row=2, col=2)
         fig.update_yaxes(title_text='beta_t (GRW slope)', row=2, col=2)
 
@@ -4399,8 +4928,8 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
     fig.add_trace(go.Scatter(x=[_lo, _hi], y=[_lo, _hi], mode='lines',
                              line=dict(color=C_REF, dash='dash', width=1.1),
                              name='y = x (no shrinkage)', hoverinfo='skip'))
-    fig.add_hline(y=0, line=dict(color=C_REF, width=0.8))
-    fig.add_vline(x=0, line=dict(color=C_REF, width=0.8))
+    _add_ref_line(fig, y=0, kind='zero')
+    _add_ref_line(fig, x=0, kind='zero')
     fig.update_xaxes(range=[_lo, _hi], ticksuffix='%',
                      title_text='raw implied upside  feat_implied_upside (%)')
     fig.update_yaxes(range=[_lo, _hi], ticksuffix='%',
@@ -4431,7 +4960,7 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
                                      fillcolor=_hex_to_rgba(_c, 0.18), name=_lab,
                                      hovertemplate=(f'{_lab}<br>'
                                                     'return = %{x:.1f}%<extra></extra>')))
-    fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+    _add_ref_line(fig, x=0, kind='zero')
     fig.update_xaxes(title_text='return / upside (%)', ticksuffix='%')
     fig.update_yaxes(title_text='density')
     fig.update_layout(title='Expected vs implied vs realised returns - distributional comparison',
@@ -4478,7 +5007,7 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
             marker=dict(color=_c2, size=_sz, symbol=_sym),
             hovertemplate=(f'%{{y}}<br>{_lab2} = %{{x:.1f}}%<extra></extra>'),
             name=_lab2))
-    fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+    _add_ref_line(fig, x=0, kind='zero')
     fig.update_xaxes(title_text='return / upside (%)', ticksuffix='%')
     fig.update_layout(title='Per-sector: expected vs implied vs realised returns',
                       height=int(max(320, 34 * len(_sec) + 140)),
@@ -4490,79 +5019,6 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
 # =============================================================================
 # 10b. CVaR-aware risk analytics + sizing (SSOT for §10c export and §14b screen)
 # =============================================================================
-@dataclass(frozen=True, eq=False)
-class RiskBook:
-    """CVaR-aware sizing artifacts shared by the §10c export and §14b screen.
-
-    Attributes
-    ----------
-    analytics : pandas.DataFrame
-        Per-ISIN copy of the §10 ``results`` table (including the
-        ``mcap_country_r`` size-rank ratio) augmented with the risk columns
-        ``p_upside_pos``, ``kalman_gain``, ``p_upside_pos_cond``, ``band_width``,
-        ``exp_vol``, ``cvar05``, ``ret_vol_ratio``, ``tail_risk``, ``starr``,
-        ``expected_sharpe`` and the normalised ``book_weight`` (0 for names outside
-        the sized book). All return/risk columns are stored as raw decimals
-        (0.25 = +25%); ratios (``ret_vol_ratio``, ``starr``, ``expected_sharpe``)
-        are dimensionless. ``p_upside_pos_cond`` is the *conditional* probability
-        of a positive upside given the smoother's state confidence: the
-        structural-TS MC ``mc_prob_pos`` multiplied by ``kalman_gain``
-        (posterior-mean ``achieve_prob``, which is inverse to ``kalman_variance``).
-    book : pandas.DataFrame
-        The sized top-``k_book`` long subset (``starr``-ranked) carrying a ``weight``
-        column that sums to 1 (100% gross) after the per-name cap.
-    summary : dict[str, float]
-        Portfolio-level metrics (``port_up``, ``port_cvar``, ``wavg_cvar``,
-        ``port_vol`` — decimal returns; ``starr_book``, ``div``, ``n_book``
-        dimensionless) and the sizing parameters
-        (``alpha``, ``cap``, ``k_book``, ``p_long``, ``mcap_r_max``, plus the
-        derived ``univ_gain``, the conditional-scale gate
-        ``p_long_cond = p_long * univ_gain`` and ``n_mcap_eligible`` — the count
-        of names passing the market-cap pre-selection gate).
-    """
-
-    analytics: pd.DataFrame
-    book: pd.DataFrame
-    summary: dict[str, float]
-
-
-def _cap_normalize_weights(w: np.ndarray, cap: float) -> np.ndarray:
-    """Normalise non-negative scores to sum 1 under an iterative per-name cap.
-
-    Cap-and-spill: clip names above ``cap`` and redistribute the excess pro-rata
-    to the uncapped names, repeating until none breach the cap (or the cap is
-    infeasible for the given breadth).
-
-    Parameters
-    ----------
-    w
-        Non-negative score per name (e.g. the STARR ratio).
-    cap
-        Maximum single-name weight.
-
-    Returns
-    -------
-    numpy.ndarray
-        Weights summing to 1 (when feasible), each ``<= cap``.
-    """
-    w = np.clip(np.asarray(w, dtype='float64'), 0.0, None)
-    s = w.sum()
-    if s <= 0:
-        return np.full(len(w), 1.0 / len(w)) if len(w) else w
-    w = w / s
-    for _ in range(64):  # cap-and-spill until no name breaches the cap
-        over = w > cap + 1e-12
-        if not over.any():
-            break
-        excess = (w[over] - cap).sum()
-        w[over] = cap
-        under = ~over
-        if w[under].sum() <= 0:
-            break
-        w[under] += excess * w[under] / w[under].sum()
-    return w
-
-
 def compute_cvar_aware_book(
         idata, panel: KalmanPanelInputs, screen: ScreenContext, results: pd.DataFrame,
         *, alpha: Optional[float] = None, cap: Optional[float] = None,
@@ -4570,212 +5026,47 @@ def compute_cvar_aware_book(
         mcap_r_max: Optional[float] = None,
         config: Optional[KalmanRunConfig] = None,
 ) -> RiskBook:
-    """Build the CVaR-aware long book and per-name risk analytics (SSOT).
+    """Resolve the sizing knobs from :class:`KalmanRunConfig` and build the book.
 
-    Re-ranks the §10 screen on risk-adjusted terms — reward per unit *expected
-    volatility* (the per-name dispersion of the posterior upside draws) and reward
-    per unit *expected-shortfall* (CVaR of the same draws) — then sizes a long
-    book on the STARR (reward-to-CVaR) ratio with a per-name cap. Shared by
-    :func:`export_analytics` (persists ``book_weight``) and
-    :func:`run_recommendations` (prints §8–§10) so the exported and displayed sizing
-    are guaranteed identical.
+    Thin workflow-level wrapper around
+    :func:`probabilistic_ml_model.pymc_models.RiskBookModel.compute_cvar_aware_book`,
+    which holds the model logic. This layer exists so the workflow keeps its
+    config-driven contract (every ``None`` falls back to the corresponding
+    ``KalmanRunConfig`` field) while the package function stays free of any
+    dependency on the script.
 
     Parameters
     ----------
     idata
-        Fitted fused-panel inference object. Supplies the posterior ``achieve_prob``
-        (the exported ``kalman_gain``) used to condition ``P(upside>0)`` on the
-        smoother's state confidence; the screen draws come via ``screen``.
+        Fused-panel inference data.
     panel
-        The :class:`KalmanPanelInputs` (supplies the modelling frame and ISIN order).
+        Unused; retained for call-site compatibility with the rest of §10b.
     screen
         The :class:`ScreenContext` carrying the ``expected_upside`` draws ``eu``.
     results
-        The §10 per-ISIN screening table.
-    alpha
-        CVaR / expected-shortfall tail probability. ``None`` (the default)
-        resolves to ``config.cvar_alpha`` (0.05).
-    cap
-        Maximum single-name weight; ``None`` -> ``config.weight_cap`` (0.08).
-    k_book
-        Target book breadth — number of STARR-ranked longs held; ``None`` ->
-        ``config.k_book`` (50).
-    p_long
-        Nominal minimum ``P(upside>0)`` for long eligibility; ``None`` ->
-        ``config.p_long`` (0.67). The
-        gate is applied on the *conditional* scale: eligibility requires
-        ``p_upside_pos_cond >= p_long * univ_gain`` where ``p_upside_pos_cond`` is
-        ``mc_prob_pos * kalman_gain`` and ``univ_gain`` is the universe-mean
-        ``kalman_gain`` — so the threshold keeps its nominal strictness after
-        conditioning on the filter's confidence.
-    mcap_r_max
-        Market-cap pre-selection gate: long-book candidates must have
-        ``mcap_country_r < mcap_r_max``; ``None`` ->
-        ``config.mcap_country_r_max`` (0.02). ``mcap_country_r`` is the
-        MV-derived ``feat_mcap_country_r = (100 - market_cap_country_r) / 100``
-        ratio, so 0.02 keeps the top 2% of each country by market cap (the
-        ratio-scale mirror of the §11–§13 ``market_cap_country_r > 98``
-        candidate filters). Names with a missing rank fail the gate (strict,
-        matching the SQL ``> 98`` NULL semantics). If ``results`` predates the
-        ``mcap_country_r`` column, the gate is skipped with a warning.
+        Per-ISIN screen table (see the package function for required columns).
+    alpha, cap, k_book, p_long, mcap_r_max
+        Sizing overrides; ``None`` resolves to ``config.cvar_alpha`` /
+        ``weight_cap`` / ``k_book`` / ``p_long`` / ``mcap_country_r_max``.
+    config
+        Optional :class:`KalmanRunConfig`; defaults to :func:`get_run_config`.
 
     Returns
     -------
     RiskBook
-        Analytics frame, sized book and portfolio summary.
+        Per-name ``analytics``, the sized ``book`` and the portfolio ``summary``.
     """
     cfg = config if config is not None else get_run_config()
-    alpha = cfg.cvar_alpha if alpha is None else alpha
-    cap = cfg.weight_cap if cap is None else cap
-    k_book = cfg.k_book if k_book is None else k_book
-    p_long = cfg.p_long if p_long is None else p_long
-    mcap_r_max = cfg.mcap_country_r_max if mcap_r_max is None else mcap_r_max
-
-    eu = screen.eu  # expected upside draws (chain, draw, isin), decimal
-    nm = results.copy()
-
-    # Posterior P(upside>0) and credible-band width (mirror the §5 name screen).
-    p_pos_name = (eu > 0).mean(('chain', 'draw')).to_series()
-    nm['p_upside_pos'] = nm['isin'].map(p_pos_name).astype('float64')
-    _den = nm['expected_pt'].replace(0, np.nan)
-    nm['band_width'] = (nm['expected_pt_hdi_hi'] - nm['expected_pt_hdi_lo']) / _den
-
-    # Conditional P(upside>0 | kalman gain). ``achieve_prob`` (exported as
-    # ``kalman_gain``) is the smoother's state-confidence analogue — inverse to
-    # ``kalman_variance`` — so multiplying the structural-TS MC ``mc_prob_pos`` by
-    # it discounts names whose positive-upside odds rest on a low-confidence state
-    # estimate. Falls back to the posterior ``p_upside_pos`` where the MC column is
-    # missing, and to the unconditional probability if ``achieve_prob`` is absent.
-    try:
-        _gain_ser = _posterior_dataset(idata)['achieve_prob'].mean(
-            ('chain', 'draw')).to_series()
-        _gain_ser.index = _gain_ser.index.astype(str)
-        nm['kalman_gain'] = nm['isin'].astype(str).map(_gain_ser).astype('float64')
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning('achieve_prob (kalman_gain) unavailable: %s — conditional '
-                       'P(upside>0) falls back to the unconditional probability.', exc)
-        nm['kalman_gain'] = 1.0
-    _p_base = (pd.to_numeric(nm['mc_prob_pos'], errors='coerce')
-               if 'mc_prob_pos' in nm.columns else nm['p_upside_pos'])
-    nm['p_upside_pos_cond'] = (_p_base.fillna(nm['p_upside_pos'])
-                               * nm['kalman_gain'].fillna(1.0)).astype('float64')
-    _gain_vals = nm['kalman_gain'].to_numpy(dtype='float64')
-    univ_gain = (float(np.nanmean(_gain_vals))
-                 if np.isfinite(_gain_vals).any() else 1.0)
-    if not np.isfinite(univ_gain) or univ_gain <= 0:
-        univ_gain = 1.0
-    p_long_cond = p_long * univ_gain
-
-    # Per-name CVaR and expected volatility from the posterior upside draws
-    # (decimal return units). exp_vol is the per-name std of the draws — a
-    # genuinely forward-looking dispersion (the absolute feat_vol_* MV levels
-    # were replaced by the feat_vol_drift widener, which is a signed drift,
-    # not a level).
-    _row_of: dict[str, int] = {}
-    _eu_vals = None
-    try:
-        _eu_s = eu.stack(s=('chain', 'draw')).transpose('isin', 's')
-        _eu_vals = np.ascontiguousarray(_eu_s.values, dtype='float64')  # (n_isin, n_samples)
-        _var = np.quantile(_eu_vals, alpha, axis=1, keepdims=True)
-        _mask = _eu_vals <= _var
-        _denom = np.maximum(_mask.sum(axis=1), 1)
-        _cvar = np.where(_mask, _eu_vals, 0.0).sum(axis=1) / _denom
-        _isin_order = _eu_s.coords['isin'].values.astype(str)
-        _row_of = {is_: i for i, is_ in enumerate(_isin_order)}
-        nm['cvar05'] = nm['isin'].astype(str).map(
-            pd.Series(_cvar, index=_isin_order)).astype('float64')
-        nm['exp_vol'] = nm['isin'].astype(str).map(
-            pd.Series(_eu_vals.std(axis=1), index=_isin_order)).astype('float64')
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning('CVaR computation from upside draws failed: %s', exc)
-        nm['cvar05'] = np.nan
-        nm['exp_vol'] = np.nan
-
-    # Reward-to-risk ratios (all dimensionless — decimal / decimal).
-    #   * ret_vol_ratio    - reward per unit posterior dispersion of the upside
-    #     draws (estimation-uncertainty-adjusted reward; internal only, NOT a
-    #     Sharpe ratio — the denominator is parameter uncertainty).
-    #   * expected_sharpe  - er_mean / er_sd of the structural-TS MC forward-return
-    #     distribution: a genuine forward-looking Sharpe (exported as
-    #     ``expected_sharpe_ratio``).
-    #   * tail_risk        - binding downside: the larger of the posterior
-    #     mean->CVaR dispersion and the Student-t MC 5% loss magnitude (floored
-    #     at 1pp = 0.01). Names with a wide posterior OR a fat simulated tail
-    #     both score high here.
-    #   * starr            - reward per unit expected-shortfall (STARR ratio).
-    _exp_vol_pos = nm['exp_vol'].where(nm['exp_vol'] > 0)
-    nm['ret_vol_ratio'] = nm['expected_upside'] / _exp_vol_pos
-    if {'er_mean', 'er_sd'} <= set(nm.columns):
-        _er_sd_pos = pd.to_numeric(nm['er_sd'], errors='coerce')
-        nm['expected_sharpe'] = (pd.to_numeric(nm['er_mean'], errors='coerce')
-                                 / _er_sd_pos.where(_er_sd_pos > 0))
-    else:  # pragma: no cover - older screen frame without the MC summary
-        nm['expected_sharpe'] = np.nan
-    _md_disp = (nm['expected_upside'] - nm['cvar05']).fillna(0.0).clip(lower=0.0)
-    _mc_loss = (-nm['er_p05'].astype('float64')
-                if 'er_p05' in nm.columns else pd.Series(0.0, index=nm.index)).fillna(0.0)
-    nm['tail_risk'] = np.maximum.reduce([
-        _md_disp.to_numpy(), _mc_loss.to_numpy(), np.full(len(nm), 0.01)])
-    nm['starr'] = nm['expected_upside'] / nm['tail_risk']
-
-    # Market-cap pre-selection: only top-of-country names (mcap_country_r <
-    # mcap_r_max, i.e. raw market_cap_country_r > 98 at the 0.02 default) are
-    # long-book eligible. Strict on missing ranks — NaN < x is False — matching
-    # the NULL semantics of the §11–§13 SQL candidate filters.
-    if 'mcap_country_r' in nm.columns:
-        _mcap_r = pd.to_numeric(nm['mcap_country_r'], errors='coerce')
-        _mcap_ok = (_mcap_r < mcap_r_max).fillna(False).to_numpy(dtype=bool)
-    else:  # pre-0.9.9.12 results frame
-        logger.warning('results frame lacks mcap_country_r — the market-cap '
-                       'pre-selection gate (mcap_r_max=%.4f) is skipped.', mcap_r_max)
-        _mcap_ok = np.ones(len(nm), dtype=bool)
-
-    # Sized long book: STARR-ranked, cap-and-spill normalised to 100% gross.
-    nm['book_weight'] = 0.0
-    summary: dict[str, float] = {
-        'alpha': alpha, 'cap': cap, 'k_book': float(k_book), 'p_long': p_long,
-        'p_long_cond': p_long_cond, 'univ_gain': univ_gain,
-        'mcap_r_max': mcap_r_max, 'n_mcap_eligible': float(_mcap_ok.sum()),
-        'n_book': 0.0, 'port_up': float('nan'), 'port_cvar': float('nan'),
-        'wavg_cvar': float('nan'), 'port_vol': float('nan'),
-        'starr_book': float('nan'), 'div': float('nan'),
-    }
-    _book = nm[(nm['expected_upside'] > 0) & (nm['p_upside_pos_cond'] >= p_long_cond)
-               & np.isfinite(nm['starr']) & _mcap_ok].copy()
-    if len(_book):
-        _book = _book.sort_values('starr', ascending=False).head(k_book)
-        _w = _cap_normalize_weights(_book['starr'].to_numpy(), cap)
-        _book = _book.assign(weight=_w)
-        nm.loc[_book.index, 'book_weight'] = _w  # stamp weights back (0 elsewhere)
-        _book = _book.reset_index(drop=True)
-
-        # Portfolio analytics from the joint posterior upside draws of held names.
-        port_cvar = port_up = wavg_cvar = float('nan')
-        if _eu_vals is not None:
-            _rows = [_row_of.get(str(i)) for i in _book['isin']]
-            _keep = [j for j, idx in enumerate(_rows) if idx is not None]
-            if _keep:
-                _wk = _w[_keep] / _w[_keep].sum()
-                _held = _eu_vals[[_rows[j] for j in _keep]]  # (k, n_samples)
-                _port_draws = _wk @ _held
-                _pv = np.quantile(_port_draws, alpha)
-                port_cvar = float(_port_draws[_port_draws <= _pv].mean())
-                port_up = float(_port_draws.mean())
-                wavg_cvar = float(np.nansum(_wk * _book['cvar05'].to_numpy()[_keep]))
-        port_vol = float(np.nansum(
-            _book['weight'].to_numpy() * _book['exp_vol'].to_numpy()))
-        summary.update(
-            n_book=float(len(_book)), port_up=port_up, port_cvar=port_cvar,
-            wavg_cvar=wavg_cvar, port_vol=port_vol,
-            starr_book=(port_up / abs(port_cvar)
-                        if np.isfinite(port_cvar) and port_cvar != 0 else float('nan')),
-            div=(wavg_cvar / port_cvar
-                 if np.isfinite(port_cvar) and port_cvar != 0 else float('nan')),
-        )
-    else:
-        _book = _book.assign(weight=pd.Series(dtype='float64')).reset_index(drop=True)
-
-    return RiskBook(analytics=nm, book=_book, summary=summary)
+    return _compute_cvar_aware_book(
+        idata,
+        screen.eu,
+        results,
+        alpha=cfg.cvar_alpha if alpha is None else alpha,
+        cap=cfg.weight_cap if cap is None else cap,
+        k_book=cfg.k_book if k_book is None else k_book,
+        p_long=cfg.p_long if p_long is None else p_long,
+        mcap_r_max=cfg.mcap_country_r_max if mcap_r_max is None else mcap_r_max,
+    )
 
 
 def plot_kalman_results_overview(kalman_results: pd.DataFrame,
@@ -4850,7 +5141,7 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame,
         fig.add_trace(go.Scatter(
             x=exp_vol_pct[_m], y=er_mean_pct[_m], mode='markers',
             marker=dict(
-                color=_starr_clip[_m], colorscale='Viridis', opacity=0.8,
+                color=_starr_clip[_m], colorscale=CS_SEQ, opacity=0.8,
                 size=(6.0 + 60.0 * weight[_m]).clip(upper=22.0),
                 colorbar=dict(title='STARR', len=0.42, y=0.79, x=0.455,
                               thickness=12)),
@@ -4887,13 +5178,12 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame,
                 fig.add_trace(go.Scatter(
                     x=[_pv], y=[_pu], mode='markers',
                     marker=dict(color=C_HIGHLIGHT, size=16, symbol='star',
-                                line=dict(color='#1e1e1e', width=1)),
+                                line=dict(color=C_PANEL_BG, width=1)),
                     name='CVaR book (portfolio)',
                     hovertemplate=(f'portfolio<br>E[r]=%{{y:.1f}}%  '
                                    f'vol=%{{x:.1f}}%<br>STARR={_st:.2f}'
                                    '<extra></extra>')), row=1, col=1)
-        fig.add_hline(y=0, line=dict(color=C_REF, dash='dash', width=1.0),
-                      row=1, col=1)
+        _add_ref_line(fig, y=0, kind='zero', row=1, col=1)
         fig.update_xaxes(title_text='expected volatility  expected_vol_kalman (%)',
                          ticksuffix='%', row=1, col=1)
         fig.update_yaxes(title_text='MC expected return  er_mean (%)',
@@ -4924,8 +5214,7 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame,
             marker=dict(color=C_OBSERVED, size=8, symbol='diamond'),
             hovertemplate='%{y}<br>posterior E[r] = %{x:.1f}%<extra></extra>',
             name='posterior expected return', legendgroup='fan'), row=1, col=2)
-        fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0),
-                      row=1, col=2)
+        _add_ref_line(fig, x=0, kind='zero', row=1, col=2)
         fig.update_xaxes(title_text='simulated return distribution (%)',
                          ticksuffix='%', row=1, col=2)
 
@@ -4934,7 +5223,7 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame,
     if _c.any():
         fig.add_trace(go.Scatter(
             x=mc_pos[_c], y=p_cond[_c], mode='markers',
-            marker=dict(color=gain[_c], colorscale='Magma', size=6, opacity=0.75,
+            marker=dict(color=gain[_c], colorscale=CS_SEQ, size=6, opacity=0.75,
                         colorbar=dict(title='kalman gain', len=0.42, y=0.21,
                                       x=0.455, thickness=12)),
             text=label[_c],
@@ -4972,14 +5261,12 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame,
                 fig.add_trace(go.Scatter(
                     x=[_pc], y=[_pu], mode='markers',
                     marker=dict(color=C_HIGHLIGHT, size=16, symbol='star',
-                                line=dict(color='#1e1e1e', width=1)),
+                                line=dict(color=C_PANEL_BG, width=1)),
                     name='CVaR book (portfolio)', showlegend=False,
                     hovertemplate=('portfolio<br>CVaR5=%{x:.1f}%  '
                                    'E[r]=%{y:.1f}%<extra></extra>')), row=2, col=2)
-        fig.add_hline(y=0, line=dict(color=C_REF, dash='dash', width=1.0),
-                      row=2, col=2)
-        fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0),
-                      row=2, col=2)
+        _add_ref_line(fig, y=0, kind='zero', row=2, col=2)
+        _add_ref_line(fig, x=0, kind='zero', row=2, col=2)
         fig.update_xaxes(title_text='cvar_5pct_kalman — 5% expected shortfall (%)',
                          ticksuffix='%', row=2, col=2)
         fig.update_yaxes(title_text='expected_return_kalman (%)',
@@ -4994,6 +5281,99 @@ def plot_kalman_results_overview(kalman_results: pd.DataFrame,
 # =============================================================================
 # 10c. Export — analytics.kalman_filtered_price_targets
 # =============================================================================
+_ANALYTICS_TABLE = 'kalman_filtered_price_targets'
+_ANALYTICS_DDL_PATH = (Path(__file__).resolve().parent / 'sql_scripts' /
+                       'analytics' / f'{_ANALYTICS_TABLE}.sql')
+
+# Unit-convention header + per-column comments persisted with the regenerated
+# DDL. ``if_exists='replace'`` drops and recreates the table on every export, so
+# the comments only survive if the checked-in DDL carries them (CHANGELOG 0.9.9.7
+# / CLAUDE.md document this contract; the file had drifted without them).
+_ANALYTICS_DDL_HEADER = """\
+-- analytics.kalman_filtered_price_targets
+--
+-- Generated by ``export_analytics`` in pymc_kalman_filter_pt.py -- do not edit by
+-- hand; ``export_to_analytics_db(..., if_exists='replace')`` drops and recreates
+-- the table on every run and this file is rewritten alongside it.
+--
+-- UNIT CONVENTION (since 0.9.9.7): every return / risk column stores a **raw
+-- decimal** return (0.25 = +25%), including ``cvar_5pct_kalman`` and
+-- ``expected_vol_kalman``. Percent scaling happens only at visualization and
+-- print boundaries. Probabilities are decimals in [0, 1]."""
+
+_ANALYTICS_COLUMN_COMMENTS: dict[str, str] = {
+    'price_target_kalman': 'Posterior-mean Kalman-smoothed price target (price units).',
+    'implied_upside': 'Raw analyst-consensus implied upside vs last price (decimal return).',
+    'expected_return_kalman': 'Posterior-mean expected return (decimal return, 0.25 = +25%).',
+    'kalman_variance': 'Posterior variance of the smoothed price target (price units squared).',
+    'kalman_gain': 'achieve_prob = sigmoid(risk_adj_return): probability the target is '
+                   'achieved (decimal in [0, 1]).',
+    'signal_strength': '|E[risk_adj_return]| / sd(risk_adj_return) (dimensionless).',
+    'expected_pt_hdi_lo': 'Lower bound of the 94% posterior price-target HDI (price units).',
+    'expected_pt_hdi_hi': 'Upper bound of the 94% posterior price-target HDI (price units).',
+    'risk_adj_return': 'Posterior-mean risk-adjusted-return latent (decimal return).',
+    'er_mean': 'Structural-TS Monte-Carlo mean forward return (decimal return).',
+    'er_sd': 'Pooled std of the structural-TS Monte-Carlo forward-return draws '
+             '(decimal return); denominator of expected_sharpe_ratio.',
+    'er_p05': '5th percentile of the Monte-Carlo forward-return draws (decimal return).',
+    'er_p50': 'Median of the Monte-Carlo forward-return draws (decimal return).',
+    'er_p95': '95th percentile of the Monte-Carlo forward-return draws (decimal return).',
+    'mc_prob_pos': 'Monte-Carlo probability of a positive forward return (decimal in [0, 1]).',
+    'cvar_book_weight': 'Normalised CVaR-aware long-book weight; held names sum to 1 '
+                        '(0 for names outside the sized book).',
+    'cvar_5pct_kalman': '5% expected shortfall (CVaR) of the posterior upside draws '
+                        '(decimal return, negative = loss).',
+    'reward_to_cvar': 'STARR ratio: expected upside / binding tail risk (dimensionless).',
+    'expected_vol_kalman': 'Std of the posterior upside draws (decimal return).',
+    'expected_sharpe_ratio': 'er_mean / er_sd of the structural-TS Monte-Carlo forward-return '
+                             'distribution (dimensionless).',
+    'p_upside_pos_cond': 'mc_prob_pos x kalman_gain: probability of a positive upside given '
+                         'state confidence (decimal in [0, 1]); the p_long gate applies here.',
+    'pt_achievement_1y': 'Historic 1y price-target achievement rate (decimal in [0, 1]).',
+    'pt_range_hit_rate': 'Share of history inside the analyst target range (decimal in [0, 1]).',
+    'analyst_bullish_pct': 'Share of analysts rating the name a buy (decimal in [0, 1]).',
+    'analyst_bearish_pct': 'Share of analysts rating the name a sell (decimal in [0, 1]).',
+    'analyst_neutral_pct': 'Share of analysts rating the name a hold (decimal in [0, 1]).',
+    'analyst_conviction': 'Net buy-minus-sell analyst conviction (decimal in [-1, 1]).',
+}
+
+
+def write_analytics_ddl(frame: pd.DataFrame,
+                        path: Optional[Path] = None) -> Optional[Path]:
+    """Rewrite the checked-in ``kalman_filtered_price_targets`` DDL from ``frame``.
+
+    Keeps ``sql_scripts/analytics/kalman_filtered_price_targets.sql`` in step with
+    the frame the export actually writes, and re-attaches the unit-convention
+    header plus the ``COMMENT ON COLUMN`` statements that the drop-and-recreate
+    write destroys each run.
+
+    Parameters
+    ----------
+    frame
+        The exported analytics frame.
+    path
+        Destination; defaults to :data:`_ANALYTICS_DDL_PATH`.
+
+    Returns
+    -------
+    Optional[Path]
+        The written path, or ``None`` when the write failed (never raises).
+    """
+    target = Path(path) if path is not None else _ANALYTICS_DDL_PATH
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            _sql_table_ddl(frame, _ANALYTICS_TABLE, quote_table=False,
+                           comments=_ANALYTICS_COLUMN_COMMENTS,
+                           header=_ANALYTICS_DDL_HEADER),
+            encoding='utf-8')
+        logger.info("Regenerated analytics DDL -> %s", target)
+        return target
+    except Exception as exc:
+        logger.warning("Analytics DDL regeneration skipped: %r", exc)
+        return None
+
+
 def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
                      *, risk_book: Optional[RiskBook] = None,
                      write: bool = True) -> pd.DataFrame:
@@ -5038,11 +5418,13 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     The :class:`RiskBook` is reused when passed via ``risk_book`` (so the export and the
     §14b screen share one computation); otherwise it is recomputed from ``screen``.
 
-    Set ``write=True`` to append the rows to the DB sink via ``export_to_analytics_db``
-    (``DB_ANALYTICS_SCHEMA``, default ``analytics``). When appending, the target table
-    must carry the risk columns above (``cvar_*``, ``p_upside_pos_cond``,
-    ``expected_vol_kalman``) — DDL in
-    ``sql_scripts/analytics/kalman_filtered_price_targets.sql``.
+    Set ``write=True`` to persist the rows via ``export_to_analytics_db``
+    (``DB_ANALYTICS_SCHEMA``, default ``analytics``) with ``if_exists='replace'`` — the
+    table is **dropped and recreated** on every run, not appended to, so the
+    hand-maintained types and column comments do not survive. The regenerated DDL
+    (including the unit-convention header and ``COMMENT ON COLUMN`` statements) is
+    therefore rewritten to ``sql_scripts/analytics/kalman_filtered_price_targets.sql``
+    on each write, keeping the checked-in schema honest.
     """
     model_df = panel.frame
     _post = idata.posterior
@@ -5238,12 +5620,14 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
             .sort_values('cvar_book_weight', ascending=False)
             .head(25).round({c: 4 for c in _num_cols}))
 
+    write_analytics_ddl(kalman_results)
     if write:
-        _n = export_to_analytics_db(kalman_results, 'kalman_filtered_price_targets',
+        _n = export_to_analytics_db(kalman_results, _ANALYTICS_TABLE,
                                     if_exists='replace')
-        print(f'Replaced analytics.kalman_filtered_price_targets with {_n} rows.')
+        note_analytics_written()
+        print(f'Replaced analytics.{_ANALYTICS_TABLE} with {_n} rows.')
     else:
-        print('write=False -> not persisted. Pass write=True to append to the DB sink.')
+        print('write=False -> not persisted. Pass write=True to replace the DB sink.')
     return kalman_results
 
 
@@ -6046,9 +6430,8 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine,
                                        _forest_height_px(len(dates), per_row=30)))
         _ax_state = pc_state.viz['plot'].sel(column='forest').item()  # PlotlyPlot
         if last_price is not None:
-            _ax_state.add_vline(x=last_price,
-                                line=dict(color=C_REF, dash='dash', width=1.2),
-                                annotation_text='cohort last_price')
+            _add_ref_line(_ax_state, x=last_price, kind='anchor',
+                          annotation_text='cohort last_price')
         _ax_state.update_xaxes(title_text='expected_pt (price)')
         pc_state.add_title(f'Expected price target (Kalman state) per as-of date - {label}')
         _safe_show(pc_state)
@@ -6325,17 +6708,18 @@ def run_granular_further_views(prior_idata, panel: KalmanPanelInputs,
     cons_da = xr.DataArray(_cons.to_numpy(), dims='isin',
                            coords={'isin': _cons.index.to_numpy()}).rename(VAR)
 
-    _C_POST, _C_PRIOR, _C_CONS, _C_REF = C_POSTERIOR, C_VOL, C_ACCENT, C_REF
     # Styles carry Plotly line vocabulary (``width`` / ``linestyle`` dash names) so the
     # same dict feeds both the ``plot_dist`` ``dist`` visual and the proxy legend traces.
+    # Colours come straight from the module palette — the local ``_C_*`` aliases this
+    # block used to declare shadowed the SSOT names and hid which role each series played.
     series = [
-        (cohort_upside, ['chain', 'draw'], dict(color=_C_POST, width=2.2),
+        (cohort_upside, ['chain', 'draw'], dict(color=C_POSTERIOR, width=2.2),
          'posterior E[upside] (cohort mean)'),
-        (prior_cohort, ['chain', 'draw'], dict(color=_C_PRIOR, width=2.0, linestyle='dash'),
+        (prior_cohort, ['chain', 'draw'], dict(color=C_VOL, width=2.0, linestyle='dash'),
          'prior E[upside] (cohort mean)'),
     ]
     if len(_cons) >= 2:
-        series.append((cons_da, ['isin'], dict(color=_C_CONS, width=2.2),
+        series.append((cons_da, ['isin'], dict(color=C_ACCENT, width=2.2),
                        'consensus implied upside (across names)'))
 
     pc3 = None
@@ -6351,9 +6735,9 @@ def run_granular_further_views(prior_idata, panel: KalmanPanelInputs,
     ax = pc3.get_target(VAR, {})  # PlotlyPlot (figure + row/col)
     fig = ax.figure
     cons_mean = float(_cons.mean()) if len(_cons) else float('nan')
-    ax.add_vline(x=0.0, line=dict(color=_C_REF, dash='dash', width=1.3))
+    _add_ref_line(ax, x=0.0, kind='zero')
     if np.isfinite(cons_mean):
-        ax.add_vline(x=cons_mean, line=dict(color=_C_CONS, dash='dot', width=1.6))
+        _add_ref_line(ax, x=cons_mean, kind='emphasis', color=C_ACCENT)
 
     _all = np.concatenate([cohort_upside.values.ravel(), prior_cohort.values.ravel(),
                            _cons.to_numpy()])
@@ -6376,10 +6760,11 @@ def run_granular_further_views(prior_idata, panel: KalmanPanelInputs,
                           dash=style.get('linestyle', 'solid')),
                 name=label), row=_r, col=_c)
         fig.add_trace(go.Scatter(
-            x=[None], y=[None], mode='lines', line=dict(color=_C_CONS, width=1.6, dash='dot'),
+            x=[None], y=[None], mode='lines',
+            line=_REF_LINE_KINDS['emphasis'] | {'color': C_ACCENT},
             name=f'consensus cohort mean ({cons_mean:.1f}%)'), row=_r, col=_c)
         fig.add_trace(go.Scatter(
-            x=[None], y=[None], mode='lines', line=dict(color=_C_REF, width=1.3, dash='dash'),
+            x=[None], y=[None], mode='lines', line=dict(**_REF_LINE_KINDS['zero']),
             name='0% break-even'), row=_r, col=_c)
         fig.update_layout(showlegend=True)
     _safe_show(pc3)
@@ -6466,10 +6851,8 @@ def plot_group_signal_forest(payload: dict[str, dict[str, Any]]) -> None:
         lam = np.array([r[7] for r in rows])[::-1]
         vcol = [_VERDICT_COLORS.get(v, C_MUTED) for v in verdicts[::-1]]
         if np.isfinite(band) and band > 0:
-            fig.add_vrect(x0=-band, x1=band, fillcolor=_hex_to_rgba(C_REF, 0.08),
-                          line_width=0, row=i, col=1)
-        fig.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0),
-                      row=i, col=1)
+            _add_ref_band(fig, x0=-band, x1=band, row=i, col=1)
+        _add_ref_line(fig, x=0, kind='zero', row=i, col=1)
         fig.add_trace(go.Scatter(
             x=ex, y=names, mode='markers',
             marker=dict(color=vcol, size=9),
@@ -6512,9 +6895,21 @@ def plot_book_composition(rb: RiskBook) -> None:
     _tk = book.get('ticker', pd.Series(index=book.index, dtype=object))
     labels = [t if isinstance(t, str) and t.strip() else str(i)[:8]
               for t, i in zip(_tk, book['isin'])]
-    w_pct = pd.to_numeric(book['weight'], errors='coerce') * 100.0
-    cvar_pct = pd.to_numeric(book.get('cvar05'), errors='coerce') * 100.0
-    eu_pct = pd.to_numeric(book.get('expected_upside'), errors='coerce') * 100.0
+    # Disambiguate collisions (e.g. tickers truncated/missing to the same
+    # 8-char isin prefix) so distinct names never share one bar category --
+    # Plotly silently sums same-category bar values into a single bar
+    # otherwise, hiding the rest of the book behind one inflated total.
+    _dupe_n: dict[str, int] = {}
+    for _i, _lab in enumerate(labels):
+        _dupe_n[_lab] = _dupe_n.get(_lab, 0) + 1
+        if _dupe_n[_lab] > 1:
+            labels[_i] = f'{_lab} ({_dupe_n[_lab]})'
+    w_pct = (pd.to_numeric(book['weight'], errors='coerce')
+             .replace([np.inf, -np.inf], np.nan) * 100.0)
+    cvar_pct = (pd.to_numeric(book.get('cvar05'), errors='coerce')
+                .replace([np.inf, -np.inf], np.nan) * 100.0)
+    eu_pct = (pd.to_numeric(book.get('expected_upside'), errors='coerce')
+              .replace([np.inf, -np.inf], np.nan) * 100.0)
     s = rb.summary or {}
     cap = float(s.get('cap', float('nan')))
 
@@ -6528,7 +6923,7 @@ def plot_book_composition(rb: RiskBook) -> None:
                        'E[upside] = %{customdata[0]:.1f}%<extra></extra>'),
         name='weight'), row=1, col=1)
     if np.isfinite(cap):
-        fig.add_vline(x=cap * 100.0, line=dict(color=C_REF, dash='dash', width=1.2),
+        _add_ref_line(fig, x=cap * 100.0, kind='anchor',
                       annotation_text=f'cap {cap:.0%}', row=1, col=1)
     fig.add_trace(go.Bar(
         x=cvar_pct, y=labels, orientation='h',
@@ -6537,7 +6932,14 @@ def plot_book_composition(rb: RiskBook) -> None:
         name='CVaR5'), row=1, col=2)
     fig.update_xaxes(title_text='weight (%)', ticksuffix='%', row=1, col=1)
     fig.update_xaxes(title_text='CVaR5 (%)', ticksuffix='%', row=1, col=2)
-    fig.update_yaxes(automargin=True)
+    # Force an explicit categorical y-axis (with the STARR-sorted label order
+    # pinned via categoryarray) rather than relying on Plotly's implicit
+    # type inference -- that inference can flip the shared axis to a
+    # numeric/linear type for certain label sets, which collapses every bar
+    # into an invisible sliver against an autoranged 0..N numeric axis
+    # instead of the intended per-name category rows.
+    fig.update_yaxes(type='category', categoryorder='array', categoryarray=labels,
+                     automargin=True)
 
     _fmt = _fmt_or_na
     fig.update_layout(
@@ -6573,10 +6975,9 @@ def plot_screen_overview(results_df: pd.DataFrame, *, top_n: int = 15) -> None:
         marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.8)),
         hovertemplate='upside = %{x:.0f}%<extra></extra>',
         name='expected upside', showlegend=False), row=1, col=1)
-    fig.add_vline(x=float(eu_pct.median()),
-                  line=dict(color=C_HIGHLIGHT, dash='dash', width=1.5),
+    _add_ref_line(fig, x=float(eu_pct.median()), kind='emphasis',
                   annotation_text=f'median {eu_pct.median():.1f}%', row=1, col=1)
-    fig.add_vline(x=0, line=dict(color=C_REF, dash='dot', width=1.2), row=1, col=1)
+    _add_ref_line(fig, x=0, kind='zero', row=1, col=1)
     fig.update_xaxes(title_text='expected upside (%)', ticksuffix='%', row=1, col=1)
     fig.update_yaxes(title_text='ISIN count', row=1, col=1)
 
@@ -6602,7 +7003,7 @@ def plot_screen_overview(results_df: pd.DataFrame, *, top_n: int = 15) -> None:
                        '[%{customdata[0]:.1f}%, %{customdata[1]:.1f}%]'
                        '<extra></extra>'),
         name='top names', showlegend=False), row=1, col=2)
-    fig.add_vline(x=0, line=dict(color=C_REF, dash='dot', width=1.2), row=1, col=2)
+    _add_ref_line(fig, x=0, kind='zero', row=1, col=2)
     fig.update_xaxes(title_text='expected upside (%)', ticksuffix='%', row=1, col=2)
     fig.update_layout(title='Screen overview — distribution and ranked '
                             'recommendations', showlegend=False)
@@ -6644,7 +7045,7 @@ def plot_risk_return_scatter(results_df: pd.DataFrame, *,
                 'expected_upside_pct': 'expected upside (%)',
                 'color': 'sector'},
         title='Expected upside vs posterior uncertainty (94% HDI width)')
-    fig.add_hline(y=0, line_dash='dot', line_color=C_REF)
+    _add_ref_line(fig, y=0, kind='zero')
     fig.update_xaxes(ticksuffix='%')
     fig.update_yaxes(ticksuffix='%')
     fig.update_layout(legend_title_text='sector',
@@ -6680,7 +7081,7 @@ def plot_top_candidate_forest(screen_ctx: ScreenContext,
     with contextlib.suppress(Exception):
         _fx = _plotly_figure_of(pc)
         if _fx is not None:
-            _fx.add_vline(x=0, line=dict(color=C_REF, dash='dash', width=1.0))
+            _add_ref_line(_fx, x=0, kind='zero')
             _fx.update_xaxes(title_text='expected upside (%)', ticksuffix='%')
     _safe_show(pc)
 
@@ -6759,7 +7160,7 @@ def run_summary(results: pd.DataFrame, screen: ScreenContext,
                     marker=dict(color=_grp_colors[:len(summary_tbl)]),
                     hovertemplate=f'%{{y}}<br>{lab} = %{{x:.1f}}%<extra></extra>',
                     name=lab, showlegend=False), row=1, col=j)
-                figs.add_vline(x=0, line=dict(color=C_REF, width=0.8), row=1, col=j)
+                _add_ref_line(figs, x=0, kind='zero', row=1, col=j)
                 figs.update_xaxes(ticksuffix='%', row=1, col=j)
             figs.update_layout(title='Earnings cohort vs baseline vs universe — '
                                      'decision metrics', showlegend=False)
@@ -6793,7 +7194,7 @@ def run_summary(results: pd.DataFrame, screen: ScreenContext,
                     hovertemplate=('%{y}<br>tilt = %{x:+.1f}pp of names'
                                    '<extra></extra>'),
                     name='sector tilt'))
-                figt.add_vline(x=0, line=dict(color=C_REF, width=1.0))
+                _add_ref_line(figt, x=0, kind='zero')
                 figt.update_xaxes(title_text='cohort share − universe share '
                                              '(pp of names)')
                 figt.update_layout(title='Earnings-cohort sector tilt vs universe',
@@ -6938,7 +7339,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     univ_gain = float(gain_da.mean())
     if not np.isfinite(univ_gain) or univ_gain <= 0:
         univ_gain = 1.0
-    P_HI_BASE, P_LO_BASE = 0.80, 0.20
+    P_HI_BASE, P_LO_BASE = 0.67, 0.33
     P_HI, P_LO = P_HI_BASE * univ_gain, P_LO_BASE * univ_gain
 
     # Minimum-coverage gate for the §4 group allocation signals: coord groups
@@ -7010,7 +7411,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
                 'size_class',
                 'style_class')
                if c in model_df.columns]
-    _forest_coords = ('region', 'trading_region','sector', 'industry','size_class','style_class')
+    _forest_coords = ('sector', 'industry','size_class','style_class')
     _forest_payload: dict[str, dict[str, Any]] = {}
     for col in _coords:
         lab = model_df[col].fillna('Unknown').astype(str).to_numpy()
@@ -7260,7 +7661,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
 # Entry point
 # =============================================================================
 def main(*, run_eda_section: bool = True, write_analytics: bool = True,
-         robust: bool = False, volume_penalty: float = 0.2, export_results: bool = True,
+         robust: bool = False, volume_penalty: float = 0.25, export_results: bool = True,
          config: Optional[KalmanRunConfig] = None) -> dict[str, Any]:
     """Run the full Kalman price-target workflow end-to-end on the fused panel model.
 
@@ -7274,15 +7675,18 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     run_eda_section
         When ``True`` (default), render the section-2 EDA panels.
     write_analytics
-        When ``True``, append the §10c screen to ``analytics.kalman_filtered_price_targets``.
+        When ``True``, replace ``analytics.kalman_filtered_price_targets`` with the
+        §10c screen (drop-and-recreate) and regenerate its checked-in DDL.
     robust
         When ``True``, use the Student-t panel likelihood (absorbs analyst
         outliers); ``False`` (default) selects the Normal-likelihood twin.
     volume_penalty
         Prior scale (``HalfNormal`` sigma) of the learned ``volume_loading``
         tilt on ``risk_adj_return`` via the per-ISIN relative trading volume
-        (``feat_rel_volume``, z-scored). Defaults to ``0.2`` (enabled); ``0.0``
-        disables the factor.
+        (``feat_rel_volume``, z-scored). Defaults to ``0.25`` (enabled), which
+        overrides the ``0.2`` builder default in
+        :func:`~probabilistic_ml_model.pymc_models.KalmanFilterModel.build_fused_kalman_pt_model`;
+        ``0.0`` disables the factor.
     export_results
         When ``True`` (default), persist every rendered figure / displayed table
         (via the :func:`_safe_show` / :func:`display` hooks) and the bulk data
@@ -7351,7 +7755,7 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
         screen = summarize_panel_screen(idata, panel,
                                         horizon=cfg.mc_horizon, rho=cfg.mc_rho)
         results = screen.results
-    with export_section('10b_risk_book'):
+    with export_section('10b_risk'):
         risk_book = compute_cvar_aware_book(idata, panel, screen, results, config=cfg)
     with export_section('10c_analytics'):
         kalman_results = export_analytics(idata, panel, screen, risk_book=risk_book,
@@ -7397,5 +7801,34 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     return artifacts
 
 
+def _parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    """Parse the script's command-line arguments.
+
+    The default invocation (no flags) runs the full workflow, as documented in
+    the module docstring; ``--migrate-layout`` runs only the one-off results-tree
+    migration and exits.
+    """
+    parser = argparse.ArgumentParser(
+        prog='pymc_kalman_filter_pt',
+        description='Bayesian Kalman price-target workflow '
+                    '(fused panel model -> screen -> risk book -> analytics export).')
+    parser.add_argument(
+        '--migrate-layout', action='store_true',
+        help='Re-file flat legacy artifacts in KALMAN_PT_RESULTS_DIR into the '
+             'per-section subdirectory tree, then exit. Dry-run unless --apply.')
+    parser.add_argument(
+        '--apply', action='store_true',
+        help='Perform the --migrate-layout moves instead of only reporting them.')
+    parser.add_argument(
+        '--results-dir', default=None,
+        help='Override the results directory for --migrate-layout.')
+    return parser.parse_args(argv)
+
+
 if __name__ == '__main__':
-    main()
+    _args = _parse_cli_args()
+    if _args.migrate_layout:
+        logging.basicConfig(level=logging.INFO)
+        migrate_results_layout(_args.results_dir, dry_run=not _args.apply)
+    else:
+        main()

@@ -104,20 +104,38 @@ python pymc_kalman_filter_pt.py
 ```python
 from pymc_kalman_filter_pt import main
 
-artifacts = main(
-    run_eda_section=True,    # render the §2 EDA panels
-    write_analytics=True,    # append the §10c screen to analytics.kalman_filtered_price_targets
-    robust=False,            # True = Student-t panel likelihood, False = Normal twin
-    export_results=True,     # persist figures/tables/NetCDF under KALMAN_PT_RESULTS_DIR
-)
+artifacts = main(run_eda_section=True, write_analytics=True, robust=False, export_results=True)
 # -> {'idata', 'results', 'kalman_results', 'panel', 'screen', 'universe_fit'}
 ```
 
-Artifacts (PNG/CSV/JSON/NetCDF) are written to `KALMAN_PT_RESULTS_DIR`. The
-script resolves `DB_URL` from the environment and falls back to parsing
+Artifacts are written to `KALMAN_PT_RESULTS_DIR` in a **per-section
+subdirectory** (`01_data/`, `02_eda/`, … `14b_recommendations/`, with `00_misc/`
+as the fallback):
+
+| Artifact    | Destination                                                                        |
+|-------------|------------------------------------------------------------------------------------|
+| Figures     | PNG via kaleido; self-contained HTML when kaleido/Chromium is unavailable           |
+| DataFrames  | curated bulk frames → `analytics."<stem>"` **plus** a generated `<stem>.sql` DDL; all other frames → CSV |
+| DataTrees   | NetCDF (h5netcdf) + a compact per-group JSON summary                               |
+
+The curated set is `04_panel_frame`, `09_diagnostics_01_table`,
+`10_screen_results`, `10_screen_mc_summary`, `10b_risk_analytics`,
+`10b_risk_book`, `10c_kalman_results`. Set `KALMAN_PT_SQL_EXPORT=0` to emit DDL
+and CSV without touching the database — the same fallback happens automatically
+when the database is unreachable, so no frame is ever lost.
+
+The script resolves `DB_URL` from the environment and falls back to parsing
 `environment_variables.txt`. Set `KALMAN_PT_EXPORT_DRAWS=1` to additionally
-bundle the raw `eu` / `ept` posterior draws (large, ~200 MB per array), and
-`PML_FIG_WIDTH_PX` to match figure width to your display.
+bundle the raw `eu` / `ept` posterior draws (large, ~200 MB per array),
+`KALMAN_PT_CLEAN_RESULTS=1` to purge each section subdirectory on first entry,
+and `PML_FIG_WIDTH_PX` to match figure width to your display.
+
+To re-file a pre-0.9.9.13 flat results directory into the tree:
+
+```powershell
+python pymc_kalman_filter_pt.py --migrate-layout           # dry run
+python pymc_kalman_filter_pt.py --migrate-layout --apply
+```
 
 ### Multi-Level Hierarchical Shrinkage (`probabilistic_ml_model/pymc_models/_hierarchy.py`)
 
@@ -375,8 +393,11 @@ Set via `set_env.ps1` (dot-source to persist in session: `. .\set_env.ps1`). Ref
 | `MODEL_DIR`                | `models`                                                     | Saved model artifacts (`set_env.ps1` currently sets `regression`) |
 | `CACHE_DIR`                | `.cache`                                                     | Cache directory                                                   |
 | `OUTPUT_DIR`               | `outputs`                                                    | Generated reports / visualizations                                |
-| `KALMAN_PT_RESULTS_DIR`    | `pymc_kalman_filter_pt_results`                             | Kalman price-target workflow artifact exports (figures/CSV/JSON/NetCDF) |
+| `KALMAN_PT_RESULTS_DIR`    | `pymc_kalman_filter_pt_results`                             | Kalman artifact-export root; artifacts land in per-section subdirectories |
 | `KALMAN_PT_EXPORT_DRAWS`   | `0`                                                          | `1` also exports the raw `eu` / `ept` posterior draws as NetCDF (large) |
+| `KALMAN_PT_SQL_EXPORT`     | `1`                                                          | `0` skips the analytics-schema write for curated frames (DDL + CSV only) |
+| `KALMAN_PT_CLEAN_RESULTS`  | `0`                                                          | `1` purges each section subdirectory on first entry (no cross-run interleaving) |
+| `DB_ANALYTICS_OWNER`       | `postgres`                                                   | Owner emitted in the generated analytics DDL                      |
 | `PML_FIG_WIDTH_PX`         | *(unset)*                                                    | Target Plotly / matplotlib figure width (px) for the Kalman panels |
 | `PML_STRICT_STREAK_MERGE`  | *(unset)*                                                    | Truthy = fail fast on missing EPS streak-merge columns (CI guard) |
 | `DB_URL`                   | `postgresql+psycopg2://postgres:...@localhost:5432/postgres` | SQLAlchemy DB connection URL                                      |
@@ -518,7 +539,8 @@ PML_Finance_Project/
 │   └── public/                     # Public schema SQL
 ├── expected_returns_v3.py          # Automated expected-returns pipeline (v3.6)
 ├── pymc_kalman_filter_pt.py        # Kalman price-target workflow (fused panel model)
-├── pymc_kalman_filter_pt_results/  # Kalman workflow artifact exports (KALMAN_PT_RESULTS_DIR)
+├── pymc_kalman_filter_pt_results/  # Kalman artifact exports, one subdirectory per workflow step
+│   ├── 01_data/ 02_eda/ …          #   (through 14b_recommendations/, 00_misc/ fallback)
 ├── main.py                         # PyCharm sample stub (see TODO above)
 ├── *.sql                           # Root-level schema / materialized-view / metadata SQL
 ├── *.ipynb                         # Exploratory / reproducible analysis notebooks

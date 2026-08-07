@@ -1,6 +1,31 @@
 ﻿-- =============================================================================
--- SQL Feature Catatlogue for PML Finance Project
--- Pymc Feature Engineering - PostgreSQL Implementation
+-- SQL Feature Catalogue for PML Finance Project
+-- PyMC Feature Engineering - PostgreSQL Implementation
+-- =============================================================================
+-- *** SINGLE SOURCE OF TRUTH ***
+--
+-- This file is authoritative for, in order:
+--   1. the pml.* helper FUNCTIONS (arithmetic, transforms, domain, fiscal),
+--   2. all seven pml.mv_pymc_* MATERIALIZED VIEWS (the per-model feature
+--      matrices — this is where every feat_* / observed_* / n_* column is
+--      actually defined),
+--   3. the catalogue VIEWS (vw_pymc_feature_catalogue / _aliases / _coverage),
+--   4. the coverage regression check + pml.refresh_pymc_materialized_views().
+--
+-- The per-object files under sql_scripts/pml/ are pg_dump-style EXTRACTS, not
+-- sources: every mv_pymc_*.sql, every vw_pymc_*.sql and all 37 function files
+-- there carry a `-- missing source code` body and cannot recreate anything.
+-- They are authoritative only for the base TABLES (pml_df.sql, staging.sql,
+-- pml_df_metadata.sql, pml_df_feature_alias.sql) and the five vw_pml_df_*
+-- views. Edit the definitions HERE.
+--
+-- Companion SSOT files:
+--   * pml_df_metadata.sql          -- metadata/alias table DDL + vocabularies
+--   * pml_df_metadata_populate.sql -- pymc_role / model_targets assignment
+--
+-- NOTE (rebuild order): recreating pml.pml_df cascade-drops every
+-- mv_pymc_* that depends on it, so a pml_df rebuild must be followed by
+-- re-running this file to recreate the MVs and catalogue views.
 -- =============================================================================
 -- OPTIMIZATIONS APPLIED:
 -- 1. STABLE modifier on all functions (enables query optimizer caching)
@@ -8,6 +33,11 @@
 -- 3. Materialized views for pymc (uses pml_df_materialized_view)
 -- 4. PARALLEL SAFE where applicable
 -- 5. Helper functions for common calculations (DRY principle)
+--
+-- Volatility caveat: most helpers are IMMUTABLE PARALLEL SAFE with paired
+-- NUMERIC + DOUBLE PRECISION overloads, but NOT all --
+-- pml.calc_piotroski_f_score is STABLE and single-overload (it reads pml_df),
+-- as are the country_name / currency_name / exchange_name lookups.
 -- =============================================================================
 
 -- =============================================================================
@@ -768,6 +798,15 @@ SELECT isin,
        expected_report_date,
        -- Pre-computed numeric horizons (days). Feed pm.Data as the time-step
        -- deltas the marginalized GaussianRandomWalk scales innovations by.
+       --
+       -- REPRODUCIBILITY: these seven days_* columns are computed against
+       -- CURRENT_DATE, so this MV is NOT reproducible across refresh dates --
+       -- refreshing on a different day silently shifts every horizon. That is
+       -- acceptable for the live screen (the point is "days from today") but
+       -- makes the MV unusable as-is for a point-in-time backtest, which would
+       -- need an as-of date parameter instead. It is also part of why the
+       -- days_* family is excluded from the drift design matrix in Python via
+       -- KALMAN_TIME_COVARIATE_PREFIX ('days_') in KalmanFilterModel.py.
        (next_earnings - CURRENT_DATE)::INT                                                                                                                                                                     AS days_to_next_earnings,
        (CURRENT_DATE - income_statement_report_date)::INT                                                                                                                                                      AS days_since_last_report,
        (next_fy_end_date - CURRENT_DATE)::INT                                                                                                                                                                  AS days_to_next_fy_end,
@@ -1420,6 +1459,24 @@ $$;
 -- =============================================================================
 -- 1. Refresh all PyMC feature MVs:
 --      CALL pml.refresh_pymc_materialized_views();
+--
+--    Full signature (both arguments are frequently overlooked):
+--      CALL pml.refresh_pymc_materialized_views(
+--               use_concurrently => TRUE,   -- REFRESH ... CONCURRENTLY
+--               assert_coverage  => FALSE); -- run the catalogue coverage gate
+--
+--    `assert_coverage => TRUE` runs pml.assert_pymc_catalogue_coverage() after
+--    the refresh, which RAISES if any mv_pymc_* feat_/observed_/n_ column is
+--    unregistered, duplicated or phantom in the catalogue. It defaults to
+--    FALSE because the non-kalman models still carry known violations; the
+--    kalman_pt path is clean. Enumerate what is outstanding with:
+--      SELECT model_target, status, count(*),
+--             string_agg(feat_name, ', ' ORDER BY feat_name)
+--      FROM pml.vw_pymc_catalogue_coverage_check
+--      WHERE status <> 'OK' GROUP BY 1, 2 ORDER BY 1, 2;
+--    Fix MISSING_FROM_CATALOGUE / PHANTOM_CATALOGUE_ALIAS /
+--    DUPLICATE_CATALOGUE_ALIAS in pml_df_metadata_populate.sql, then flip this
+--    default to TRUE so refreshes stay honest.
 --
 -- 2. Drive the notebook's MODEL_FEATURE_CONTAINERS from SQL:
 --      SELECT * FROM pml.vw_pymc_feature_aliases WHERE model_target = 'earnings_beat';

@@ -1,9 +1,6 @@
 CREATE FUNCTION information_schema._pg_numeric_precision_radix(typid oid, typmod integer) RETURNS integer
 	IMMUTABLE STRICT PARALLEL SAFE
-	LANGUAGE sql AS
-$$ BEGIN
-	-- missing source code
-END;
-$$;
+	LANGUAGE sql
+RETURN CASE WHEN (typid = ANY (ARRAY[(21)::oid, (23)::oid, (20)::oid, (700)::oid, (701)::oid])) THEN 2 WHEN (typid = (1700)::oid) THEN 10 ELSE NULL::integer END;
 
-ALTER FUNCTION information_schema._pg_numeric_precision_radix(oid, integer) OWNER TO postgres;
+ALTER FUNCTION information_schema._pg_numeric_precision_radix(unknown, unknown) OWNER TO postgres;

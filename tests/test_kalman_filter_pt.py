@@ -434,3 +434,91 @@ def test_builder_rejects_zero_variance_nonprimary_series():
     )
     with pytest.raises(ValueError, match="zero variance"):
         build_fused_kalman_pt_model(bad)
+
+
+# ---------------------------------------------------------------------------
+# compute_cvar_aware_book — market-cap pre-selection gate (pure pandas/xarray;
+# the achieve_prob path is defensively wrapped, so a stub idata falls back to
+# kalman_gain = 1.0 and no sampler is required).
+# ---------------------------------------------------------------------------
+def _risk_book_inputs(*, drop_mcap_col=False, seed=0):
+    """Minimal (idata, panel, screen, results) for compute_cvar_aware_book.
+
+    Four names: A/D pass the 0.02 default gate, B fails on size, C fails on a
+    missing rank (strict NaN policy).
+    """
+    import types
+
+    import xarray as xr
+
+    rng = np.random.default_rng(seed)
+    isins = np.array(["A", "B", "C", "D"])
+    eu = xr.DataArray(
+        rng.normal(0.20, 0.05, (2, 100, len(isins))),
+        dims=("chain", "draw", "isin"),
+        coords={"isin": isins},
+    )
+    results = pd.DataFrame(
+        {
+            "isin": isins,
+            "expected_pt": [110.0, 120.0, 130.0, 140.0],
+            "expected_pt_hdi_lo": [100.0, 110.0, 120.0, 130.0],
+            "expected_pt_hdi_hi": [120.0, 130.0, 140.0, 150.0],
+            "expected_upside": [0.20, 0.22, 0.18, 0.25],
+            "mc_prob_pos": [0.9, 0.9, 0.9, 0.9],
+            "mcap_country_r": [0.01, 0.05, np.nan, 0.015],
+        }
+    )
+    if drop_mcap_col:
+        results = results.drop(columns=["mcap_country_r"])
+    screen = types.SimpleNamespace(eu=eu)
+    return object(), None, screen, results
+
+
+def test_cvar_book_mcap_gate_default_excludes_small_and_unranked():
+    import pymc_kalman_filter_pt as kf
+
+    idata, panel, screen, results = _risk_book_inputs()
+    rb = kf.compute_cvar_aware_book(
+        idata, panel, screen, results, config=kf.KalmanRunConfig(),
+    )
+    assert set(rb.book["isin"]) == {"A", "D"}
+    zeroed = rb.analytics.set_index("isin").loc[["B", "C"], "book_weight"]
+    assert (zeroed == 0.0).all()
+    assert rb.summary["mcap_r_max"] == pytest.approx(0.02)
+    assert rb.summary["n_mcap_eligible"] == 2.0
+    assert rb.summary["n_book"] == 2.0
+
+
+def test_cvar_book_mcap_gate_loose_threshold_keeps_ranked_names_only():
+    import pymc_kalman_filter_pt as kf
+
+    idata, panel, screen, results = _risk_book_inputs()
+    rb = kf.compute_cvar_aware_book(
+        idata, panel, screen, results,
+        mcap_r_max=1.0, config=kf.KalmanRunConfig(),
+    )
+    # B re-enters under the loose gate; C stays out (NaN rank is strict).
+    assert set(rb.book["isin"]) == {"A", "B", "D"}
+    assert rb.summary["mcap_r_max"] == pytest.approx(1.0)
+    assert rb.summary["n_mcap_eligible"] == 3.0
+
+
+def test_cvar_book_mcap_gate_skipped_when_column_missing(caplog):
+    import pymc_kalman_filter_pt as kf
+
+    idata, panel, screen, results = _risk_book_inputs(drop_mcap_col=True)
+    with caplog.at_level("WARNING", logger="pymc_kalman_filter_pt"):
+        rb = kf.compute_cvar_aware_book(
+            idata, panel, screen, results, config=kf.KalmanRunConfig(),
+        )
+    # Pre-0.9.9.12 frame: gate is skipped (all eligible) with a warning.
+    assert set(rb.book["isin"]) == {"A", "B", "C", "D"}
+    assert rb.summary["n_mcap_eligible"] == 4.0
+    assert any("mcap_country_r" in rec.getMessage() for rec in caplog.records)
+
+
+def test_run_config_mcap_gate_default():
+    import pymc_kalman_filter_pt as kf
+
+    assert kf.KalmanRunConfig().mcap_country_r_max == pytest.approx(0.02)

@@ -12,3 +12,5 @@ df_dw = df_dw.drop(columns=['Annualized excess returns'])
 df_dw = df_dw.drop(columns=['Annualized returns'])
 # Drop Column: `12B-1`
 df_dw = df_dw.drop(columns=['12B-1'])
+
+df_dw.head()

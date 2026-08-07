@@ -5,6 +5,156 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.13] - 2026-08-05
+
+### Added
+
+- **Curated bulk frames export to the analytics schema instead of CSV** —
+  `_export_dataframe` (`pymc_kalman_filter_pt.py` §1c) now routes the stems in
+  the new `_SQL_EXPORT_ARTIFACTS` frozenset — `04_panel_frame`,
+  `09_diagnostics_01_table`, `10_screen_results`, `10_screen_mc_summary`,
+  `10b_risk_analytics`, `10b_risk_book`, `10c_kalman_results` — through the new
+  `_export_table`, which writes `analytics."<stem>"` via the existing
+  `export_to_analytics_db(..., if_exists='replace')` **and** emits a generated
+  `<stem>.sql` DDL file beside it. Everything else (the auto-numbered
+  `display()` snapshots, whose stems shift between runs) still writes CSV.
+  New `_sql_table_ddl` / `_sql_column_type` render PostgreSQL DDL from frame
+  dtypes with no database connection required, reproducing the layout of the
+  hand-written files in `sql_scripts/analytics/` (tab-indented, name-aligned,
+  `ALTER TABLE … OWNER TO`). New `KALMAN_PT_SQL_EXPORT=0` emits DDL + CSV
+  without touching the database; an unreachable database triggers the same CSV
+  fallback automatically (first failure memoised on `_ExportState.sql_ok`, so
+  later frames skip the doomed reconnect). `DB_ANALYTICS_OWNER` overrides the
+  `postgres` owner. `10c_kalman_results` skips its table write when
+  `export_analytics(write=True)` already wrote the identical frame to
+  `analytics.kalman_filtered_price_targets` (tracked via the new
+  `note_analytics_written`).
+- **Per-section results tree** — artifacts now land in a subdirectory named
+  for their workflow step (`01_data/`, `02_eda/`, … `14b_recommendations/`,
+  `00_misc/` fallback) instead of one flat directory of 167+ files. The new
+  `_EXPORT_SECTION_DIRS` tuple plus `_export_dir_for` (longest-prefix match on
+  the artifact **stem**, with `_EXPORT_DIR_ALIASES` covering the one genuine
+  mismatch, `10c_kalman_results` → `10c_analytics/`) is the single rule;
+  `_export_path` applies it, so every writer — PNG/HTML, CSV, SQL, JSON,
+  NetCDF, and the two raw `to_netcdf` calls — inherits the tree unchanged.
+- **`migrate_results_layout` + `--migrate-layout` CLI** — one-off, idempotent
+  re-filing of a pre-existing flat results directory into the tree. Dry-run by
+  default; `--apply` performs the moves, `--results-dir` overrides the target.
+- **`set_export_section`** — non-context-manager section setter for notebooks,
+  which have no enclosing block per cell. `pymc_kalman_filter_pt_v3.ipynb` now
+  calls `enable_artifact_export()` in §0 and scopes each cell with
+  `kf.set_export_section(...)`; previously a notebook run produced **no**
+  artifacts at all while the script run produced the full set.
+- **`KALMAN_PT_CLEAN_RESULTS=1`** — purge a section's subdirectory on first
+  entry so a re-run does not interleave with the previous run's artifacts
+  (per-section counters restart each run while title slugs drift). Off by
+  default so an interrupted run never destroys the previous output.
+- **Reference-geometry SSOT** — new `_add_ref_line` / `_add_ref_band` helpers
+  and the `_REF_LINE_KINDS` spec (`zero` / `anchor` / `emphasis`) replace ~40
+  ad-hoc `add_hline` / `add_vline` / `add_vrect` call sites that had grown
+  seven widths, three dash treatments and two different Plotly APIs for what is
+  semantically one piece of geometry. All guides now draw with `layer='below'`
+  (none did before, so every zero-line rendered **over** its own data),
+  uniform opacity, and uniform annotation font.
+
+### Changed
+
+- **`analytics.kalman_filtered_price_targets` DDL is generated** —
+  `export_analytics` calls the new `write_analytics_ddl` on every run,
+  rewriting `sql_scripts/analytics/kalman_filtered_price_targets.sql` from the
+  frame it actually exports. Because `if_exists='replace'` drops and recreates
+  the table each run, the unit-convention header and `COMMENT ON COLUMN`
+  statements only survive in the checked-in file — restored here from the new
+  `_ANALYTICS_COLUMN_COMMENTS` map (see Fixed).
+- **Colour and background constants** — `C_PANEL_BG` / `C_AXES_BG` replace
+  eight hard-coded `#1e1e1e` literals; `CS_SEQ` / `CS_DIV` (+ `*_MPL`) replace
+  the ad-hoc `Viridis` / `Magma` / `flare` / `vlag` ramps so two views of the
+  same quantity no longer read as different measurements. The local
+  `_C_POST, _C_PRIOR, _C_CONS, _C_REF = …` aliases that shadowed the module
+  palette inside `run_granular_further_views` are gone.
+- **`export_section('10b_risk_book')` → `export_section('10b_risk')`** so the
+  section label and its directory agree with the `10b_risk_*` bulk stems.
+- **`.gitignore`** — the two literal NetCDF paths are replaced by
+  `pymc_kalman_filter_pt_results/**/*.nc` (+ the top-level glob). The literals
+  would no longer match after the move, and the glob additionally covers
+  `10k_universe_idata.nc`, `10k_universe_predictions.nc` and
+  `13_forest_ctx_ppc_tree.nc`, which were never excluded before.
+- **`KalmanRunConfig.results_dir` is now read.** The field was populated by
+  `from_env()` and consumed nowhere; `get_export_state()` now prefers it over
+  `KALMAN_PT_RESULTS_DIR`, so `main(config=…)` genuinely redirects artifacts.
+
+### Fixed
+
+- **Dark template applied in one place, at the funnel.** `_render_plotly` and
+  `_write_plotly_figure` each stamped `template='arviz-tumma'`, but
+  `_safe_show` — the funnel every `arviz_plots.PlotCollection` passes through —
+  did not, so a collection composed against a non-default template could
+  display and export light. The new `_apply_dark_template` is called from
+  `_safe_show` before both display and export, and the other two call it rather
+  than inlining the update, so displayed and exported output cannot diverge.
+- **Silent arviz-style fallback.** `setup_plotting` swallowed a failing
+  `azp.style.use('arviz-tumma')` with a bare `except … pass`, which is what
+  would have made a light-theme fallback invisible. It now tries
+  `_ARVIZ_STYLE_CANDIDATES` (`arviz-tumma`, then the ArviZ 1.x `arviz-variat`
+  rename) and warns when neither resolves.
+- **Matplotlib PNG background.** `_export_figure` relied on the seaborn
+  `savefig.facecolor` rc surviving alongside `bbox_inches='tight'`; it now pins
+  `facecolor=obj.get_facecolor(), edgecolor='none'` explicitly.
+- **`probabilistic_ml_model/visualizations/_shared.py` did not import.** Three
+  `except A, B, C:` clauses used Python-2 tuple syntax — a hard `SyntaxError`
+  on Python 3, which made the entire `visualizations` package un-importable.
+  Rewritten as a candidate loop over `ARVIZ_TEMPLATE_CANDIDATES` with a
+  matplotlib fallback and a warning.
+- **`analytics.kalman_filtered_price_targets` DDL drift.** CHANGELOG 0.9.9.7
+  and `CLAUDE.md` both state the file carries a unit-convention header and
+  `COMMENT ON COLUMN` statements for every return/risk/probability column;
+  `grep 'COMMENT ON' sql_scripts/analytics/` returned nothing. Both are
+  restored and are now regenerated on every export.
+- **append/replace documentation drift.** `export_analytics`'s docstring, its
+  `write=False` print and `main`'s docstring all described the analytics write
+  as an *append*; the code has always used `if_exists='replace'` (drop and
+  recreate). All three now say so, and note that the hand-maintained types and
+  comments do not survive the recreate.
+- **`09_diagnostics_01_table` stem stability.** The §9 summary reached its
+  filename by being the first `display()` in the section; it now passes an
+  explicit `label='table'`, since the stem is a curated SQL table name.
+
+## [0.9.9.12] - 2026-08-02
+
+### Added
+
+- **Market-cap pre-selection gate for the CVaR-aware long book** —
+  `compute_cvar_aware_book` (`pymc_kalman_filter_pt.py`) now restricts
+  long-book candidates to top-of-country names: eligibility requires
+  `mcap_country_r < mcap_r_max`, where `mcap_country_r` is the MV-derived
+  `feat_mcap_country_r = (100 − market_cap_country_r) / 100` ratio (smaller
+  = larger cap). New `KalmanRunConfig.mcap_country_r_max` knob (default
+  `0.02` ⇔ raw rank `> 98` — the ratio-scale mirror of the §11–§13
+  `min_mcap_country_rank` candidate filter) and matching keyword-only
+  `mcap_r_max` override. Missing ranks fail the gate (strict, matching the
+  SQL `> 98` NULL semantics); frames predating the column skip the gate
+  with a warning. The §10 `results` frame (`summarize_panel_screen`) now
+  carries `mcap_country_r`, `RiskBook.summary` gains `mcap_r_max` /
+  `n_mcap_eligible`, and the §14b §10 sizing header + empty-book fallback
+  surface the gate. Unit tests added in `tests/test_kalman_filter_pt.py`
+  (first coverage of `compute_cvar_aware_book`).
+
+### Fixed
+
+- **`feat_mcap_country_r` doc drift** — `KalmanFilterModel.py`
+  (`size_ratio` docstring + model-builder comment) claimed
+  `market_cap / market_cap_3yavg` and `pml_df_metadata_populate.sql`
+  claimed "1 = largest in country"; both now match the SQL SSOT
+  (`mv_pymc_kalman_pt.sql`): `(100 − market_cap_country_r) / 100`,
+  **~0 = largest in country**.
+- **`export_analytics` hard column read** — `feat_mcap_country_r` is now
+  read via the NaN-tolerant `_numcol` helper instead of an unguarded
+  `model_df[...]` lookup that raised `KeyError` when the MV column was
+  absent.
+
+*(Follow-up unchanged: `pyproject.toml` and the README badge still lag at
+0.9.9.5 pending the next packaging bump.)*
+
 ## [0.9.9.11] - 2026-08-01
 
 ### Added

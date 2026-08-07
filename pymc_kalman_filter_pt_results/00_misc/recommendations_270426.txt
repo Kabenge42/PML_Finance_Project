@@ -1,0 +1,242 @@
+========================================================================================
+KALMAN PRICE-TARGET SCREEN - ACTIONABLE INVESTMENT RECOMMENDATIONS
+========================================================================================
+
+1. POSTERIOR RELIABILITY    max R-hat=1.0038    divergences=0
+   [OK]  High-quality posterior - signals are safe to act on.
+
+2. TAIL RISK    Student-t df (nu)=22.3  ->  moderate - Gaussian risk approximation broadly acceptable.
+
+3. UNIVERSE POSTURE    posterior-mean upside=30.43%    P(upside>0)=93%    mean kalman gain=0.51    names=6410
+   Rule: excess = group upside - universe posture, shrunk by lambda = tau^2/(tau^2+s_g^2); OVERWEIGHT if shrunk excess >= +1 cross-group sd and P(>0|gain)>=34%; UNDERWEIGHT if <= -1 sd or P(>0|gain)<=17%  (gates = 67%/33% x mean gain). Groups with n<15 names are excluded from the group signals below.
+
+4.REGION SIGNALS  (5 groups, 0 dropped n<15)  OW/UW band=±3.37pp shrunk excess
+    OVERWEIGHT  Latin America and Caribbea  upside= 39.51%  CI=[ 36.58, 42.40]  xs= 7.88pp  P(>0|K)= 58%  n=223
+       NEUTRAL  Asia / Pacific              upside= 31.10%  CI=[ 28.63, 33.44]  xs= 0.60pp  P(>0|K)= 51%  n=2054
+       NEUTRAL  Europe                      upside= 29.87%  CI=[ 27.42, 32.28]  xs=-0.50pp  P(>0|K)= 50%  n=2064
+       NEUTRAL  Africa / Middle East        upside= 29.49%  CI=[ 26.83, 32.14]  xs=-0.83pp  P(>0|K)= 51%  n=265
+       NEUTRAL  United States and Canada    upside= 29.32%  CI=[ 26.92, 31.64]  xs=-1.00pp  P(>0|K)= 50%  n=1804
+
+4.TRADING_REGION SIGNALS  (5 groups, 0 dropped n<15)  OW/UW band=±4.33pp shrunk excess
+    OVERWEIGHT  Latin America and Caribbea  upside= 41.75%  CI=[ 38.75, 44.80]  xs=10.21pp  P(>0|K)= 59%  n=179
+       NEUTRAL  Asia / Pacific              upside= 30.33%  CI=[ 27.88, 32.66]  xs=-0.09pp  P(>0|K)= 51%  n=1999
+       NEUTRAL  Europe                      upside= 30.19%  CI=[ 27.72, 32.61]  xs=-0.22pp  P(>0|K)= 51%  n=1994
+       NEUTRAL  United States and Canada    upside= 29.93%  CI=[ 27.50, 32.27]  xs=-0.47pp  P(>0|K)= 50%  n=2000
+       NEUTRAL  Africa / Middle East        upside= 28.90%  CI=[ 26.23, 31.62]  xs=-1.41pp  P(>0|K)= 51%  n=238
+
+4.EXCHANGE_NAME SIGNALS  (47 groups, 32 dropped n<15)  OW/UW band=±14.80pp shrunk excess
+    OVERWEIGHT  KOSDAQ (Korea)              upside= 77.96%  CI=[ 70.90, 85.12]  xs=44.84pp  P(>0|K)= 78%  n=26
+    OVERWEIGHT  London Stock Exchange AIM   upside= 65.66%  CI=[ 60.37, 71.09]  xs=34.07pp  P(>0|K)= 71%  n=151
+    OVERWEIGHT  Nasdaq Capital Market       upside= 57.96%  CI=[ 53.10, 62.81]  xs=26.74pp  P(>0|K)= 65%  n=75
+    OVERWEIGHT  Korea Stock Exchange (KRX)  upside= 54.45%  CI=[ 51.01, 57.90]  xs=23.68pp  P(>0|K)= 68%  n=133
+    OVERWEIGHT  Nasdaq Global Market        upside= 54.39%  CI=[ 50.39, 58.37]  xs=23.53pp  P(>0|K)= 64%  n=112
+    OVERWEIGHT  Hong Kong Stock Exchange    upside= 49.73%  CI=[ 46.51, 52.94]  xs=19.06pp  P(>0|K)= 64%  n=232
+    OVERWEIGHT  B3 - Brasil Bolsa Balcao    upside= 48.28%  CI=[ 44.65, 51.97]  xs=17.57pp  P(>0|K)= 63%  n=116
+   ... 33 mid-ranked exchange_name groups omitted ...
+       NEUTRAL  Athens Stock Exchange       upside= 17.12%  CI=[ 11.80, 22.61]  xs=-12.85pp  P(>0|K)= 42%  n=32
+       NEUTRAL  Tokyo Stock Exchange        upside= 16.98%  CI=[ 14.57, 19.39]  xs=-13.35pp  P(>0|K)= 41%  n=417
+       NEUTRAL  National Stock Exchange of  upside= 16.15%  CI=[ 13.83, 18.44]  xs=-14.19pp  P(>0|K)= 41%  n=243
+   UNDERWEIGHT  Bombay Stock Exchange       upside= 14.34%  CI=[ 11.74, 16.85]  xs=-15.96pp  P(>0|K)= 39%  n=92
+   UNDERWEIGHT  New Zealand Stock Exchange  upside= 14.28%  CI=[  8.55, 20.32]  xs=-15.50pp  P(>0|K)= 39%  n=17
+   UNDERWEIGHT  Stock Exchange of Thailand  upside=  9.68%  CI=[  6.87, 12.61]  xs=-20.53pp  P(>0|K)= 36%  n=49
+   UNDERWEIGHT  Bucharest Stock Exchange    upside=-11.23%  CI=[-17.19, -4.84]  xs=-39.82pp  P(>0|K)=  0%  n=16
+
+4.UNIT_NAME SIGNALS  (31 groups, 15 dropped n<15)  OW/UW band=±12.72pp shrunk excess
+    OVERWEIGHT  South Korean Won            upside= 58.29%  CI=[ 54.88, 61.74]  xs=27.33pp  P(>0|K)= 69%  n=159
+    OVERWEIGHT  Hong Kong Dollar            upside= 49.73%  CI=[ 46.51, 52.94]  xs=18.98pp  P(>0|K)= 64%  n=232
+    OVERWEIGHT  Brazilian Real              upside= 48.28%  CI=[ 44.65, 51.97]  xs=17.47pp  P(>0|K)= 63%  n=116
+    OVERWEIGHT  Indonesian Rupiah           upside= 47.75%  CI=[ 43.32, 52.35]  xs=16.77pp  P(>0|K)= 64%  n=45
+       NEUTRAL  British Pound               upside= 42.79%  CI=[ 39.55, 45.96]  xs=12.15pp  P(>0|K)= 58%  n=397
+       NEUTRAL  Chinese Yuan                upside= 38.99%  CI=[ 36.09, 41.88]  xs= 8.44pp  P(>0|K)= 58%  n=379
+       NEUTRAL  Turkish Lira                upside= 38.72%  CI=[ 34.16, 43.39]  xs= 8.01pp  P(>0|K)= 58%  n=48
+   ... 17 mid-ranked unit_name groups omitted ...
+       NEUTRAL  Polish Zloty                upside= 19.02%  CI=[ 15.16, 22.88]  xs=-11.14pp  P(>0|K)= 42%  n=99
+       NEUTRAL  Malaysian Ringgit           upside= 18.23%  CI=[ 14.94, 21.55]  xs=-11.98pp  P(>0|K)= 42%  n=51
+   UNDERWEIGHT  Japanese Yen                upside= 16.98%  CI=[ 14.57, 19.39]  xs=-13.32pp  P(>0|K)= 41%  n=417
+   UNDERWEIGHT  Indian Rupee                upside= 15.65%  CI=[ 13.34, 17.85]  xs=-14.66pp  P(>0|K)= 40%  n=335
+   UNDERWEIGHT  New Zealand Dollar          upside= 14.28%  CI=[  8.55, 20.32]  xs=-15.28pp  P(>0|K)= 39%  n=17
+   UNDERWEIGHT  Thai Baht                   upside=  9.68%  CI=[  6.87, 12.61]  xs=-20.46pp  P(>0|K)= 36%  n=49
+   UNDERWEIGHT  Romanian Leu                upside=-11.23%  CI=[-17.19, -4.84]  xs=-39.21pp  P(>0|K)=  0%  n=16
+
+4.COUNTRY_NAME SIGNALS  (42 groups, 40 dropped n<15)  OW/UW band=±8.98pp shrunk excess
+    OVERWEIGHT  South Korea                 upside= 58.29%  CI=[ 54.88, 61.74]  xs=26.83pp  P(>0|K)= 69%  n=159
+    OVERWEIGHT  Indonesia                   upside= 48.22%  CI=[ 43.90, 52.71]  xs=16.76pp  P(>0|K)= 64%  n=47
+    OVERWEIGHT  Brazil                      upside= 47.93%  CI=[ 44.33, 51.56]  xs=16.79pp  P(>0|K)= 63%  n=118
+    OVERWEIGHT  China                       upside= 44.32%  CI=[ 41.45, 47.13]  xs=13.53pp  P(>0|K)= 61%  n=564
+    OVERWEIGHT  United Kingdom              upside= 40.57%  CI=[ 37.47, 43.66]  xs= 9.84pp  P(>0|K)= 57%  n=386
+       NEUTRAL  Hong Kong                   upside= 38.80%  CI=[ 35.85, 41.76]  xs= 8.14pp  P(>0|K)= 58%  n=76
+       NEUTRAL  Turkey                      upside= 38.21%  CI=[ 33.71, 42.82]  xs= 7.29pp  P(>0|K)= 57%  n=49
+   ... 28 mid-ranked country_name groups omitted ...
+   UNDERWEIGHT  Finland                     upside= 19.78%  CI=[ 16.06, 23.37]  xs=-10.20pp  P(>0|K)= 43%  n=97
+   UNDERWEIGHT  Greece                      upside= 18.42%  CI=[ 13.97, 22.95]  xs=-11.27pp  P(>0|K)= 43%  n=37
+   UNDERWEIGHT  Malaysia                    upside= 18.23%  CI=[ 14.94, 21.55]  xs=-11.78pp  P(>0|K)= 42%  n=51
+   UNDERWEIGHT  Japan                       upside= 16.98%  CI=[ 14.57, 19.39]  xs=-13.20pp  P(>0|K)= 41%  n=417
+   UNDERWEIGHT  New Zealand                 upside= 16.58%  CI=[ 11.18, 22.21]  xs=-12.61pp  P(>0|K)= 40%  n=17
+   UNDERWEIGHT  India                       upside= 15.84%  CI=[ 13.54, 18.05]  xs=-14.36pp  P(>0|K)= 41%  n=337
+   UNDERWEIGHT  Thailand                    upside=  9.89%  CI=[  7.10, 12.79]  xs=-20.00pp  P(>0|K)= 36%  n=50
+
+4.SECTOR SIGNALS  (9 groups, 0 dropped n<15)  OW/UW band=±5.66pp shrunk excess
+       NEUTRAL  Health Care                 upside= 36.13%  CI=[ 33.53, 38.70]  xs= 5.40pp  P(>0|K)= 54%  n=835
+       NEUTRAL  Information Technology      upside= 35.53%  CI=[ 32.92, 38.01]  xs= 4.84pp  P(>0|K)= 54%  n=933
+       NEUTRAL  Materials                   upside= 33.05%  CI=[ 30.50, 35.62]  xs= 2.49pp  P(>0|K)= 52%  n=669
+       NEUTRAL  Communication Services      upside= 31.69%  CI=[ 29.13, 34.24]  xs= 1.20pp  P(>0|K)= 52%  n=380
+       NEUTRAL  Consumer Discretionary      upside= 29.13%  CI=[ 26.67, 31.56]  xs=-1.24pp  P(>0|K)= 50%  n=965
+       NEUTRAL  Industrials                 upside= 28.98%  CI=[ 26.53, 31.34]  xs=-1.38pp  P(>0|K)= 50%  n=1470
+       NEUTRAL  Consumer Staples            upside= 25.70%  CI=[ 23.26, 28.11]  xs=-4.51pp  P(>0|K)= 48%  n=544
+       NEUTRAL  Energy                      upside= 24.64%  CI=[ 22.18, 27.06]  xs=-5.52pp  P(>0|K)= 47%  n=354
+   UNDERWEIGHT  Utilities                   upside= 16.01%  CI=[ 13.72, 18.32]  xs=-13.82pp  P(>0|K)= 40%  n=260
+
+4.INDUSTRY SIGNALS  (59 groups, 0 dropped n<15)  OW/UW band=±7.22pp shrunk excess
+    OVERWEIGHT  Biotechnology               upside= 48.27%  CI=[ 45.38, 51.16]  xs=17.11pp  P(>0|K)= 62%  n=231
+    OVERWEIGHT  Communications Equipment    upside= 45.03%  CI=[ 42.09, 47.90]  xs=14.00pp  P(>0|K)= 59%  n=50
+    OVERWEIGHT  Metals and Mining           upside= 41.63%  CI=[ 38.82, 44.42]  xs=10.77pp  P(>0|K)= 57%  n=292
+    OVERWEIGHT  Electrical Equipment        upside= 40.21%  CI=[ 37.51, 42.88]  xs= 9.44pp  P(>0|K)= 57%  n=181
+    OVERWEIGHT  Software                    upside= 39.39%  CI=[ 36.69, 42.02]  xs= 8.65pp  P(>0|K)= 57%  n=237
+    OVERWEIGHT  Distributors                upside= 39.37%  CI=[ 36.48, 42.18]  xs= 8.59pp  P(>0|K)= 58%  n=17
+       NEUTRAL  Entertainment               upside= 37.32%  CI=[ 34.51, 40.09]  xs= 6.63pp  P(>0|K)= 56%  n=94
+   ... 45 mid-ranked industry groups omitted ...
+   UNDERWEIGHT  Wireless Telecommunication  upside= 20.33%  CI=[ 18.02, 22.67]  xs=-9.82pp  P(>0|K)= 44%  n=42
+   UNDERWEIGHT  Independent Power and Rene  upside= 18.02%  CI=[ 15.63, 20.46]  xs=-12.05pp  P(>0|K)= 42%  n=71
+   UNDERWEIGHT  Water Utilities             upside= 17.74%  CI=[ 15.15, 20.24]  xs=-12.29pp  P(>0|K)= 42%  n=23
+   UNDERWEIGHT  Marine Transportation       upside= 16.62%  CI=[ 14.24, 18.97]  xs=-13.44pp  P(>0|K)= 40%  n=45
+   UNDERWEIGHT  Household Products          upside= 14.79%  CI=[ 12.50, 17.08]  xs=-15.23pp  P(>0|K)= 40%  n=19
+   UNDERWEIGHT  Multi-Utilities             upside= 12.51%  CI=[ 10.20, 14.80]  xs=-17.45pp  P(>0|K)= 38%  n=37
+   UNDERWEIGHT  Electric Utilities          upside= 12.20%  CI=[  9.99, 14.42]  xs=-17.78pp  P(>0|K)= 38%  n=86
+
+4.SIZE_CLASS SIGNALS  (3 groups, 0 dropped n<15)  OW/UW band=±4.43pp shrunk excess
+       NEUTRAL  Small Cap                   upside= 34.48%  CI=[ 31.98, 36.90]  xs= 3.76pp  P(>0|K)= 53%  n=3780
+   UNDERWEIGHT  Mid Cap                     upside= 25.17%  CI=[ 22.88, 27.39]  xs=-4.93pp  P(>0|K)= 47%  n=1525
+   UNDERWEIGHT  Large Cap                   upside= 23.83%  CI=[ 21.57, 26.08]  xs=-6.20pp  P(>0|K)= 47%  n=1105
+
+4.STYLE_CLASS SIGNALS  (3 groups, 0 dropped n<15)  OW/UW band=±1.14pp shrunk excess
+       NEUTRAL  Core                        upside= 31.80%  CI=[ 29.37, 34.15]  xs= 0.89pp  P(>0|K)= 52%  n=3684
+       NEUTRAL  Growth                      upside= 30.40%  CI=[ 28.03, 32.76]  xs=-0.02pp  P(>0|K)= 51%  n=936
+   UNDERWEIGHT  Value                       upside= 27.63%  CI=[ 25.23, 29.93]  xs=-1.84pp  P(>0|K)= 49%  n=1790
+
+5. NAME-LEVEL ACTIONS
+   --- High-conviction LONGS (upside>0, P(>0|K)>=38%): 4125 names ---
+   BUY    Evolution Meta  upside=278.00%  P(>0|K)= 99%  band=10.7%  n_analysts=1
+   BUY    Strategic Mine  upside=257.81%  P(>0|K)= 99%  band=11.0%  n_analysts=1
+   BUY    Kardigan Inc.   upside=206.75%  P(>0|K)= 97%  band=10.2%  n_analysts=4
+   BUY    Hycroft Mining  upside=211.20%  P(>0|K)= 97%  band=10.8%  n_analysts=1
+   BUY    Parabilis Medi  upside=200.25%  P(>0|K)= 97%  band=9.4%  n_analysts=4
+   BUY    Ondas Inc.      upside=196.20%  P(>0|K)= 97%  band=8.4%  n_analysts=8
+   BUY    ERock Inc.      upside=186.33%  P(>0|K)= 97%  band=10.1%  n_analysts=8
+   BUY    Stockholm Nord  upside=186.22%  P(>0|K)= 96%  band=10.1%  n_analysts=2
+   BUY    Apotex Health   upside=182.97%  P(>0|K)= 96%  band=9.6%  n_analysts=13
+   BUY    Liftoff Mobile  upside=177.84%  P(>0|K)= 96%  band=9.9%  n_analysts=13
+   --- AVOID / SHORT candidates (upside<0, P(>0|K)<=13%): 389 names ---
+   AVOID  SyntheticMR AB  upside=-60.57%  P(>0|K)=  0%  band=26.5%  n_analysts=2
+   AVOID  agilon health   upside=-44.98%  P(>0|K)=  0%  band=9.1%  n_analysts=14
+   AVOID  SNGN Romgaz SA  upside=-44.35%  P(>0|K)=  0%  band=14.9%  n_analysts=4
+   AVOID  S.P.E.E.H. Hid  upside=-34.60%  P(>0|K)=  0%  band=14.0%  n_analysts=9
+   AVOID  AlzeCure Pharm  upside=-55.91%  P(>0|K)=  0%  band=11.3%  n_analysts=1
+   AVOID  Fortinet Inc.   upside=-19.25%  P(>0|K)=  0%  band=4.6%  n_analysts=37
+   AVOID  Forte Bioscien  upside=-33.60%  P(>0|K)=  0%  band=15.2%  n_analysts=5
+   AVOID  Crinetics Phar  upside=-26.13%  P(>0|K)=  0%  band=5.3%  n_analysts=10
+   AVOID  Delivery Hero   upside=-21.77%  P(>0|K)=  0%  band=5.5%  n_analysts=14
+   AVOID  Selçuk Ecza De  upside=-31.88%  P(>0|K)=  0%  band=8.0%  n_analysts=4
+
+6. SIZE-DOWN WATCH (band in top quintile >= 9.6% or n_analysts<=2): 946 names
+   CAUTION GMO internet g  upside= 41.06%  band=45.9%  n_analysts=5  -> wide posterior: size to the downside of the credible band.
+   CAUTION Hemlo Mining C  upside= 75.15%  band=38.2%  n_analysts=7  -> wide posterior: size to the downside of the credible band.
+   CAUTION Naftna Industr  upside= 12.05%  band=32.7%  n_analysts=1  -> wide posterior: size to the downside of the credible band.
+   CAUTION Aluminium Bahr  upside= 51.37%  band=28.3%  n_analysts=4  -> wide posterior: size to the downside of the credible band.
+   CAUTION Itissalat Al-M  upside= 19.97%  band=27.4%  n_analysts=3  -> wide posterior: size to the downside of the credible band.
+   CAUTION Akdital S.A     upside= 51.97%  band=27.1%  n_analysts=3  -> wide posterior: size to the downside of the credible band.
+   CAUTION Pampa Energía   upside= 25.67%  band=26.7%  n_analysts=3  -> wide posterior: size to the downside of the credible band.
+   CAUTION YPF Sociedad A  upside= 19.72%  band=26.5%  n_analysts=3  -> wide posterior: size to the downside of the credible band.
+
+7. EARNINGS-WEEK COHORT (322 names)  median upside=20.23%  high-conviction longs=193
+   -> Pre-earnings stance: lean AWAY from the reporting cohort vs the broader universe; gate entries on the SIZE-DOWN WATCH list above.
+
+8. RISK-ADJUSTED RETURN  median expected vol=1.8%  (reward per unit expected volatility; demotes high-upside/high-vol names)
+   --- Top risk-adjusted LONGS (4571 eligible, by upside/vol) ---
+   BUY-RA Shanghai Chicm  upside=113.58%  vol=2.8%  ret/vol=40.37  P(>0|K)= 89%
+   BUY-RA GCL Technology  upside=107.19%  vol=2.7%  ret/vol=40.19  P(>0|K)= 88%
+   BUY-RA Strategy Inc    upside=106.23%  vol=2.7%  ret/vol=40.03  P(>0|K)= 88%
+   BUY-RA American Super  upside= 85.67%  vol=2.2%  ret/vol=39.30  P(>0|K)= 82%
+   BUY-RA Horizon Roboti  upside=107.81%  vol=2.8%  ret/vol=38.99  P(>0|K)= 88%
+   BUY-RA Enovix Corpora  upside=101.37%  vol=2.6%  ret/vol=38.95  P(>0|K)= 86%
+   BUY-RA Ascentage Phar  upside= 99.57%  vol=2.6%  ret/vol=37.75  P(>0|K)= 86%
+   BUY-RA Sable Offshore  upside=121.15%  vol=3.2%  ret/vol=37.52  P(>0|K)= 90%
+   BUY-RA Zhongsheng Gro  upside= 95.53%  vol=2.6%  ret/vol=37.46  P(>0|K)= 85%
+   BUY-RA Wingstop Inc.   upside= 75.03%  vol=2.0%  ret/vol=37.09  P(>0|K)= 79%
+   --- DEMOTED by volatility (high upside, ret/vol < universe median 17.95) ---
+   TRIM   Speedy AD       upside=173.36%  vol=16.3%  ret/vol=10.63  -> upside is volatility-inflated; prefer the risk-adjusted leaders.
+   TRIM   AS Infortar     upside=151.86%  vol=15.4%  ret/vol=9.85  -> upside is volatility-inflated; prefer the risk-adjusted leaders.
+   TRIM   Damora Therape  upside=126.34%  vol=8.4%  ret/vol=15.11  -> upside is volatility-inflated; prefer the risk-adjusted leaders.
+   TRIM   Andrada Mining  upside=121.42%  vol=7.1%  ret/vol=17.00  -> upside is volatility-inflated; prefer the risk-adjusted leaders.
+   TRIM   LandMark Optoe  upside=116.24%  vol=6.6%  ret/vol=17.72  -> upside is volatility-inflated; prefer the risk-adjusted leaders.
+   TRIM   SharonAI Holdi  upside=113.13%  vol=6.7%  ret/vol=16.94  -> upside is volatility-inflated; prefer the risk-adjusted leaders.
+
+9. TAIL RISK (CVaR, 5% expected shortfall)  universe mean 5% upside-ES=26.22%  names with simulated loss tail (MC p05<0)=59%
+   --- Fattest-tail LONGS (largest mean->ES gap / MC loss; sized down) ---
+   TAIL   Novem Group S.  upside= 72.78%  CVaR5=67.1%  MC_p05=-73.3%  tail_risk=73.3%  STARR=0.99
+   TAIL   Avantium N.V.   upside= 86.61%  CVaR5=78.6%  MC_p05=-67.2%  tail_risk=67.2%  STARR=1.29
+   TAIL   Geox S.p.A.     upside= 56.08%  CVaR5=50.9%  MC_p05=-60.2%  tail_risk=60.2%  STARR=0.93
+   TAIL   Molecular Part  upside= 58.11%  CVaR5=52.2%  MC_p05=-55.7%  tail_risk=55.7%  STARR=1.04
+   TAIL   Novogenia AG    upside= 34.06%  CVaR5=17.1%  MC_p05=-40.0%  tail_risk=40.0%  STARR=0.85
+   TAIL   Agfa-Gevaert N  upside= 35.65%  CVaR5=29.6%  MC_p05=-38.3%  tail_risk=38.3%  STARR=0.93
+   TAIL   Texas Pacific   upside= 24.07%  CVaR5=20.3%  MC_p05=-35.8%  tail_risk=35.8%  STARR=0.67
+   TAIL   Humble Group A  upside= 23.66%  CVaR5=19.4%  MC_p05=-34.2%  tail_risk=34.2%  STARR=0.69
+   -> CVaR is the mean of the worst 5% of outcomes; with heavy tails it, not the mean upside, is the right sizing denominator.
+
+10. CVaR-AWARE SIZING  (top 50 reward-to-CVaR longs, 8% name cap, 100% gross)
+   NAME                wt    upside      vol     CVaR5   STARR
+   Shanghai Chicm    2.3%   113.58%     2.8%    107.9%   20.16
+   GCL Technology    2.2%   107.19%     2.7%    101.8%   19.76
+   Strategy Inc      2.2%   106.23%     2.7%    100.8%   19.60
+   American Super    2.2%    85.67%     2.2%     81.3%   19.48
+   Horizon Roboti    2.2%   107.81%     2.8%    102.2%   19.17
+   Enovix Corpora    2.2%   101.37%     2.6%     96.0%   18.97
+   Sable Offshore    2.2%   121.15%     3.2%    114.8%   18.96
+   Ascentage Phar    2.1%    99.57%     2.6%     94.2%   18.64
+   Zhongsheng Gro    2.1%    95.53%     2.6%     90.3%   18.36
+   Robosense Tech    2.1%   109.19%     2.9%    103.2%   18.35
+   Applied Digita    2.1%   100.31%     2.8%     94.8%   18.11
+   Wingstop Inc.     2.1%    75.03%     2.0%     70.9%   18.09
+   Plano & Plano     2.0%   106.00%     2.9%    100.1%   18.04
+   ME Group Inter    2.0%    84.13%     2.3%     79.5%   18.03
+   Cowell e Holdi    2.0%    85.90%     2.3%     81.1%   17.98
+   Amprius Techno    2.0%    85.39%     2.3%     80.6%   17.95
+   Kingdee Intern    2.0%    82.00%     2.3%     77.4%   17.91
+   HomeToGo SE       2.0%    90.06%     2.5%     85.0%   17.77
+   SUNeVision Hol    2.0%    83.20%     2.3%     78.5%   17.76
+   Topsports Inte    2.0%    84.43%     2.4%     79.7%   17.72
+   China Literatu    2.0%    83.45%     2.3%     78.7%   17.61
+   Alphatec Holdi    2.0%    73.96%     2.1%     69.8%   17.60
+   Lojas Quero-Qu    2.0%   116.81%     3.2%    110.1%   17.54
+   Laopu Gold Co.    2.0%    93.16%     2.6%     87.8%   17.43
+   TMC the metals    2.0%    98.96%     2.8%     93.3%   17.34
+   TTM Technologi    2.0%    78.94%     2.2%     74.4%   17.33
+   Hyundai Steel     2.0%    89.08%     2.5%     83.9%   17.29
+   Shenzhen Dobot    2.0%    96.43%     2.7%     90.8%   17.25
+   Bloks Group Li    2.0%    93.57%     2.7%     88.1%   17.24
+   Kratos Defense    2.0%    66.63%     1.9%     62.8%   17.23
+   Hyundai Rotem     1.9%    81.90%     2.3%     77.1%   17.19
+   CALB Group Co.    1.9%    83.21%     2.4%     78.4%   17.17
+   Tongcheng Trav    1.9%    71.24%     2.1%     67.1%   17.11
+   Beam Therapeut    1.9%    71.03%     2.0%     66.9%   17.01
+   Black Sesame I    1.9%    91.70%     2.7%     86.3%   17.01
+   Oracle Corpora    1.9%    69.86%     2.0%     65.7%   16.98
+   Anhui Jianghua    1.9%    96.81%     2.8%     91.1%   16.88
+   Ardelyx Inc.      1.9%   100.04%     2.9%     94.1%   16.81
+   Calix Inc.        1.9%    63.16%     1.8%     59.4%   16.80
+   Boston Scienti    1.9%    68.89%     2.0%     64.8%   16.79
+   Century Alumin    1.9%    81.06%     2.3%     76.2%   16.78
+   Addnode Group     1.9%    99.79%     2.9%     93.8%   16.77
+   ABIONYX Pharma    1.9%   129.09%     3.8%    121.4%   16.75
+   Universal Disp    1.9%    65.66%     1.9%     61.7%   16.72
+   Crossject Soci    1.9%    92.27%     2.7%     86.7%   16.72
+   China East Edu    1.9%    73.47%     2.2%     69.1%   16.70
+   Verve Group Me    1.9%    87.37%     2.6%     82.1%   16.67
+   Poongsan Corpo    1.9%    94.19%     2.8%     88.5%   16.67
+   Nanshan Alumin    1.9%    92.30%     2.8%     86.7%   16.62
+   GlobalData Plc    1.9%    74.18%     2.2%     69.7%   16.62
+   PORTFOLIO  expected upside=90.39%  CVaR5=86.32%  reward/CVaR=1.05  approx vol(upper bnd)=2.5%
+   Diversification: weighted-avg name CVaR5=85.28% vs portfolio CVaR5=86.32% (tail lift x0.99); weights inverse to expected shortfall, so the analyst-target outliers are capped, not chased. Persisted to analytics.kalman_filtered_price_targets as cvar_book_weight.
+
+========================================================================================
+Signals are model-implied screens from analyst-target dynamics, NOT investment advice; size on the §10 CVaR budget and combine with fundamentals, liquidity and risk limits.
+========================================================================================

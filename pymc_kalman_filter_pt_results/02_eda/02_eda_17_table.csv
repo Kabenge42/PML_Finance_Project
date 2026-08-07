@@ -1,0 +1,16 @@
+feature,spearman_rho,n
+feat_total_return_3m,-0.5582,6360
+feat_price_chg_pct_3m,-0.5542,6360
+feat_total_return_6m,-0.4912,6323
+feat_total_return_ytd,-0.424,6305
+feat_total_return_1m,-0.3587,6396
+feat_total_return_1y,-0.2521,6245
+feat_price_drift,-0.2,6405
+feat_total_return_5y,-0.1462,5638
+feat_tr_cagr_5y,-0.1461,5638
+feat_tr_cagr_3y,-0.116,5948
+feat_total_return_10y,-0.0572,4468
+feat_one_day_return,0.0058,6405
+feat_pt_drift,0.0432,6405
+feat_pt_noise_drift,0.084,6405
+feat_coverage_drift,0.0927,6405

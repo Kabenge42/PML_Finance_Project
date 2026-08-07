@@ -19,10 +19,22 @@ DATA_DIR=data
 MODEL_DIR=models
 CACHE_DIR=.cache
 OUTPUT_DIR=outputs
-# Kalman price-target workflow artifact exports (figures/CSV/JSON/NetCDF);
-# consumed by pymc_kalman_filter_pt.py (KALMAN_PT_EXPORT_DRAWS=1 additionally
-# exports the raw eu/ept posterior draws as NetCDF).
+# Kalman price-target workflow artifact exports; consumed by
+# pymc_kalman_filter_pt.py. Artifacts land in per-section subdirectories under
+# this root (01_data/, 02_eda/, ... 14b_recommendations/, 00_misc/):
+#   figures    -> PNG (self-contained HTML when kaleido/Chromium is missing)
+#   dataframes -> the curated bulk frames become analytics."<stem>" tables plus
+#                 a generated <stem>.sql DDL file; all others stay CSV
+#   DataTrees  -> NetCDF + per-group JSON summary
+# KALMAN_PT_EXPORT_DRAWS=1 additionally exports the raw eu/ept posterior draws.
+# KALMAN_PT_SQL_EXPORT=0    -> skip the analytics-schema write (DDL + CSV only);
+#                              the same fallback applies automatically when the
+#                              database is unreachable.
+# KALMAN_PT_CLEAN_RESULTS=1 -> purge each section subdirectory on first entry so
+#                              a re-run does not interleave with the previous one.
 KALMAN_PT_RESULTS_DIR=C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt_results
+KALMAN_PT_SQL_EXPORT=1
+KALMAN_PT_CLEAN_RESULTS=0
 
 # -----------------------------------------------------------------------------
 # Database Configuration

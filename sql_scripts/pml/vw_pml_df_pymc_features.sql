@@ -8,7 +8,7 @@ SELECT m.model_name,
        md.data_type,
        md.ordinal_position,
        md.description
-FROM pml.pml_df_metadata              md,
+FROM pml_df_metadata                  md,
      LATERAL unnest(md.model_targets) m(model_name)
 WHERE md.pymc_role = ANY (ARRAY ['coord'::text, 'observed'::text, 'mutable_predictor'::text, 'constant_data'::text]);
 

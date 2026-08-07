@@ -39,6 +39,10 @@ if TYPE_CHECKING:
 
 from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._workflow import (
+    build_sample_kwargs,
+    log_sample_diagnostics,
+)
 from probabilistic_ml_model.pymc_models._feature_alignment import (
     coerce_by_data_type,
     load_feature_metadata_from_db,
@@ -336,26 +340,22 @@ class CreditRiskBayesian:
                 dims="isin",
             )
 
-            scall: dict[str, Any] = dict(
-                draws=samples,
-                tune=tune,
-                chains=chains,
-                target_accept=target_accept,
-                random_seed=random_seed,
-                progressbar=True,
-                compile_kwargs=get_pytensor_compile_kwargs(),
+            idata = pm.sample(
+                **build_sample_kwargs(
+                    samples=samples,
+                    tune=tune,
+                    chains=chains,
+                    target_accept=target_accept,
+                    random_seed=random_seed,
+                    nuts_sampler=nuts_sampler,
+                    sample_kwargs=sample_kwargs,
+                    model_name="CreditRiskBayesian",
+                )
             )
-            if nuts_sampler is not None:
-                scall["nuts_sampler"] = nuts_sampler
-            scall.setdefault("idata_kwargs", {"log_likelihood": False})
-            scall.update(sample_kwargs)
 
-            # nutpie ignores idata_kwargs and emits a UserWarning; strip it
-            # to keep logs clean while preserving behaviour for other samplers.
-            if scall.get("nuts_sampler") == "nutpie":
-                scall.pop("idata_kwargs", None)
-
-            idata = pm.sample(**scall)
+        # Self-report sampler quality (divergences / bulk ESS) instead of
+        # relying on console scraping of the sampler output.
+        log_sample_diagnostics(idata, model_name="CreditRiskBayesian")
 
         # Recommendation §12.3 #3 — stamp feature_catalogue provenance.
         try:

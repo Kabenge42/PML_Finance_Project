@@ -78,9 +78,33 @@ NUMERIC_COLUMNS: list[str] = [
     "expected_sharpe_ratio",
     # CAPM market sensitivity / analyst-consensus target levels.
     "beta",
+    "implied_upside",
+    "mcap_country_r",
     "price_target_median",
     "price_target_high",
     "price_target_low",
+    # Analyst rating-mix block (0.9.9.9 export additions). ``analyst_rating``
+    # is the raw 1-5 vendor consensus, higher = more bullish.
+    "analyst_rating",
+    "analyst_conviction",
+    "analyst_bullish_pct",
+    "analyst_bearish_pct",
+    "analyst_neutral_pct",
+    "n_analysts",
+    "n_buys",
+    "n_holds",
+    "n_sells",
+    "feat_no_opinion",
+    # Piotroski F-score composites (0-9 per fiscal year; ``_median`` is the
+    # fused-model drift feature, the per-year components are analytics-only).
+    "piotroski_f_score_median",
+    "piotroski_f_score_fy",
+    "piotroski_f_score_neg1fy",
+    "piotroski_f_score_neg2fy",
+    "piotroski_f_score_neg3fy",
+    # Consensus price-target achievement diagnostics.
+    "pt_achievement_1y",
+    "pt_range_hit_rate",
     # Price-target history ladder (consensus target as of the suffix lookback).
     "price_target_1w_ago",
     "price_target_mtd_ago",
@@ -105,6 +129,7 @@ NUMERIC_COLUMNS: list[str] = [
     "days_to_next_earnings",
     "days_since_last_report",
     "days_to_next_fy_end",
+    "days_to_next_fiscal_quarter",
     "days_to_next_report",
     "days_to_expected_report",
     "days_since_fy_end",

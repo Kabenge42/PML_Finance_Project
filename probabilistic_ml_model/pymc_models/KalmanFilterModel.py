@@ -47,6 +47,11 @@ if TYPE_CHECKING:
 
 from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._workflow import (
+    MIN_ESS_GATE,
+    build_sample_kwargs,
+    log_sample_diagnostics,
+)
 from probabilistic_ml_model.pymc_models._hierarchy import (
     build_hierarchy_indices,
     coerce_categories,
@@ -67,8 +72,9 @@ _DEFAULT_TUNE = 1000
 _DEFAULT_CHAINS = 4
 _DEFAULT_TARGET_ACCEPT = 0.90
 _DEFAULT_RANDOM_SEED = 42
-# Minimum bulk ESS before ``_log_sample_diagnostics`` warns (project gate).
-_MIN_ESS_GATE = 400
+# Minimum bulk ESS before ``log_sample_diagnostics`` warns. Re-exported from
+# the shared workflow module so the gate has exactly one home project-wide.
+_MIN_ESS_GATE = MIN_ESS_GATE
 
 # ---------------------------------------------------------------------------
 # Historical "*_ago" cohort -> per-ISIN time-series helpers.
@@ -1094,105 +1100,6 @@ class KalmanFilterPriceTarget:
         )
         return pm.Deterministic("log_state", smoothed, dims="time")
 
-    @staticmethod
-    def _build_sample_kwargs(
-            *,
-            samples: int,
-            tune: int,
-            chains: int,
-            target_accept: float,
-            random_seed: int,
-            nuts_sampler: Optional[str],
-            sample_kwargs: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Assemble the keyword arguments for :func:`pymc.sample`.
-
-        Applies the project defaults (compile kwargs, no log-likelihood),
-        layers in ``nuts_sampler`` and caller overrides, then strips
-        ``idata_kwargs`` for nutpie (which ignores it and warns).
-
-        Notes
-        -----
-        Warns when the effective chain count (after ``sample_kwargs``
-        overrides) is below 2: r-hat and between-chain ESS are undefined
-        for a single chain, so downstream ArviZ diagnostics come back NaN.
-        """
-        scall: dict[str, Any] = dict(
-            draws=samples,
-            tune=tune,
-            chains=chains,
-            target_accept=target_accept,
-            random_seed=random_seed,
-            progressbar=True,
-            compile_kwargs=get_pytensor_compile_kwargs(),
-        )
-        if nuts_sampler is not None:
-            scall["nuts_sampler"] = nuts_sampler
-        scall.setdefault("idata_kwargs", {"log_likelihood": False})
-        scall.update(sample_kwargs)
-
-        eff_chains = int(scall.get("chains", chains))
-        if eff_chains < 2:
-            logger.warning(
-                "KalmanFilterPriceTarget: sampling with chains=%d; r_hat and "
-                "between-chain ESS diagnostics require >= 2 chains "
-                "(4 recommended) and will be NaN. Single-chain fits are for "
-                "fast tests only.",
-                eff_chains,
-            )
-
-        # nutpie ignores idata_kwargs and emits a UserWarning; strip it
-        # to keep logs clean while preserving behaviour for other samplers.
-        if scall.get("nuts_sampler") == "nutpie":
-            scall.pop("idata_kwargs", None)
-        return scall
-
-    @staticmethod
-    def _log_sample_diagnostics(idata: Any, isin: Optional[str]) -> None:
-        """Log divergences and minimum ESS so quality is self-reported.
-
-        Inspects ``idata.sample_stats["diverging"]`` and, when available,
-        the bulk effective sample size, emitting warnings rather than
-        relying on console scraping of the sampler output.
-
-        Parameters
-        ----------
-        idata : Any
-            The object returned by :func:`pymc.sample` (ArviZ ``InferenceData``
-            / ``xarray.DataTree`` or a ``MultiTrace``).
-        isin : str, optional
-            ISIN tag used to label the log messages.
-        """
-        tag = isin if isin is not None else "?"
-        sample_stats = getattr(idata, "sample_stats", None)
-        if sample_stats is None or "diverging" not in getattr(sample_stats, "data_vars", {}):
-            return
-        try:
-            n_div = int(sample_stats["diverging"].sum())
-        except Exception:  # pragma: no cover - defensive
-            return
-        if n_div:
-            logger.warning(
-                "KalmanFilterPriceTarget[%s]: %d divergences after tuning; "
-                "consider parameterization='marginalized' or a higher target_accept.",
-                tag,
-                n_div,
-            )
-        if az is not None and hasattr(az, "ess"):
-            try:
-                min_ess = float(az.ess(idata).to_array().min())
-            except Exception:  # pragma: no cover - defensive
-                min_ess = float("nan")
-            if np.isfinite(min_ess) and min_ess < _MIN_ESS_GATE:
-                logger.warning(
-                    "KalmanFilterPriceTarget[%s]: minimum ESS %.0f < %d "
-                    "(project convergence gate); increase tune/draws for "
-                    "reliable r-hat / ESS.",
-                    tag,
-                    min_ess,
-                    _MIN_ESS_GATE,
-                )
-
     def fit(
             self,
             price_targets: np.ndarray,
@@ -1477,7 +1384,7 @@ class KalmanFilterPriceTarget:
                 )
 
             idata = pm.sample(
-                **self._build_sample_kwargs(
+                **build_sample_kwargs(
                     samples=samples,
                     tune=tune,
                     chains=chains,
@@ -1485,6 +1392,7 @@ class KalmanFilterPriceTarget:
                     random_seed=random_seed,
                     nuts_sampler=nuts_sampler,
                     sample_kwargs=sample_kwargs,
+                    model_name="KalmanFilterPriceTarget",
                 )
             )
 
@@ -1497,7 +1405,9 @@ class KalmanFilterPriceTarget:
 
         # Surface sampler-quality diagnostics so the model self-reports funnel
         # problems (divergences / low ESS) instead of relying on console scraping.
-        self._log_sample_diagnostics(idata, isin)
+        log_sample_diagnostics(
+            idata, model_name="KalmanFilterPriceTarget", tag=isin
+        )
 
         self.model_ = model
         # Detect ArviZ InferenceData (or arviz-base xarray.DataTree per migration
@@ -1885,8 +1795,6 @@ class KalmanFilterPriceTarget:
 # :data:`GROUP_EFFECT_SCALE` in ``build_fused_kalman_pt_model`` (the group SD is
 # fixed, not learned — see that builder's docstring for why).
 _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
-    "size_class",
-    "style_class",
     "exchange",
     "unit",
     "country",
@@ -2496,9 +2404,7 @@ def build_fused_kalman_pt_model(
             volume_loading = pt.constant(0.0)
         risk_tilt = pm.Deterministic("risk_tilt", -risk_loading * beta_z, dims="isin")
         size_tilt = pm.Deterministic("size_tilt", -size_loading * size_z, dims="isin")
-        volume_tilt = pm.Deterministic(
-            "volume_tilt", -volume_loading * volume_z, dims="isin"
-        )
+        volume_tilt = pm.Deterministic("volume_tilt", -volume_loading * volume_z, dims="isin")
         risk_adj_return = pm.Deterministic(
             "risk_adj_return",
             expected_return + risk_tilt + size_tilt + volume_tilt,

@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW pml.mv_pymc_kalman_pt AS
+CREATE MATERIALIZED VIEW mv_pymc_kalman_pt AS
 SELECT pml_df.isin,
        pml_df.ticker,
        pml_df.name,
@@ -36,7 +36,7 @@ SELECT pml_df.isin,
        pml_df.market_cap,
        pml_df.enterprise_value,
        pml_df.market_cap_country_r,
-       pml_df.rel_volume                                                                                                                                                                                                                              AS feat_rel_volume,
+       pml_df.rel_volume                                                                                                                                                                                                                             AS feat_rel_volume,
        pml_df.price_target                                                                                                                                                                                                                           AS observed_pt,
        pml_df.last_price,
        pml_df.price_target_median,
@@ -95,8 +95,8 @@ SELECT pml_df.isin,
        pml_df.price_3y_ago,
        pml_df.price_5y_ago,
        pml_df.price_qtd_ago,
-       public.calc_change_ratio(pml_df.price_target::numeric,
-                                pml_df.last_price::numeric)                                                                                                                                                                                          AS feat_implied_upside,
+       calc_change_ratio(pml_df.price_target::numeric,
+                         pml_df.last_price::numeric)                                                                                                                                                                                                 AS feat_implied_upside,
        pml_df.num_hold_ratings                                                                                                                                                                                                                       AS feat_holds,
        pml_df.num_strong_buys_ratings + pml_df.num_buys_ratings                                                                                                                                                                                      AS feat_buys,
        pml_df.num_strong_sell_ratings + pml_df.num_sell_ratings                                                                                                                                                                                      AS feat_sells,
@@ -288,6 +288,6 @@ FROM pml_df
 	                                                   pml_df.asset_turnover_neg3fy,
 	                                                   pml_df.asset_turnover_neg4fy)                               AS feat_piotroski_f_score_neg3fy) pio;
 
-ALTER MATERIALIZED VIEW pml.mv_pymc_kalman_pt OWNER TO postgres;
+ALTER MATERIALIZED VIEW mv_pymc_kalman_pt OWNER TO postgres;
 
-CREATE UNIQUE INDEX idx_mv_pymc_kalman_pt_isin ON pml.mv_pymc_kalman_pt (isin);
+CREATE UNIQUE INDEX idx_mv_pymc_kalman_pt_isin ON mv_pymc_kalman_pt (isin);

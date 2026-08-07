@@ -12,6 +12,7 @@ a single source of truth.
 
 from __future__ import annotations
 
+import importlib as _importlib
 import logging
 
 import plotly.graph_objects as go
@@ -25,8 +26,10 @@ from probabilistic_ml_model.data_utils.feature_catalog import (
 PLOTLY_TEMPLATE = "plotly_dark"
 
 # Dark theme for ArviZ / Matplotlib (single source of truth)
-# ArviZ 1.0 style system: "arviz-variat" (updated from "arviz-tumma")
+# ArviZ 1.0 renamed the dark style; try both spellings rather than assuming one
+# (mirrors ``_ARVIZ_STYLE_CANDIDATES`` in pymc_kalman_filter_pt.py).
 ARVIZ_TEMPLATE = "arviz-variat"
+ARVIZ_TEMPLATE_CANDIDATES: tuple[str, ...] = ("arviz-variat", "arviz-tumma")
 
 logger = logging.getLogger(__name__)
 
@@ -38,22 +41,25 @@ def apply_arviz_theme() -> None:
     ``matplotlib.pyplot.style.use("dark_background")`` otherwise.
     Call this once at import time in modules that produce ArviZ figures.
     """
-    try:
-        import arviz_plots as azp
-
-        azp.style.use(ARVIZ_TEMPLATE)
-    except ImportError, ValueError, TypeError, OSError:
+    _errors = (ImportError, ValueError, TypeError, OSError)
+    for _module_name, _accessor in (("arviz_plots", "style"), ("arviz", "style")):
         try:
-            import arviz as az
-
-            az.style.use(ARVIZ_TEMPLATE)
-        except ImportError, ValueError, TypeError, OSError:
+            _module = _importlib.import_module(_module_name)
+        except _errors:
+            continue
+        for _template in ARVIZ_TEMPLATE_CANDIDATES:
             try:
-                import matplotlib.pyplot as plt
+                getattr(_module, _accessor).use(_template)
+                return
+            except _errors:
+                continue
+    try:
+        import matplotlib.pyplot as plt
 
-                plt.style.use("dark_background")
-            except ImportError, OSError:
-                pass
+        plt.style.use("dark_background")
+    except _errors:
+        logger.warning("No dark plotting style available (tried %s).",
+                       ", ".join(ARVIZ_TEMPLATE_CANDIDATES))
 
 
 # ---------------------------------------------------------------------------

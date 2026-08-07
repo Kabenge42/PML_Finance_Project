@@ -1,0 +1,298 @@
+INFO:__main__:Artifact export enabled -> C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt_results
+INFO:__main__:Loaded kalman_df: (6402, 178)
+INFO:__main__:Loaded feature_catalogue: (156, 8)
+INFO:__main__:Exported dataframe 01_data_01_table (12 rows)
+            pymc_role feature_role  n_columns  n_present
+0       constant_data        count          1          1
+1       constant_data   historical          8          8
+2               coord  categorical         12         12
+3               coord         date          7          7
+4       derived_input    predictor          3          3
+5   mutable_predictor        count          6          6
+6   mutable_predictor     metadata          3          3
+7   mutable_predictor    predictor         30         30
+8   mutable_predictor        score          6          6
+9            observed   historical         52         52
+10           observed    predictor          1          1
+11           observed       target         27         27
+#predictors     : 45 -> ['feat_analyst_bearish_pct', 'feat_analyst_bullish_pct', 'feat_analyst_conviction', 'feat_analyst_neutral_pct', 'feat_holds', 'feat_no_opinion', 'feat_price_drift_n', 'feat_pt_drift_n', 'feat_vol_drift_n', 'days_since_fy_end', 'days_since_last_report', 'days_to_expected_report', 'days_to_next_earnings', 'days_to_next_fiscal_quarter', 'days_to_next_fy_end', 'days_to_next_report', 'feat_avg_beta', 'feat_buys', 'feat_coverage_drift', 'feat_ev_vs_3yavg', 'feat_implied_upside', 'feat_mcap_country_r', 'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_mv_ev_drift', 'feat_one_day_return', 'feat_price_chg_pct_3m', 'feat_price_drift', 'feat_pt_accuracy_1y', 'feat_pt_achievement_1y', 'feat_pt_drift', 'feat_pt_high_drift', 'feat_pt_low_drift', 'feat_pt_median_drift', 'feat_pt_noise_drift', 'feat_pt_range_hit_rate', 'feat_pt_range_norm', 'feat_sells', 'feat_vol_drift', 'feat_analyst_rating', 'feat_median_piotroski_f_score', 'feat_piotroski_f_score_fy', 'feat_piotroski_f_score_neg1fy', 'feat_piotroski_f_score_neg2fy', 'feat_piotroski_f_score_neg3fy']
+#response       : 80 -> ['price_1d_ago', 'price_1m_ago', 'price_1w_ago', 'price_1y_ago', 'price_3m_ago', 'price_3y_ago', 'price_5d_ago', 'price_5y_ago', 'price_6m_ago', 'price_mtd_ago', 'price_qtd_ago', 'price_target_1m_ago', 'price_target_1w_ago', 'price_target_1y_ago', 'price_target_3m_ago', 'price_target_6m_ago', 'price_target_high_1m_ago', 'price_target_high_1w_ago', 'price_target_high_1y_ago', 'price_target_high_3m_ago', 'price_target_high_6m_ago', 'price_target_high_mtd_ago', 'price_target_high_qtd_ago', 'price_target_high_ytd_ago', 'price_target_low_1m_ago', 'price_target_low_1w_ago', 'price_target_low_1y_ago', 'price_target_low_3m_ago', 'price_target_low_6m_ago', 'price_target_low_mtd_ago', 'price_target_low_qtd_ago', 'price_target_low_ytd_ago', 'price_target_median_1m_ago', 'price_target_median_1w_ago', 'price_target_median_1y_ago', 'price_target_median_3m_ago', 'price_target_median_6m_ago', 'price_target_median_mtd_ago', 'price_target_median_qtd_ago', 'price_target_median_ytd_ago', 'price_target_mtd_ago', 'price_target_qtd_ago', 'price_target_stddev_1m_ago', 'price_target_stddev_1w_ago', 'price_target_stddev_1y_ago', 'price_target_stddev_3m_ago', 'price_target_stddev_6m_ago', 'price_target_stddev_mtd_ago', 'price_target_stddev_qtd_ago', 'price_target_stddev_ytd_ago', 'price_target_ytd_ago', 'price_ytd_ago', 'last_price', 'feat_pt_noise_sigma', 'feat_total_return_10y', 'feat_total_return_1d', 'feat_total_return_1m', 'feat_total_return_1w', 'feat_total_return_1y', 'feat_total_return_2021', 'feat_total_return_2022', 'feat_total_return_2023', 'feat_total_return_2024', 'feat_total_return_2025', 'feat_total_return_3m', 'feat_total_return_3y', 'feat_total_return_5d', 'feat_total_return_5y', 'feat_total_return_6m', 'feat_total_return_mtd', 'feat_total_return_qtd', 'feat_total_return_ytd', 'feat_tr_cagr_10y', 'feat_tr_cagr_1y', 'feat_tr_cagr_3y', 'feat_tr_cagr_5y', 'observed_pt', 'price_target_high', 'price_target_low', 'price_target_median']
+#coords         : 12 -> ['country', 'exchange', 'industry', 'next_earnings_status', 'next_earnings_when', 'region', 'sector', 'size_class', 'style_class', 'trading_country', 'trading_region', 'unit']
+#classification : 10 -> ['region', 'country', 'trading_region', 'trading_country', 'exchange', 'sector', 'industry', 'style_class', 'size_class', 'unit']
+#fiscal-calendar: 8 -> ['income_statement_report_date', 'next_earnings', 'fy_end_date', 'next_fiscal_quarter', 'last_updated', 'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date']
+#day-count      : 7 -> ['days_to_next_earnings', 'days_since_last_report', 'days_to_next_fy_end', 'days_to_next_fiscal_quarter', 'days_to_next_report', 'days_to_expected_report', 'days_since_fy_end']
+kalman_df shape: (6402, 178)
+                              dtype  n_missing  pct_missing  n_unique
+INFO:__main__:Exported dataframe 02_eda_01_table (30 rows)
+feat_tr_cagr_10y            float64       1883         29.4      2771
+feat_total_return_10y       float64       1883         29.4      4376
+feat_total_return_2021      float64        986         15.4      4524
+market_cap_ev_5yavg         float64        745         11.6      5657
+feat_total_return_5y        float64        739         11.5      5252
+price_5y_ago                float64        739         11.5      4733
+feat_tr_cagr_5y             float64        739         11.5      3919
+feat_total_return_2022      float64        622          9.7      4498
+market_cap_ev_neg4fy        float64        618          9.7      5784
+beta_5y                     float64        559          8.7       383
+feat_total_return_2023      float64        498          7.8      4822
+market_cap_ev_neg3fy        float64        488          7.6      5914
+price_3y_ago                float64        442          6.9      4897
+feat_total_return_3y        float64        442          6.9      5369
+feat_tr_cagr_3y             float64        442          6.9      4334
+feat_ev_vs_3yavg            float64        433          6.8      5969
+market_cap_ev_3yavg         float64        434          6.8      5968
+feat_mcap_vs_3yavg          float64        425          6.6      5977
+beta_2y                     float64        407          6.4       365
+feat_total_return_2024      float64        412          6.4      4795
+beta_1y                     float64        407          6.4       493
+feat_avg_beta               float64        407          6.4      1457
+market_cap_ev_neg2fy        float64        379          5.9      6023
+price_target_high_1y_ago    float64        262          4.1      2279
+feat_total_return_2025      float64        265          4.1      4996
+feat_pt_accuracy_1y         float64        262          4.1      6126
+price_target_1y_ago         float64        262          4.1      5376
+price_target_median_1y_ago  float64        262          4.1      2732
+price_target_num_1y_ago     float64        262          4.1        54
+feat_pt_achievement_1y      float64        262          4.1      3509
+INFO:choreographer.browsers.chromium:Chromium init'ed with kwargs {}
+INFO:choreographer.browsers.chromium:Found chromium path: C:\Program Files\Google\Chrome\Application\chrome.exe
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmpsxhgudmh.
+INFO:choreographer.browser_async:Opening browser.
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmphn3qills.
+INFO:choreographer.browsers.chromium:Temporary directory at: C:\Users\markm\AppData\Local\Temp\tmphn3qills
+INFO:kaleido.kaleido:Conforming 1 to file:///C:/Users/markm/AppData/Local/Temp/tmpsxhgudmh/index.html
+INFO:kaleido.kaleido:Getting tab from queue (has 1)
+INFO:kaleido.kaleido:Got 34A3
+INFO:kaleido.kaleido:Reloading tab 34A3 before return.
+INFO:kaleido.kaleido:Putting tab 34A3 back (queue size: 0).
+INFO:kaleido.kaleido:Waiting for all cleanups to finish.
+INFO:kaleido.kaleido:Exiting Kaleido.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:__main__:Exported dataframe 02_eda_03_table (8 rows)
+count    6402.000000
+mean       31.452045
+std        40.009981
+min       -96.209386
+25%         8.796813
+50%        21.848055
+75%        41.738771
+max       500.000000
+Name: upside_pct, dtype: float64
+INFO:__main__:Exported dataframe 02_eda_04_table (10 rows)
+country            83
+exchange           79
+trading_country    62
+industry           59
+unit               46
+sector              9
+region              5
+trading_region      5
+style_class         3
+size_class          3
+dtype: int64
+Distributional summary (winsorised 1/99 pct) for 21 feat_* columns:
+INFO:__main__:Exported dataframe 02_eda_05_table (21 rows)
+                           mean         sd  eti89_lb  eti89_ub
+feat_pt_drift            0.0486     0.1120   -0.0724    0.2432
+feat_price_drift         0.0474     0.1171   -0.0858    0.2545
+feat_coverage_drift      0.0311     0.0838   -0.0519    0.1950
+feat_pt_noise_drift      0.1742     0.3207   -0.1214    1.0000
+feat_one_day_return      0.0018     0.0355   -0.0467    0.0563
+feat_price_chg_pct_3m    0.0182     0.2082   -0.2897    0.3693
+feat_total_return_ytd    0.1086     0.3493   -0.3289    0.7143
+feat_total_return_5y     1.0078     2.3573   -0.7275    4.9783
+feat_total_return_10y    3.8004     7.9447   -0.5378   14.3589
+feat_tr_cagr_3y          0.1297     0.2754   -0.2407    0.6416
+feat_total_return_1m     0.0015     0.1430   -0.2629    0.2141
+feat_total_return_3m     0.0263     0.2087   -0.2846    0.3771
+feat_total_return_6m     0.0617     0.3032   -0.3501    0.5830
+feat_total_return_1y     0.2508     0.6285   -0.3868    1.3017
+feat_tr_cagr_5y          0.0701     0.2038   -0.2289    0.4299
+feat_pt_range_norm       0.4350     0.3021    0.0000    0.9887
+feat_pt_noise_sigma    663.0018  3865.4571    0.0000  750.2189
+feat_vol_drift          -0.0120     0.0930   -0.1614    0.1380
+feat_mcap_trend_1y       0.5430     1.2332   -0.4102    2.4069
+feat_mcap_vs_3yavg       1.2093     0.4921    0.6272    2.1749
+feat_ev_vs_3yavg         1.2033     0.4829    0.6635    2.0783
+INFO:choreographer.browsers.chromium:Chromium init'ed with kwargs {}
+INFO:choreographer.browsers.chromium:Found chromium path: C:\Program Files\Google\Chrome\Application\chrome.exe
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmpjadyvo7a.
+INFO:choreographer.browser_async:Opening browser.
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmp8jyujd26.
+INFO:choreographer.browsers.chromium:Temporary directory at: C:\Users\markm\AppData\Local\Temp\tmp8jyujd26
+INFO:kaleido.kaleido:Conforming 1 to file:///C:/Users/markm/AppData/Local/Temp/tmpjadyvo7a/index.html
+INFO:kaleido.kaleido:Getting tab from queue (has 1)
+INFO:kaleido.kaleido:Got DE1F
+INFO:kaleido.kaleido:Reloading tab DE1F before return.
+INFO:kaleido.kaleido:Putting tab DE1F back (queue size: 0).
+INFO:kaleido.kaleido:Waiting for all cleanups to finish.
+INFO:kaleido.kaleido:Exiting Kaleido.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browsers.chromium:Chromium init'ed with kwargs {}
+INFO:choreographer.browsers.chromium:Found chromium path: C:\Program Files\Google\Chrome\Application\chrome.exe
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmpom2zec62.
+INFO:choreographer.browser_async:Opening browser.
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmpw8a61hux.
+INFO:choreographer.browsers.chromium:Temporary directory at: C:\Users\markm\AppData\Local\Temp\tmpw8a61hux
+INFO:kaleido.kaleido:Conforming 1 to file:///C:/Users/markm/AppData/Local/Temp/tmpom2zec62/index.html
+INFO:kaleido.kaleido:Getting tab from queue (has 1)
+INFO:kaleido.kaleido:Got 1DF5
+INFO:kaleido.kaleido:Reloading tab 1DF5 before return.
+INFO:kaleido.kaleido:Putting tab 1DF5 back (queue size: 0).
+INFO:kaleido.kaleido:Waiting for all cleanups to finish.
+INFO:kaleido.kaleido:Exiting Kaleido.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.
+Observation-noise wideners (raw, un-winsorised, model-facing):
+  - range  (feat_pt_range_norm)                median=    0.387  p99=      1.51  min=       0  (p99/median tail ratio=3.9)
+  - cv  (feat_pt_noise_sigma / last_price)     median=    0.141  p99=     0.853  min=       0  (p99/median tail ratio=6.0)
+  - noise drift  (feat_pt_noise_drift, signed) median=   0.0603  p99=         1  min=      -1  (p99/median tail ratio=16.6)
+  - vol drift  (feat_vol_drift, signed)        median=   -0.013  p99=     0.238  min=  -0.515  (p99/median tail ratio=-18.3)
+  sigma_obs multiplier: median=0.58, p99=1.41; 7% of names widen sigma_obs above base, 89% (high-coverage) tighten it below base.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browsers.chromium:Chromium init'ed with kwargs {}
+INFO:choreographer.browsers.chromium:Found chromium path: C:\Program Files\Google\Chrome\Application\chrome.exe
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmpzdzy9q6p.
+INFO:choreographer.browser_async:Opening browser.
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmp2saxgjy0.
+INFO:choreographer.browsers.chromium:Temporary directory at: C:\Users\markm\AppData\Local\Temp\tmp2saxgjy0
+INFO:kaleido.kaleido:Conforming 1 to file:///C:/Users/markm/AppData/Local/Temp/tmpzdzy9q6p/index.html
+INFO:kaleido.kaleido:Getting tab from queue (has 1)
+INFO:kaleido.kaleido:Got 7B55
+INFO:kaleido.kaleido:Reloading tab 7B55 before return.
+INFO:kaleido.kaleido:Putting tab 7B55 back (queue size: 0).
+INFO:kaleido.kaleido:Waiting for all cleanups to finish.
+INFO:kaleido.kaleido:Exiting Kaleido.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browsers.chromium:Chromium init'ed with kwargs {}
+INFO:choreographer.browsers.chromium:Found chromium path: C:\Program Files\Google\Chrome\Application\chrome.exe
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmpbizk86cz.
+INFO:choreographer.browser_async:Opening browser.
+INFO:choreographer.utils._tmpfile:Temp directory created: C:\Users\markm\AppData\Local\Temp\tmpwcw6jloh.
+INFO:choreographer.browsers.chromium:Temporary directory at: C:\Users\markm\AppData\Local\Temp\tmpwcw6jloh
+INFO:kaleido.kaleido:Conforming 1 to file:///C:/Users/markm/AppData/Local/Temp/tmpbizk86cz/index.html
+INFO:kaleido.kaleido:Getting tab from queue (has 1)
+INFO:kaleido.kaleido:Got 6C7B
+Traceback (most recent call last):
+  File "C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt.py", line 6417, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt.py", line 6348, in main
+    run_eda(kalman_df, roles)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt.py", line 2226, in run_eda
+    _plot_upside_vs_drivers_plotly(kalman_df)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt.py", line 1929, in _plot_upside_vs_drivers_plotly
+    _render_plotly(fig, height=640)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt.py", line 1816, in _render_plotly
+    _safe_show(fig, label=label, _fallback=display)
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt.py", line 1848, in _safe_show
+    _export_figure(obj, label=label)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt.py", line 1433, in _export_figure
+    _write_plotly_figure(fig, stem)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt.py", line 1402, in _write_plotly_figure
+    fig.write_image(
+    ~~~~~~~~~~~~~~~^
+        str(_export_path(stem, 'png')),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        scale=_DEFAULT_EXPORT_PNG_SCALE,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\markm\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\plotly\basedatatypes.py", line 3895, in write_image
+    return pio.write_image(self, *args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\plotly\io\_kaleido.py", line 530, in write_image
+    img_data = to_image(
+        fig,
+    ...<5 lines>...
+        engine=engine,
+    )
+  File "C:\Users\markm\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\plotly\io\_kaleido.py", line 400, in to_image
+    img_bytes = kaleido.calc_fig_sync(
+        fig_dict,
+    ...<7 lines>...
+        kopts=kopts,
+    )
+  File "C:\Users\markm\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\kaleido\__init__.py", line 170, in calc_fig_sync
+    return _sync_server.oneshot_async_run(calc_fig, args=args, kwargs=kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\markm\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\kaleido\_sync_server.py", line 158, in oneshot_async_run
+    t.join()
+    ~~~~~~^^
+  File "C:\Users\markm\AppData\Local\Python\pythoncore-3.14-64\Lib\threading.py", line 1133, in join
+    self._os_thread_handle.join(timeout)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+KeyboardInterrupt
+INFO:kaleido.kaleido:Reloading tab 6C7B before return.
+INFO:kaleido.kaleido:Putting tab 6C7B back (queue size: 0).
+INFO:kaleido.kaleido:Waiting for all cleanups to finish.
+INFO:kaleido.kaleido:Exiting Kaleido.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:choreographer.browser_async:Closing browser.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.
+INFO:choreographer.utils._tmpfile:TemporaryDirectory.cleanup() worked.
+INFO:choreographer.utils._tmpfile:shutil.rmtree worked.
+INFO:kaleido.kaleido:Cancelling tasks.
+INFO:kaleido.kaleido:Exiting Kaleido/Choreo.

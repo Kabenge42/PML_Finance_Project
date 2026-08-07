@@ -11,6 +11,8 @@ outputs/
 pml_model_analysis_files/
 .coverage
 !/pymc_kalman_filter_pt_results/
-# posterior/prior draw NetCDFs exceed GitHub 100MB limit (use LFS if needed)
-pymc_kalman_filter_pt_results/06_prior_idata.nc
-pymc_kalman_filter_pt_results/07_posterior_idata.nc
+# posterior/prior draw NetCDFs exceed GitHub 100MB limit (use LFS if needed).
+# Glob rather than literal paths: artifacts live in per-section subdirectories
+# (06_prior/, 07_posterior/, 10k_universe/, 13_forest/ ...) since 0.9.9.12.
+pymc_kalman_filter_pt_results/**/*.nc
+pymc_kalman_filter_pt_results/*.nc

@@ -1,19 +1,22 @@
-"""CAPM Beta & Return Calculator.
+"""Beta & CAPM: Market Sensitivity Analysis.
 
 Two side-by-side panes driven by a shared CAPM computation over the real
-``beta`` column exported to ``analytics.kalman_filtered_price_targets``:
+``beta`` column exported to ``analytics.kalman_filtered_price_targets`` (the
+NULL-aware mean of ``beta_{1y,2y,5y}`` — ``feat_avg_beta``):
 
-* **Security Market Line** — a scatter of each name's ``beta`` against its
+* **Market Sensitivity** — a scatter of each name's ``beta`` against its
   Kalman ``expected_return_kalman`` (bubble size = ``market_cap``, colour by a
   selectable dimension), overlaid with the theoretical CAPM line
   ``rf + beta * (market_return - rf)``.
-* **Alpha Analysis** — a horizontal bar chart of the 15 highest- and 15
-  lowest-alpha tickers (``alpha = expected_return_kalman - capm_expected_return``),
-  coloured by the sign of alpha.
+* **Jensen's Alpha Analysis** — a horizontal bar chart of the highest- and
+  lowest-alpha tickers (``alpha = expected_return_kalman -
+  capm_expected_return``), coloured by the sign of alpha.
 
-The risk-free rate and market return are user inputs (sliders), so the SML and
-alpha decomposition reflect the analyst's own capital-market assumptions rather
-than a universe-derived proxy.
+The risk-free rate and expected market return are dropdown inputs, so the SML
+and alpha decomposition reflect the analyst's own capital-market assumptions
+rather than a universe-derived proxy. A minimum |alpha| threshold and a beta
+band (low / medium / high) narrow both panes. All returns are raw decimals
+(0.25 = +25%) per the project unit contract.
 """
 
 from __future__ import annotations
@@ -31,22 +34,51 @@ from ._common import coalesce, empty_figure, scoped_filter
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
-from ..theme import COLORWAY, DUAL_GRAPH_STYLE, SUBTLE_TEXT, control
+from ..theme import COLORWAY, STACKED_GRAPH_STYLE, SUBTLE_TEXT, control
 from ..theme import card as theme_card
 
 component_id = "capm_beta_return_calculator"
 
 risk_free_rate_id = f"{component_id}_risk_free_rate"
+risk_free_rate_options = [
+    {"label": "0%", "value": 0.0},
+    {"label": "2%", "value": 0.02},
+    {"label": "3%", "value": 0.03},
+    {"label": "4%", "value": 0.04},
+    {"label": "5%", "value": 0.05},
+]
 risk_free_rate_default = 0.03
-risk_free_rate_min = 0.0
-risk_free_rate_max = 0.05
-risk_free_rate_step = 0.005
 
 market_return_id = f"{component_id}_market_return"
-market_return_default = 0.10
-market_return_min = 0.05
-market_return_max = 0.20
-market_return_step = 0.05
+market_return_options = [
+    {"label": "6%", "value": 0.06},
+    {"label": "8%", "value": 0.08},
+    {"label": "10%", "value": 0.10},
+    {"label": "12%", "value": 0.12},
+]
+market_return_default = 0.08
+
+min_alpha_id = f"{component_id}_min_alpha"
+min_alpha_options = [
+    {"label": "0%", "value": 0.0},
+    {"label": "2%", "value": 0.02},
+    {"label": "5%", "value": 0.05},
+    {"label": "10%", "value": 0.10},
+]
+min_alpha_default = 0.0
+
+beta_range_id = f"{component_id}_beta_range"
+beta_range_options = [
+    {"label": "All", "value": "all"},
+    {"label": "Low (<0.8)", "value": "low"},
+    {"label": "Medium (0.8-1.2)", "value": "medium"},
+    {"label": "High (>1.2)", "value": "high"},
+]
+beta_range_default = "all"
+
+# Beta band edges for the Low / Medium / High convenience filter.
+_BETA_LOW = 0.8
+_BETA_HIGH = 1.2
 
 color_by_id = f"{component_id}_color_by"
 color_by_options = [
@@ -82,21 +114,12 @@ _MARKER_SIZE_MIN = 6
 _POS_COLOR = "#2ecc71"
 _NEG_COLOR = "#e74c3c"
 
-title = "CAPM Beta & Return Calculator"
+title = "Beta & CAPM: Market Sensitivity Analysis"
 description = (
-    "Calculate stock sensitivity to market movements (beta) and expected "
-    "returns using CAPM. Identify over/undervalued stocks by comparing actual "
-    "vs. predicted returns."
+    "Analyze stock sensitivity to market movements using beta coefficients "
+    "and CAPM expected returns. Identify mispriced securities through alpha "
+    "analysis."
 )
-
-
-def _slider_marks(low: float, high: float, step: float, fmt: str) -> dict:
-    """Return slider marks at every *step* from *low* to *high* inclusive."""
-    n_steps = int(round((high - low) / step))
-    return {
-        round(low + i * step, 4): fmt.format(round(low + i * step, 4) * 100)
-        for i in range(n_steps + 1)
-    }
 
 
 def component() -> "object":
@@ -108,30 +131,22 @@ def component() -> "object":
             html.Div(
                 className="geib-controls-row",
                 children=[
-                    control("Risk-Free Rate:", html.Div(
-                        dcc.Slider(
-                            id=risk_free_rate_id,
-                            min=risk_free_rate_min, max=risk_free_rate_max,
-                            step=risk_free_rate_step, value=risk_free_rate_default,
-                            marks=_slider_marks(
-                                risk_free_rate_min, risk_free_rate_max,
-                                risk_free_rate_step * 2, "{:.1f}%"),
-                            tooltip={"placement": "bottom", "always_visible": True},
-                        ),
-                        style={"minWidth": "220px"},
-                    )),
-                    control("Market Return:", html.Div(
-                        dcc.Slider(
-                            id=market_return_id,
-                            min=market_return_min, max=market_return_max,
-                            step=market_return_step, value=market_return_default,
-                            marks=_slider_marks(
-                                market_return_min, market_return_max,
-                                market_return_step, "{:.0f}%"),
-                            tooltip={"placement": "bottom", "always_visible": True},
-                        ),
-                        style={"minWidth": "220px"},
-                    )),
+                    control("Risk-Free Rate:", dcc.Dropdown(
+                        id=risk_free_rate_id, options=risk_free_rate_options,
+                        value=risk_free_rate_default, searchable=False,
+                        clearable=False, style={"minWidth": "130px"})),
+                    control("Expected Market Return:", dcc.Dropdown(
+                        id=market_return_id, options=market_return_options,
+                        value=market_return_default, searchable=False,
+                        clearable=False, style={"minWidth": "160px"})),
+                    control("Min |Alpha| Threshold:", dcc.Dropdown(
+                        id=min_alpha_id, options=min_alpha_options,
+                        value=min_alpha_default, searchable=False,
+                        clearable=False, style={"minWidth": "150px"})),
+                    control("Beta Range:", dcc.Dropdown(
+                        id=beta_range_id, options=beta_range_options,
+                        value=beta_range_default, searchable=False,
+                        clearable=False, style={"minWidth": "170px"})),
                     control("Color By:", dcc.Dropdown(
                         id=color_by_id, options=color_by_options,
                         value=color_by_default, searchable=False,
@@ -146,20 +161,20 @@ def component() -> "object":
                 ],
             ),
             html.Div(
-                className="geib-dual-graph",
+                className="geib-dual-graph geib-dual-graph--stacked",
                 children=[
                     html.Div(className="geib-graph-pane", children=[
-                        html.Label("Security Market Line (Beta vs Expected Return)",
+                        html.Label("Market Sensitivity (Beta vs Expected Return)",
                                    className="geib-graph-label"),
                         dcc.Loading(type="circle", children=[
-                            dcc.Graph(id=f"{component_id}_scatter_graph", style=DUAL_GRAPH_STYLE)]),
+                            dcc.Graph(id=f"{component_id}_scatter_graph", style=STACKED_GRAPH_STYLE)]),
                         html.Pre(id=f"{component_id}_scatter_error", className="geib-error"),
                     ]),
                     html.Div(className="geib-graph-pane", children=[
-                        html.Label("Alpha Analysis (Actual vs CAPM Return)",
+                        html.Label("Jensen's Alpha Analysis",
                                    className="geib-graph-label"),
                         dcc.Loading(type="circle", children=[
-                            dcc.Graph(id=f"{component_id}_bar_graph", style=DUAL_GRAPH_STYLE)]),
+                            dcc.Graph(id=f"{component_id}_bar_graph", style=STACKED_GRAPH_STYLE)]),
                         html.Pre(id=f"{component_id}_bar_error", className="geib-error"),
                     ]),
                 ],
@@ -172,9 +187,10 @@ def _prepare_capm_frame(**kwargs) -> Tuple[pd.DataFrame, float, float]:
     """Return ``(df, risk_free_rate, market_return)`` with CAPM / alpha columns.
 
     Applies the global filters, keeps only rows with a non-null ``beta``,
-    narrows by the local Size Class / Sectors controls, and computes
+    narrows by the local Beta Range / Size Class / Sectors controls, computes
     ``capm_expected_return = rf + beta * (market_return - rf)`` plus
-    ``alpha = expected_return_kalman - capm_expected_return``.
+    ``alpha = expected_return_kalman - capm_expected_return``, and drops rows
+    below the Min |Alpha| threshold.
     """
     df = filter_data(get_data(), **kwargs)
     risk_free_rate = float(coalesce(kwargs.get(risk_free_rate_id), risk_free_rate_default))
@@ -185,8 +201,14 @@ def _prepare_capm_frame(**kwargs) -> Tuple[pd.DataFrame, float, float]:
 
     logger.debug("Filtering to stocks with non-null beta...")
     df = df[df["beta"].notna()].copy()
-    if len(df) == 0:
-        return df, risk_free_rate, market_return
+
+    beta_range = coalesce(kwargs.get(beta_range_id), beta_range_default)
+    if beta_range == "low":
+        df = df[df["beta"] < _BETA_LOW]
+    elif beta_range == "medium":
+        df = df[(df["beta"] >= _BETA_LOW) & (df["beta"] <= _BETA_HIGH)]
+    elif beta_range == "high":
+        df = df[df["beta"] > _BETA_HIGH]
 
     size_class = coalesce(kwargs.get(size_class_id), size_class_default)
     if size_class and size_class != "All":
@@ -202,6 +224,10 @@ def _prepare_capm_frame(**kwargs) -> Tuple[pd.DataFrame, float, float]:
                  risk_free_rate * 100, market_return * 100)
     df["capm_expected_return"] = risk_free_rate + df["beta"] * (market_return - risk_free_rate)
     df["alpha"] = df["expected_return_kalman"] - df["capm_expected_return"]
+
+    min_alpha = float(coalesce(kwargs.get(min_alpha_id), min_alpha_default))
+    if min_alpha > 0.0:
+        df = df[df["alpha"].abs() >= min_alpha]
     logger.debug(tbl(df[["ticker", "beta", "capm_expected_return", "alpha"]]))
     return df, risk_free_rate, market_return
 
@@ -210,6 +236,7 @@ def _scatter_figure(df: pd.DataFrame, risk_free_rate: float, market_return: floa
                     color_by: Optional[str]) -> go.Figure:
     """SML scatter (bubble size = market cap) with the CAPM line overlaid."""
     hover_data = {
+        "name": True,
         "ticker": True,
         "beta": ":.3f",
         "expected_return_kalman": ":.3f",
@@ -280,8 +307,10 @@ def _bar_figure(df: pd.DataFrame) -> go.Figure:
                      title_text="Ticker")
     fig.add_vline(x=0, line_dash="dash", line_color=SUBTLE_TEXT,
                   annotation_text="Zero Alpha", annotation_position="top right")
-    fig.update_xaxes(title_text="Alpha (Actual - CAPM Return)")
-    fig.update_layout(showlegend=False, hovermode="closest")
+    fig.update_xaxes(title_text="Jensen's Alpha (Actual - CAPM Return)")
+    # Grow the pane with the bar count so every company stays legible.
+    fig.update_layout(showlegend=False, hovermode="closest",
+                      height=max(400, 20 * len(df_display)))
     return fig
 
 
@@ -313,6 +342,8 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         "refresh_trigger": Input("refresh_trigger", "data"),
         risk_free_rate_id: Input(risk_free_rate_id, "value"),
         market_return_id: Input(market_return_id, "value"),
+        min_alpha_id: Input(min_alpha_id, "value"),
+        beta_range_id: Input(beta_range_id, "value"),
         color_by_id: Input(color_by_id, "value"),
         size_class_id: Input(size_class_id, "value"),
         sector_filter_id: Input(sector_filter_id, "value"),

@@ -31,7 +31,26 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_metadata
 	data_type        TEXT,
 	pymc_role        TEXT,
 	model_targets    TEXT[] NOT NULL DEFAULT ARRAY []::TEXT[],
-	updated_at       TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
+	updated_at       TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+	-- ------------------------------------------------------------------
+	-- Controlled vocabularies (see CK_VOCABULARIES note at the foot of
+	-- this file). These three columns drive Python feature selection
+	-- end-to-end, and an unrecognised value fails SILENTLY rather than
+	-- loudly -- hence the CHECKs.
+	-- ------------------------------------------------------------------
+	CONSTRAINT ck_pml_df_metadata_pymc_role
+		CHECK (pymc_role IS NULL OR pymc_role IN
+		       ('coord', 'index', 'observed', 'mutable_predictor',
+		        'constant_data', 'derived_input', 'excluded')),
+	CONSTRAINT ck_pml_df_metadata_feature_role
+		CHECK (feature_role IN
+		       ('id', 'categorical', 'date', 'target', 'predictor', 'count',
+		        'score', 'historical', 'surprise', 'revision', 'metadata')),
+	-- `<@` = "is contained by": every element must be a known model target.
+	-- The empty-array default trivially satisfies this.
+	CONSTRAINT ck_pml_df_metadata_model_targets
+		CHECK (model_targets <@ ARRAY ['earnings_beat', 'price_target', 'kalman_pt',
+			'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']::TEXT[])
 );
 
 -- References fix to avoid foreign key violation
@@ -47,7 +66,18 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_feature_alias
 	-- COALESCE(fa.pymc_role, md.pymc_role). NULL = inherit the global role.
 	pymc_role TEXT,
 	PRIMARY KEY (column_name, model_target),
-	CONSTRAINT fk_column_name FOREIGN KEY (column_name) REFERENCES pml.pml_df_metadata (column_name) ON DELETE CASCADE
+	CONSTRAINT fk_column_name FOREIGN KEY (column_name) REFERENCES pml.pml_df_metadata (column_name) ON DELETE CASCADE,
+	-- Same vocabularies as pml_df_metadata: an override with an unknown role
+	-- would win the COALESCE in vw_pymc_feature_catalogue and silently drop
+	-- the column from that model's feature list.
+	CONSTRAINT ck_pml_df_feature_alias_pymc_role
+		CHECK (pymc_role IS NULL OR pymc_role IN
+		       ('coord', 'index', 'observed', 'mutable_predictor',
+		        'constant_data', 'derived_input', 'excluded')),
+	CONSTRAINT ck_pml_df_feature_alias_model_target
+		CHECK (model_target IN ('earnings_beat', 'price_target', 'kalman_pt',
+		                        'dcf_pt', 'dividend_safety', 'credit_risk',
+		                        'accounting_anomaly'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_pml_df_feature_alias_model ON pml.pml_df_feature_alias (model_target);
@@ -64,7 +94,10 @@ CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_feature_alias ON pml.pml_df_metad
 CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_model_targets ON pml.pml_df_metadata USING gin (model_targets);
 
 COMMENT ON TABLE pml.pml_df_metadata IS 'Metadata for pml.pml_df. (category, feature_role) drive domain/data-centric SQL filters; (pymc_role, model_targets) drive PyMC pm.Data container assignment and per-model feature selection. pymc_role vocabulary: coord | index | observed | mutable_predictor | constant_data | derived_input | excluded. model_targets is a TEXT[] keyed by MODEL_FEATURE_CONTAINERS (earnings_beat, price_target, kalman_pt, dcf_pt, dividend_safety, credit_risk, accounting_anomaly).';;
--- Create a metadata table documenting available pml_df schema columns
+-- Create a metadata table documenting available pml_df schema columns.
+-- NOTE: this is the same definition as the block above (both are
+-- CREATE TABLE IF NOT EXISTS, so whichever runs first wins). The constraints
+-- are repeated verbatim so the table is correctly constrained either way.
 CREATE TABLE IF NOT EXISTS pml.pml_df_metadata
 (
 	column_name      TEXT PRIMARY KEY,
@@ -76,7 +109,18 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_metadata
 	data_type        TEXT,
 	pymc_role        TEXT,
 	model_targets    TEXT[] NOT NULL DEFAULT ARRAY []::TEXT[],
-	updated_at       TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
+	updated_at       TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+	CONSTRAINT ck_pml_df_metadata_pymc_role
+		CHECK (pymc_role IS NULL OR pymc_role IN
+		       ('coord', 'index', 'observed', 'mutable_predictor',
+		        'constant_data', 'derived_input', 'excluded')),
+	CONSTRAINT ck_pml_df_metadata_feature_role
+		CHECK (feature_role IN
+		       ('id', 'categorical', 'date', 'target', 'predictor', 'count',
+		        'score', 'historical', 'surprise', 'revision', 'metadata')),
+	CONSTRAINT ck_pml_df_metadata_model_targets
+		CHECK (model_targets <@ ARRAY ['earnings_beat', 'price_target', 'kalman_pt',
+			'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']::TEXT[])
 );
 
 -- ---------------------------------------------------------------------------
@@ -94,7 +138,15 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_feature_alias
 	-- Per-model pymc_role override (NULL = inherit pml_df_metadata.pymc_role).
 	-- Resolved in vw_pymc_feature_catalogue via COALESCE(fa.pymc_role, md.pymc_role).
 	pymc_role TEXT,
-	PRIMARY KEY (column_name, model_target)
+	PRIMARY KEY (column_name, model_target),
+	CONSTRAINT ck_pml_df_feature_alias_pymc_role
+		CHECK (pymc_role IS NULL OR pymc_role IN
+		       ('coord', 'index', 'observed', 'mutable_predictor',
+		        'constant_data', 'derived_input', 'excluded')),
+	CONSTRAINT ck_pml_df_feature_alias_model_target
+		CHECK (model_target IN ('earnings_beat', 'price_target', 'kalman_pt',
+		                        'dcf_pt', 'dividend_safety', 'credit_risk',
+		                        'accounting_anomaly'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_pml_df_feature_alias_model ON pml.pml_df_feature_alias (model_target);
@@ -124,6 +176,33 @@ COMMENT ON COLUMN pml.pml_df_metadata.feature_alias IS 'Default (model-agnostic)
 COMMENT ON COLUMN pml.pml_df_feature_alias.pymc_role IS 'Per-model pymc_role override. NULL inherits pml_df_metadata.pymc_role. vw_pymc_feature_catalogue resolves the effective role via COALESCE(fa.pymc_role, md.pymc_role), so a column can be globally observed/derived_input yet act as a mutable_predictor for a specific model.';
 
 COMMENT ON TABLE pml.pml_df_feature_alias IS 'Per-model alias overrides for source columns in pml.pml_df_metadata. Surfaces through pml.vw_pymc_feature_catalogue.feature_alias and the notebook''s MODEL_FEATURE_CONTAINERS registry. Multi-source engineered features (e.g. the normalized analyst-sentiment feat_analyst_bullish_pct / feat_analyst_bearish_pct / feat_analyst_neutral_pct / feat_analyst_conviction columns in pml.mv_pymc_price_target, each derived from all six num_*_ratings buckets) record provenance against a single representative source column per (column_name, model_target) key.';
+
+COMMENT ON COLUMN pml.pml_df_metadata.feature_role IS 'Coarse ML role used for SQL filtering during feature engineering. Vocabulary (CHECK-enforced): id | categorical | date | target | predictor | count | score | historical | surprise | revision | metadata. Also the deterministic seed for pymc_role -- see the CASE in pml_df_metadata_populate.sql step 2.';
+
+-- ---------------------------------------------------------------------------
+-- CK_VOCABULARIES — why the three CHECK constraints above exist.
+--
+-- `feature_role`, `pymc_role` and `model_targets` drive Python feature
+-- selection end-to-end:
+--
+--     pml_df_metadata (global pymc_role, model_targets[])
+--       -> pml_df_feature_alias (per-model feature_alias AND pymc_role override)
+--       -> vw_pymc_feature_catalogue  (COALESCE(fa.pymc_role, md.pymc_role),
+--                                      rows with 'excluded' filtered out)
+--       -> vw_pymc_feature_aliases    (the arrays consumed by each model's
+--                                      _resolve_<model>_feature_aliases())
+--
+-- An unrecognised value in any of the three fails **silently**, not loudly:
+-- vw_pymc_feature_catalogue only filters `<> 'excluded'`, so a typo'd role
+-- neither raises nor matches any consumer -- the column simply vanishes from
+-- the model's feature list and is later reindexed to 0.0 by the alignment
+-- layer. That is precisely the failure class pml.assert_pymc_catalogue_coverage()
+-- was written to catch after the fact; these CHECKs stop it at write time.
+--
+-- The vocabularies were previously documented only in prose (this file's
+-- header and pml_df_metadata_populate.sql lines 9-34). Keep them in sync with
+-- CLAUDE.md ("pymc_role Enum" table) when adding a model or a role.
+-- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------
 -- Fused Kalman MvGRW panel (kalman_pt) — role notes.

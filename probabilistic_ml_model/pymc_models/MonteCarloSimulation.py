@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING, Union
 
 # PyMC 6.0 + ArviZ 1.0: top-level ``arviz`` re-exports the modular API,
 # so the legacy ``arviz_base`` fallback (PyMC 5.x transition artefact) is
@@ -56,6 +56,10 @@ if TYPE_CHECKING:
 
 from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._workflow import (
+    build_sample_kwargs,
+    log_sample_diagnostics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +181,7 @@ def fit(
     nuts_sampler: Optional[str] = None,
     return_model: bool = False,
     **sample_kwargs: Any,
-):
+) -> Union[InferenceLike, "tuple[InferenceLike, Optional[pm_typing.Model]]"]:
     """Fit return-distribution model and generate simulations.
 
     Parameters
@@ -237,23 +241,23 @@ def fit(
         """Build model and run sampler with the given settings."""
         model = _build_mc_model(historical_means, historical_stds, tickers)
         with model:
-            scall: dict[str, Any] = dict(
-                draws=n_draws,
+            scall = build_sample_kwargs(
+                samples=n_draws,
                 tune=n_tune,
                 chains=n_chains,
                 cores=cores,
                 target_accept=accept,
                 random_seed=random_seed,
-                init="adapt_diag",
-                progressbar=True,
-                compile_kwargs=_compile_kwargs,
+                nuts_sampler=nuts_sampler,
+                sample_kwargs=sample_kwargs,
+                model_name="MonteCarloReturnSimulation",
             )
-            if nuts_sampler is not None:
-                scall["nuts_sampler"] = nuts_sampler
-            scall.setdefault("idata_kwargs", {"log_likelihood": False})
-            scall.update(sample_kwargs)
+            # MC's own default: the diagonal-adaptation init is cheaper than
+            # jitter+adapt_diag for this well-conditioned per-ticker model.
+            scall.setdefault("init", "adapt_diag")
 
             idata = pm.sample(**scall)
+            log_sample_diagnostics(idata, model_name="MonteCarloReturnSimulation")
         return idata, model
 
     # Try with requested settings; on failure, retry with conservative settings.

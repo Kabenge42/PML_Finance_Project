@@ -1,0 +1,4 @@
+fiscal_event,date,horizon_days,forecast_pt,forecast_pt_lo,forecast_pt_hi,implied_upside_pct
+Next earnings,2026-08-06,1,265.69,236.892,312.434,-7.085
+Next report,2026-09-30,56,271.068,227.996,324.488,-5.204
+Next FY end,2026-09-30,56,270.987,227.644,322.956,-5.233

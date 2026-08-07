@@ -1,6 +1,6 @@
 CREATE TABLE analytics."09_diagnostics_01_table"
 (
-	posterior text,
+	index     text,
 	mean      double precision,
 	sd        double precision,
 	eti89_lb  double precision,

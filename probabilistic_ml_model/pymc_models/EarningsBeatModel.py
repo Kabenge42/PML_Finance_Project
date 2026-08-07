@@ -41,6 +41,10 @@ if TYPE_CHECKING:
 
 from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._workflow import (
+    build_sample_kwargs,
+    log_sample_diagnostics,
+)
 from probabilistic_ml_model.pymc_models._feature_alignment import (
     coerce_by_data_type,
     load_feature_metadata_from_db,
@@ -373,22 +377,22 @@ class EarningsBeatBayesian:
                         dims="isin",
                     )
 
-            sample_call_kwargs: dict[str, Any] = dict(
-                draws=samples,
-                tune=tune,
-                chains=chains,
-                target_accept=target_accept,
-                random_seed=random_seed,
-                progressbar=True,
-                compile_kwargs=get_pytensor_compile_kwargs(),
+            idata = pm.sample(
+                **build_sample_kwargs(
+                    samples=samples,
+                    tune=tune,
+                    chains=chains,
+                    target_accept=target_accept,
+                    random_seed=random_seed,
+                    nuts_sampler=nuts_sampler,
+                    sample_kwargs=sample_kwargs,
+                    model_name="EarningsBeatBayesian",
+                )
             )
-            if nuts_sampler is not None:
-                sample_call_kwargs["nuts_sampler"] = nuts_sampler
-            # Default to skipping log_likelihood unless caller overrides.
-            sample_call_kwargs.setdefault("idata_kwargs", {"log_likelihood": False})
-            sample_call_kwargs.update(sample_kwargs)
 
-            idata = pm.sample(**sample_call_kwargs)
+        # Self-report sampler quality (divergences / bulk ESS) instead of
+        # relying on console scraping of the sampler output.
+        log_sample_diagnostics(idata, model_name="EarningsBeatBayesian")
 
         # Recommendation §12.3 #3 — stamp feature_catalogue provenance.
         try:

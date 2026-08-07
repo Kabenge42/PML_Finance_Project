@@ -34,8 +34,12 @@ from probabilistic_ml_model._pytensor_env import force_python_vm as _force_pytho
 
 _force_python_vm()
 
-from probabilistic_ml_model._pymc_arviz_compat import InferenceLike  # noqa: F401
+from probabilistic_ml_model._pymc_arviz_compat import InferenceLike
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
+from probabilistic_ml_model.pymc_models._workflow import (
+    build_sample_kwargs,
+    log_sample_diagnostics,
+)
 
 import numpy as np
 
@@ -113,7 +117,7 @@ class ProbabilisticLinearRegression:
         max_treedepth: int = _DEFAULT_MAX_TREEDEPTH,
         posterior_predictive: bool = False,
         progressbar: bool = True,
-    ):
+    ) -> InferenceLike:
         """Fit Bayesian linear regression and return InferenceData.
 
         Parameters
@@ -222,22 +226,32 @@ class ProbabilisticLinearRegression:
 
             pm.Normal("y_obs", mu=mu, sigma=sigma, observed=y_scaled, dims="obs")
 
-            nuts_kwargs: dict = {"max_treedepth": max_treedepth}
-
             _compile_kwargs = get_pytensor_compile_kwargs()
 
+            # ``idata_kwargs={"posterior_predictive": {}}`` is a deliberate
+            # arviz-base 1.0 workaround (an explicit empty dict avoids the
+            # ``TypeError: 'NoneType' object is not iterable`` raised by
+            # ``posterior_predictive_to_xarray``) — it must survive the
+            # project default, so it is passed as a caller override.
             idata = pm.sample(
-                draws=samples,
-                tune=tune,
-                chains=chains,
-                cores=cores,
-                target_accept=target_accept,
-                random_seed=random_seed,
-                progressbar=progressbar,
-                nuts_sampler="pymc",
-                idata_kwargs={"posterior_predictive": {}},
-                compile_kwargs=_compile_kwargs,
-                **nuts_kwargs,
+                **build_sample_kwargs(
+                    samples=samples,
+                    tune=tune,
+                    chains=chains,
+                    cores=cores,
+                    target_accept=target_accept,
+                    random_seed=random_seed,
+                    nuts_sampler="pymc",
+                    progressbar=progressbar,
+                    model_name="ProbabilisticLinearRegression",
+                    sample_kwargs={
+                        "idata_kwargs": {"posterior_predictive": {}},
+                        "max_treedepth": max_treedepth,
+                    },
+                )
+            )
+            log_sample_diagnostics(
+                idata, model_name="ProbabilisticLinearRegression"
             )
 
             if posterior_predictive:

@@ -2367,6 +2367,151 @@ FROM pml.pml_df_metadata         md,
 WHERE md.pymc_role IN ('coord', 'observed', 'mutable_predictor', 'constant_data');
 
 -- Convenience predicate views (mirror equities_schema_metadata role views).
+-- =========================================================================
+-- 7i. CATALOGUE COVERAGE RECONCILIATION
+-- =========================================================================
+-- Brings pml.assert_pymc_catalogue_coverage() to zero violations (73 -> 0 as
+-- of 2026-08-06). The contract it enforces: every feat_* / observed_* / n_*
+-- column emitted by an mv_pymc_* must map to exactly ONE
+-- pml.vw_pymc_feature_catalogue row whose feature_alias equals that column
+-- name, for that MV's model_target.
+--
+-- Each block below was derived from the live check, not by inspection:
+--     SELECT model_target, status, count(*),
+--            string_agg(feat_name, ', ' ORDER BY feat_name)
+--     FROM pml.vw_pymc_catalogue_coverage_check
+--     WHERE status <> 'OK' GROUP BY 1, 2 ORDER BY 1, 2;
+-- Re-run that query after editing any mv_pymc_* definition.
+-- (kalman_pt was already clean and is untouched here.)
+-- =========================================================================
+
+-- 7i.1 PHANTOM_CATALOGUE_ALIAS - stray model tags.
+--   These engineered self-rows are features of a DIFFERENT model's MV; they
+--   were additionally tagged 'accounting_anomaly' / 'price_target', whose MVs
+--   never emit them. Each row keeps its correct tag (earnings_beat / dcf_pt /
+--   kalman_pt), so only the stray tag is removed.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_remove(model_targets, 'accounting_anomaly')
+WHERE column_name IN
+      -- -> earnings_beat
+      ('feat_ebit_logit_beat_rate', 'feat_ebit_logit_beat_rate_annual',
+       'feat_ebitda_logit_beat_rate', 'feat_ebitda_logit_beat_rate_annual',
+       'feat_logit_beat_rate', 'feat_logit_beat_rate_annual',
+       'feat_sales_logit_beat_rate', 'feat_sales_logit_beat_rate_annual',
+       'feat_rev_accel_1m_6m',
+      -- -> dcf_pt
+       'feat_fcf_growth_1y', 'feat_fcf_growth_2y', 'feat_fcf_terminal_growth',
+       'feat_reinvest_rate',
+      -- -> kalman_pt (the Piotroski composite + its four components)
+       'feat_median_piotroski_f_score', 'feat_piotroski_f_score_fy',
+       'feat_piotroski_f_score_neg1fy', 'feat_piotroski_f_score_neg2fy',
+       'feat_piotroski_f_score_neg3fy');
+
+-- The analyst drift / range family belongs to mv_pymc_kalman_pt only.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_remove(model_targets, 'price_target')
+WHERE column_name IN ('feat_coverage_drift', 'feat_price_drift', 'feat_price_drift_n',
+                      'feat_pt_drift', 'feat_pt_drift_n', 'feat_pt_high_drift',
+                      'feat_pt_low_drift', 'feat_pt_median_drift',
+                      'feat_pt_noise_drift', 'feat_pt_range_norm');
+
+-- 7i.2 PHANTOM_CATALOGUE_ALIAS - provenance rows for INTERMEDIATE inputs.
+--   These aliases (_denom / _lag / _offset) document the inputs *feeding* an
+--   engineered feature; they are CTE-internal and no MV emits them as columns.
+--   Dropping the alias row makes each column fall back to its own name, which
+--   no longer matches the feat_/observed_/n_ prefixes the check inspects.
+--   The underlying columns keep their model_targets and predictor roles.
+DELETE
+FROM pml.pml_df_feature_alias
+WHERE feature_alias IN ('feat_accruals_ratio_cfo', 'feat_accruals_ratio_ni',
+                        'feat_ebit_growth_1y_lag', 'feat_ebitda_growth_1y_lag',
+                        'feat_employee_growth_1y_lag', 'feat_gpm_change_1y_lag',
+                        'feat_issuance_intensity_denom', 'feat_sales_growth_1y_lag',
+                        'feat_share_inflation_1y_lag', 'feat_cfo_capex_cov_denom',
+                        'feat_fcf_yield_denom', 'feat_net_equity_issuance_denom',
+                        'feat_net_equity_issuance_offset',
+                        'feat_eps_payout_ratio_denom', 'feat_fcf_coverage_denom');
+
+-- 7i.3 DUPLICATE_CATALOGUE_ALIAS - two rows claimed price_target's
+--   feat_pt_achievement_1y (the engineered self-row and a price_target_1y_ago
+--   alias). A duplicate makes _resolve_<model>_feature_aliases() order-
+--   dependent; the self-row is canonical, so drop the alias row.
+DELETE
+FROM pml.pml_df_feature_alias
+WHERE column_name = 'price_target_1y_ago'
+  AND model_target = 'price_target'
+  AND feature_alias = 'feat_pt_achievement_1y';
+
+-- 7i.4 PHANTOM_CATALOGUE_ALIAS - day-count aliases. mv_pymc_price_target emits
+--   the raw days_* names (days_to_next_earnings, ...), but the catalogue
+--   claimed feat_days_* variants that no MV produces. Drop the overrides so
+--   the alias falls back to the real column name.
+DELETE
+FROM pml.pml_df_feature_alias
+WHERE model_target = 'price_target'
+  AND feature_alias LIKE 'feat_days_%';
+
+-- 7i.5 MISSING_FROM_CATALOGUE - the dangerous class: the MV emits the column
+--   but no catalogue row claims it, so the alignment layer silently reindexes
+--   it to 0.0. Registered here as engineered self-rows (column_name =
+--   feature_alias), following the 7h convention for MV-computed features.
+--   The 16 earnings_beat n_* columns are the model's OBSERVED counts
+--   (pml.beat_counts over the *_surprise_pct arrays).
+INSERT INTO pml.pml_df_metadata (column_name, category, feature_role, feature_alias,
+                                 data_type, pymc_role, model_targets, description)
+VALUES ('n_total', 'earnings', 'count', 'n_total', 'count', 'observed', ARRAY ['earnings_beat'],
+        'EPS surprise observations (pml.beat_counts).'),
+       ('n_beats', 'earnings', 'count', 'n_beats', 'count', 'observed', ARRAY ['earnings_beat'],
+        'EPS surprise beats (pml.beat_counts).'),
+       ('n_total_annual', 'earnings', 'count', 'n_total_annual', 'count', 'observed', ARRAY ['earnings_beat'],
+        'Annual EPS surprise observations.'),
+       ('n_beats_annual', 'earnings', 'count', 'n_beats_annual', 'count', 'observed', ARRAY ['earnings_beat'],
+        'Annual EPS surprise beats.'),
+       ('n_sales_total', 'earnings', 'count', 'n_sales_total', 'count', 'observed', ARRAY ['earnings_beat'],
+        'Sales surprise observations.'),
+       ('n_sales_beats', 'earnings', 'count', 'n_sales_beats', 'count', 'observed', ARRAY ['earnings_beat'],
+        'Sales surprise beats.'),
+       ('n_sales_total_annual', 'earnings', 'count', 'n_sales_total_annual', 'count', 'observed',
+        ARRAY ['earnings_beat'], 'Annual sales surprise observations.'),
+       ('n_sales_beats_annual', 'earnings', 'count', 'n_sales_beats_annual', 'count', 'observed',
+        ARRAY ['earnings_beat'], 'Annual sales surprise beats.'),
+       ('n_ebit_total', 'earnings', 'count', 'n_ebit_total', 'count', 'observed', ARRAY ['earnings_beat'],
+        'EBIT surprise observations.'),
+       ('n_ebit_beats', 'earnings', 'count', 'n_ebit_beats', 'count', 'observed', ARRAY ['earnings_beat'],
+        'EBIT surprise beats.'),
+       ('n_ebit_total_annual', 'earnings', 'count', 'n_ebit_total_annual', 'count', 'observed',
+        ARRAY ['earnings_beat'], 'Annual EBIT surprise observations.'),
+       ('n_ebit_beats_annual', 'earnings', 'count', 'n_ebit_beats_annual', 'count', 'observed',
+        ARRAY ['earnings_beat'], 'Annual EBIT surprise beats.'),
+       ('n_ebitda_total', 'earnings', 'count', 'n_ebitda_total', 'count', 'observed', ARRAY ['earnings_beat'],
+        'EBITDA surprise observations.'),
+       ('n_ebitda_beats', 'earnings', 'count', 'n_ebitda_beats', 'count', 'observed', ARRAY ['earnings_beat'],
+        'EBITDA surprise beats.'),
+       ('n_ebitda_total_annual', 'earnings', 'count', 'n_ebitda_total_annual', 'count', 'observed',
+        ARRAY ['earnings_beat'], 'Annual EBITDA surprise observations.'),
+       ('n_ebitda_beats_annual', 'earnings', 'count', 'n_ebitda_beats_annual', 'count', 'observed',
+        ARRAY ['earnings_beat'], 'Annual EBITDA surprise beats.'),
+       ('feat_accruals_ratio', 'earnings_quality', 'predictor', 'feat_accruals_ratio', 'ratio',
+        'mutable_predictor', ARRAY ['accounting_anomaly'], '(NI - CFO) / scale (pml.accruals_ratio).'),
+       ('feat_eps_adj_gap', 'earnings_quality', 'predictor', 'feat_eps_adj_gap', 'ratio',
+        'mutable_predictor', ARRAY ['accounting_anomaly'], 'Adjusted-vs-GAAP EPS gap.'),
+       ('feat_distress_zone', 'credit', 'score', 'feat_distress_zone', 'score', 'mutable_predictor',
+        ARRAY ['credit_risk'], 'Altman zone 1=distress / 2=grey / 3=safe (pml.altman_zone).'),
+       ('feat_total_yield', 'dividend', 'predictor', 'feat_total_yield', 'pct', 'mutable_predictor',
+        ARRAY ['dividend_safety'], 'Dividend + buyback shareholder yield.'),
+       ('observed_price', 'valuation', 'target', 'observed_price', 'level', 'observed',
+        ARRAY ['dcf_pt'], 'Spot price response for the DCF fair-value model.')
+ON CONFLICT (column_name) DO UPDATE
+	SET feature_alias = EXCLUDED.feature_alias,
+	    pymc_role     = EXCLUDED.pymc_role,
+	    model_targets = (SELECT ARRAY(SELECT DISTINCT
+	                                  unnest(pml.pml_df_metadata.model_targets ||
+	                                         EXCLUDED.model_targets)));
+
+-- Verify (should return no rows, i.e. the assertion below passes):
+--   SELECT * FROM pml.vw_pymc_catalogue_coverage_check WHERE status <> 'OK';
+--   SELECT pml.assert_pymc_catalogue_coverage();
+
 CREATE OR REPLACE VIEW pml.vw_pml_df_predictors AS
 SELECT column_name, category, data_type, ordinal_position, description
 FROM pml.pml_df_metadata
