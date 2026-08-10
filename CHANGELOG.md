@@ -65,9 +65,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the redundancy was latent and only bit when another per-name absorber competed
   for the same variance. `trading_region` is kept: listing venue determines analyst
   coverage and currency, which is the mechanism the drift features measure.
-- **`KalmanRunConfig.draws` returned to 1000** from the 3000 briefly used to
-  out-sample the ridge above. With the conditioning fixed at source the extra
-  draws buy nothing, and a T=4 run costs ~16 min again rather than ~45.
+- **`KalmanRunConfig.draws` settled at 2000**, after separating the two effects
+  that were confounded in the `beta` failure. All measured at draws=1000, zero
+  divergences throughout:
+
+  | drift cols | group coords | `beta` R-hat | global min ESS |
+  |---|---|---|---|
+  | 21 | region + trading_region | 1.0261 | 139.8 |
+  | 15 | region + trading_region | <1.0121 | 235.7 |
+  | 15 | trading_region only | 1.0262 | 296.0 |
+
+  Removing the collinearity was necessary and it worked — min ESS rose **2.1×**
+  at an unchanged budget — but it was not sufficient. Nothing collinear remains:
+  drift design condition number 23, group coords orthogonal (max Cramér's V 0.24),
+  no drift feature more than R² 0.25 explained by the group dummies. ESS still
+  lands near 300 against a 400 gate, with R-hat bouncing 1.013–1.026 between runs
+  because R-hat is itself noisy at that ESS. That is an under-sampled posterior,
+  not a structural defect. An earlier build used 3000 to out-sample the *un-pruned*
+  ridge (treating the symptom); reverting to 1000 then overshot the other way.
 
 - **Exported price targets were ~1.5–2.3 pp too high on every T>1 run.**
   `prepare_kalman_panel_inputs` standardises the response tensor on the **pooled

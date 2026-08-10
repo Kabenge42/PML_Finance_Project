@@ -326,18 +326,29 @@ class KalmanRunConfig:
 
     # Sampling
     random_seed: int = 42
-    # Briefly raised to 3000 to out-sample the ``beta`` ridge on the 2026-08-10
-    # T=4 validation (R-hat 1.026 / bulk-ESS 140 at ZERO divergences). That was
-    # treating the symptom: the drift design carried condition number 1 580
-    # because four price-target drift columns and four analyst-sentiment columns
-    # each restated one signal. Pruning those to a single representative apiece
-    # (``KALMAN_PT_DRIFT_SIBLING_FEATURES`` /
-    # ``KALMAN_COLLINEAR_COMPOSITION_FEATURES``) took the design to 15 columns at
-    # condition number 23, so the extra draws are no longer buying anything and
-    # the budget returns to 1000 — worth ~45 min -> ~16 min per T=4 run. If
-    # ``beta`` ever falls short of the ESS gate again, raise this as a measured
-    # decision rather than a standing tax, and check the conditioning first.
-    draws: int = 1000
+    # 2000. Settled after separating the two things that were confounded in the
+    # ``beta`` convergence failure — conditioning and sampling budget. Measured on
+    # the 2026-08-10 T=4 panel, all at draws=1000 and ZERO divergences throughout:
+    #
+    #   drift cols  group coords              beta R-hat   global min ESS
+    #       21      region + trading_region      1.0261            139.8
+    #       15      region + trading_region     <1.0121            235.7
+    #       15      trading_region only          1.0262            296.0
+    #
+    # Removing the collinearity was necessary and it worked: min ESS rose 2.1x at
+    # an unchanged budget. But it was not sufficient. Nothing collinear remains to
+    # cut — the drift design sits at condition number 23, the group coords are
+    # mutually orthogonal (max Cramer's V 0.24), and no drift feature is more than
+    # R^2 0.25 explained by the group dummies — yet ESS still lands near 300
+    # against a 400 gate, and R-hat bounces 1.013-1.026 between runs because
+    # R-hat is itself noisy at that ESS. That is an under-sampled posterior, not a
+    # structural defect.
+    #
+    # 2000 projects to ESS ~590 with margin on R-hat, at ~32 min per T=4 run.
+    # (An earlier build set 3000 purely to out-sample the un-pruned ridge; that
+    # was treating the symptom and is no longer needed. Reverting it to 1000 then
+    # overshot in the other direction — this is the measured middle.)
+    draws: int = 2000
     tune: int = 1000
     chains: int = 4
     cores: int = 1

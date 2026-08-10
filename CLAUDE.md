@@ -479,6 +479,7 @@ Local-level state / comparison knobs on `KalmanRunConfig`:
 
 | Field                     | Default | Purpose                                                                          |
 |---------------------------|---------|----------------------------------------------------------------------------------|
+| `draws`                   | `2000`  | Pruning the collinear features lifted min ESS 2.1x at draws=1000 but landed near 300 against the 400 gate; nothing collinear remains to cut (drift cond 23, coords orthogonal), so the residual is sampling budget. ~32 min per T=4 run. |
 | `state_innovation_scale`  | `0.0`   | **AR(1) time-varying state — OFF by default.** Tried and rejected at T=4: it bought +0.013 recovery correlation for min ESS 14 vs 69, with `sigma_state`/`rho` drifting between draw budgets. The per-ISIN intercept below carries the panel. Set to `0.1` to enable; revisit on a longer panel. |
 | `isin_level_scale` (builder arg) | `0.10` | Prior scale of `sigma_isin_level`, the per-ISIN random intercept restored on `T > 1`. This is the layer the panel actually buys. `0.0` pins it off (the pre-0.9.9.14 baseline). |
 | `enable_model_comparison` | `False` | Run §9b. Refits both arms and computes a pointwise `log_likelihood` per arm (~820 MB each at full panel size), so ≈3× the sampling cost. |
