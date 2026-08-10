@@ -20,51 +20,51 @@ INFO:pymc_kalman_filter_pt:Loaded feature_catalogue: (157, 8)
 #fiscal-calendar: 8 -> ['next_earnings', 'income_statement_report_date', 'next_income_statement_report_date', 'expected_report_date', 'next_fy_end_date', 'fy_end_date', 'next_fiscal_quarter', 'last_updated']
 #day-count      : 7 -> ['days_to_next_earnings', 'days_since_last_report', 'days_to_next_report', 'days_to_expected_report', 'days_to_next_fy_end', 'days_since_fy_end', 'days_to_next_fiscal_quarter']
 Drift-feature source: feature_catalogue frame (46 mutable_predictor candidates)
-Drift features : ['feat_analyst_bearish_pct', 'feat_analyst_bullish_pct', 'feat_analyst_conviction', 'feat_coverage_drift', 'feat_ev_vs_3yavg', 'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_mv_ev_drift', 'feat_one_day_return', 'feat_price_chg_pct_3m', 'feat_price_drift', 'feat_pt_accuracy_1y', 'feat_pt_achievement_1y', 'feat_pt_drift', 'feat_pt_high_drift', 'feat_pt_low_drift', 'feat_pt_median_drift', 'feat_pt_noise_drift', 'feat_pt_range_hit_rate', 'feat_analyst_rating', 'feat_median_piotroski_f_score']
+Drift features : ['feat_coverage_drift', 'feat_ev_vs_3yavg', 'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_mv_ev_drift', 'feat_one_day_return', 'feat_price_chg_pct_3m', 'feat_price_drift', 'feat_pt_accuracy_1y', 'feat_pt_achievement_1y', 'feat_pt_drift', 'feat_pt_noise_drift', 'feat_pt_range_hit_rate', 'feat_analyst_rating', 'feat_median_piotroski_f_score']
 Noise drivers  : range=feat_pt_range_norm, sigma=feat_pt_noise_sigma, vol=['feat_vol_drift']
                         mv_column                                   state_space_role
-0        feat_analyst_bearish_pct               drift / state-transition mean (beta)
-1        feat_analyst_bullish_pct               drift / state-transition mean (beta)
-2         feat_analyst_conviction               drift / state-transition mean (beta)
-3             feat_coverage_drift               drift / state-transition mean (beta)
-4                feat_ev_vs_3yavg               drift / state-transition mean (beta)
-5              feat_mcap_trend_1y               drift / state-transition mean (beta)
-6              feat_mcap_vs_3yavg               drift / state-transition mean (beta)
-7                feat_mv_ev_drift               drift / state-transition mean (beta)
-8             feat_one_day_return               drift / state-transition mean (beta)
-9           feat_price_chg_pct_3m               drift / state-transition mean (beta)
-10               feat_price_drift               drift / state-transition mean (beta)
-11            feat_pt_accuracy_1y               drift / state-transition mean (beta)
-12         feat_pt_achievement_1y               drift / state-transition mean (beta)
-13                  feat_pt_drift               drift / state-transition mean (beta)
-14             feat_pt_high_drift               drift / state-transition mean (beta)
-15              feat_pt_low_drift               drift / state-transition mean (beta)
-16           feat_pt_median_drift               drift / state-transition mean (beta)
-17            feat_pt_noise_drift               drift / state-transition mean (beta)
-18         feat_pt_range_hit_rate               drift / state-transition mean (beta)
-19            feat_analyst_rating               drift / state-transition mean (beta)
-20  feat_median_piotroski_f_score               drift / state-transition mean (beta)
-21             feat_pt_range_norm                  observation-noise widener (range)
-22            feat_pt_noise_sigma        observation-noise widener (consensus sigma)
-23                 feat_vol_drift     observation-noise widener (realized-vol drift)
-24                  feat_avg_beta           risk/size tilt (named pm.Data container)
-25            feat_mcap_country_r           risk/size tilt (named pm.Data container)
-26                feat_rel_volume           risk/size tilt (named pm.Data container)
-27              days_since_fy_end                     time covariate (t_scaled axis)
-28         days_since_last_report                     time covariate (t_scaled axis)
-29        days_to_expected_report                     time covariate (t_scaled axis)
-30          days_to_next_earnings                     time covariate (t_scaled axis)
-31    days_to_next_fiscal_quarter                     time covariate (t_scaled axis)
-32            days_to_next_fy_end                     time covariate (t_scaled axis)
-33            days_to_next_report                     time covariate (t_scaled axis)
-34            feat_implied_upside  RESPONSE (log1p -> feat_log_uplift; leakage-ba...
-35       feat_analyst_neutral_pct  excluded (drift-support counter / raw rating c...
-36                     feat_holds  excluded (drift-support counter / raw rating c...
-37                feat_no_opinion  excluded (drift-support counter / raw rating c...
-38             feat_price_drift_n  excluded (drift-support counter / raw rating c...
-39                feat_pt_drift_n  excluded (drift-support counter / raw rating c...
-40               feat_vol_drift_n  excluded (drift-support counter / raw rating c...
-41                      feat_buys  excluded (drift-support counter / raw rating c...
+0             feat_coverage_drift               drift / state-transition mean (beta)
+1                feat_ev_vs_3yavg               drift / state-transition mean (beta)
+2              feat_mcap_trend_1y               drift / state-transition mean (beta)
+3              feat_mcap_vs_3yavg               drift / state-transition mean (beta)
+4                feat_mv_ev_drift               drift / state-transition mean (beta)
+5             feat_one_day_return               drift / state-transition mean (beta)
+6           feat_price_chg_pct_3m               drift / state-transition mean (beta)
+7                feat_price_drift               drift / state-transition mean (beta)
+8             feat_pt_accuracy_1y               drift / state-transition mean (beta)
+9          feat_pt_achievement_1y               drift / state-transition mean (beta)
+10                  feat_pt_drift               drift / state-transition mean (beta)
+11            feat_pt_noise_drift               drift / state-transition mean (beta)
+12         feat_pt_range_hit_rate               drift / state-transition mean (beta)
+13            feat_analyst_rating               drift / state-transition mean (beta)
+14  feat_median_piotroski_f_score               drift / state-transition mean (beta)
+15             feat_pt_range_norm                  observation-noise widener (range)
+16            feat_pt_noise_sigma        observation-noise widener (consensus sigma)
+17                 feat_vol_drift     observation-noise widener (realized-vol drift)
+18                  feat_avg_beta           risk/size tilt (named pm.Data container)
+19            feat_mcap_country_r           risk/size tilt (named pm.Data container)
+20                feat_rel_volume           risk/size tilt (named pm.Data container)
+21              days_since_fy_end                     time covariate (t_scaled axis)
+22         days_since_last_report                     time covariate (t_scaled axis)
+23        days_to_expected_report                     time covariate (t_scaled axis)
+24          days_to_next_earnings                     time covariate (t_scaled axis)
+25    days_to_next_fiscal_quarter                     time covariate (t_scaled axis)
+26            days_to_next_fy_end                     time covariate (t_scaled axis)
+27            days_to_next_report                     time covariate (t_scaled axis)
+28            feat_implied_upside  RESPONSE (log1p -> feat_log_uplift; leakage-ba...
+29       feat_analyst_bearish_pct  excluded (drift-support counter / raw rating c...
+30       feat_analyst_bullish_pct  excluded (drift-support counter / raw rating c...
+31        feat_analyst_conviction  excluded (drift-support counter / raw rating c...
+32       feat_analyst_neutral_pct  excluded (drift-support counter / raw rating c...
+33                     feat_holds  excluded (drift-support counter / raw rating c...
+34                feat_no_opinion  excluded (drift-support counter / raw rating c...
+35             feat_price_drift_n  excluded (drift-support counter / raw rating c...
+36                feat_pt_drift_n  excluded (drift-support counter / raw rating c...
+37               feat_vol_drift_n  excluded (drift-support counter / raw rating c...
+38                      feat_buys  excluded (drift-support counter / raw rating c...
+39             feat_pt_high_drift  excluded (drift-support counter / raw rating c...
+40              feat_pt_low_drift  excluded (drift-support counter / raw rating c...
+41           feat_pt_median_drift  excluded (drift-support counter / raw rating c...
 42                     feat_sells  excluded (drift-support counter / raw rating c...
 43      feat_piotroski_f_score_fy  excluded (drift-support counter / raw rating c...
 44  feat_piotroski_f_score_neg1fy  excluded (drift-support counter / raw rating c...
@@ -72,9 +72,9 @@ Noise drivers  : range=feat_pt_range_norm, sigma=feat_pt_noise_sigma, vol=['feat
 46  feat_piotroski_f_score_neg3fy  excluded (drift-support counter / raw rating c...
   history panel: lookbacks=['6m', '3m', '1m'] -> T=4; 217 missing history cells filled with the snapshot uplift (1.1% of history cells).
 Fused panel — isins:6540  T:4  D:1 (['feat_log_uplift'])
-  drift_features:21  avg_beta(mean):0.740  size_ratio(mean):0.181  volume_ratio(mean):1.059  vol_drift(mean):0.039  cv(mean):0.169
+  drift_features:15  avg_beta(mean):0.740  size_ratio(mean):0.181  volume_ratio(mean):1.059  vol_drift(mean):0.039  cv(mean):0.169
 
-=== panel: 6540 ISINs, T=4, D=1, 21 drift features ===
+=== panel: 6540 ISINs, T=4, D=1, 15 drift features ===
 
 === de-standardisation moments (Finding 2) ===
   pooled   (used by the model): mean=0.174439 std=0.211119
@@ -96,33 +96,33 @@ C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\arviz
 
 === gate 1: convergence ===
   divergences = 0      (gate: 0)
-  GLOBAL parameters : max R-hat = 1.0261 (gate < 1.01), min ESS = 139.8 (gate > 400)
-  per-ISIN latents  : max R-hat = 1.0249, min ESS = 176.9   [min over thousands of names — informational]
+  GLOBAL parameters : max R-hat = 1.0130 (gate < 1.01), min ESS = 235.7 (gate > 400)
+  per-ISIN latents  : max R-hat = 1.0168, min ESS = 241.6   [min over thousands of names — informational]
   worst 8 by R-hat:
-    GLOBAL   beta                   n=21     r_hat=1.0261  ess=   139.8
-    per-isin mu_reg                 n=6540   r_hat=1.0249  ess=   176.9
-    per-isin expected_return        n=6540   r_hat=1.0239  ess=   278.8
-    per-isin mu_isin                n=6540   r_hat=1.0239  ess=   277.8
-    per-isin state_path             n=26160  r_hat=1.0239  ess=   277.8
-    per-isin state_now              n=6540   r_hat=1.0239  ess=   277.8
-    per-isin risk_adj_return        n=6540   r_hat=1.0239  ess=   277.8
-    per-isin achieve_prob           n=6540   r_hat=1.0239  ess=   277.8
+    per-isin mu_reg                 n=6540   r_hat=1.0168  ess=   241.6
+    GLOBAL   region_effect          n=5      r_hat=1.0130  ess=   242.6
+    GLOBAL   sigma_region           n=1      r_hat=1.0129  ess=   326.5
+    GLOBAL   trading_region_effect  n=5      r_hat=1.0121  ess=   235.7
+    GLOBAL   sigma_trading_region   n=1      r_hat=1.0104  ess=   340.0
+    per-isin z_isin_level           n=6540   r_hat=1.0094  ess=  2421.4
+    per-isin expected_return        n=6540   r_hat=1.0091  ess=   348.3
+    per-isin mu_isin                n=6540   r_hat=1.0090  ess=   348.4
 
 === gate 2: is the per-ISIN latent alive? ===
   fixed prior scale        = 0.1000
-  realised effect sd       = 0.0426 (43% of the prior scale)
+  realised effect sd       = 0.0428 (43% of the prior scale)
   AR(1) layer disabled (state_innovation_scale=0.0) — expected; the per-ISIN intercept carries the panel.
 
 === gate 4: per-time PPC coverage (target 0.92) ===
 Sampling: [target_pct_obs]
 INFO:pymc.sampling.forward:Sampling: [target_pct_obs]
-  t=0: 91.93%
+  t=0: 91.51%
   t=1: 92.11%
-  t=2: 92.68%
-  t=3: 91.88%
+  t=2: 92.43%
+  t=3: 92.02%
 
 === gate 3: predicted signature vs the static twin ===
-  production: sigma_base=0.1678  mean per-name posterior sd=0.0914
+  production: sigma_base=0.1674  mean per-name posterior sd=0.0910
 
 --- fitting baseline(no per-ISIN latent) (state_innovation_scale=0.0) ---
 INFO:pymc_kalman_filter_pt:kalman_pt[baseline(no per-ISIN latent)]: sampler priority ['nutpie', 'numpyro', 'pymc']
@@ -130,13 +130,13 @@ NUTS[nutpie]: [beta, region_effect, trading_region_effect, sector_effect, style_
 INFO:pymc.sampling.mcmc:NUTS[nutpie]: [beta, region_effect, trading_region_effect, sector_effect, style_class_effect, size_class_effect, risk_loading, size_loading, volume_loading, alpha_level, sigma_base, sigma_time_free, nu_tail]
 C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\pytensor\tensor\rewriting\elemwise.py:1004: UserWarning: Loop fusion failed because the resulting node would exceed the kernel argument limit.
   warn(
-  baseline  : sigma_base=0.1685  mean per-name posterior sd=0.0188
-  -> sigma_base 0.1685 -> 0.1678 (FALLS as predicted)
-  -> per-name sd 0.0188 -> 0.0914 (WIDENS as predicted)
+  baseline  : sigma_base=0.1680  mean per-name posterior sd=0.0174
+  -> sigma_base 0.1680 -> 0.1674 (FALLS as predicted)
+  -> per-name sd 0.0174 -> 0.0910 (WIDENS as predicted)
 
 ==============================================================
 VALIDATION FAILED:
-  - global max R-hat 1.0261
-  - global min ESS 139.8
+  - global max R-hat 1.0130
+  - global min ESS 235.7
 Do NOT re-export analytics until these are resolved.
 EXIT=1

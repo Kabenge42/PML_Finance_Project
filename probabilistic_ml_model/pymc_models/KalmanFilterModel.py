@@ -1880,8 +1880,21 @@ class KalmanFilterPriceTarget:
 # ``feat_mcap_country_r`` is defined against) and collapse ``industry`` to its
 # parent ``sector``, the standard de-collinearisation move for a near-nested
 # pair. Two orthogonal dimensions, both low-to-moderate cardinality.
+# ``region`` is deliberately absent: it and ``trading_region`` are the SAME
+# variable for practical purposes — they agree for 96.12 % of the 6 549-name
+# universe (Cramer's V = 0.938; only cross-listings differ), against V <= 0.24
+# for every other pair here. Carrying both left the two effects trading off along
+# a ridge, and after the per-ISIN intercept landed they became the two
+# worst-mixing globals in the model: ``region_effect`` R-hat 1.0130 / ESS 243 and
+# ``trading_region_effect`` 1.0121 / 236, blocking the convergence gate on the
+# 2026-08-10 validation. (They mixed acceptably BEFORE the per-ISIN latent existed
+# — R-hat 1.002, ESS ~1.4-1.6k — so the redundancy was always there but only bit
+# once another per-name absorber competed for the same variance.)
+#
+# ``trading_region`` is kept over ``region`` because this model is driven by
+# analyst consensus: where a name LISTS determines which analysts cover it and in
+# what currency, which is the mechanism the drift features actually measure.
 _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
-    "region",
     "trading_region",
     "sector",
     "style_class",

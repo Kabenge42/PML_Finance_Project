@@ -54,6 +54,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them from `vw_pymc_feature_catalogue` while the MV still emits them, making
   `assert_pymc_catalogue_coverage()` raise MISSING_FROM_CATALOGUE.
   Verified after the change: `kalman_pt` reports 64 OK / 0 violations.
+- **`region` dropped from the crossed group effects.** It and `trading_region`
+  agree for **96.12 %** of the universe (Cramér's V **0.938**; only cross-listings
+  differ) against V ≤ 0.24 for every other coord pair — the same near-duplicate
+  pattern as the pruned drift families. Carrying both left the effects trading off
+  along a ridge, and once the per-ISIN intercept landed they became the two
+  worst-mixing globals (`region_effect` R-hat 1.0130 / ESS 243,
+  `trading_region_effect` 1.0121 / 236), blocking the convergence gate. They mixed
+  acceptably *before* the per-ISIN latent existed (R-hat 1.002, ESS ~1.4–1.6k), so
+  the redundancy was latent and only bit when another per-name absorber competed
+  for the same variance. `trading_region` is kept: listing venue determines analyst
+  coverage and currency, which is the mechanism the drift features measure.
 - **`KalmanRunConfig.draws` returned to 1000** from the 3000 briefly used to
   out-sample the ridge above. With the conditioning fixed at source the extra
   draws buy nothing, and a T=4 run costs ~16 min again rather than ~45.
