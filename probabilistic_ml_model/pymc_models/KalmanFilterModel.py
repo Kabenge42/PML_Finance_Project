@@ -1979,7 +1979,7 @@ def build_fused_kalman_pt_model(
         size_penalty: float = 0.25,
         volume_penalty: float = 0.1,
         robust: bool = True,
-        isin_level_scale: float = 0.5,
+        isin_level_scale: float = 0.10,
         state_innovation_scale: float = 0.0,
 ) -> "pm_typing.Model":
     """Build the fused coregionalised cross-sectional Kalman price-target model.
@@ -2208,11 +2208,15 @@ def build_fused_kalman_pt_model(
         ``True`` (default) → Student-t panel likelihood (absorbs analyst
         outliers); ``False`` → Normal-likelihood twin.
     isin_level_scale : float
-        Prior scale (``HalfNormal`` sigma) of ``sigma_isin_level``, the sd of the
-        per-ISIN random intercept restored on ``T > 1`` panels. ``0.0`` pins it
-        off, recovering the pre-0.9.9.14 purely-deterministic ``expected_return``
-        — the baseline arm for before/after comparison. Ignored when ``T == 1``,
-        where the intercept is genuinely non-identified.
+        **Fixed** (not learned) sd of the per-ISIN ``ZeroSumNormal`` intercept
+        restored on ``T > 1`` panels — the per-name analogue of
+        :data:`GROUP_EFFECT_SCALE`. A learned scale was tried and was the
+        worst-mixing parameter in the model (R-hat 1.023 / ESS 110, sliding
+        toward 0 and shifting with the group-effect coord set); the T=4 slices
+        are too serially correlated to identify a per-name variance component.
+        ``0.0`` pins the intercept off, recovering the pre-0.9.9.14 purely
+        deterministic ``expected_return`` — the baseline arm for before/after
+        comparison. Ignored when ``T == 1``.
     state_innovation_scale : float
         Prior scale (``HalfNormal`` sigma) of ``sigma_state``, the marginal sd of
         the AR(1) state deviation, on the standardised response scale.
@@ -2526,13 +2530,38 @@ def build_fused_kalman_pt_model(
         # deviation and cannot alias with the ``alpha_level`` level; non-centred
         # (scale x unit-ZSN) to avoid the funnel.
         if T > 1 and isin_level_scale > 0:
-            sigma_isin_level = pm.HalfNormal(
-                "sigma_isin_level", sigma=float(isin_level_scale)
+            # FIXED scale, not learned — the same medicine, and for the same
+            # reason, as the crossed group effects above.
+            #
+            # A learned ``sigma_isin_level`` was tried first and behaved exactly
+            # like the ``sigma_group`` scalar this model already abandoned: on the
+            # 2026-08-10 full-scale run (6 540 ISINs, T=4) it was the WORST-mixing
+            # parameter in the entire model at R-hat 1.023 / ESS 110, and its
+            # posterior slid toward the boundary (mean 0.032, 5.5 % quantile
+            # 0.0073). It also moved with the group-effect coord set — 0.089 under
+            # one set, 0.032 under another — which is the "two fits disagree"
+            # signature of a variance component the data cannot pin down, not a
+            # funnel.
+            #
+            # Why the data cannot pin it down: separating per-name SIGNAL
+            # dispersion from per-name MEASUREMENT noise needs independent
+            # replication within a name, and the T=4 lookback slices are strongly
+            # serially correlated (analyst targets are sticky), so they supply far
+            # less than 4 independent observations each. The level itself is
+            # identified; its scale is not.
+            #
+            # Fixing the scale deletes the stuck scalar from the sampler and
+            # leaves a plain regularized per-name effect, exactly as
+            # ``GROUP_EFFECT_SCALE`` does for the crossed intercepts.
+            # ``isin_level_scale`` is that constant. The default 0.10 brackets
+            # both learned estimates (0.032-0.089) with room above, so it
+            # regularizes without pinning the effect near zero.
+            pm.Deterministic("sigma_isin_level", pt.constant(isin_level_scale))
+            z_isin_level = pm.ZeroSumNormal(
+                "z_isin_level", sigma=float(isin_level_scale), dims="isin"
             )
-            z_isin_level = pm.ZeroSumNormal("z_isin_level", sigma=1.0, dims="isin")
             expected_return = pm.Deterministic(
-                "expected_return", mu_reg + sigma_isin_level * z_isin_level,
-                dims="isin",
+                "expected_return", mu_reg + z_isin_level, dims="isin",
             )
         else:
             # T == 1, or the latent deliberately pinned off — the pre-0.9.9.14

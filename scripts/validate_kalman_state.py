@@ -65,7 +65,7 @@ RHAT_GATE = 1.01
 SIGMA_STATE_FLOOR = 0.01  # below this the walk is indistinguishable from static
 
 
-def _fit(panel, cfg, *, scale: float, label: str, isin_level: float = 0.5):
+def _fit(panel, cfg, *, scale: float, label: str, isin_level: float = 0.10):
     """Build and sample one arm; returns (idata, model).
 
     Sampling goes through :func:`K.sample_with_fallback` (nutpie → numpyro →
@@ -235,18 +235,26 @@ def main() -> int:
     # The per-ISIN random intercept is the layer the T>1 panel actually buys; the
     # AR(1) state on top of it is opt-in (state_innovation_scale > 0) and off by
     # default. Check whichever is present.
-    if 'sigma_isin_level' not in post:
-        failures.append('sigma_isin_level absent (per-ISIN latent not built)')
-        print('  FAIL: sigma_isin_level not in the posterior.')
+    if 'z_isin_level' not in post:
+        failures.append('z_isin_level absent (per-ISIN latent not built)')
+        print('  FAIL: z_isin_level not in the posterior.')
     else:
-        lv = post['sigma_isin_level']
-        lv_lo = float(lv.quantile(0.055))
-        print(f'  sigma_isin_level mean = {float(lv.mean()):.4f}, '
-              f'5.5% quantile = {lv_lo:.4f} (floor {SIGMA_STATE_FLOOR})')
-        if lv_lo < SIGMA_STATE_FLOOR:
+        # The SCALE is fixed by construction (isin_level_scale), so its posterior
+        # is a point and quantiles of it say nothing. What matters is whether the
+        # effect is doing work: the realised cross-sectional spread of the
+        # per-name intercept, and whether the data moved individual names off zero.
+        eff = post['z_isin_level'].mean(('chain', 'draw'))
+        realised = float(eff.std())
+        prior_scale = float(post['sigma_isin_level'].mean()) \
+            if 'sigma_isin_level' in post else float('nan')
+        shrink = realised / prior_scale if prior_scale else float('nan')
+        print(f'  fixed prior scale        = {prior_scale:.4f}')
+        print(f'  realised effect sd       = {realised:.4f} '
+              f'({shrink:.0%} of the prior scale)')
+        if realised < SIGMA_STATE_FLOOR:
             failures.append(
-                f'sigma_isin_level collapsed toward 0 (5.5% q = {lv_lo:.4f}) — '
-                'the panel carries no per-name signal beyond the regression')
+                f'per-ISIN effect collapsed (realised sd = {realised:.4f}) — the '
+                'panel carries no per-name signal beyond the drift regression')
     if 'sigma_state' in post:
         ss = post['sigma_state']
         ss_lo = float(ss.quantile(0.055))
@@ -262,7 +270,10 @@ def main() -> int:
         print('  AR(1) layer disabled (state_innovation_scale=0.0) — expected; '
               'the per-ISIN intercept carries the panel.')
 
-    print('\n=== gate 4: per-time PPC coverage (target 0.94) ===')
+    # Target follows the module's interval width, so a 92% band is not scored
+    # against a hardcoded 94%.
+    target = K._HDI_HI - K._HDI_LO
+    print(f'\n=== gate 4: per-time PPC coverage (target {target:.2f}) ===')
     try:
         cov = _per_time_coverage(model, idata, panel)
         for t, v in cov.items():
@@ -271,8 +282,10 @@ def main() -> int:
         if (cov.max() - cov.min()) > 0.10:
             failures.append(
                 f'per-time coverage drifts {cov.min():.2%}->{cov.max():.2%}')
-    except Exception as exc:  # pragma: no cover - best-effort
-        print(f'  skipped: {exc!r}')
+    except Exception as exc:
+        # Not swallowed: a coverage failure is a validation failure, not a note.
+        print(f'  FAILED to compute: {exc!r}')
+        failures.append(f'per-time coverage could not be computed ({exc})')
 
     latent = K.resolve_screen_latent(post)
     sd_state = float(latent.std(('chain', 'draw')).mean())
