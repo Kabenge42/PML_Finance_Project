@@ -353,12 +353,13 @@ class KalmanRunConfig:
     # level/slope + GRW-innovation block; see build_fused_kalman_pt_model.)
     # Use replace(cfg, panel_lookbacks=()) for the collapsed T=1 cross-section.
     panel_lookbacks: tuple[str, ...] = ('6m', '3m', '1m')
-    # Local-level state: HalfNormal prior scale of ``sigma_state``, the per-step
-    # innovation sd of the per-ISIN random walk, on the standardised response
-    # scale. Weakly-informative at 0.1. Set to 0.0 to pin the state at the t=0
-    # anchor, recovering the pre-0.9.9.14 time-constant latent — that is the
-    # baseline arm of the §9b model comparison. Ignored when T == 1.
-    state_innovation_scale: float = 0.1
+    # AR(1) time-varying state on top of the per-ISIN random intercept.
+    # 0.0 = OFF (the default). The per-ISIN intercept restored on T>1 panels
+    # carries the per-name signal; the AR deviation on top of it bought +0.013
+    # recovery correlation for min ESS 14 vs 69 and drifting sigma_state/rho
+    # between runs, so it is disabled pending a longer panel. Set to e.g. 0.1
+    # to enable; it is the treatment arm of the §9b model comparison.
+    state_innovation_scale: float = 0.0
     # Model comparison (§9b) is OPT-IN: it needs a pointwise log_likelihood group,
     # which costs chains x draws x n_obs floats (~820 MB for the full T=4 panel at
     # 4x1000 draws over 6.4k ISINs) and is computed twice — once per arm.

@@ -1,0 +1,93 @@
+INFO:pymc_kalman_filter_pt:Loaded kalman_df: (5606, 179)
+INFO:pymc_kalman_filter_pt:Loaded feature_catalogue: (157, 8)
+            pymc_role feature_role  n_columns  n_present
+0       constant_data        count          1          1
+1       constant_data   historical          8          8
+2               coord  categorical         12         12
+3               coord         date          7          7
+4       derived_input    predictor          3          3
+5   mutable_predictor        count          6          6
+6   mutable_predictor     metadata          3          3
+7   mutable_predictor    predictor         31         31
+8   mutable_predictor        score          6          6
+9            observed   historical         52         52
+10           observed    predictor          1          1
+11           observed       target         27         27
+#predictors     : 46 -> ['feat_analyst_bearish_pct', 'feat_analyst_bullish_pct', 'feat_analyst_conviction', 'feat_analyst_neutral_pct', 'feat_holds', 'feat_no_opinion', 'feat_price_drift_n', 'feat_pt_drift_n', 'feat_vol_drift_n', 'days_since_fy_end', 'days_since_last_report', 'days_to_expected_report', 'days_to_next_earnings', 'days_to_next_fiscal_quarter', 'days_to_next_fy_end', 'days_to_next_report', 'feat_avg_beta', 'feat_buys', 'feat_coverage_drift', 'feat_ev_vs_3yavg', 'feat_implied_upside', 'feat_mcap_country_r', 'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_mv_ev_drift', 'feat_one_day_return', 'feat_price_chg_pct_3m', 'feat_price_drift', 'feat_pt_accuracy_1y', 'feat_pt_achievement_1y', 'feat_pt_drift', 'feat_pt_high_drift', 'feat_pt_low_drift', 'feat_pt_median_drift', 'feat_pt_noise_drift', 'feat_pt_range_hit_rate', 'feat_pt_range_norm', 'feat_rel_volume', 'feat_sells', 'feat_vol_drift', 'feat_analyst_rating', 'feat_median_piotroski_f_score', 'feat_piotroski_f_score_fy', 'feat_piotroski_f_score_neg1fy', 'feat_piotroski_f_score_neg2fy', 'feat_piotroski_f_score_neg3fy']
+#response       : 80 -> ['price_1d_ago', 'price_1m_ago', 'price_1w_ago', 'price_1y_ago', 'price_3m_ago', 'price_3y_ago', 'price_5d_ago', 'price_5y_ago', 'price_6m_ago', 'price_mtd_ago', 'price_qtd_ago', 'price_target_1m_ago', 'price_target_1w_ago', 'price_target_1y_ago', 'price_target_3m_ago', 'price_target_6m_ago', 'price_target_high_1m_ago', 'price_target_high_1w_ago', 'price_target_high_1y_ago', 'price_target_high_3m_ago', 'price_target_high_6m_ago', 'price_target_high_mtd_ago', 'price_target_high_qtd_ago', 'price_target_high_ytd_ago', 'price_target_low_1m_ago', 'price_target_low_1w_ago', 'price_target_low_1y_ago', 'price_target_low_3m_ago', 'price_target_low_6m_ago', 'price_target_low_mtd_ago', 'price_target_low_qtd_ago', 'price_target_low_ytd_ago', 'price_target_median_1m_ago', 'price_target_median_1w_ago', 'price_target_median_1y_ago', 'price_target_median_3m_ago', 'price_target_median_6m_ago', 'price_target_median_mtd_ago', 'price_target_median_qtd_ago', 'price_target_median_ytd_ago', 'price_target_mtd_ago', 'price_target_qtd_ago', 'price_target_stddev_1m_ago', 'price_target_stddev_1w_ago', 'price_target_stddev_1y_ago', 'price_target_stddev_3m_ago', 'price_target_stddev_6m_ago', 'price_target_stddev_mtd_ago', 'price_target_stddev_qtd_ago', 'price_target_stddev_ytd_ago', 'price_target_ytd_ago', 'price_ytd_ago', 'last_price', 'feat_pt_noise_sigma', 'feat_total_return_10y', 'feat_total_return_1d', 'feat_total_return_1m', 'feat_total_return_1w', 'feat_total_return_1y', 'feat_total_return_2021', 'feat_total_return_2022', 'feat_total_return_2023', 'feat_total_return_2024', 'feat_total_return_2025', 'feat_total_return_3m', 'feat_total_return_3y', 'feat_total_return_5d', 'feat_total_return_5y', 'feat_total_return_6m', 'feat_total_return_mtd', 'feat_total_return_qtd', 'feat_total_return_ytd', 'feat_tr_cagr_10y', 'feat_tr_cagr_1y', 'feat_tr_cagr_3y', 'feat_tr_cagr_5y', 'observed_pt', 'price_target_high', 'price_target_low', 'price_target_median']
+#coords         : 12 -> ['country', 'exchange', 'industry', 'next_earnings_status', 'next_earnings_when', 'region', 'sector', 'size_class', 'style_class', 'trading_country', 'trading_region', 'unit']
+#classification : 10 -> ['region', 'country', 'trading_region', 'trading_country', 'exchange', 'sector', 'industry', 'style_class', 'size_class', 'unit']
+#fiscal-calendar: 8 -> ['next_earnings', 'income_statement_report_date', 'next_income_statement_report_date', 'expected_report_date', 'next_fy_end_date', 'fy_end_date', 'next_fiscal_quarter', 'last_updated']
+#day-count      : 7 -> ['days_to_next_earnings', 'days_since_last_report', 'days_to_next_report', 'days_to_expected_report', 'days_to_next_fy_end', 'days_since_fy_end', 'days_to_next_fiscal_quarter']
+Drift-feature source: feature_catalogue frame (46 mutable_predictor candidates)
+Drift features : ['feat_analyst_bearish_pct', 'feat_analyst_bullish_pct', 'feat_analyst_conviction', 'feat_coverage_drift', 'feat_ev_vs_3yavg', 'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_mv_ev_drift', 'feat_one_day_return', 'feat_price_chg_pct_3m', 'feat_price_drift', 'feat_pt_accuracy_1y', 'feat_pt_achievement_1y', 'feat_pt_drift', 'feat_pt_high_drift', 'feat_pt_low_drift', 'feat_pt_median_drift', 'feat_pt_noise_drift', 'feat_pt_range_hit_rate', 'feat_analyst_rating', 'feat_median_piotroski_f_score']
+Noise drivers  : range=feat_pt_range_norm, sigma=feat_pt_noise_sigma, vol=['feat_vol_drift']
+                        mv_column                                   state_space_role
+0        feat_analyst_bearish_pct               drift / state-transition mean (beta)
+1        feat_analyst_bullish_pct               drift / state-transition mean (beta)
+2         feat_analyst_conviction               drift / state-transition mean (beta)
+3             feat_coverage_drift               drift / state-transition mean (beta)
+4                feat_ev_vs_3yavg               drift / state-transition mean (beta)
+5              feat_mcap_trend_1y               drift / state-transition mean (beta)
+6              feat_mcap_vs_3yavg               drift / state-transition mean (beta)
+7                feat_mv_ev_drift               drift / state-transition mean (beta)
+8             feat_one_day_return               drift / state-transition mean (beta)
+9           feat_price_chg_pct_3m               drift / state-transition mean (beta)
+10               feat_price_drift               drift / state-transition mean (beta)
+11            feat_pt_accuracy_1y               drift / state-transition mean (beta)
+12         feat_pt_achievement_1y               drift / state-transition mean (beta)
+13                  feat_pt_drift               drift / state-transition mean (beta)
+14             feat_pt_high_drift               drift / state-transition mean (beta)
+15              feat_pt_low_drift               drift / state-transition mean (beta)
+16           feat_pt_median_drift               drift / state-transition mean (beta)
+17            feat_pt_noise_drift               drift / state-transition mean (beta)
+18         feat_pt_range_hit_rate               drift / state-transition mean (beta)
+19            feat_analyst_rating               drift / state-transition mean (beta)
+20  feat_median_piotroski_f_score               drift / state-transition mean (beta)
+21             feat_pt_range_norm                  observation-noise widener (range)
+22            feat_pt_noise_sigma        observation-noise widener (consensus sigma)
+23                 feat_vol_drift     observation-noise widener (realized-vol drift)
+24                  feat_avg_beta           risk/size tilt (named pm.Data container)
+25            feat_mcap_country_r           risk/size tilt (named pm.Data container)
+26                feat_rel_volume           risk/size tilt (named pm.Data container)
+27              days_since_fy_end                     time covariate (t_scaled axis)
+28         days_since_last_report                     time covariate (t_scaled axis)
+29        days_to_expected_report                     time covariate (t_scaled axis)
+30          days_to_next_earnings                     time covariate (t_scaled axis)
+31    days_to_next_fiscal_quarter                     time covariate (t_scaled axis)
+32            days_to_next_fy_end                     time covariate (t_scaled axis)
+33            days_to_next_report                     time covariate (t_scaled axis)
+34            feat_implied_upside  RESPONSE (log1p -> feat_log_uplift; leakage-ba...
+35       feat_analyst_neutral_pct  excluded (drift-support counter / raw rating c...
+36                     feat_holds  excluded (drift-support counter / raw rating c...
+37                feat_no_opinion  excluded (drift-support counter / raw rating c...
+38             feat_price_drift_n  excluded (drift-support counter / raw rating c...
+39                feat_pt_drift_n  excluded (drift-support counter / raw rating c...
+40               feat_vol_drift_n  excluded (drift-support counter / raw rating c...
+41                      feat_buys  excluded (drift-support counter / raw rating c...
+42                     feat_sells  excluded (drift-support counter / raw rating c...
+43      feat_piotroski_f_score_fy  excluded (drift-support counter / raw rating c...
+44  feat_piotroski_f_score_neg1fy  excluded (drift-support counter / raw rating c...
+45  feat_piotroski_f_score_neg2fy  excluded (drift-support counter / raw rating c...
+46  feat_piotroski_f_score_neg3fy  excluded (drift-support counter / raw rating c...
+  history panel: lookbacks=['6m', '3m', '1m'] -> T=4; 193 missing history cells filled with the snapshot uplift (1.1% of history cells).
+Fused panel — isins:5605  T:4  D:1 (['feat_log_uplift'])
+  drift_features:21  avg_beta(mean):0.754  size_ratio(mean):0.185  volume_ratio(mean):1.089  vol_drift(mean):0.041  cv(mean):0.178
+
+=== panel: 5605 ISINs, T=4, D=1, 21 drift features ===
+
+=== de-standardisation moments (Finding 2) ===
+  pooled   (used by the model): mean=0.182563 std=0.217141
+  snapshot (the old inverse)  : mean=0.194840 std=0.207960
+  implied exported-upside shift at the cross-sectional mean latent:
+    latent=-0.5: corrected=+7.68%  legacy=+9.51%  delta=-1.83%
+    latent=+0.0: corrected=+20.03%  legacy=+21.51%  delta=-1.48%
+    latent=+0.5: corrected=+33.79%  legacy=+34.83%  delta=-1.03%
+    latent=+1.0: corrected=+49.14%  legacy=+49.60%  delta=-0.46%
+
+--- fitting production (state_innovation_scale=0.0) ---
+INFO:pymc_kalman_filter_pt:kalman_pt[production]: sampler priority ['nutpie', 'numpyro', 'pymc']
+NUTS[nutpie]: [beta, exchange_effect, unit_effect, country_effect, industry_effect, sigma_isin_level, z_isin_level, risk_loading, size_loading, volume_loading, alpha_level, sigma_base, nu_tail]
+INFO:pymc.sampling.mcmc:NUTS[nutpie]: [beta, exchange_effect, unit_effect, country_effect, industry_effect, sigma_isin_level, z_isin_level, risk_loading, size_loading, volume_loading, alpha_level, sigma_base, nu_tail]
+C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\pytensor\tensor\rewriting\elemwise.py:1004: UserWarning: Loop fusion failed because the resulting node would exceed the kernel argument limit.
+  warn(

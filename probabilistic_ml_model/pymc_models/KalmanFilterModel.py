@@ -1810,6 +1810,13 @@ _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
 # scale) at ≤ 2 prior sd.
 GROUP_EFFECT_SCALE: float = 0.25
 
+# Upper bound on the local-level state's AR(1) persistence in
+# ``build_fused_kalman_pt_model``. As ``rho -> 1`` the AR field degenerates into a
+# per-name constant, which is precisely what ``mu_isin`` already is, so the two
+# trade off along a ridge; the cap keeps the state a genuine *process*. See the
+# state block's comment for the measured failure this prevents.
+_STATE_RHO_MAX: float = 0.95
+
 
 def _nan_zscore(raw: np.ndarray, *, eps: float = 1e-9) -> tuple[np.ndarray, float]:
     """Nan-safe cross-sectional z-score for the fused-model tilt containers.
@@ -1955,7 +1962,8 @@ def build_fused_kalman_pt_model(
         size_penalty: float = 0.1,
         volume_penalty: float = 0.2,
         robust: bool = True,
-        state_innovation_scale: float = 0.1,
+        isin_level_scale: float = 0.5,
+        state_innovation_scale: float = 0.0,
 ) -> "pm_typing.Model":
     """Build the fused coregionalised cross-sectional Kalman price-target model.
 
@@ -2090,12 +2098,33 @@ def build_fused_kalman_pt_model(
       noisier output (``feat_pt_drift``) no longer inflates the primary series' σ —
       ``sigma_obs[i,d] = sigma_isin[i] * sigma_series[d]``.
 
-    Local-level state (``T > 1``) — what makes this a filter:
+    Per-ISIN latent on a genuine panel (``T > 1``) — what the time axis buys:
 
-    * ``state_path[i, t]`` is a per-ISIN Gaussian random walk anchored at
-      ``state_path[i, 0] = mu_isin[i]``, with ``state_now = state_path[:, -1]``
-      the **filtered** level at the snapshot. ``state_path`` — not the
-      time-constant ``mu_isin`` — enters the ICM regression.
+    * A per-ISIN random intercept ``sigma_isin_level · z_isin_level``
+      (``ZeroSumNormal`` over ``isin``, non-centred) is added to
+      ``expected_return``. It was dropped in an earlier release as non-identified
+      — correctly, **for ``T == 1``**. T repeated observations per name identify
+      it in the ordinary way, and restoring it is what fixes the
+      pseudo-replication described below.
+    * ``state_path`` (``isin``, ``time``) and ``state_now = state_path[:, -1]``
+      are always emitted so downstream consumers have one stable name for the
+      decision latent; with the AR layer off they equal ``mu_isin``.
+
+    Time-varying state (``state_innovation_scale > 0``) — **off by default**:
+
+    * Adds a stationary AR(1) deviation ``sigma_state · z[i, t]`` with persistence
+      ``state_rho`` on top of the intercept, so a name's level may move across the
+      lookback window.
+    * **It did not pay for itself at T=4 and is disabled.** On the synthetic
+      recovery check (N=300, T=4; truth: intercept sd 0.8, AR deviation sd 0.35,
+      rho 0.75) it bought +0.013 correlation with the true terminal state (0.964
+      vs 0.951) while collapsing mixing — min ESS 14 vs 69, max R-hat 1.13 vs
+      1.03 — and ``sigma_state`` / ``rho`` drifted between runs at different draw
+      budgets (0.265→0.216, 0.63→0.49), the same "two fits disagree" signature
+      this model's docstring already flags for non-identified variance
+      components. With T=4 the data cannot cleanly split a per-name constant from
+      a persistent per-name deviation. Revisit on a longer panel; the machinery
+      is retained and tested.
     * **Why it was added.** Broadcasting a time-constant ``mu_isin`` across the T
       lookback slices treated each name's T serially-correlated log-uplift
       observations as T iid draws around one latent: pseudo-replication that
@@ -2113,13 +2142,20 @@ def build_fused_kalman_pt_model(
     * **Alternatives tried and rejected.** (a) Re-adding a free ``beta_slope`` on
       the tiled axis — exactly aliased with the T free ``alpha_level`` intercepts;
       this is the 2026-08-01 T=4 failure (190 divergences, ``alpha_level`` /
-      ``beta_slope`` R-hat 1.06, bulk-ESS ≈ 75). (b) A **centred** walk
-      (``pm.GaussianRandomWalk`` on the level directly) — reintroduces the
-      scale ↔ deviation funnel that gave ``sigma_*_innov`` ESS ≈ 7 / R-hat ≈ 1.5;
-      the build is non-centred instead. (c) An **uncentred** walk — its
-      cross-sectional mean at each step is aliased with ``alpha_level[t, ·]``, so
-      the innovations are cross-sectionally centred and carry idiosyncratic
-      deviation only, leaving ``alpha`` the market-wide time effect.
+      ``beta_slope`` R-hat 1.06, bulk-ESS ≈ 75). (b) A **centred** field —
+      reintroduces the scale ↔ deviation funnel that gave ``sigma_*_innov``
+      ESS ≈ 7 / R-hat ≈ 1.5; the build is non-centred instead. (c) An **uncentred**
+      field — its cross-sectional mean at each t is aliased with
+      ``alpha_level[t, ·]``. (d) A literal **cumulative random walk** anchored at
+      ``state[i,0] = mu_isin[i]`` — its marginal variance grows as ``√t``, which
+      the 2026-08-10 full-scale run falsified directly: per-time predictive
+      coverage ramped 89.9 % → 95.3 % → 97.2 % → 98.2 % against a 94 % target
+      (too narrow at t=0, too wide at the snapshot), with max R-hat 1.054 and min
+      ESS 74. Uplift is marginally stationary across this window, so the
+      doubly-centred (constant-variance) field replaced it. (e) The
+      raw-``Normal``-then-subtract-means form of the same field — over-parameterised
+      by ``n_isin + T - 1`` likelihood-invariant directions that merely resample
+      their prior while dominating mass-matrix adaptation.
     * **Expected signature vs the static build:** ``sigma_base`` falls (persistent
       per-name signal leaves the residual for the state) and exported
       ``expected_upside`` HDIs widen — the pseudo-replication correction landing,
@@ -2152,15 +2188,21 @@ def build_fused_kalman_pt_model(
     robust : bool
         ``True`` (default) → Student-t panel likelihood (absorbs analyst
         outliers); ``False`` → Normal-likelihood twin.
+    isin_level_scale : float
+        Prior scale (``HalfNormal`` sigma) of ``sigma_isin_level``, the sd of the
+        per-ISIN random intercept restored on ``T > 1`` panels. ``0.0`` pins it
+        off, recovering the pre-0.9.9.14 purely-deterministic ``expected_return``
+        — the baseline arm for before/after comparison. Ignored when ``T == 1``,
+        where the intercept is genuinely non-identified.
     state_innovation_scale : float
-        Prior scale (``HalfNormal`` sigma) of ``sigma_state``, the per-step
-        innovation sd of the local-level state, on the standardised response
-        scale. The default ``0.1`` is weakly-informative: it puts ~95 % of prior
-        mass on per-step moves below ~0.2 sd of the response, so a name's level
-        can drift meaningfully across the panel without the walk being free to
-        absorb the whole cross-section. ``0.0`` pins the state at ``mu_isin``,
-        recovering the previous time-constant build for A/B comparison. Ignored
-        when ``T == 1``.
+        Prior scale (``HalfNormal`` sigma) of ``sigma_state``, the marginal sd of
+        the AR(1) state deviation, on the standardised response scale.
+        **Defaults to 0.0 — the time-varying state layer is OFF.** The per-ISIN
+        time variation the T>1 panel reliably supports is carried by the per-ISIN
+        random intercept (``sigma_isin_level``) restored above; the AR deviation
+        on top of it did not pay for itself at T=4 (see *Time-varying state* in
+        the notes below). Set to e.g. ``0.1`` to enable it — worth revisiting on
+        a longer panel. Ignored when ``T == 1``.
 
     Returns
     -------
@@ -2220,11 +2262,6 @@ def build_fused_kalman_pt_model(
         "y_series": np.asarray(panel.response_names),
         "drift_feature": list(panel.drift_names),
     }
-    # T-1 innovations back the local-level state: step t carries the walk from
-    # time t to t+1, so the state is anchored (deviation ≡ 0) at t=0. Omitted on
-    # the collapsed T=1 cross-section, where the state has nothing to walk over.
-    if T > 1 and state_innovation_scale > 0:
-        coords["time_innov"] = np.arange(T - 1)
     # Non-primary response series carry a free factor loading on ``mu_isin``; the
     # primary series (index 0, ``feat_implied_upside``) is anchored at loading ≡ 1.
     if D > 1:
@@ -2445,7 +2482,38 @@ def build_fused_kalman_pt_model(
         # (which already widens per-ISIN via ``cv`` / ``precision_weight``).
         # ``expected_return`` / ``risk_adj_return`` / ``mu_isin`` Deterministics are
         # retained so downstream Monte-Carlo consumers are unchanged.
-        expected_return = pm.Deterministic("expected_return", mu_reg, dims="isin")
+        #
+        # ...that reasoning is specific to ``T == 1`` and EXPIRES on a genuine
+        # panel. With T repeated observations per name a per-ISIN intercept is
+        # identified against the measurement noise in the ordinary way, so on
+        # ``T > 1`` the random effect is restored.
+        #
+        # This is not optional once the state layer exists — it is what keeps the
+        # two blocks from fighting. Without a free per-name intercept the ONLY
+        # place a per-name constant can live is the AR(1) state at ``rho -> 1``,
+        # and the synthetic recovery check caught it doing exactly that: against a
+        # truth of (per-name intercept sd 0.8, AR deviation sd 0.35, rho 0.75) the
+        # sampler drove ``rho`` to its 0.95 cap and ``sigma_state`` to 0.81,
+        # over-covering every predictive interval (per-time coverage 99-100 % vs
+        # the 94 % target) at min ESS 78. Giving the constant its proper home
+        # leaves the AR carrying genuine time variation.
+        #
+        # ``ZeroSumNormal`` over ``isin`` so the effect carries only cross-sectional
+        # deviation and cannot alias with the ``alpha_level`` level; non-centred
+        # (scale x unit-ZSN) to avoid the funnel.
+        if T > 1 and isin_level_scale > 0:
+            sigma_isin_level = pm.HalfNormal(
+                "sigma_isin_level", sigma=float(isin_level_scale)
+            )
+            z_isin_level = pm.ZeroSumNormal("z_isin_level", sigma=1.0, dims="isin")
+            expected_return = pm.Deterministic(
+                "expected_return", mu_reg + sigma_isin_level * z_isin_level,
+                dims="isin",
+            )
+        else:
+            # T == 1, or the latent deliberately pinned off — the pre-0.9.9.14
+            # build, and the baseline arm of the validation comparison.
+            expected_return = pm.Deterministic("expected_return", mu_reg, dims="isin")
         # ---- ADDITIVE, sign-correct risk + size tilts (data-learned loadings) ----
         # ``expected_return`` (= ``mu_reg``) is a ZERO-MEAN cross-sectional deviation
         # on the standardised log-uplift scale (the level lives in the GRW ``alpha``
@@ -2573,11 +2641,43 @@ def build_fused_kalman_pt_model(
         # cross-sectionally-shared intercepts — the model had no state evolution at
         # all despite being a "Kalman" filter.
         #
-        # The fix is a genuine local-level (random-walk) state anchored at
-        # ``mu_isin``: ``state[i, 0] = mu_isin[i]`` and
-        # ``state[i, t] = state[i, t-1] + sigma_state · z[i, t]``. Each name now has
-        # its own trajectory, so the panel identifies persistent per-name signal
-        # apart from transient measurement noise instead of double-counting it.
+        # The fix is a per-ISIN latent level that evolves as a STATIONARY AR(1)
+        # across the lookback steps: ``state[i, t] = mu_isin[i] + sigma_state ·
+        # z[i, t]`` with ``z[:, t] = rho·z[:, t-1] + sqrt(1-rho²)·eps[:, t]``.
+        # Each name gets its own trajectory, so the panel can separate persistent
+        # per-name signal from transient measurement noise instead of
+        # double-counting it.
+        #
+        # The parameterisation is pinned by TWO measured failures, both of which
+        # a plausible-looking alternative walked straight into:
+        #
+        # (1) A cumulative RANDOM WALK anchored at ``state[i,0] = mu_isin[i]``
+        #     mis-calibrates the panel. A walk's marginal variance grows as
+        #     ``sigma_state·√t``, so t=0 carries no state uncertainty and the
+        #     snapshot carries the most. The 2026-08-10 full-scale run (5 605
+        #     ISINs, T=4) showed exactly that: per-time posterior-predictive
+        #     coverage ramped 89.9 % (t=0, intervals too NARROW) → 95.3 % → 97.2 %
+        #     → 98.2 % (snapshot, too WIDE) against a 94 % target, with max R-hat
+        #     1.054 and min ESS 74 at 0 divergences. Analyst uplift is marginally
+        #     STATIONARY across a 1-6 month window, not diffusing.
+        #
+        # (2) An UNSTRUCTURED doubly-centred field fixes the calibration and
+        #     destroys the identification. With one observation per ``(isin,
+        #     time)`` cell, an unstructured state field has the same covariance
+        #     structure as the measurement noise — both diagonal — so the two are
+        #     not separately identified. Verified on synthetic data with a known
+        #     state (N=300, T=4, true sigma_state 0.35): coverage went flat (2.7 pp
+        #     spread) and mixing improved (min ESS 736, max R-hat 1.02), but
+        #     ``sigma_state`` collapsed to 0.027 and ``corr(state_now, truth)``
+        #     fell to 0.04 — the state layer had become decorative.
+        #
+        # Temporal CORRELATION is the only thing that distinguishes a persistent
+        # state from iid noise: within-name off-diagonal covariance is
+        # ``sigma_state²·rho^|Δt|``, identically zero when rho = 0. A stationary
+        # AR(1) supplies that correlation (identification) AND constant marginal
+        # variance (calibration), which is why it is the structure that survives.
+        # ``rho`` is estimated — with thousands of names the pooled within-name
+        # covariance carries ample information about it.
         #
         # Why this is identified now when the per-ISIN random effect at :2368 was
         # not: that one was dropped because "on a single cross-sectional slice
@@ -2588,17 +2688,22 @@ def build_fused_kalman_pt_model(
         # ``mu_isin`` and no innovation parameters are created.
         #
         # Two identification guards, both load-bearing:
-        #   * NON-CENTRED (``sigma_state · z_state``) — a centred walk reproduces
-        #     the classic funnel between the innovation scale and its deviations,
-        #     the same ridge that gave ``sigma_*_innov`` ESS ≈ 7 / R-hat ≈ 1.5.
-        #   * CROSS-SECTIONALLY CENTRED at each step — an uncentred walk shares a
+        #   * NON-CENTRED (``sigma_state · z``) — a centred field reproduces the
+        #     classic funnel between the scale and its deviations, the same ridge
+        #     that gave ``sigma_*_innov`` ESS ≈ 7 / R-hat ≈ 1.5.
+        #   * ZERO-SUM OVER ``isin`` at each t — otherwise the field shares a
         #     common level shift with ``alpha_level[t, ·]`` (a market-wide move at
-        #     time t is attributable to either), which is precisely the aliasing
-        #     that produced the 2026-08-01 T=4 failure (190 divergences,
-        #     ``alpha_level`` R-hat 1.06, bulk-ESS ≈ 75). Subtracting the
-        #     cross-sectional mean leaves the walk carrying ONLY idiosyncratic
-        #     deviation, so ``alpha`` keeps the market-wide time effect and the two
-        #     blocks are orthogonal by construction.
+        #     time t is attributable to either), precisely the aliasing that
+        #     produced the 2026-08-01 T=4 failure (190 divergences,
+        #     ``alpha_level`` R-hat 1.06, bulk-ESS ≈ 75). Zero-sum leaves the field
+        #     carrying ONLY idiosyncratic deviation, so ``alpha`` keeps the
+        #     market-wide time effect and the two blocks are orthogonal.
+        #
+        # ``mu_isin`` needs no explicit time-centring: a stationary AR(1) has
+        # prior mean 0 at every t, so the per-name level is identified against it
+        # the same way any random effect is identified against its intercept.
+        # (Forcing exact zero-sum over time was tried and is what produced the
+        # non-identified unstructured field in (2) above.)
         #
         # Expected diagnostic signature versus the static build: ``sigma_base``
         # FALLS (persistent per-name signal moves out of the residual and into the
@@ -2608,10 +2713,42 @@ def build_fused_kalman_pt_model(
             sigma_state = pm.HalfNormal(
                 "sigma_state", sigma=float(state_innovation_scale)
             )
-            z_state = pm.Normal("z_state", 0.0, 1.0, dims=("isin", "time_innov"))
-            innov = pt.cumsum(sigma_state * z_state, axis=1)
-            innov = innov - innov.mean(axis=0, keepdims=True)
-            state_dev = pt.concatenate([pt.zeros((n_isin, 1)), innov], axis=1)
+            # Persistence of the state across lookback steps, bounded to
+            # (0, RHO_MAX). BOTH ends are non-identified corners and the bound
+            # matters as much as the prior:
+            #   * rho -> 0 makes the state indistinguishable from iid
+            #     measurement noise (see (2) above);
+            #   * rho -> 1 makes the AR field a per-name CONSTANT, which is
+            #     exactly what ``mu_isin`` already is — the two then trade off
+            #     along a ridge. Left unbounded on the synthetic recovery check
+            #     the sampler ran to rho = 0.975 and inflated ``sigma_state``
+            #     to 0.83 against a true 0.35, widening every predictive
+            #     interval (per-time coverage 98.7-100 % vs the 94 % target) and
+            #     collapsing mixing to min ESS 46 / max R-hat 1.06.
+            # Capping at 0.95 keeps the AR genuinely a *process* rather than a
+            # second intercept; Beta(2, 2) is symmetric inside that range.
+            state_rho = pm.Deterministic(
+                "state_rho", _STATE_RHO_MAX * pm.Beta("state_rho_raw", 2.0, 2.0)
+            )
+            # Innovations are zero-sum ACROSS ISINS at each time step (PyMC
+            # constrains the TRAILING axis, hence the (time, isin) layout). The
+            # AR recursion below is a linear combination of zero-sum vectors, so
+            # every state slice inherits the constraint exactly — no aliasing
+            # with ``alpha_level[t, ·]``, and no redundant directions for the
+            # mass matrix to chase.
+            z_state = pm.ZeroSumNormal(
+                "z_state", sigma=1.0, dims=("time", "isin"), n_zerosum_axes=1
+            )
+            # Stationary AR(1) with UNIT marginal variance at every t: scaling
+            # the innovations by sqrt(1 - rho^2) is what keeps var(z[:, t])
+            # constant instead of growing like a random walk. T is a small
+            # Python int (4 on the production panel), so the recursion is
+            # unrolled rather than run through pytensor.scan.
+            innov_scale = pt.sqrt(1.0 - state_rho ** 2)
+            steps = [z_state[0]]
+            for _t in range(1, T):
+                steps.append(state_rho * steps[-1] + innov_scale * z_state[_t])
+            state_dev = sigma_state * pt.stack(steps, axis=0).T  # (isin, time)
         else:
             # T == 1, or the state deliberately pinned off (the static twin used
             # as the §9b model-comparison baseline).

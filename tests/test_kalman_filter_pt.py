@@ -579,33 +579,92 @@ def test_beta_t_returns_on_an_isin_varying_time_axis():
     assert "beta_slope" in model.named_vars
 
 
-def test_state_layer_emits_the_decision_latent():
+def test_per_isin_latent_is_restored_on_a_panel():
+    """T>1 identifies a per-ISIN intercept; T==1 genuinely does not."""
     _, model = _built_model()
-    for name in ("state_path", "state_now", "sigma_state", "z_state"):
+    assert "sigma_isin_level" in model.named_vars
+    assert "z_isin_level" in model.named_vars
+    assert tuple(model.named_vars["z_isin_level"].shape.eval()) == (60,)
+
+    _, flat = _built_model(history_lookbacks=())
+    assert "sigma_isin_level" not in flat.named_vars, (
+        "the per-ISIN intercept must stay off on the T=1 cross-section, where it "
+        "is non-identified"
+    )
+
+
+def test_per_isin_latent_can_be_pinned_off_for_baseline_comparison():
+    _, model = _built_model(isin_level_scale=0.0)
+    assert "sigma_isin_level" not in model.named_vars
+    assert "z_isin_level" not in model.named_vars
+
+
+def test_ar_state_layer_is_off_by_default():
+    """It bought +0.013 recovery for min ESS 14 vs 69 at T=4 -- see the builder."""
+    _, model = _built_model()
+    assert "sigma_state" not in model.named_vars
+    assert "state_rho" not in model.named_vars
+    # The decision latent is still emitted, so consumers resolve unchanged.
+    assert "state_now" in model.named_vars
+    assert "state_path" in model.named_vars
+
+
+def test_ar_state_layer_emits_its_parameters_when_enabled():
+    _, model = _built_model(state_innovation_scale=0.1)
+    for name in ("state_path", "state_now", "sigma_state", "state_rho", "z_state"):
         assert name in model.named_vars, f"{name} missing"
     assert tuple(model.named_vars["state_now"].shape.eval()) == (60,)
-    # T-1 innovations: the walk is anchored at t=0.
-    assert model.coords["time_innov"] == tuple(range(3))
+    # PyMC's ZeroSumNormal constrains the TRAILING axis, so the field is laid out
+    # (time, isin) to zero-sum across names at each step.
+    assert tuple(model.named_vars["z_state"].shape.eval()) == (4, 60)
+    assert "time_innov" not in model.coords
 
 
-def test_state_is_anchored_at_t0_and_cross_sectionally_centred():
-    """s[:, 0] == 0 (anchor) and mean_i s[i, t] == 0 (no alpha aliasing)."""
+def test_ar_state_is_zero_sum_across_isin_at_every_step():
+    """Zero-sum across names is what keeps the field from aliasing alpha_level."""
     import pymc as pm
 
-    panel, model = _built_model()
+    _, model = _built_model(state_innovation_scale=0.1)
     with model:
         draw = pm.draw(
             [model.named_vars["state_path"], model.named_vars["mu_isin"]],
             draws=1, random_seed=5,
         )
-    state_path, mu_isin = np.asarray(draw[0]), np.asarray(draw[1])
-    assert np.allclose(state_path[:, 0], mu_isin, atol=1e-10), (
-        "t=0 slice must equal the structural anchor mu_isin"
+    dev = np.asarray(draw[0]) - np.asarray(draw[1])[:, None]
+    assert np.allclose(dev.mean(axis=0), 0.0, atol=1e-8)
+
+
+def test_ar_state_marginal_variance_is_flat_across_time():
+    """Stationarity: the property the cumulative random walk violated.
+
+    A walk's marginal sd grows as sqrt(t); on the 2026-08-10 full-scale run that
+    ramped per-time predictive coverage 89.9% -> 98.2% against a 94% target. The
+    sqrt(1 - rho^2) innovation scaling is what holds it flat.
+    """
+    import pymc as pm
+
+    _, model = _built_model(state_innovation_scale=0.1)
+    with model:
+        z = np.asarray(pm.draw(model.named_vars["z_state"], draws=600,
+                               random_seed=11))
+    sd_per_t = z.std(axis=(0, 2))  # (draws, time, isin) -> per time step
+    assert sd_per_t.max() / sd_per_t.min() < 1.25, (
+        f"marginal sd varies across time steps: {sd_per_t.round(3)}"
     )
-    dev = state_path - mu_isin[:, None]
-    assert np.allclose(dev.mean(axis=0), 0.0, atol=1e-8), (
-        "state deviations must be cross-sectionally centred at every step"
-    )
+
+
+def test_ar_state_rho_is_bounded_away_from_one():
+    """rho -> 1 degenerates the AR into a second per-name intercept."""
+    import pymc as pm
+
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import _STATE_RHO_MAX
+
+    _, model = _built_model(state_innovation_scale=0.1)
+    with model:
+        rho = np.asarray(pm.draw(model.named_vars["state_rho"], draws=500,
+                                 random_seed=3))
+    assert rho.max() < _STATE_RHO_MAX + 1e-9
+    assert rho.min() >= 0.0
 
 
 def test_state_collapses_to_the_anchor_when_pinned_off():

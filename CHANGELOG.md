@@ -43,34 +43,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Local-level state — the fused Kalman panel now actually filters.**
+- **Per-ISIN latent restored on genuine panels — the fused Kalman panel now uses
+  its time axis.**
   With `beta_t` zeroed, `D == 1`, and `expected_return` a pure Deterministic (no
-  per-ISIN random effect, dropped in an earlier release as non-identified on
-  `T == 1`), the entire time dimension contributed nothing but `T`
+  per-ISIN random effect), the entire time dimension contributed nothing but `T`
   cross-sectionally-shared intercepts: each name's `T` strongly serially-correlated
   log-uplift observations were treated as `T` iid draws around **one** constant
   latent. That pseudo-replication shrank the per-name posterior sd by ~√T and
-  produced over-confident `expected_upside` HDIs downstream. The panel now carries
-  a per-ISIN Gaussian random walk anchored at `mu_isin`:
+  produced over-confident `expected_upside` HDIs downstream.
 
-  - `state_path` (`isin`, `time`) — non-centred (`sigma_state · z_state`) to avoid
-    the scale↔deviation funnel, and **cross-sectionally centred at each step** so
-    the walk carries only idiosyncratic deviation and cannot alias with the
-    market-wide `alpha_level[t, ·]` (that aliasing is the documented 2026-08-01
-    T=4 failure: 190 divergences, `alpha_level` R-hat 1.06, bulk-ESS ≈ 75);
-  - `state_now` = `state_path[:, -1]` — the **filtered** level at the snapshot, and
-    the new decision latent for the screen, the price-target Monte-Carlo, the risk
-    book and the analytics export. `achieve_prob` is now `sigmoid(state_now)`;
-  - `KalmanRunConfig.state_innovation_scale` (default `0.1`) sets its prior scale;
-    `0.0` pins the state at the anchor, recovering the previous build. On `T == 1`
-    the state collapses to `mu_isin` and no innovation parameters are created.
+  The per-ISIN random intercept (`sigma_isin_level` × a `ZeroSumNormal`,
+  non-centred) is restored **for `T > 1` only**. It was dropped in an earlier
+  release as non-identified, which was correct *for the T=1 cross-section*; T
+  repeated observations per name identify it in the ordinary way.
+  `isin_level_scale=0.0` pins it off, recovering the previous build as a
+  comparison baseline.
 
-  Parameter recovery on a synthetic panel with a known state (N=300, T=4,
-  σ_state 0.35): correlation between `state_now` and the true terminal state
-  **0.967** with the state on versus **0.125** with it pinned off; RMSE 0.253 vs
-  0.928; `sigma_base` 0.512 vs 0.863; mean per-name posterior sd 0.415 vs
-  **0.032** — i.e. the static build was ~29× over-confident relative to its own
-  error. 0 divergences in both arms.
+  Measured on the live 5 605-name T=4 panel: `sigma_base` 0.3373 → 0.2871 (per-name
+  signal moves out of the residual) and mean per-name posterior sd 0.0545 → 0.2694
+  — the previous build was ~5× over-confident. On synthetic data with a known
+  per-name level, correlation between the recovered and true latent rises from
+  **0.047 to 0.951**.
+- **`state_now` / `state_path` decision latent + an opt-in AR(1) state layer.**
+  `state_now` is the per-ISIN quantity every decision consumer reads (screen,
+  price-target Monte-Carlo, risk book, analytics export, §13b plots, prior
+  predictive), resolved through `KALMAN_SCREEN_LATENT`. `achieve_prob` is now
+  `sigmoid(state_now)`.
+
+  `state_innovation_scale > 0` adds a stationary AR(1) deviation on top of the
+  intercept, letting a name's level move across the lookback window.
+  **It defaults to 0.0 (off)** — the expansion was tried, measured and rejected at
+  T=4, per the Bayesian workflow's expansion/simplification stage:
+
+  - A literal cumulative random walk mis-calibrates the panel. Its marginal
+    variance grows as √t, so the full-scale run produced per-time predictive
+    coverage of 89.9 % → 95.3 % → 97.2 % → 98.2 % against a 94 % target (too
+    narrow at the oldest lookback, too wide at the snapshot), max R-hat 1.054,
+    min ESS 74.
+  - An unstructured doubly-centred field fixes calibration and destroys
+    identification: with one observation per `(isin, time)` cell it has the same
+    diagonal covariance as the measurement noise. `sigma_state` collapsed to 0.027
+    against a true 0.35 and recovery correlation fell to 0.04.
+  - A stationary AR(1) supplies both the temporal correlation that identifies the
+    state and the constant marginal variance that calibrates it — but at T=4 it
+    still cannot be cleanly separated from the per-name intercept. It bought
+    +0.013 recovery correlation (0.964 vs 0.951) for min ESS 14 vs 69 and max
+    R-hat 1.13 vs 1.03, with `sigma_state`/`rho` drifting between draw budgets
+    (0.265→0.216, 0.63→0.49) — the "two fits disagree" signature of a
+    non-identified variance component.
+
+  The machinery is retained, tested and documented for a longer panel; `rho` is
+  capped at `_STATE_RHO_MAX = 0.95` because `rho → 1` degenerates it into a second
+  per-name intercept.
 - **`resolve_screen_latent` / `KALMAN_SCREEN_LATENT`** — one name for the decision
   latent, resolved at every consumer (`panel_posterior_upside`,
   `summarize_panel_screen`, `export_analytics`, the §13b plots, the prior

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""Validate the local-level-state Kalman panel model before re-exporting analytics.
+"""Validate the per-ISIN-latent Kalman panel model before re-exporting analytics.
 
 Runs the production T=4 fit and checks the gates that decide whether the
-local-level state layer (0.9.9.14) should ship. Nothing is written to the
-database: this is a read-only, decide-then-export gate.
+0.9.9.14 changes should ship. Nothing is written to the database: this is a
+read-only, decide-then-export gate.
 
 Usage
 -----
@@ -17,23 +17,25 @@ Options::
 
     --quick              draws/tune 300 instead of the config budget (smoke run)
     --compare            also run the §9b ELPD comparison (roughly triples runtime)
-    --no-static          skip the static-twin refit (drops the sd/sigma_base deltas)
+    --no-static          skip the baseline refit (drops the sd/sigma_base deltas)
     --isins N            subsample to N names (default: full panel)
 
 What it checks
 --------------
 1. **Convergence** — 0 divergences, max R-hat < 1.01, min bulk-ESS > 400
    (``MIN_ESS_GATE``).
-2. **The state is alive** — ``sigma_state`` mixes AND its posterior is bounded
-   away from 0. A collapse to ~0 means the panel carries no per-name time
-   dynamics and the layer is dead weight: revert rather than ship.
-3. **The predicted signature** — versus the static twin, ``sigma_base`` should
-   FALL (persistent per-name signal moves out of the residual into the state)
-   and the per-name posterior sd should RISE (the pseudo-replication fix).
+2. **The per-ISIN latent is alive** — ``sigma_isin_level`` is bounded away from
+   0. A collapse to ~0 means the panel carries no per-name signal beyond the
+   drift regression. If the opt-in AR(1) layer is enabled
+   (``state_innovation_scale > 0``), ``sigma_state`` is checked the same way.
+3. **The predicted signature** — versus the pre-0.9.9.14 baseline (per-ISIN
+   latent pinned off), ``sigma_base`` should FALL (per-name signal moves out of
+   the residual) and the per-name posterior sd should RISE (the
+   pseudo-replication fix).
 4. **Per-time PPC coverage** ≈ 0.94, with no monotone drift across ``t``.
 5. **The de-standardisation correction** — reports the pooled vs snapshot
-   response moments and the resulting shift in exported upside, so the ~1.5-2.3
-   pp downward correction is visible before it reaches the analytics table.
+   response moments and the resulting shift in exported upside, so the downward
+   correction is visible before it reaches the analytics table.
 
 Exit status is non-zero if any hard gate fails.
 """
@@ -62,7 +64,7 @@ RHAT_GATE = 1.01
 SIGMA_STATE_FLOOR = 0.01  # below this the walk is indistinguishable from static
 
 
-def _fit(panel, cfg, *, scale: float, label: str):
+def _fit(panel, cfg, *, scale: float, label: str, isin_level: float = 0.5):
     """Build and sample one arm; returns (idata, model).
 
     Sampling goes through :func:`K.sample_with_fallback` (nutpie → numpyro →
@@ -73,7 +75,8 @@ def _fit(panel, cfg, *, scale: float, label: str):
     """
     print(f'\n--- fitting {label} (state_innovation_scale={scale}) ---')
     model = K.build_fused_kalman_pt_model(
-        panel, robust=True, volume_penalty=0.25, state_innovation_scale=scale)
+        panel, robust=True, volume_penalty=0.25, isin_level_scale=isin_level,
+        state_innovation_scale=scale)
     idata = K.sample_with_fallback(model, cfg, model_name=f'kalman_pt[{label}]',
                                    progressbar=False)
     if idata is None:
@@ -168,7 +171,7 @@ def main() -> int:
     failures: list[str] = []
 
     idata, model = _fit(panel, cfg, scale=cfg.state_innovation_scale,
-                        label='local_level')
+                        label='production')
     n_div, max_rhat, min_ess = _convergence(idata)
     print('\n=== gate 1: convergence ===')
     print(f'  divergences = {n_div}      (gate: 0)')
@@ -182,20 +185,36 @@ def main() -> int:
         failures.append(f'min ESS {min_ess:.1f}')
 
     post = idata.posterior
-    print('\n=== gate 2: is the state alive? ===')
-    if 'sigma_state' not in post:
-        failures.append('sigma_state absent')
-        print('  FAIL: sigma_state not in the posterior.')
+    print('\n=== gate 2: is the per-ISIN latent alive? ===')
+    # The per-ISIN random intercept is the layer the T>1 panel actually buys; the
+    # AR(1) state on top of it is opt-in (state_innovation_scale > 0) and off by
+    # default. Check whichever is present.
+    if 'sigma_isin_level' not in post:
+        failures.append('sigma_isin_level absent (per-ISIN latent not built)')
+        print('  FAIL: sigma_isin_level not in the posterior.')
     else:
+        lv = post['sigma_isin_level']
+        lv_lo = float(lv.quantile(0.055))
+        print(f'  sigma_isin_level mean = {float(lv.mean()):.4f}, '
+              f'5.5% quantile = {lv_lo:.4f} (floor {SIGMA_STATE_FLOOR})')
+        if lv_lo < SIGMA_STATE_FLOOR:
+            failures.append(
+                f'sigma_isin_level collapsed toward 0 (5.5% q = {lv_lo:.4f}) — '
+                'the panel carries no per-name signal beyond the regression')
+    if 'sigma_state' in post:
         ss = post['sigma_state']
-        ss_mean = float(ss.mean())
         ss_lo = float(ss.quantile(0.055))
-        print(f'  sigma_state mean = {ss_mean:.4f}, 5.5% quantile = {ss_lo:.4f} '
-              f'(floor {SIGMA_STATE_FLOOR})')
+        rho = (float(post['state_rho'].mean()) if 'state_rho' in post
+               else float('nan'))
+        print(f'  AR(1) layer ENABLED: sigma_state mean = {float(ss.mean()):.4f}, '
+              f'5.5% q = {ss_lo:.4f}, rho = {rho:.3f}')
         if ss_lo < SIGMA_STATE_FLOOR:
             failures.append(
-                f'sigma_state collapsed toward 0 (5.5% q = {ss_lo:.4f}) — the '
-                'panel carries no per-name dynamics; revert the state layer')
+                f'sigma_state collapsed toward 0 (5.5% q = {ss_lo:.4f}) — disable '
+                'the AR layer (state_innovation_scale=0.0)')
+    else:
+        print('  AR(1) layer disabled (state_innovation_scale=0.0) — expected; '
+              'the per-ISIN intercept carries the panel.')
 
     print('\n=== gate 4: per-time PPC coverage (target 0.94) ===')
     try:
@@ -213,23 +232,25 @@ def main() -> int:
     sd_state = float(latent.std(('chain', 'draw')).mean())
     base_state = float(post['sigma_base'].mean())
     print('\n=== gate 3: predicted signature vs the static twin ===')
-    print(f'  local_level: sigma_base={base_state:.4f}  '
+    print(f'  production: sigma_base={base_state:.4f}  '
           f'mean per-name posterior sd={sd_state:.4f}')
 
     if not args.no_static:
-        idata_s, _ = _fit(panel, cfg, scale=0.0, label='static')
+        # Baseline = the PRE-0.9.9.14 model: no per-ISIN latent at all.
+        idata_s, _ = _fit(panel, cfg, scale=0.0, isin_level=0.0,
+                          label='baseline(no per-ISIN latent)')
         post_s = idata_s.posterior
         sd_static = float(
             K.resolve_screen_latent(post_s).std(('chain', 'draw')).mean())
         base_static = float(post_s['sigma_base'].mean())
-        print(f'  static    : sigma_base={base_static:.4f}  '
+        print(f'  baseline  : sigma_base={base_static:.4f}  '
               f'mean per-name posterior sd={sd_static:.4f}')
         print(f'  -> sigma_base {base_static:.4f} -> {base_state:.4f} '
               f'({"FALLS as predicted" if base_state < base_static else "RISES — unexpected"})')
         print(f'  -> per-name sd {sd_static:.4f} -> {sd_state:.4f} '
               f'({"WIDENS as predicted" if sd_state > sd_static else "NARROWS — unexpected"})')
         if base_state >= base_static:
-            failures.append('sigma_base did not fall versus the static twin')
+            failures.append('sigma_base did not fall versus the baseline')
         if sd_state <= sd_static:
             failures.append('per-name posterior sd did not widen')
 
