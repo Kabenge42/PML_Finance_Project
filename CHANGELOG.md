@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`expm1` blow-up in the exported Monte-Carlo and price-target columns.**
+  The response is winsorised to a decimal `[-0.95, +5.0]` band before `log1p`, so
+  the model never observes an uplift outside it — but the two places that map
+  *back out* of log space (`panel_posterior_upside`'s `expm1(latent)` and
+  `summarize_panel_screen`'s `expm1(mc)`) were unbounded. Exponentiating an
+  unclipped tail produced, in the 2026-08-10 export, `er_mean` up to **7.4e12**,
+  `er_sd` up to **1.32e15** (82 names) and `kalman_variance` up to **5.09e9**
+  (1,980 names) — while medians stayed healthy at 0.17 / 0.13 / 1.31.
+
+  The asymmetry was latent: the pre-change table already showed `er_sd` mean
+  1,443 against a median of 0.258. Widening the per-name posterior ~5.4× (the
+  correct pseudo-replication fix) widened the log-space tail that `expm1` then
+  exponentiated, amplifying it by ~8 orders of magnitude.
+
+  Both directions now share one band — `UPLIFT_CLIP_{LO,HI}` /
+  `LOG_UPLIFT_CLIP_{LO,HI}` — and clipping happens in **log** space before
+  `expm1`, which is sign-preserving and therefore leaves `prob_pos` untouched.
+  Read the result honestly: this truncates the posterior to the support the model
+  was fit on, rather than extrapolating past it.
+
 - **Drift design matrix pruned 21 → 15 columns — the last failing convergence gate.**
   `beta` was the only global parameter missing the gates on the full 6,540-name
   T=4 validation: R-hat 1.026 / bulk-ESS 140 against 1.01 / 400, at **zero

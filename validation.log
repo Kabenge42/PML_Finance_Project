@@ -96,17 +96,17 @@ C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\arviz
 
 === gate 1: convergence ===
   divergences = 0      (gate: 0)
-  GLOBAL parameters : max R-hat = 1.0262 (gate < 1.01), min ESS = 296.0 (gate > 400)
-  per-ISIN latents  : max R-hat = 1.0263, min ESS = 294.9   [min over thousands of names — informational]
+  GLOBAL parameters : max R-hat = 1.0090 (gate < 1.01), min ESS = 678.3 (gate > 400)
+  per-ISIN latents  : max R-hat = 1.0088, min ESS = 690.3   [min over thousands of names — informational]
   worst 8 by R-hat:
-    per-isin mu_reg                 n=6540   r_hat=1.0263  ess=   294.9
-    GLOBAL   beta                   n=15     r_hat=1.0262  ess=   296.0
-    per-isin expected_return        n=6540   r_hat=1.0234  ess=   352.2
-    per-isin mu_isin                n=6540   r_hat=1.0233  ess=   356.2
-    per-isin risk_adj_return        n=6540   r_hat=1.0233  ess=   356.2
-    per-isin state_now              n=6540   r_hat=1.0233  ess=   356.2
-    per-isin achieve_prob           n=6540   r_hat=1.0233  ess=   356.2
-    per-isin state_path             n=26160  r_hat=1.0233  ess=   356.2
+    GLOBAL   beta                   n=15     r_hat=1.0090  ess=   678.3
+    per-isin mu_reg                 n=6540   r_hat=1.0088  ess=   690.3
+    per-isin expected_return        n=6540   r_hat=1.0075  ess=   774.5
+    per-isin mu_isin                n=6540   r_hat=1.0075  ess=   772.8
+    per-isin risk_adj_return        n=6540   r_hat=1.0075  ess=   772.8
+    per-isin state_now              n=6540   r_hat=1.0075  ess=   772.8
+    per-isin achieve_prob           n=6540   r_hat=1.0075  ess=   772.8
+    per-isin state_path             n=26160  r_hat=1.0075  ess=   772.8
 
 === gate 2: is the per-ISIN latent alive? ===
   fixed prior scale        = 0.1000
@@ -116,10 +116,10 @@ C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\arviz
 === gate 4: per-time PPC coverage (target 0.92) ===
 Sampling: [target_pct_obs]
 INFO:pymc.sampling.forward:Sampling: [target_pct_obs]
-  t=0: 91.62%
-  t=1: 92.23%
-  t=2: 92.51%
-  t=3: 91.97%
+  t=0: 91.61%
+  t=1: 92.20%
+  t=2: 92.52%
+  t=3: 92.17%
 
 === gate 3: predicted signature vs the static twin ===
   production: sigma_base=0.1667  mean per-name posterior sd=0.0909
@@ -130,13 +130,11 @@ NUTS[nutpie]: [beta, trading_region_effect, sector_effect, style_class_effect, s
 INFO:pymc.sampling.mcmc:NUTS[nutpie]: [beta, trading_region_effect, sector_effect, style_class_effect, size_class_effect, risk_loading, size_loading, volume_loading, alpha_level, sigma_base, sigma_time_free, nu_tail]
 C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\pytensor\tensor\rewriting\elemwise.py:1004: UserWarning: Loop fusion failed because the resulting node would exceed the kernel argument limit.
   warn(
-  baseline  : sigma_base=0.1677  mean per-name posterior sd=0.0167
-  -> sigma_base 0.1677 -> 0.1667 (FALLS as predicted)
-  -> per-name sd 0.0167 -> 0.0909 (WIDENS as predicted)
+  baseline  : sigma_base=0.1680  mean per-name posterior sd=0.0168
+  -> sigma_base 0.1680 -> 0.1667 (FALLS as predicted)
+  -> per-name sd 0.0168 -> 0.0909 (WIDENS as predicted)
 
 ==============================================================
-VALIDATION FAILED:
-  - global max R-hat 1.0262
-  - global min ESS 296.0
-Do NOT re-export analytics until these are resolved.
-EXIT=1
+VALIDATION PASSED — safe to re-export.
+Next:  export_analytics(..., write=True)  THEN deploy the GEIB dashboard (they ship as a pair).
+EXIT=0

@@ -255,6 +255,28 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # the file (screen tables, forecast tables, sigma_obs paths, group forests).
 _HDI_LO, _HDI_HI = 0.04, 0.96
 
+# --- Uplift support band (single source of truth) -----------------------------
+# The response is winsorised to this DECIMAL band before ``log1p`` in
+# ``prepare_kalman_panel_inputs``, so the model never observes an uplift outside
+# it. The same band therefore bounds anything mapped back OUT of log space.
+#
+# Why the inverse direction matters: ``expm1`` is exponential, so an unclipped
+# log-space draw becomes an astronomical decimal return. The 2026-08-10 export
+# shipped ``er_sd`` up to 1.32e15 and ``kalman_variance`` up to 5.09e9 for a ~1 %
+# tail of names, because the INPUT was winsorised but the simulated and
+# de-standardised OUTPUTS were not. Widening the per-name posterior (the correct
+# pseudo-replication fix) widened the log-space tail that ``expm1`` then blew up,
+# amplifying a latent asymmetry by ~8 orders of magnitude.
+#
+# Clipping in LOG space before ``expm1`` restores the symmetry: draws are
+# truncated to the support the model was actually fit on, rather than
+# extrapolated past it. This is a truncation of the posterior to its training
+# support, not a cosmetic cap on an estimate — state it that way when reading
+# the resulting HDIs.
+UPLIFT_CLIP_LO, UPLIFT_CLIP_HI = -0.95, 5.0
+LOG_UPLIFT_CLIP_LO = float(np.log1p(UPLIFT_CLIP_LO))   # ~= -2.996
+LOG_UPLIFT_CLIP_HI = float(np.log1p(UPLIFT_CLIP_HI))   # ~= +1.792
+
 # Approximate calendar day counts for the fixed *_ago lookback suffixes; backs
 # the fused panel's t_scaled axis when ``history_lookbacks`` is active. The
 # period-to-date suffixes (mtd/qtd/ytd) are date-dependent and deliberately
@@ -3706,7 +3728,7 @@ def prepare_kalman_panel_inputs(
         _raw_uplift = _iu.where(np.isfinite(_iu), _raw_uplift)
     # Cap to [-95 %, +500 %] implied upside before logging: bounds the heavy
     # momentum tails without discarding the names.
-    _uplift_w = _raw_uplift.clip(lower=-0.95, upper=5.0)
+    _uplift_w = _raw_uplift.clip(lower=UPLIFT_CLIP_LO, upper=UPLIFT_CLIP_HI)
     model_df['feat_log_uplift'] = np.log1p(_uplift_w).to_numpy()
 
     isin_labels = model_df['isin'].astype(str).to_numpy()
@@ -3816,7 +3838,8 @@ def prepare_kalman_panel_inputs(
         for lb in lookbacks:
             pt_l = pd.to_numeric(model_df[f'price_target_{lb}_ago'], errors='coerce')
             px_l = pd.to_numeric(model_df[f'price_{lb}_ago'], errors='coerce')
-            uplift = (pt_l / px_l.where(px_l > 0) - 1.0).clip(lower=-0.95, upper=5.0)
+            uplift = (pt_l / px_l.where(px_l > 0) - 1.0).clip(
+                lower=UPLIFT_CLIP_LO, upper=UPLIFT_CLIP_HI)
             col = np.log1p(uplift).to_numpy(dtype='float64', copy=True)
             missing = ~np.isfinite(col)
             n_filled += int(missing.sum())
@@ -4308,6 +4331,11 @@ def panel_posterior_upside(
     if key == 'feat_log_uplift':
         # ``latent`` is a log-uplift: exp() makes the price target positive by
         # construction and ``expm1`` recovers the decimal expected upside.
+        # Clipped to the band the response was winsorised on (see
+        # LOG_UPLIFT_CLIP_*): without it, posterior draws beyond the model's
+        # training support are exponentiated into absurd price targets, which is
+        # what produced kalman_variance up to 5.09e9 in the 2026-08-10 export.
+        latent = latent.clip(LOG_UPLIFT_CLIP_LO, LOG_UPLIFT_CLIP_HI)
         eu = np.expm1(latent).rename('expected_upside')
         ept = (last * np.exp(latent)).rename('expected_pt')
     else:
@@ -5288,8 +5316,12 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
     )
     if _key == 'feat_log_uplift':
         # Simulated quantities are log-uplifts -> decimal returns (sign-preserving,
-        # so ``prob_pos`` is unchanged and reads as P(return > 0)).
-        mc = np.expm1(mc)
+        # so ``prob_pos`` is unchanged and reads as P(return > 0)). Clipped to the
+        # winsorisation band first: expm1 of an unbounded forward draw is what
+        # produced er_mean 7.4e12 / er_sd 1.32e15 in the 2026-08-10 export. The
+        # clip is applied in LOG space, so it is sign-preserving and leaves
+        # prob_pos untouched.
+        mc = np.expm1(np.clip(mc, LOG_UPLIFT_CLIP_LO, LOG_UPLIFT_CLIP_HI))
     mc_summary = summarize_mc_returns(mc, np.asarray(panel.isins))
 
     results = pd.DataFrame({

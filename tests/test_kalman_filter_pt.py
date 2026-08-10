@@ -833,6 +833,40 @@ def test_pruned_drift_design_is_well_conditioned():
     assert kept_cond < 100, f"retained design still ill-conditioned: {kept_cond:.0f}"
 
 
+def test_log_uplift_clip_band_matches_the_input_winsorisation():
+    """The inverse map must be bounded by the same support as the forward one."""
+    import pymc_kalman_filter_pt as kf
+
+    assert kf.LOG_UPLIFT_CLIP_LO == pytest.approx(np.log1p(kf.UPLIFT_CLIP_LO))
+    assert kf.LOG_UPLIFT_CLIP_HI == pytest.approx(np.log1p(kf.UPLIFT_CLIP_HI))
+    # Decimal returns recovered from the clipped band stay inside it.
+    assert np.expm1(kf.LOG_UPLIFT_CLIP_HI) == pytest.approx(kf.UPLIFT_CLIP_HI)
+    assert np.expm1(kf.LOG_UPLIFT_CLIP_LO) == pytest.approx(kf.UPLIFT_CLIP_LO)
+
+
+def test_clipping_bounds_expm1_blowup():
+    """Guard for the 2026-08-10 export: er_sd reached 1.32e15 without this.
+
+    expm1 is exponential, so an unclipped log-space tail becomes an astronomical
+    decimal return. Clipping in log space caps it at the winsorisation band and
+    is sign-preserving, so prob_pos is unaffected.
+    """
+    import pymc_kalman_filter_pt as kf
+
+    rng = np.random.default_rng(0)
+    # A heavy log-space tail of the kind a widened per-name posterior produces.
+    draws = np.r_[rng.normal(0, 0.3, 5000), np.array([12.0, 20.0, 35.0, -18.0])]
+
+    unclipped = np.expm1(draws)
+    clipped = np.expm1(np.clip(draws, kf.LOG_UPLIFT_CLIP_LO, kf.LOG_UPLIFT_CLIP_HI))
+
+    assert unclipped.max() > 1e5, "fixture no longer reproduces the blow-up"
+    assert clipped.max() == pytest.approx(kf.UPLIFT_CLIP_HI)
+    assert clipped.min() >= kf.UPLIFT_CLIP_LO - 1e-12
+    # Sign preservation: clipping in log space cannot flip P(return > 0).
+    assert ((unclipped > 0) == (clipped > 0)).all()
+
+
 def test_comparison_subsample_keeps_arrays_aligned():
     import pymc_kalman_filter_pt as kf
 
