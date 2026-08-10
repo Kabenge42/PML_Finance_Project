@@ -4024,6 +4024,61 @@ def _max_posterior_rhat(posterior: "xr.Dataset",
         return float('nan')
 
 
+def sample_with_fallback(model: "pm.Model", config: Optional[KalmanRunConfig] = None,
+                         *, model_name: str = 'kalman_pt',
+                         progressbar: bool = True) -> Optional[Any]:
+    """Sample ``model``, trying nutpie → numpyro → pymc in priority order.
+
+    The same sampler priority :func:`sample_posterior` uses, factored out so
+    secondary fits (§9b model comparison, the validation script) cannot silently
+    diverge from the production path.
+
+    **This is not a micro-optimisation.** The project forces the PyTensor
+    pure-Python VM (``PML_ENABLE_PYTENSOR_C=0``), under which PyMC's own NUTS is
+    orders of magnitude slower than the nutpie numba backend. On the local-level
+    panel — which adds ``n_isin × (T-1)`` state innovations, ~16.8k parameters on
+    a 5.6k-ISIN T=4 panel — the pure-Python sampler produced **zero draws in 42
+    minutes of CPU**. Anything that samples this model must go through here (or
+    pass ``nuts_sampler`` explicitly), never bare ``build_sample_kwargs``, whose
+    ``nuts_sampler=None`` default lands on the pure-Python path.
+
+    Parameters
+    ----------
+    model
+        The built model to sample.
+    config
+        Supplies the NUTS budget. Defaults to :func:`get_run_config`.
+    model_name
+        Label used in the diagnostics log lines.
+    progressbar
+        ``False`` for back-to-back fits — the bars are noise, and nutpie's
+        thin-space glyphs crash a cp1252 Windows console.
+
+    Returns
+    -------
+    Any or None
+        The inference object, or ``None`` when every candidate sampler failed.
+    """
+    cfg = config if config is not None else get_run_config()
+    candidates = [s for s in ('nutpie', 'numpyro')
+                  if _ilu.find_spec(s) is not None] + ['pymc']
+    logger.info('%s: sampler priority %s', model_name, candidates)
+    for sampler in candidates:
+        try:
+            with model:
+                idata = pm.sample(**build_sample_kwargs(
+                    samples=cfg.draws, tune=cfg.tune, chains=cfg.chains,
+                    target_accept=cfg.target_accept, random_seed=cfg.random_seed,
+                    cores=cfg.cores, nuts_sampler=sampler,
+                    model_name=model_name, progressbar=progressbar))
+            log_sample_diagnostics(idata, model_name=model_name)
+            return idata
+        except Exception as exc:
+            logger.warning('%s: sampler %r failed (%s); falling back.',
+                           model_name, sampler, exc)
+    return None
+
+
 def build_panel_model(
         panel: KalmanPanelInputs, *, robust: bool = True, volume_penalty: float = 0.25,
         config: Optional[KalmanRunConfig] = None,
@@ -5087,40 +5142,19 @@ def run_model_comparison(panel: KalmanPanelInputs, *,
         'local_level': float(cfg.state_innovation_scale),
         'static': 0.0,
     }
-    # Same nutpie -> numpyro -> pymc priority as ``sample_posterior``: the
-    # pure-Python NUTS fallback is orders of magnitude slower under the project's
-    # forced PyTensor py-VM, and this stage pays for TWO fits.
-    candidate_samplers = [s for s in ('nutpie', 'numpyro')
-                          if _ilu.find_spec(s) is not None] + ['pymc']
-
     fits: dict[str, Any] = {}
     for name, scale in arms.items():
         model = build_fused_kalman_pt_model(
             sub, robust=robust, volume_penalty=volume_penalty,
             state_innovation_scale=scale)
-        idata = None
-        for sampler in candidate_samplers:
-            try:
-                with model:
-                    idata = pm.sample(
-                        **build_sample_kwargs(
-                            samples=cfg.draws, tune=cfg.tune, chains=cfg.chains,
-                            target_accept=cfg.target_accept,
-                            random_seed=cfg.random_seed, cores=cfg.cores,
-                            nuts_sampler=sampler,
-                            model_name=f'kalman_pt[{name}]',
-                            # Two full fits back to back: the bars are noise, and
-                            # nutpie's thin-space glyphs crash a cp1252 console.
-                            progressbar=False))
-                break
-            except Exception as exc:
-                logger.warning('%s sampler failed for the %r arm (%s); '
-                               'falling back.', sampler, name, exc)
+        # Two full fits back to back: the bars are noise, and nutpie's
+        # thin-space glyphs crash a cp1252 console.
+        idata = sample_with_fallback(model, cfg, model_name=f'kalman_pt[{name}]',
+                                     progressbar=False)
         if idata is None:
             print(f'Model comparison aborted: every sampler failed on the '
                   f'{name!r} arm.')
             return None
-        log_sample_diagnostics(idata, model_name=f'kalman_pt[{name}]')
         attach_log_likelihood(idata, model)
         if not hasattr(idata, 'log_likelihood'):
             print(f'Model comparison aborted: could not attach a log_likelihood '

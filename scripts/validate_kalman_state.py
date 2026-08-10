@@ -56,27 +56,28 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 import pymc_kalman_filter_pt as K  # noqa: E402
-from probabilistic_ml_model.pymc_models._workflow import (  # noqa: E402
-    MIN_ESS_GATE, build_sample_kwargs, log_sample_diagnostics,
-)
+from probabilistic_ml_model.pymc_models._workflow import MIN_ESS_GATE  # noqa: E402
 
 RHAT_GATE = 1.01
 SIGMA_STATE_FLOOR = 0.01  # below this the walk is indistinguishable from static
 
 
 def _fit(panel, cfg, *, scale: float, label: str):
-    """Build and sample one arm; returns (idata, model)."""
-    import pymc as pm
+    """Build and sample one arm; returns (idata, model).
 
+    Sampling goes through :func:`K.sample_with_fallback` (nutpie → numpyro →
+    pymc), NOT bare ``build_sample_kwargs``. Its ``nuts_sampler=None`` default
+    lands on PyMC's pure-Python NUTS, which under the project's forced PyTensor
+    py-VM produced zero draws in 42 minutes of CPU on this model — the state
+    layer adds ``n_isin × (T-1)`` ≈ 16.8k innovation parameters.
+    """
     print(f'\n--- fitting {label} (state_innovation_scale={scale}) ---')
     model = K.build_fused_kalman_pt_model(
         panel, robust=True, volume_penalty=0.25, state_innovation_scale=scale)
-    with model:
-        idata = pm.sample(**build_sample_kwargs(
-            samples=cfg.draws, tune=cfg.tune, chains=cfg.chains,
-            target_accept=cfg.target_accept, random_seed=cfg.random_seed,
-            cores=cfg.cores, model_name=f'kalman_pt[{label}]'))
-    log_sample_diagnostics(idata, model_name=f'kalman_pt[{label}]')
+    idata = K.sample_with_fallback(model, cfg, model_name=f'kalman_pt[{label}]',
+                                   progressbar=False)
+    if idata is None:
+        raise RuntimeError(f'every candidate sampler failed on the {label!r} arm')
     return idata, model
 
 
