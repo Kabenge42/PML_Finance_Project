@@ -91,3 +91,42 @@ NUTS[nutpie]: [beta, exchange_effect, unit_effect, country_effect, industry_effe
 INFO:pymc.sampling.mcmc:NUTS[nutpie]: [beta, exchange_effect, unit_effect, country_effect, industry_effect, sigma_isin_level, z_isin_level, risk_loading, size_loading, volume_loading, alpha_level, sigma_base, nu_tail]
 C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\pytensor\tensor\rewriting\elemwise.py:1004: UserWarning: Loop fusion failed because the resulting node would exceed the kernel argument limit.
   warn(
+C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\arviz_stats\base\diagnostics.py:90: RuntimeWarning: invalid value encountered in scalar divide
+  (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
+
+=== gate 1: convergence ===
+  divergences = 0      (gate: 0)
+  max R-hat   = 1.0412 (gate: < 1.01)
+  min ESS     = 209.3   (gate: > 400)
+
+=== gate 2: is the per-ISIN latent alive? ===
+  sigma_isin_level mean = 0.0888, 5.5% quantile = 0.0737 (floor 0.01)
+  AR(1) layer disabled (state_innovation_scale=0.0) — expected; the per-ISIN intercept carries the panel.
+
+=== gate 4: per-time PPC coverage (target 0.94) ===
+Sampling: [target_pct_obs]
+INFO:pymc.sampling.forward:Sampling: [target_pct_obs]
+  t=0: 90.72%   <-- off target
+  t=1: 94.29%
+  t=2: 95.70%
+  t=3: 96.65%
+
+=== gate 3: predicted signature vs the static twin ===
+  production: sigma_base=0.3298  mean per-name posterior sd=0.1002
+
+--- fitting baseline(no per-ISIN latent) (state_innovation_scale=0.0) ---
+INFO:pymc_kalman_filter_pt:kalman_pt[baseline(no per-ISIN latent)]: sampler priority ['nutpie', 'numpyro', 'pymc']
+NUTS[nutpie]: [beta, exchange_effect, unit_effect, country_effect, industry_effect, risk_loading, size_loading, volume_loading, alpha_level, sigma_base, nu_tail]
+INFO:pymc.sampling.mcmc:NUTS[nutpie]: [beta, exchange_effect, unit_effect, country_effect, industry_effect, risk_loading, size_loading, volume_loading, alpha_level, sigma_base, nu_tail]
+C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\pytensor\tensor\rewriting\elemwise.py:1004: UserWarning: Loop fusion failed because the resulting node would exceed the kernel argument limit.
+  warn(
+  baseline  : sigma_base=0.3373  mean per-name posterior sd=0.0548
+  -> sigma_base 0.3373 -> 0.3298 (FALLS as predicted)
+  -> per-name sd 0.0548 -> 0.1002 (WIDENS as predicted)
+
+==============================================================
+VALIDATION FAILED:
+  - max R-hat 1.0412
+  - min ESS 209.3
+Do NOT re-export analytics until these are resolved.
+EXIT=1

@@ -2262,6 +2262,10 @@ def build_fused_kalman_pt_model(
         "y_series": np.asarray(panel.response_names),
         "drift_feature": list(panel.drift_names),
     }
+    # Free per-time noise multipliers: every slice except the SNAPSHOT, which is
+    # anchored at 1.0 so ``sigma_base`` stays identified.
+    if T > 1:
+        coords["time_free"] = np.arange(T - 1)
     # Non-primary response series carry a free factor loading on ``mu_isin``; the
     # primary series (index 0, ``feat_implied_upside``) is anchored at loading ≡ 1.
     if D > 1:
@@ -2829,6 +2833,40 @@ def build_fused_kalman_pt_model(
             sigma_obs = sigma_isin[:, None] * tau_series[None, :]  # (isin, y_series)
         else:
             sigma_obs = sigma_isin[:, None]  # (isin, 1)
+
+        # ---- Per-TIME noise scale (the lookback slices are not equally clean) ----
+        # ``sigma_isin`` is a per-name scale applied identically to every time
+        # slice. That is wrong for a history panel and the data says so: with the
+        # state layer entirely OFF, the 2026-08-10 full-scale run still produced a
+        # monotone per-time posterior-predictive coverage ramp — 90.7 % at the
+        # oldest lookback (intervals too NARROW), 94.3 %, 95.7 %, 96.7 % at the
+        # snapshot (too WIDE) against a 94 % target. Because the ramp survives with
+        # no time-varying latent at all, it is not a state-dynamics artefact: the
+        # OBSERVATION noise genuinely differs by lookback. That is what one would
+        # expect — ``price_target_{6m,3m,1m}_ago`` / ``price_*_ago`` are staler and
+        # thinner-covered than today's consensus, and a small share of history
+        # cells are snapshot-filled outright.
+        #
+        # One multiplicative scale per time step fixes it, anchored at the
+        # SNAPSHOT (the final index, and the slice every downstream decision reads)
+        # so ``sigma_base`` keeps its meaning and no ``sigma_base · tau`` product
+        # appears. ``LogNormal(0, 0.25)`` is median-1 and strictly positive — the
+        # same median-anchored form used for the ICM loading — so the prior is
+        # neutral about which lookbacks are noisier and the data decides. Costs
+        # ``T-1`` parameters (3 on the production panel), amply identified by
+        # thousands of names.
+        if T > 1:
+            tau_time_free = pm.LogNormal(
+                "sigma_time_free", mu=0.0, sigma=0.25, dims="time_free"
+            )
+            tau_time = pm.Deterministic(
+                "sigma_time",
+                pt.concatenate([tau_time_free, pt.ones(1)]),
+                dims="time",
+            )
+            sigma_full = sigma_obs[:, None, :] * tau_time[None, :, None]
+        else:
+            sigma_full = sigma_obs[:, None, :]
         # Robust-likelihood degrees of freedom, lower-bounded at ν₀ = 2.5.
         # A plain ``Gamma(2, 0.1)`` places non-trivial mass below ν = 2, where the
         # Student-t has infinite variance and — critically — the joint density is
@@ -2852,7 +2890,7 @@ def build_fused_kalman_pt_model(
                 "target_pct_obs",
                 nu=nu,
                 mu=regression,
-                sigma=sigma_obs[:, None, :],
+                sigma=sigma_full,
                 observed=Y_obs,
                 dims=("isin", "time", "y_series"),
             )
@@ -2860,7 +2898,7 @@ def build_fused_kalman_pt_model(
             pm.Normal(
                 "target_pct_obs",
                 mu=regression,
-                sigma=sigma_obs[:, None, :],
+                sigma=sigma_full,
                 observed=Y_obs,
                 dims=("isin", "time", "y_series"),
             )
