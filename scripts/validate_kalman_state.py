@@ -43,12 +43,20 @@ import argparse
 import logging
 import sys
 from dataclasses import replace
+from pathlib import Path
 
-import numpy as np
-import pandas as pd
+# Python puts THIS file's directory (scripts/) on sys.path, not the repo root, so
+# the top-level modules are not importable without help. Prepend the repo root so
+# the script runs from anywhere.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-import pymc_kalman_filter_pt as K
-from probabilistic_ml_model.pymc_models._workflow import (
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+import pymc_kalman_filter_pt as K  # noqa: E402
+from probabilistic_ml_model.pymc_models._workflow import (  # noqa: E402
     MIN_ESS_GATE, build_sample_kwargs, log_sample_diagnostics,
 )
 
