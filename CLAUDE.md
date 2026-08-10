@@ -479,7 +479,6 @@ Local-level state / comparison knobs on `KalmanRunConfig`:
 
 | Field                     | Default | Purpose                                                                          |
 |---------------------------|---------|----------------------------------------------------------------------------------|
-| `draws`                   | `3000`  | Raised from 1000: the drift block `beta` needs ~3x the default to clear bulk-ESS 400 (it was 140 at 1000 draws, with 0 divergences — autocorrelation, not geometry). Budget ~45 min for the T=4 panel. |
 | `state_innovation_scale`  | `0.0`   | **AR(1) time-varying state — OFF by default.** Tried and rejected at T=4: it bought +0.013 recovery correlation for min ESS 14 vs 69, with `sigma_state`/`rho` drifting between draw budgets. The per-ISIN intercept below carries the panel. Set to `0.1` to enable; revisit on a longer panel. |
 | `isin_level_scale` (builder arg) | `0.5` | Prior scale of `sigma_isin_level`, the per-ISIN random intercept restored on `T > 1`. This is the layer the panel actually buys. `0.0` pins it off (the pre-0.9.9.14 baseline). |
 | `enable_model_comparison` | `False` | Run §9b. Refits both arms and computes a pointwise `log_likelihood` per arm (~820 MB each at full panel size), so ≈3× the sampling cost. |
@@ -915,7 +914,10 @@ The other ~45 files there are hand-written screen/analysis scripts unmanaged by 
 - Schema: `pml.pml_df_metadata` (DDL `pml_df_metadata.sql`, population `pml_df_metadata_populate.sql`)
 - Functions / MVs / catalogue views: `pml_feature_catalogue.sql`
 - Sampling & diagnostics: `pymc_models/_workflow.py`
-- Drift-feature exclusions: `KALMAN_DRIFT_EXCLUDED_FEATURES` in `KalmanFilterModel.py`
+- Drift-feature exclusions: `KALMAN_DRIFT_EXCLUDED_FEATURES` in `KalmanFilterModel.py` — 15 surviving columns (cond 23,
+  max VIF 3.8). Exclusions live HERE, never as a `pymc_role='excluded'` flip in SQL: that drops the row from
+  `vw_pymc_feature_catalogue` while the MV still emits the column, so `assert_pymc_catalogue_coverage()` raises
+  MISSING_FROM_CATALOGUE. Collapsed families keep one representative each (`feat_pt_drift`, `feat_analyst_rating`).
 - Artifact sections: `_EXPORT_SECTION_DIRS` in `pymc_kalman_filter_pt.py`
 - Kalman decision latent: `KALMAN_SCREEN_LATENT` / `resolve_screen_latent` in `pymc_kalman_filter_pt.py` — every
   consumer (screen, price-target MC, risk book, analytics export, §13b plots, prior predictive) resolves the

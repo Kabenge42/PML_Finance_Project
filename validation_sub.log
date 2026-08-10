@@ -91,3 +91,5 @@ NUTS[nutpie]: [beta, region_effect, trading_region_effect, sector_effect, style_
 INFO:pymc.sampling.mcmc:NUTS[nutpie]: [beta, region_effect, trading_region_effect, sector_effect, style_class_effect, size_class_effect, z_isin_level, risk_loading, size_loading, volume_loading, alpha_level, sigma_base, sigma_time_free, nu_tail]
 C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\pytensor\tensor\rewriting\elemwise.py:1004: UserWarning: Loop fusion failed because the resulting node would exceed the kernel argument limit.
   warn(
+C:\Users\markm\.virtualenvs\PML_Finance_Project-s3M9Q_V2\Lib\site-packages\arviz_stats\base\diagnostics.py:90: RuntimeWarning: invalid value encountered in scalar divide
+  (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)

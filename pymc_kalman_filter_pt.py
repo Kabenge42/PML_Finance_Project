@@ -326,17 +326,18 @@ class KalmanRunConfig:
 
     # Sampling
     random_seed: int = 42
-    # 3000, raised from 1000 on the 2026-08-10 T=4 validation. Every other gate
-    # passed there — 0 divergences, per-time PPC coverage within 0.8 pp of
-    # nominal, the per-ISIN effect alive — but the drift coefficients ``beta``
-    # came in at R-hat 1.026 / bulk-ESS 140 against the 1.01 / 400 gates. With no
-    # divergences that is autocorrelation, not bad geometry: the 21 drift features
-    # are mutually correlated (the PT / price / momentum trails move together) and
-    # now share explanatory space with the per-ISIN intercept, so the chain
-    # explores that block slowly. Bulk-ESS scales ~linearly in draws, so ~3x is
-    # what clears 140 -> 400. Costs proportionally more wall-clock: budget ~45 min
-    # for the T=4 panel rather than the ~16 min the 1000-draw build took.
-    draws: int = 3000
+    # Briefly raised to 3000 to out-sample the ``beta`` ridge on the 2026-08-10
+    # T=4 validation (R-hat 1.026 / bulk-ESS 140 at ZERO divergences). That was
+    # treating the symptom: the drift design carried condition number 1 580
+    # because four price-target drift columns and four analyst-sentiment columns
+    # each restated one signal. Pruning those to a single representative apiece
+    # (``KALMAN_PT_DRIFT_SIBLING_FEATURES`` /
+    # ``KALMAN_COLLINEAR_COMPOSITION_FEATURES``) took the design to 15 columns at
+    # condition number 23, so the extra draws are no longer buying anything and
+    # the budget returns to 1000 — worth ~45 min -> ~16 min per T=4 run. If
+    # ``beta`` ever falls short of the ESS gate again, raise this as a measured
+    # decision rather than a standing tax, and check the conditioning first.
+    draws: int = 1000
     tune: int = 1000
     chains: int = 4
     cores: int = 1

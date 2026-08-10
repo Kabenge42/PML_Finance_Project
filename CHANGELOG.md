@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Drift design matrix pruned 21 → 15 columns — the last failing convergence gate.**
+  `beta` was the only global parameter missing the gates on the full 6,540-name
+  T=4 validation: R-hat 1.026 / bulk-ESS 140 against 1.01 / 400, at **zero
+  divergences**. Zero divergences with slow mixing is the signature of poor
+  conditioning, not bad geometry — and the design carried condition number
+  **1,580** with a smallest eigenvalue of 0.004. Two families each restated one
+  signal:
+
+  - `feat_pt_{median,high,low}_drift` are the same `pml.target_drift()` run over
+    the median / high / low target trails as `feat_pt_drift` runs over the mean.
+    A consensus revision moves the whole band together: r = 0.81–0.89,
+    VIF = 162 / 77 / 25 / 6.6.
+  - `feat_analyst_{bullish_pct,bearish_pct,neutral_pct,conviction,rating}` are
+    all functions of the same six `num_*_ratings` buckets, with `conviction`
+    literally `|bullish − bearish|` and the three pct legs summing to ~1.
+    r(bullish, conviction) = 0.926, r(bullish, rating) = 0.909.
+
+  One representative survives per family — `feat_pt_drift` and
+  `feat_analyst_rating`. Measured on the live MV:
+
+  | set | k | cond | max VIF | R² |
+  |---|---|---|---|---|
+  | before | 21 | 1,580 | 162.5 | 0.6538 |
+  | after | **15** | **23** | **3.8** | **0.6499** |
+
+  69× better conditioning for a 0.6 % relative loss in explanatory power.
+  `feat_analyst_rating` was kept over the `bullish_pct` + `bearish_pct` pair
+  because it scored *higher* (R² 0.6499 vs 0.6463) using one fewer column, at
+  99.76 % coverage. An orthogonal replacement for the dropped drift siblings
+  (`high_drift − low_drift`, band-widening dynamics) was tried and rejected: it
+  correlates −0.003 with the response and moved R² by 0.0001 — the siblings are
+  duplication, not a distinct dispersion signal, which `feat_pt_noise_drift`
+  already carries.
+
+  This also retires the 2026-07-31 note in `KALMAN_DRIFT_EXCLUDED_FEATURES` that
+  flagged `feat_analyst_conviction` as a null beta "to revisit if it stays null
+  on the genuine panel". It did, and the reason is now clear.
+
+  Implemented in `KALMAN_DRIFT_EXCLUDED_FEATURES` (the SSOT CLAUDE.md names), NOT
+  in SQL: the columns stay in `mv_pymc_kalman_pt` and the catalogue, because they
+  remain valid for EDA / the analytics export and the analyst family is shared
+  with the `price_target` model. Flipping `pymc_role` to `'excluded'` would drop
+  them from `vw_pymc_feature_catalogue` while the MV still emits them, making
+  `assert_pymc_catalogue_coverage()` raise MISSING_FROM_CATALOGUE.
+  Verified after the change: `kalman_pt` reports 64 OK / 0 violations.
+- **`KalmanRunConfig.draws` returned to 1000** from the 3000 briefly used to
+  out-sample the ridge above. With the conditioning fixed at source the extra
+  draws buy nothing, and a T=4 run costs ~16 min again rather than ~45.
+
 - **Exported price targets were ~1.5–2.3 pp too high on every T>1 run.**
   `prepare_kalman_panel_inputs` standardises the response tensor on the **pooled
   (isin × time)** moments of the genuine `price_target_{lb}_ago` /

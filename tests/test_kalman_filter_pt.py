@@ -731,6 +731,108 @@ def test_response_extra_rejects_an_unknown_key():
         )
 
 
+# ---------------------------------------------------------------------------
+# Drift-matrix collinearity pruning.
+#
+# The 21-column design had condition number 1580 / max VIF 162 because four
+# price-target drift columns and four analyst-sentiment columns each restated a
+# single signal. That left `beta` on thin ridges: R-hat 1.026 / bulk-ESS 140 at
+# ZERO divergences on the 2026-08-10 full-scale run -- the last failing gate.
+# Pruning to one representative apiece gives 15 columns / cond 23 / VIF 3.8.
+# ---------------------------------------------------------------------------
+_PRUNED_DRIFT_ALIASES = (
+    "feat_pt_median_drift", "feat_pt_high_drift", "feat_pt_low_drift",
+    "feat_analyst_bullish_pct", "feat_analyst_bearish_pct",
+    "feat_analyst_conviction",
+)
+_RETAINED_REPRESENTATIVES = ("feat_pt_drift", "feat_analyst_rating")
+
+
+@pytest.mark.parametrize("alias", _PRUNED_DRIFT_ALIASES)
+def test_collinear_drift_aliases_are_excluded(alias):
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KALMAN_DRIFT_EXCLUDED_FEATURES,
+    )
+
+    assert alias in KALMAN_DRIFT_EXCLUDED_FEATURES
+
+
+@pytest.mark.parametrize("alias", _RETAINED_REPRESENTATIVES)
+def test_drift_family_representatives_are_retained(alias):
+    """Each collapsed family must keep exactly one column in the design."""
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KALMAN_DRIFT_EXCLUDED_FEATURES,
+    )
+
+    assert alias not in KALMAN_DRIFT_EXCLUDED_FEATURES
+
+
+def test_select_drift_features_drops_the_collinear_families():
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KalmanFilterPriceTarget,
+    )
+
+    candidates = [
+        "feat_pt_drift", "feat_pt_median_drift", "feat_pt_high_drift",
+        "feat_pt_low_drift", "feat_analyst_rating", "feat_analyst_bullish_pct",
+        "feat_analyst_bearish_pct", "feat_analyst_conviction",
+        "feat_analyst_neutral_pct", "feat_price_drift", "feat_coverage_drift",
+    ]
+    kept = KalmanFilterPriceTarget.select_drift_features(candidates)
+    assert set(kept) == {
+        "feat_pt_drift", "feat_analyst_rating", "feat_price_drift",
+        "feat_coverage_drift",
+    }
+
+
+def test_pruned_drift_design_is_well_conditioned():
+    """The guard that actually regresses if a sibling feature is re-added.
+
+    Builds a synthetic design reproducing the measured correlation structure --
+    the target-band columns move almost rigidly together (r ~ 0.85) and the
+    analyst columns likewise -- then checks that the retained subset is far
+    better conditioned than the full one. Thresholds are loose because the
+    fixture is synthetic; the real numbers are 1580 -> 23.
+    """
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KALMAN_DRIFT_EXCLUDED_FEATURES,
+    )
+
+    rng = np.random.default_rng(0)
+    n = 2000
+    pt_signal = rng.normal(size=n)
+    analyst_signal = rng.normal(size=n)
+
+    def near(sig, rho=0.88):
+        return rho * sig + np.sqrt(1 - rho ** 2) * rng.normal(size=n)
+
+    cols = {
+        "feat_pt_drift": near(pt_signal),
+        "feat_pt_median_drift": near(pt_signal),
+        "feat_pt_high_drift": near(pt_signal),
+        "feat_pt_low_drift": near(pt_signal),
+        "feat_analyst_rating": near(analyst_signal),
+        "feat_analyst_bullish_pct": near(analyst_signal),
+        "feat_analyst_bearish_pct": -near(analyst_signal),
+        "feat_analyst_conviction": near(analyst_signal),
+        "feat_price_drift": rng.normal(size=n),
+        "feat_coverage_drift": rng.normal(size=n),
+    }
+    df = pd.DataFrame(cols)
+
+    def cond(frame):
+        z = (frame - frame.mean()) / frame.std(ddof=0)
+        ev = np.linalg.eigvalsh(z.corr().values)
+        return float(ev.max() / max(ev.min(), 1e-12))
+
+    kept = [c for c in df.columns if c not in KALMAN_DRIFT_EXCLUDED_FEATURES]
+    full_cond, kept_cond = cond(df), cond(df[kept])
+    assert kept_cond < full_cond / 5, (
+        f"pruning barely helped: {full_cond:.0f} -> {kept_cond:.0f}"
+    )
+    assert kept_cond < 100, f"retained design still ill-conditioned: {kept_cond:.0f}"
+
+
 def test_comparison_subsample_keeps_arrays_aligned():
     import pymc_kalman_filter_pt as kf
 

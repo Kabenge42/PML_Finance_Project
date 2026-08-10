@@ -235,10 +235,9 @@ KALMAN_DRIFT_SUPPORT_COUNTERS: frozenset[str] = frozenset({
     "feat_vol_drift_n",
 })
 
-# Raw analyst-rating counts. The compositional percentage / conviction variants
-# (``feat_analyst_bullish_pct`` / ``feat_analyst_bearish_pct`` /
-# ``feat_analyst_conviction`` / ``feat_analyst_rating``) enter the drift matrix
-# instead; the raw counts are collinear with them and with ``n_analysts``.
+# Raw analyst-rating counts. ``feat_analyst_rating`` enters the drift matrix as
+# the family's single representative; the raw counts are collinear with it and
+# with ``n_analysts``.
 KALMAN_RATING_COUNT_FEATURES: frozenset[str] = frozenset({
     "feat_holds",
     "feat_buys",
@@ -246,11 +245,56 @@ KALMAN_RATING_COUNT_FEATURES: frozenset[str] = frozenset({
     "feat_no_opinion",
 })
 
-# One leg of the bullish/bearish/neutral composition (the three sum to ~1, so
-# after z-scoring the triplet is perfectly collinear); the neutral leg is the
-# least informative and is dropped.
+# The analyst-sentiment family collapses to ONE column in the drift matrix.
+#
+# ``feat_analyst_{bullish_pct,bearish_pct,neutral_pct,conviction,rating}`` are all
+# functions of the same six ``num_*_ratings`` buckets, and ``conviction`` is
+# literally ``|bullish - bearish|``. The three percentage legs sum to ~1, so the
+# triplet is exactly collinear after z-scoring; ``conviction`` and ``rating`` then
+# restate the same contrast again. Measured on the live ``mv_pymc_kalman_pt``
+# (6 549 rows):
+#
+#     r(bullish, conviction) = +0.926   VIF(bullish)    = 14.4
+#     r(bullish, rating)     = +0.909   VIF(rating)     = 11.8
+#     r(conviction, rating)  = +0.837   VIF(conviction) =  7.2
+#     r(bearish, rating)     = -0.691   VIF(bearish)    =  2.6
+#
+# ``feat_analyst_rating`` is kept because it measurably dominates the
+# alternatives: retaining it alone scores R^2 0.6499 against the log-uplift
+# response versus 0.6463 for the ``bullish_pct`` + ``bearish_pct`` pair, with one
+# FEWER column, and it is 99.76 % populated (16 missing of 6 549). It is the
+# vendor's weighted composite of all six buckets, where ``bullish_pct`` is a
+# crude share — which is why it carries more of the signal.
 KALMAN_COLLINEAR_COMPOSITION_FEATURES: frozenset[str] = frozenset({
     "feat_analyst_neutral_pct",
+    "feat_analyst_bullish_pct",
+    "feat_analyst_bearish_pct",
+    "feat_analyst_conviction",
+})
+
+# Siblings of ``feat_pt_drift``: the SAME ``pml.target_drift()`` computation run
+# over the median / high / low analyst-target trails instead of the mean. The
+# four move together almost rigidly, because a consensus revision shifts the whole
+# target band at once:
+#
+#     r(pt_drift, pt_low_drift)      = +0.889   VIF(pt_drift)        = 162.5
+#     r(pt_low_drift, pt_median)     = +0.875   VIF(pt_median_drift) =  77.0
+#     r(pt_high_drift, pt_low_drift) = +0.805   VIF(pt_high_drift)   =  24.7
+#                                               VIF(pt_low_drift)    =   6.6
+#
+# The consensus MEAN drift is retained as the family's representative. Dropping
+# the siblings costs R^2 0.6538 -> 0.6518 (0.3 % relative).
+#
+# An orthogonal REPLACEMENT was tried instead of a plain drop and rejected:
+# ``feat_pt_high_drift - feat_pt_low_drift`` (how the analyst band is widening,
+# as distinct from where its centre is moving) correlates -0.003 with the
+# response and moves R^2 by 0.0001. The high/low drifts genuinely are duplication
+# of the level drift, not a separate dispersion signal — ``feat_pt_noise_drift``
+# (the stddev trail's drift) already carries dispersion dynamics.
+KALMAN_PT_DRIFT_SIBLING_FEATURES: frozenset[str] = frozenset({
+    "feat_pt_median_drift",
+    "feat_pt_high_drift",
+    "feat_pt_low_drift",
 })
 
 # Per-fiscal-year Piotroski F-score components (``pml.piotroski_f_score`` in
@@ -272,13 +316,37 @@ KALMAN_TIME_COVARIATE_PREFIX: str = "days_"
 # Union of every alias barred from the drift design matrix (``days_*`` columns
 # are excluded by prefix, see KALMAN_TIME_COVARIATE_PREFIX).
 #
-# NOTE (2026-07-31 run): two surviving drift betas are statistically
-# indistinguishable from zero on the T=1 snapshot —
-# ``beta[feat_one_day_return]`` = 0.002 ± 0.006 and
-# ``beta[feat_analyst_conviction]`` = −0.016 ± 0.017 (89% ETIs straddle 0).
-# They are deliberately KEPT in the drift matrix (pruning is a model-composition
-# change requiring a validation re-run); revisit if they stay null on the
-# genuine (isin, time) panel.
+# The surviving drift set is 15 columns, down from 21. The 2026-07-31 note here
+# flagged ``feat_analyst_conviction`` as a null beta to "revisit if it stays null
+# on the genuine (isin, time) panel" — it did, and the T=4 panel supplied the
+# reason: conviction is ``|bullish - bearish|``, so it never carried information
+# the rest of the analyst family did not already have. It is now excluded, along
+# with the rest of that family bar ``feat_analyst_rating`` and the three
+# ``feat_pt_*_drift`` siblings. (``feat_one_day_return``, the other null beta in
+# that note, is KEPT: its VIF is ~1, so it is merely uninformative rather than
+# collinear, and dropping it would not improve conditioning.)
+#
+# Why this mattered: the 21-column design had condition number 1 580 and a
+# smallest eigenvalue of 0.004 — near-singular. That left ``beta`` on long, thin
+# ridges which NUTS crawls along, and it was the LAST failing gate on the
+# 2026-08-10 full-scale validation (R-hat 1.026 / bulk-ESS 140 against 1.01 / 400,
+# at ZERO divergences — the signature of poor conditioning rather than bad
+# geometry). Pruning to 15:
+#
+#     set                                  k    cond   maxVIF   R^2
+#     current                             21   1 580    162.5   0.6538
+#     - pt_drift siblings                 18     106     14.1   0.6518
+#     - + analyst family (this build)     15      23      3.8   0.6499
+#
+# i.e. 69x better conditioning for a 0.6 % relative loss in explanatory power.
+#
+# These columns are NOT removed from ``mv_pymc_kalman_pt`` or the catalogue. They
+# remain valid features for EDA and the analytics export, and the analyst family
+# is shared with the ``price_target`` model. Flipping ``pymc_role`` to 'excluded'
+# in ``pml_df_feature_alias`` would drop them from ``vw_pymc_feature_catalogue``
+# while the MV still emits them, which makes
+# ``pml.assert_pymc_catalogue_coverage()`` raise MISSING_FROM_CATALOGUE. The
+# drift matrix is a Python-side concern and this frozenset is its SSOT.
 KALMAN_DRIFT_EXCLUDED_FEATURES: frozenset[str] = (
     KALMAN_LEAKAGE_FEATURES
     | KALMAN_NOISE_WIDENER_FEATURES
@@ -287,6 +355,7 @@ KALMAN_DRIFT_EXCLUDED_FEATURES: frozenset[str] = (
     | KALMAN_RATING_COUNT_FEATURES
     | KALMAN_COLLINEAR_COMPOSITION_FEATURES
     | KALMAN_PIOTROSKI_COMPONENT_FEATURES
+    | KALMAN_PT_DRIFT_SIBLING_FEATURES
 )
 
 

@@ -227,3 +227,42 @@ COMMENT ON COLUMN pml.pml_df_metadata.feature_role IS 'Coarse ML role used for S
 --       outcome series available to the ICM panel as observed evidence.
 --   No metadata schema change is required; this note documents the consumption.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Fused Kalman drift matrix — catalogue-registered but DELIBERATELY UNUSED.
+--
+-- These kalman_pt mutable_predictors keep their catalogue rows and stay in
+-- mv_pymc_kalman_pt, but are barred from the model's drift DESIGN MATRIX by
+-- KALMAN_DRIFT_EXCLUDED_FEATURES in
+-- probabilistic_ml_model/pymc_models/KalmanFilterModel.py:
+--
+--     feat_pt_median_drift / feat_pt_high_drift / feat_pt_low_drift
+--         Siblings of feat_pt_drift: the same pml.target_drift() over the
+--         median / high / low target trails. A consensus revision moves the
+--         whole target band together, so r = 0.81-0.89 among them and
+--         VIF = 162 / 77 / 25 / 6.6. feat_pt_drift (the consensus mean) is
+--         retained as the representative.
+--
+--     feat_analyst_bullish_pct / feat_analyst_bearish_pct /
+--     feat_analyst_neutral_pct / feat_analyst_conviction
+--         All functions of the same six num_*_ratings buckets, with conviction
+--         literally |bullish - bearish| and the three pct legs summing to ~1
+--         (hence exactly collinear after z-scoring). r(bullish, conviction) =
+--         0.926, r(bullish, rating) = 0.909. feat_analyst_rating is retained:
+--         it scored higher against the response than the bullish+bearish pair
+--         (R^2 0.6499 vs 0.6463) using one fewer column, at 99.76 % coverage.
+--
+-- Effect: the drift design went from 21 columns / condition number 1 580 /
+-- max VIF 162 to 15 / 23 / 3.8, for a 0.6 % relative loss in R^2. That was the
+-- last failing gate on the 2026-08-10 full-scale validation, where beta sat at
+-- R-hat 1.026 / bulk-ESS 140 with zero divergences.
+--
+-- DO NOT implement this by flipping pymc_role to 'excluded' here.
+-- vw_pymc_feature_catalogue filters 'excluded' rows out, while
+-- mv_pymc_kalman_pt still emits the columns — so
+-- vw_pymc_catalogue_coverage_check would report MISSING_FROM_CATALOGUE and
+-- pml.assert_pymc_catalogue_coverage() would RAISE. The analyst family is also
+-- shared with the price_target model (see the pml_df_feature_alias inserts in
+-- pml_df_metadata_populate.sql), which must keep using it. Membership of one
+-- model's design matrix is a Python-side concern, not a property of the column.
+-- ---------------------------------------------------------------------------
