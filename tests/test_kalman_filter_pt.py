@@ -867,6 +867,40 @@ def test_clipping_bounds_expm1_blowup():
     assert ((unclipped > 0) == (clipped > 0)).all()
 
 
+def test_out_of_support_suppression_rule():
+    """Names pinned at the uplift cap must not carry a ranking score.
+
+    Truncation collapses er_sd for a name whose whole forward distribution sits
+    beyond the training support, so er_mean/er_sd explodes -- the 2026-08-10
+    re-export produced Sharpe 717.7 on er_sd 0.007. That failure sorts to the TOP
+    of a risk-adjusted screen while marking the least-understood names, which is
+    strictly more dangerous than an obviously-broken 1e15.
+    """
+    import pymc_kalman_filter_pt as kf
+
+    df = pd.DataFrame({
+        "isin": ["A", "B", "C"],
+        "er_mean": [0.25, kf.UPLIFT_CLIP_HI, kf.UPLIFT_CLIP_HI - 1e-9],
+        "er_sd": [0.20, 0.007, 0.009],
+        "expected_sharpe_ratio": [1.25, 717.7, 555.0],
+        "reward_to_cvar": [3.6, 900.0, 800.0],
+        "cvar_book_weight": [0.04, 0.05, 0.05],
+    })
+    oos = (pd.to_numeric(df["er_mean"], errors="coerce")
+           >= kf.UPLIFT_CLIP_HI - 1e-6).fillna(False)
+    assert oos.tolist() == [False, True, True], "cap detection must tolerate float slop"
+
+    for col in ("expected_sharpe_ratio", "reward_to_cvar", "cvar_book_weight"):
+        df.loc[oos, col] = np.nan
+    # The in-support name keeps its score; the pinned ones carry none.
+    assert df.loc[0, "expected_sharpe_ratio"] == pytest.approx(1.25)
+    assert df.loc[1:, "expected_sharpe_ratio"].isna().all()
+    assert df.loc[1:, "reward_to_cvar"].isna().all()
+    # er_* are RETAINED -- suppression hides the ranking, not the evidence.
+    assert df["er_mean"].notna().all()
+    assert df["er_sd"].notna().all()
+
+
 def test_comparison_subsample_keeps_arrays_aligned():
     import pymc_kalman_filter_pt as kf
 

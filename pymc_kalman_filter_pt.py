@@ -5967,9 +5967,18 @@ _ANALYTICS_COLUMN_COMMENTS: dict[str, str] = {
                         '(0 for names outside the sized book).',
     'cvar_5pct_kalman': '5% expected shortfall (CVaR) of the posterior upside draws '
                         '(decimal return, negative = loss).',
-    'reward_to_cvar': 'STARR ratio: expected upside / binding tail risk (dimensionless).',
+    'reward_to_cvar': 'STARR ratio: expected upside / binding tail risk '
+                      '(dimensionless). NULL when out_of_support.',
+    'out_of_support': 'TRUE when the forward-return distribution is pinned at '
+                      'the uplift winsorisation cap, so the model has no '
+                      'reliable estimate for this name. The ranking metrics '
+                      '(expected_sharpe_ratio, reward_to_cvar, '
+                      'cvar_book_weight) are NULL for these rows; exclude them '
+                      'from risk-adjusted rankings rather than treating a '
+                      'missing score as a zero.',
     'expected_vol_kalman': 'Std of the posterior upside draws (decimal return).',
-    'expected_sharpe_ratio': 'er_mean / er_sd of the structural-TS Monte-Carlo forward-return '
+    'expected_sharpe_ratio': 'NULL when out_of_support. er_mean / er_sd of the '
+                             'structural-TS Monte-Carlo forward-return '
                              'distribution (dimensionless).',
     'p_upside_pos_cond': 'mc_prob_pos x kalman_gain: probability of a positive upside given '
                          'state confidence (decimal in [0, 1]); the p_long gate applies here.',
@@ -6219,6 +6228,40 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     if 'cvar_book_weight' not in kalman_results.columns:
         kalman_results['cvar_book_weight'] = 0.0
     kalman_results['cvar_book_weight'] = kalman_results['cvar_book_weight'].fillna(0.0)
+
+    # ---- Out-of-support names: refuse to rank what the model cannot estimate --
+    # A name whose entire forward-return distribution sits at or beyond the
+    # winsorisation cap is truncated to a near-constant by the LOG_UPLIFT_CLIP_*
+    # bound. Its ``er_sd`` then collapses, and ``expected_sharpe_ratio =
+    # er_mean / er_sd`` explodes — the 2026-08-10 re-export produced Sharpe 717.7
+    # on ``er_sd`` 0.007 for 19 names.
+    #
+    # That is the dangerous direction of failure. An unbounded 1e15 is obviously
+    # broken and gets noticed; a Sharpe of 717 looks like the best opportunity in
+    # the book and would sort straight to the top of any risk-adjusted screen —
+    # while marking precisely the names the model understands LEAST. Those two
+    # readings are opposites, so the ratio must not be published for them.
+    #
+    # The honest output is "no reliable estimate": the ranking metrics go NULL and
+    # the row carries an explicit ``out_of_support`` flag. Identity, price targets
+    # and the raw ``er_*`` distribution are retained, so nothing vanishes silently
+    # and a consumer can still show these names — greyed, or excluded from
+    # rankings — rather than trusting a fabricated score.
+    _er_mean = pd.to_numeric(kalman_results.get('er_mean'), errors='coerce')
+    oos = (_er_mean >= UPLIFT_CLIP_HI - 1e-6).fillna(False)
+    kalman_results['out_of_support'] = oos.to_numpy()
+    _ranking_cols = ['expected_sharpe_ratio', 'reward_to_cvar', 'cvar_book_weight']
+    for _c in _ranking_cols:
+        if _c in kalman_results.columns:
+            kalman_results.loc[oos, _c] = np.nan
+    # A suppressed name must never carry book weight; re-fill so the gross print
+    # and any downstream sum stay well-defined.
+    kalman_results['cvar_book_weight'] = kalman_results['cvar_book_weight'].fillna(0.0)
+    if int(oos.sum()):
+        print(f'  [out-of-support] {int(oos.sum())} name(s) pinned at the '
+              f'+{UPLIFT_CLIP_HI:.0%} uplift cap: {", ".join(_ranking_cols)} set '
+              f'to NULL and out_of_support=True (er_* retained).')
+
     _held = int((kalman_results['cvar_book_weight'] > 0).sum())
     print(f'Built kalman_filtered_price_targets row-set: {kalman_results.shape}  '
           f'(CVaR-aware book: {_held} sized names, gross='
