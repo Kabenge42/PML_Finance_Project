@@ -32,7 +32,8 @@ What it checks
    latent pinned off), ``sigma_base`` should FALL (per-name signal moves out of
    the residual) and the per-name posterior sd should RISE (the
    pseudo-replication fix).
-4. **Per-time PPC coverage** ≈ 0.94, with no monotone drift across ``t``.
+4. **Per-time PPC coverage** ≈ the nominal interval (``_HDI_HI - _HDI_LO``),
+   with no monotone drift across ``t``.
 5. **The de-standardisation correction** — reports the pooled vs snapshot
    response moments and the resulting shift in exported upside, so the downward
    correction is visible before it reaches the analytics table.
@@ -128,7 +129,7 @@ def _convergence(idata) -> dict:
 
 
 def _per_time_coverage(model, idata, panel) -> pd.Series:
-    """94% posterior-predictive coverage per time step."""
+    """Posterior-predictive interval coverage per time step (K._HDI_LO/_HI)."""
     import pymc as pm
     from probabilistic_ml_model.pymc_models._pytensor_compat import (
         get_pytensor_compile_kwargs,
@@ -151,6 +152,8 @@ def _per_time_coverage(model, idata, panel) -> pd.Series:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--quick', action='store_true')
+    ap.add_argument('--draws', type=int, default=0,
+                    help='override draws AND tune (ESS scales ~linearly in draws)')
     ap.add_argument('--compare', action='store_true')
     ap.add_argument('--no-static', action='store_true')
     ap.add_argument('--isins', type=int, default=0)
@@ -161,6 +164,8 @@ def main() -> int:
     cfg = K.get_run_config()
     if args.quick:
         cfg = replace(cfg, draws=300, tune=300)
+    if args.draws:
+        cfg = replace(cfg, draws=args.draws, tune=args.draws)
     logging.basicConfig(level=cfg.log_level)
 
     engine = create_engine(K.resolve_db_url())
@@ -261,7 +266,7 @@ def main() -> int:
     try:
         cov = _per_time_coverage(model, idata, panel)
         for t, v in cov.items():
-            flag = '' if abs(v - 0.94) <= 0.03 else '   <-- off target'
+            flag = '' if abs(v - target) <= 0.03 else '   <-- off target'
             print(f'  t={t}: {v:.2%}{flag}')
         if (cov.max() - cov.min()) > 0.10:
             failures.append(

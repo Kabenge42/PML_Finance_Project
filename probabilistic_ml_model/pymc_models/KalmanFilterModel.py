@@ -1786,20 +1786,37 @@ class KalmanFilterPriceTarget:
 # ``feat_vol_drift`` observation-noise widener.
 # ===========================================================================
 
-# Group-effect coords (highest-signal, lowest-cardinality) that receive a
-# fixed-scale ``ZeroSumNormal`` intercept in the fused MvGRW drift baseline.
-# Crossed group intercepts for the cross-sectional drift mean. ``industry`` is
-# deliberately excluded: it is near-nested under ``sector`` (their effects trade
-# off) and was the worst-mixing group effect (R-hat ≈ 3.4), so it is dropped to
-# reduce collinearity. All surviving effects share the single fixed
-# :data:`GROUP_EFFECT_SCALE` in ``build_fused_kalman_pt_model`` (the group SD is
-# fixed, not learned — see that builder's docstring for why).
+# Crossed group intercepts for the cross-sectional drift mean: one fixed-scale
+# ``ZeroSumNormal`` per coord, all sharing :data:`GROUP_EFFECT_SCALE` (the group
+# SD is fixed, not learned — see ``build_fused_kalman_pt_model``'s docstring).
+#
+# ONE control per distinct dimension. The previous set — exchange, unit, country,
+# industry — was three near-duplicate geography controls plus a high-cardinality
+# industry, and it mixed badly: on the 2026-08-10 T=4 validation ``beta`` came in
+# at R-hat 1.028 / ESS 134 with ``unit_effect`` 1.024 / 206 and
+# ``exchange_effect`` 1.021 / 199, while the per-ISIN latents mixed fine
+# (R-hat 1.014, ESS 308). Level counts on the production panel say why:
+#
+#     country 82 | exchange 81 | unit 47 | industry 59 | sector 9
+#
+# ``exchange`` is very nearly 1:1 with ``country`` (81 vs 82 levels — a venue sits
+# in a country), and ``unit`` (currency) is largely determined by it too, so the
+# three effects were mutually aliased and traded off draw to draw. ``industry``
+# is near-nested under ``sector``; the comment that used to sit here already said
+# industry was excluded for exactly that reason and for being the worst-mixing
+# effect (R-hat ≈ 3.4) — the code had silently drifted from its own comment and
+# was still including it.
+#
+# So: keep ``country`` as the geography control (it is also the dimension
+# ``feat_mcap_country_r`` is defined against) and collapse ``industry`` to its
+# parent ``sector``, the standard de-collinearisation move for a near-nested
+# pair. Two orthogonal dimensions, both low-to-moderate cardinality.
 _FUSED_KALMAN_GROUP_EFFECTS: tuple[str, ...] = (
-    "exchange",
-    "unit",
-    "country",
-    "industry",
-
+    "region",
+    "trading_region",
+    "sector",
+    "style_class",
+    "size_class",
 )
 
 # Fixed (non-learned) scale for the crossed group-intercept ``ZeroSumNormal``
@@ -1958,9 +1975,9 @@ def build_fused_kalman_pt_model(
         panel: "KalmanPanelInputs",
         *,
         group_effects: Optional[tuple[str, ...]] = None,
-        risk_penalty: float = 0.1,
-        size_penalty: float = 0.1,
-        volume_penalty: float = 0.2,
+        risk_penalty: float = 0.15,
+        size_penalty: float = 0.25,
+        volume_penalty: float = 0.1,
         robust: bool = True,
         isin_level_scale: float = 0.5,
         state_innovation_scale: float = 0.0,
@@ -2045,7 +2062,7 @@ def build_fused_kalman_pt_model(
     * Remaining priors are scaled to the standardised response/design (``beta``
       σ≈1.0) rather than the previous diffuse ``10``/``5``, so the posterior is
       well-conditioned.
-    * Crossed group intercepts (trading_region/region/sector/size_class/style_class) use a
+    * Crossed group intercepts (see :data:`_FUSED_KALMAN_GROUP_EFFECTS`) use a
       :class:`pm.ZeroSumNormal` at a **FIXED scale** :data:`GROUP_EFFECT_SCALE`
       (0.25) — the group SD is **not learned**. The sum-to-zero constraint removes
       the additive level ridge (level carried by ``alpha``); the fixed scale removes
@@ -2059,8 +2076,10 @@ def build_fused_kalman_pt_model(
       the scale was stuck, dragging the dependent scalars down with it. Fixing the
       scale (Gelman: fix the group SD when one slice can't identify it) deletes
       ``sigma_group`` from the sampler so the group effects are plain regularized
-      fixed effects. ``industry`` stays dropped from ``_FUSED_KALMAN_GROUP_EFFECTS``
-      (near-nested under ``sector``). Per-coord ``sigma_<col>`` are re-exposed as a
+      fixed effects. ``_FUSED_KALMAN_GROUP_EFFECTS`` keeps ONE control
+      per distinct dimension (``country``, ``sector``); the near-duplicate
+      geography coords and the near-nested ``industry`` were dropped — see that
+      constant for the mixing evidence. Per-coord ``sigma_<col>`` are re-exposed as a
       Deterministic of each effect's empirical between-group sd (a genuine,
       well-identified per-coord number — no longer four aliases of one stuck scalar)
       so downstream diagnostics resolve unchanged.
@@ -2455,8 +2474,9 @@ def build_fused_kalman_pt_model(
         # and the crossed effects become plain regularized fixed effects.
         # ``GROUP_EFFECT_SCALE`` = 0.25 comfortably covers the observed effect
         # magnitudes (~0.01–0.17 on the standardised log-uplift scale) at ≤ 2 prior
-        # sd. ``industry`` stays dropped from ``_FUSED_KALMAN_GROUP_EFFECTS``
-        # (near-nested under ``sector``) to limit collinearity.
+        # sd. Which coords participate is :data:`_FUSED_KALMAN_GROUP_EFFECTS` —
+        # one control per distinct dimension, the near-duplicate geography coords
+        # and the near-nested ``industry`` having been dropped for collinearity.
         for col in avail_groups:
             group_effect = pm.ZeroSumNormal(
                 f"{col}_effect", sigma=GROUP_EFFECT_SCALE, dims=col

@@ -253,7 +253,7 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # 94% equal-tailed credible-interval bounds shared by every HDI-style band in
 # the file (screen tables, forecast tables, sigma_obs paths, group forests).
-_HDI_LO, _HDI_HI = 0.03, 0.97
+_HDI_LO, _HDI_HI = 0.04, 0.96
 
 # Approximate calendar day counts for the fixed *_ago lookback suffixes; backs
 # the fused panel's t_scaled axis when ``history_lookbacks`` is active. The
@@ -337,7 +337,7 @@ class KalmanRunConfig:
     mc_rho: float = 0.85
     # Risk book
     cvar_alpha: float = 0.05
-    weight_cap: float = 0.08
+    weight_cap: float = 0.15
     k_book: int = 25
     p_long: float = 0.50
     mcap_country_r_max: float = 0.02
@@ -377,7 +377,7 @@ class KalmanRunConfig:
     min_report_date: str = '2025-01-01'
     min_mcap_country_rank: float = 98.0
     candidate_limit: int = 50
-    earnings_window_days: int = 5
+    earnings_window_days: int = 10
     # Plumbing
     results_dir: Optional[str] = None
     export_draws: bool = False
@@ -454,7 +454,6 @@ def kalman_df_query(config: Optional[KalmanRunConfig] = None) -> str:
            WHERE observed_pt IS NOT NULL
              AND next_earnings >= '{cfg.min_next_earnings}'
              AND income_statement_report_date >= '{cfg.min_report_date}'
-             AND sector <> 'Financials'
            """
 
 
@@ -4632,7 +4631,9 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
     hi = pp.quantile(_HDI_HI, dim=('chain', 'draw'))
     inside = ((obs >= lo) & (obs <= hi))
     cover = inside.mean(('isin', 'time'))
-    print('Per-y_series 94% posterior-predictive coverage (target ≈ 0.94):')
+    _tgt = _HDI_HI - _HDI_LO
+    print(f'Per-y_series {_tgt:.0%} posterior-predictive coverage '
+          f'(target ≈ {_tgt:.2f}):')
     _cov_names, _cov_vals = [], []
     for name in panel.response_names:
         try:
@@ -4649,7 +4650,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
             marker=dict(color=[C_POSTERIOR if abs(v - _target) <= 0.03
                                else C_HIGHLIGHT for v in _cov_vals]),
             hovertemplate='%{y}<br>coverage = %{x:.1%}<extra></extra>',
-            name='94% PI coverage'))
+            name=f'{_target:.0%} PI coverage'))
         _add_ref_line(figc, x=_target, kind='zero',
                       annotation_text=f'target {_target:.0%}')
         figc.update_xaxes(title_text='share of observations inside the 94% PI',
@@ -4658,7 +4659,8 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
                            showlegend=False)
         _render_plotly(figc, height=max(240, 60 * len(_cov_names) + 160))
 
-    # (c2) Per-TIME 94% coverage — the calibration statistic that actually tests
+    # (c2) Per-TIME predictive-interval coverage — the calibration statistic that
+    # actually tests
     # the local-level state. Coverage pooled over time can look fine while the
     # model is systematically over-confident at the oldest lookbacks and
     # over-dispersed at the snapshot (or vice versa); only a per-time breakdown
@@ -4671,7 +4673,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
         _t_idx = [int(v) for v in np.asarray(cover_t['time'].values)]
         _t_vals = [float(v) for v in np.asarray(cover_t.values)]
         _target = _HDI_HI - _HDI_LO
-        print(f'Per-time 94% posterior-predictive coverage '
+        print(f'Per-time {_target:.0%} posterior-predictive coverage '
               f'(target ≈ {_target:.2f}; oldest → snapshot):')
         for _ti, _tv in zip(_t_idx, _t_vals):
             _flag = '' if abs(_tv - _target) <= 0.03 else '   <-- off target'
@@ -4680,7 +4682,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
             x=_t_idx, y=_t_vals, mode='lines+markers',
             marker=dict(size=8, color=C_POSTERIOR), line=dict(width=1.8),
             hovertemplate='t = %{x}<br>coverage = %{y:.1%}<extra></extra>',
-            name='94% PI coverage'))
+            name=f'{_target:.0%} PI coverage'))
         _add_ref_line(figt, y=_target, kind='zero',
                       annotation_text=f'target {_target:.0%}')
         figt.update_xaxes(title_text='time index (lookback anchor, oldest → now)',
