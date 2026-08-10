@@ -60,7 +60,7 @@ import re
 import shutil
 import sys
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
@@ -130,6 +130,9 @@ from probabilistic_ml_model.pymc_models._price_target_mc import (
 )
 from probabilistic_ml_model.pymc_models._pytensor_compat import get_pytensor_compile_kwargs
 from probabilistic_ml_model.pymc_models._workflow import (
+    attach_log_likelihood,
+    build_sample_kwargs,
+    log_sample_diagnostics,
     posterior_dataset as _posterior_dataset,
 )
 from probabilistic_ml_model.pymc_models.RiskBookModel import (
@@ -350,6 +353,24 @@ class KalmanRunConfig:
     # level/slope + GRW-innovation block; see build_fused_kalman_pt_model.)
     # Use replace(cfg, panel_lookbacks=()) for the collapsed T=1 cross-section.
     panel_lookbacks: tuple[str, ...] = ('6m', '3m', '1m')
+    # Local-level state: HalfNormal prior scale of ``sigma_state``, the per-step
+    # innovation sd of the per-ISIN random walk, on the standardised response
+    # scale. Weakly-informative at 0.1. Set to 0.0 to pin the state at the t=0
+    # anchor, recovering the pre-0.9.9.14 time-constant latent — that is the
+    # baseline arm of the §9b model comparison. Ignored when T == 1.
+    state_innovation_scale: float = 0.1
+    # Model comparison (§9b) is OPT-IN: it needs a pointwise log_likelihood group,
+    # which costs chains x draws x n_obs floats (~820 MB for the full T=4 panel at
+    # 4x1000 draws over 6.4k ISINs) and is computed twice — once per arm.
+    # ``comparison_max_isins`` subsamples the ISIN axis to keep that tractable.
+    enable_model_comparison: bool = False
+    comparison_max_isins: int = 800
+    # Second response series (D > 1), OFF by default. Populates the rank-1 ICM
+    # (``mu_isin_loading`` / ``sigma_series``), which is inert while D == 1. The
+    # D > 1 path is what produced the historic R-hat 4.45 / min-ESS 4.3 freeze, so
+    # it must be validated as a change of its own -- see
+    # KALMAN_PANEL_RESPONSE_EXTRA for the supported values.
+    panel_response_extra: tuple[str, ...] = ()
     # Universe query
     min_next_earnings: str = '2026-01-01'
     min_report_date: str = '2025-01-01'
@@ -1936,7 +1957,8 @@ _EXPORT_SLUG_MAXLEN = 48
 # alongside the ``10b_risk_book_NN_*`` section stems.
 _EXPORT_SECTION_DIRS: tuple[str, ...] = (
     '01_data', '02_eda', '03_features', '04_panel', '06_prior', '07_posterior',
-    '08_ppc', '09_diagnostics', '10_screen', '10b_risk', '10c_analytics',
+    '08_ppc', '09_diagnostics', '09b_comparison', '10_screen', '10b_risk',
+    '10c_analytics',
     '10k_universe', '11_single_isin', '11b_single_sv', '12_mingled',
     '12b_mingled_sv', '13_forest', '13b_further_views', '14_summary',
     '14b_recommendations', '00_misc',
@@ -3496,6 +3518,68 @@ KALMAN_PANEL_RESPONSE_COLS: tuple[str, ...] = (
 # coverage (or with ~0 standardised variance) are dropped with a logged message.
 KALMAN_RESPONSE_COVERAGE_MIN: float = 0.60
 
+# --- Optional SECOND response series (D > 1), opt-in --------------------------
+# Populating a second series is what makes the rank-1 ICM live: with D == 1 the
+# coregion loading ``mu_isin_loading`` and the per-output noise diagonal
+# ``sigma_series`` are not created at all, so the whole "MOGP-Coregion-Hadamard"
+# apparatus in build_fused_kalman_pt_model is dormant.
+#
+# The requirement a candidate must meet is NOT merely "another column". Per the
+# KALMAN_PANEL_RESPONSE_COLS notes it must be (a) a DISTINCT signal, not a
+# near-collinear restatement of the primary log-uplift, (b) NOT already an
+# X_drift predictor — otherwise the model partly predicts a response from itself
+# — and (c) populated across a genuine ``*_ago`` trail, so it fills the time
+# panel rather than sitting NaN in every history cell (a snapshot-only series
+# standardises to a near-constant column and leaves its loading unidentified,
+# the documented R-hat 4.45 / min-ESS 4.3 freeze).
+#
+# ``pt_dispersion`` is the one candidate that satisfies all three: the analyst
+# dispersion LEVEL, log1p(price_target_stddev_{lb} / price_{lb}), built from the
+# stddev trail that mv_pymc_kalman_pt emits for every lookback. It measures
+# disagreement rather than direction, so it is genuinely orthogonal to the uplift
+# level, and it shares the latent conviction/quality factor the ICM is meant to
+# pool. Its DRIFT (``feat_pt_noise_drift``) is an X_drift predictor, so enabling
+# this series drops that predictor -- see _resolve_response_extra.
+KALMAN_PANEL_RESPONSE_EXTRA: dict[str, dict[str, str]] = {
+    'pt_dispersion': {
+        'numerator': 'price_target_stddev_{lb}_ago',
+        'denominator': 'price_{lb}_ago',
+        'snapshot_numerator': 'feat_pt_noise_sigma',
+        'snapshot_denominator': 'last_price',
+        # Predictor that must leave X_drift when this series is promoted: it is
+        # the first difference of exactly this level.
+        'conflicting_drift': 'feat_pt_noise_drift',
+    },
+}
+
+
+def _dispersion_log_ratio(numerator: pd.Series, denominator: pd.Series) -> np.ndarray:
+    """Return ``log1p(numerator / denominator)`` with non-positive denominators voided.
+
+    The scale map applied to every optional dispersion response series, at the
+    snapshot and at each ``*_ago`` lookback alike, so all ``T`` slices of the
+    series live on one scale (exactly as the primary log-uplift does). The ratio
+    is winsorised at 200 % of price before the log: analyst-dispersion outliers
+    are real but a handful of them would otherwise dominate the series std and
+    drag the shared coregion factor.
+
+    Parameters
+    ----------
+    numerator, denominator
+        Aligned dispersion / price columns.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``float64`` array; non-finite where the denominator is not > 0.
+    """
+    num = pd.to_numeric(numerator, errors='coerce')
+    den = pd.to_numeric(denominator, errors='coerce')
+    ratio = (num / den.where(den > 0)).clip(lower=0.0, upper=2.0)
+    # ``copy=True``: callers fill missing history cells in place, and pandas can
+    # hand back a read-only view here.
+    return np.log1p(ratio).to_numpy(dtype='float64', copy=True)
+
 
 def prepare_kalman_panel_inputs(
         kalman_df: pd.DataFrame,
@@ -3506,6 +3590,7 @@ def prepare_kalman_panel_inputs(
         response_cols: Sequence[str] = KALMAN_PANEL_RESPONSE_COLS,
         history_lookbacks: Optional[Sequence[str]] = None,
         time_covariate_cols: Sequence[str] = DAY_COUNT_COLS_ALL,
+        response_extra: Sequence[str] = (),
 ) -> KalmanPanelInputs:
     """Assemble the 3-D MvGRW panel tensors for :func:`build_fused_kalman_pt_model`.
 
@@ -3545,6 +3630,16 @@ def prepare_kalman_panel_inputs(
         **tiled** the snapshot across the fiscal anchors — time-invariant data
         that double-counted every observation ``T``-fold and ill-conditioned
         the posterior.
+    response_extra : Sequence[str]
+        Keys of :data:`KALMAN_PANEL_RESPONSE_EXTRA` promoting an optional
+        **second** response series (``D > 1``), which is what activates the rank-1
+        ICM (``mu_isin_loading`` / ``sigma_series``) — dormant while ``D == 1``.
+        Each series is derived on the same ``log1p`` scale as the primary and
+        carries its own ``*_ago`` trail so it populates the time panel. Promoting
+        a series DROPS any drift predictor declared as its ``conflicting_drift``
+        (response ↔ predictor disjointness), with a printed note. Empty by
+        default: the ``D > 1`` path is the one that produced the historic R-hat
+        4.45 / min-ESS 4.3 freeze and must be validated on its own.
 
     Returns
     -------
@@ -3596,6 +3691,37 @@ def prepare_kalman_panel_inputs(
     n_isin = len(model_df)
     if n_isin == 0:
         raise ValueError('No modelling rows after filtering observed_pt / last_price.')
+
+    # --- Optional derived SECOND response series (D > 1), opt-in --------------
+    # Materialises the snapshot column for each requested extra series and
+    # enforces response <-> predictor disjointness before anything is fitted.
+    drift_features = list(drift_features)
+    extra_specs: dict[str, dict[str, str]] = {}
+    for key in response_extra:
+        if key not in KALMAN_PANEL_RESPONSE_EXTRA:
+            raise ValueError(
+                f'Unknown response_extra {key!r}. Supported: '
+                f'{sorted(KALMAN_PANEL_RESPONSE_EXTRA)}.')
+        spec = KALMAN_PANEL_RESPONSE_EXTRA[key]
+        num, den = spec['snapshot_numerator'], spec['snapshot_denominator']
+        if num not in model_df.columns or den not in model_df.columns:
+            logger.warning(
+                'response_extra %r dropped (missing %s / %s).', key, num, den)
+            continue
+        model_df[key] = _dispersion_log_ratio(model_df[num], model_df[den])
+        extra_specs[key] = spec
+        # A response must never also be a predictor: the model would partly
+        # predict the series from a deterministic function of itself. This is the
+        # contract `assert_disjoint_features` exists to enforce; here the collision
+        # is known in advance, so the conflicting predictor is dropped loudly.
+        clash = spec.get('conflicting_drift')
+        if clash and clash in drift_features:
+            drift_features.remove(clash)
+            print(f'  [response_extra] {key!r} promoted to a response series; '
+                  f'dropped the collinear drift predictor {clash!r} '
+                  f'(it is the first difference of this level).')
+    if extra_specs:
+        response_cols = (*response_cols, *extra_specs)
 
     # --- Time axis + response tensor (n_isin, T, D) standardised --------------
     # ``history_lookbacks`` builds a GENUINE (isin, time) log-uplift panel from
@@ -3676,15 +3802,37 @@ def prepare_kalman_panel_inputs(
             hist_cols.append(col)
         primary_panel = np.stack([*hist_cols, snap_uplift], axis=1)  # (n_isin, T)
 
-        # Non-primary series carry no *_ago trail: observed at the snapshot step
-        # only; their history cells stay NaN (-> series mean 0 after the
-        # nan-aware standardisation below).
+        # Non-primary series: build a genuine trail when the series declares one
+        # (KALMAN_PANEL_RESPONSE_EXTRA), else observe it at the snapshot step only
+        # and leave the history cells NaN (-> series mean 0 after the nan-aware
+        # standardisation below). A snapshot-only series in a T > 1 panel is a
+        # near-constant column whose ICM loading is unidentified, so this branch
+        # is where an opt-in extra series earns its place.
         per_series = [primary_panel]
         for c in resp[1:]:
-            vals = model_df[c].astype('float64').to_numpy()
-            filled = np.full((n_isin, T), np.nan, dtype='float64')
-            filled[:, -1] = vals
-            per_series.append(filled)
+            snap_vals = model_df[c].astype('float64').to_numpy()
+            spec = extra_specs.get(c)
+            if spec is None:
+                filled = np.full((n_isin, T), np.nan, dtype='float64')
+                filled[:, -1] = snap_vals
+                per_series.append(filled)
+                continue
+            cols: list[np.ndarray] = []
+            for lb in lookbacks:
+                num_c = spec['numerator'].format(lb=lb)
+                den_c = spec['denominator'].format(lb=lb)
+                if num_c in model_df.columns and den_c in model_df.columns:
+                    col = _dispersion_log_ratio(model_df[num_c], model_df[den_c])
+                else:
+                    logger.warning(
+                        'response_extra %r: lookback %r missing %s / %s; that '
+                        'history cell falls back to the snapshot value.',
+                        c, lb, num_c, den_c)
+                    col = np.full(n_isin, np.nan, dtype='float64')
+                missing = ~np.isfinite(col)
+                col[missing] = snap_vals[missing]
+                cols.append(col)
+            per_series.append(np.stack([*cols, snap_vals], axis=1))
         Y = np.stack(per_series, axis=-1)
         print(f'  history panel: lookbacks={lookbacks} -> T={T}; '
               f'{n_filled} missing history cells filled with the snapshot uplift '
@@ -3807,6 +3955,10 @@ def prepare_kalman_panel_inputs(
         size_ratio=size_ratio, volume_ratio=volume_ratio,
         drift_names=list(drift_features), response_names=list(resp),
         coord_uniques=coord_uniques, coord_idx=coord_idx,
+        # The EXACT moments applied above — carried so the posterior can be
+        # de-standardised without recomputation. See _panel_response_stats.
+        response_mean=np.asarray(y_mean, dtype='float64'),
+        response_std=np.asarray(y_std, dtype='float64'),
     )
 
 
@@ -3816,8 +3968,13 @@ def prepare_kalman_panel_inputs(
 FUSED_SCALAR_VARS: tuple[str, ...] = (
     # ``mu_logit`` / ``sigma_logit`` were removed with the dead achievement block
     # in build_fused_kalman_pt_model (they sampled the prior only and dominated the
-    # divergences); ``achieve_prob`` is now a Deterministic of ``risk_adj_return``.
-    'sigma_base', 'nu',
+    # divergences); ``achieve_prob`` is now a Deterministic of ``state_now``.
+    #
+    # ``sigma_state`` is the local-level state's per-step innovation sd. It exists
+    # only on a genuine T > 1 panel with the state enabled; run_diagnostics skips
+    # absent vars. Watch it: a posterior pressed against 0 means the panel carries
+    # no per-name time dynamics and the state layer is dead weight.
+    'sigma_base', 'nu', 'sigma_state',
     # Learned, sign-fixed risk / size loadings (additive tilts on the per-ISIN
     # baseline keyed on feat_avg_beta / feat_mcap_country_r). Present only when the
     # corresponding penalty prior scale is > 0; run_diagnostics skips absent vars.
@@ -3869,9 +4026,31 @@ def _max_posterior_rhat(posterior: "xr.Dataset",
 
 def build_panel_model(
         panel: KalmanPanelInputs, *, robust: bool = True, volume_penalty: float = 0.25,
+        config: Optional[KalmanRunConfig] = None,
+        state_innovation_scale: Optional[float] = None,
 ) -> "pm.Model":
-    """Build the fused MvGRW + volatility-conditioned model and render its graph."""
-    model = build_fused_kalman_pt_model(panel, robust=robust, volume_penalty=volume_penalty)
+    """Build the fused local-level-state model and render its graph.
+
+    Parameters
+    ----------
+    panel
+        Output of :func:`prepare_kalman_panel_inputs`.
+    robust
+        Student-t (``True``) vs Normal panel likelihood.
+    volume_penalty
+        Prior scale of the learned relative-volume tilt.
+    config
+        Supplies ``state_innovation_scale`` when it is not passed explicitly.
+    state_innovation_scale
+        Explicit override of the local-level innovation prior scale. ``0.0``
+        pins the state at its t=0 anchor (the static comparison baseline).
+    """
+    if state_innovation_scale is None:
+        cfg = config if config is not None else get_run_config()
+        state_innovation_scale = cfg.state_innovation_scale
+    model = build_fused_kalman_pt_model(
+        panel, robust=robust, volume_penalty=volume_penalty,
+        state_innovation_scale=float(state_innovation_scale))
     try:
         pm.model_to_graphviz(model)
     except Exception:  # pragma: no cover - graphviz optional
@@ -3889,28 +4068,114 @@ def present_group_effects(idata) -> list[str]:
     return [v[:-len('_effect')] for v in post.data_vars if str(v).endswith('_effect')]
 
 
+# --- Decision latent (single source of truth) ---------------------------------
+# The per-ISIN quantity every decision consumer de-standardises: the screen, the
+# price-target Monte-Carlo, the risk book, the analytics export and the §13b
+# plots. Since the local-level state landed this is the FILTERED level at the
+# final (snapshot) time step, ``state_now`` — not ``risk_adj_return``, which is
+# now only the t=0 structural anchor of the walk. They coincide exactly when
+# T == 1 (or the state is pinned off), so the fallback is not a degraded path.
+#
+# The fallback exists for idata produced BEFORE the state layer (archived
+# NetCDF artifacts, the notebook twin mid-migration), which carry
+# ``risk_adj_return`` and no ``state_now``.
+KALMAN_SCREEN_LATENT: str = 'state_now'
+KALMAN_SCREEN_LATENT_FALLBACK: str = 'risk_adj_return'
+
+
+def resolve_screen_latent(group: "xr.Dataset") -> "xr.DataArray":
+    """Return the decision latent from a posterior/prior group.
+
+    Resolves :data:`KALMAN_SCREEN_LATENT` (``state_now``, the filtered level at
+    the snapshot), falling back to :data:`KALMAN_SCREEN_LATENT_FALLBACK`
+    (``risk_adj_return``, the t=0 anchor) for pre-state-layer inference objects.
+
+    Parameters
+    ----------
+    group
+        A posterior or prior group (``idata.posterior`` / ``idata.prior``).
+
+    Returns
+    -------
+    xarray.DataArray
+        Per-``isin`` latent draws over ``(chain, draw, isin)``.
+
+    Raises
+    ------
+    KeyError
+        If neither name is present.
+    """
+    if KALMAN_SCREEN_LATENT in group:
+        return group[KALMAN_SCREEN_LATENT]
+    if KALMAN_SCREEN_LATENT_FALLBACK in group:
+        logger.debug(
+            '%r absent; falling back to %r (pre-state-layer inference object).',
+            KALMAN_SCREEN_LATENT, KALMAN_SCREEN_LATENT_FALLBACK)
+        return group[KALMAN_SCREEN_LATENT_FALLBACK]
+    raise KeyError(
+        f'Neither {KALMAN_SCREEN_LATENT!r} nor {KALMAN_SCREEN_LATENT_FALLBACK!r} '
+        f'is present in the group (have: {sorted(group.data_vars)[:12]}...).')
+
+
 def _panel_response_stats(panel: KalmanPanelInputs) -> dict[str, tuple[float, float]]:
     """Per-response-series ``(mean, std)`` reproducing ``prepare_kalman_panel_inputs``.
 
     The fused model standardises each ``y_series`` column before fitting, so the
-    per-ISIN baseline ``mu_isin``/``risk_adj_return`` lives on the dimensionless
+    per-ISIN baseline ``mu_isin`` / ``state_now`` lives on the dimensionless
     standardised scale. These stats invert that standardisation back onto a chosen
-    response series (the primary ``feat_implied_upside`` target) for human-facing
-    screening readouts. Mirrors the exact ``(Y - mean) / std`` used at fit time
-    (population std; tiling across ``T`` leaves the moments unchanged), with a
-    NaN-aware fallback so a partially-missing column still yields a finite mapping.
+    response series (the primary ``feat_log_uplift`` target) for human-facing
+    screening readouts.
+
+    The moments are read from :attr:`KalmanPanelInputs.response_mean` /
+    ``response_std`` — the values the panel builder ACTUALLY applied — so the
+    inverse is exact by construction.
+
+    .. note::
+
+       This previously recomputed the moments by tiling the **snapshot** column
+       across ``T``, on the (then-correct, now-false) reasoning that "tiling
+       across ``T`` leaves the moments unchanged". That holds only for the
+       removed tile-based panel. With ``history_lookbacks`` the primary series is
+       built from genuine ``price_target_{lb}_ago`` / ``price_{lb}_ago`` trails
+       and standardised on the **pooled (isin × time)** moments, which differ
+       from the snapshot's — measured on the 2026-08 6 401-name T=4 run, pooled
+       ``(0.20754, 0.24939)`` vs snapshot ``(0.22475, 0.24163)``. Inverting with
+       the snapshot moments inflated every exported ``expected_upside`` /
+       ``expected_pt`` by **+1.5 to +2.3 percentage points**, biasing the screen,
+       the CVaR risk book and ``analytics.kalman_filtered_price_targets`` alike.
+
+    Falls back to the legacy snapshot-tiling computation only for panels built
+    before those fields existed (e.g. an unpickled pre-0.9.9.14 object), logging
+    a warning so a silently-biased readout can never pass unnoticed.
     """
-    T = panel.Y.shape[1]
     stats: dict[str, tuple[float, float]] = {}
-    for col in panel.response_names:
-        v = panel.frame[col].astype('float64').to_numpy()
-        tiled = np.tile(v[:, None], (1, T)).reshape(-1)
-        mean = float(np.mean(tiled))
-        std = float(np.std(tiled))
+    recorded_mean = np.asarray(getattr(panel, 'response_mean', ()), dtype='float64')
+    recorded_std = np.asarray(getattr(panel, 'response_std', ()), dtype='float64')
+    have_recorded = (recorded_mean.size == len(panel.response_names)
+                     and recorded_std.size == len(panel.response_names))
+    if not have_recorded:
+        logger.warning(
+            'KalmanPanelInputs carries no fit-time response moments; falling back '
+            'to snapshot-tiling, which is BIASED on a T>1 history panel. Rebuild '
+            'the panel with prepare_kalman_panel_inputs to get the exact inverse.')
+
+    T = panel.Y.shape[1]
+    for d, col in enumerate(panel.response_names):
+        if have_recorded:
+            mean, std = float(recorded_mean[d]), float(recorded_std[d])
+        else:
+            v = panel.frame[col].astype('float64').to_numpy()
+            tiled = np.tile(v[:, None], (1, T)).reshape(-1)
+            mean, std = float(np.mean(tiled)), float(np.std(tiled))
+            if not np.isfinite(mean):
+                mean = (float(np.nanmean(tiled))
+                        if np.isfinite(np.nanmean(tiled)) else 0.0)
+            if not np.isfinite(std) or std <= 1e-6:
+                std = float(np.nanstd(tiled))
+        # Same guards the builder applies, so a degenerate series maps through
+        # the identity rather than dividing by ~0.
         if not np.isfinite(mean):
-            mean = float(np.nanmean(tiled)) if np.isfinite(np.nanmean(tiled)) else 0.0
-        if not np.isfinite(std) or std <= 1e-6:
-            std = float(np.nanstd(tiled))
+            mean = 0.0
         if not np.isfinite(std) or std <= 1e-6:
             std = 1.0
         stats[col] = (mean, std)
@@ -3921,13 +4186,16 @@ def panel_posterior_upside(
         idata, panel: KalmanPanelInputs,
         *, source: str = 'posterior',
 ) -> tuple[xr.DataArray, xr.DataArray]:
-    """De-standardise ``risk_adj_return`` into ``(expected_upside, expected_pt)`` draws.
+    """De-standardise the decision latent into ``(expected_upside, expected_pt)`` draws.
 
-    The fused MvGRW baseline ``mu_isin = risk_adj_return`` is a per-ISIN shift on the
-    standardised response scale shared across the ``D`` series. Mapping it through the
-    primary ``feat_implied_upside`` series' standardisation recovers an interpretable
-    implied-upside (decimal) per posterior draw, and ``expected_pt = last_price *
-    (1 + expected_upside)`` lifts it to price units.
+    The latent is resolved through :func:`resolve_screen_latent` — ``state_now``,
+    the local-level state's **filtered** level at the snapshot time step, falling
+    back to ``risk_adj_return`` (the t=0 anchor) for pre-state-layer inference
+    objects. It is a per-ISIN shift on the standardised response scale shared
+    across the ``D`` series. Mapping it through the primary ``feat_log_uplift``
+    series' standardisation recovers an interpretable implied-upside (decimal)
+    per posterior draw, and ``expected_pt = last_price * exp(log_uplift)`` lifts
+    it to price units.
 
     Parameters
     ----------
@@ -3946,7 +4214,7 @@ def panel_posterior_upside(
         ``(expected_upside, expected_pt)`` over ``(chain, draw, isin)``.
     """
     group = getattr(idata, source)
-    rar = group['risk_adj_return']
+    rar = resolve_screen_latent(group)
     stats = _panel_response_stats(panel)
     if 'feat_log_uplift' in stats:
         key = 'feat_log_uplift'
@@ -4016,8 +4284,14 @@ def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs,
     # when its penalty prior scale is > 0).
     cfg = config if config is not None else get_run_config()
     _hyper = [v for v in (*FUSED_SCALAR_VARS, 'beta') if v in model.named_vars]
-    var_names = ['expected_return', 'risk_adj_return', 'achieve_prob', 'sigma_isin',
-                 *_hyper]
+    # ``state_now`` (the filtered decision latent) is what panel_posterior_upside
+    # de-standardises, so it must be drawn for the prior implied-upside panel;
+    # ``state_path`` is skipped — an (isin, time) tensor over prior draws is large
+    # and adds nothing the terminal state does not already show.
+    var_names = [v for v in ('expected_return', 'risk_adj_return', 'state_now',
+                             'achieve_prob', 'sigma_isin')
+                 if v in model.named_vars]
+    var_names.extend(_hyper)
     with model:
         prior_idata = pm.sample_prior_predictive(
             draws=cfg.prior_draws, var_names=var_names,
@@ -4328,6 +4602,39 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
                            showlegend=False)
         _render_plotly(figc, height=max(240, 60 * len(_cov_names) + 160))
 
+    # (c2) Per-TIME 94% coverage — the calibration statistic that actually tests
+    # the local-level state. Coverage pooled over time can look fine while the
+    # model is systematically over-confident at the oldest lookbacks and
+    # over-dispersed at the snapshot (or vice versa); only a per-time breakdown
+    # exposes that. A monotone drift across t is the signature of a state whose
+    # innovation scale is mis-set — too small and the early slices fall outside
+    # the interval, too large and the late ones are over-covered.
+    if 'time' in inside.dims and inside.sizes['time'] > 1:
+        cover_t = inside.mean(('isin', 'y_series')) if 'y_series' in inside.dims \
+            else inside.mean('isin')
+        _t_idx = [int(v) for v in np.asarray(cover_t['time'].values)]
+        _t_vals = [float(v) for v in np.asarray(cover_t.values)]
+        _target = _HDI_HI - _HDI_LO
+        print(f'Per-time 94% posterior-predictive coverage '
+              f'(target ≈ {_target:.2f}; oldest → snapshot):')
+        for _ti, _tv in zip(_t_idx, _t_vals):
+            _flag = '' if abs(_tv - _target) <= 0.03 else '   <-- off target'
+            print(f'  - t={_ti} : {_tv:.2%}{_flag}')
+        figt = go.Figure(go.Scatter(
+            x=_t_idx, y=_t_vals, mode='lines+markers',
+            marker=dict(size=8, color=C_POSTERIOR), line=dict(width=1.8),
+            hovertemplate='t = %{x}<br>coverage = %{y:.1%}<extra></extra>',
+            name='94% PI coverage'))
+        _add_ref_line(figt, y=_target, kind='zero',
+                      annotation_text=f'target {_target:.0%}')
+        figt.update_xaxes(title_text='time index (lookback anchor, oldest → now)',
+                          tickmode='array', tickvals=_t_idx)
+        figt.update_yaxes(title_text='share inside the 94% PI', tickformat='.0%')
+        figt.update_layout(
+            title='Posterior-predictive coverage by time step — local-level state',
+            showlegend=False)
+        _render_plotly(figt, height=H_SHORT)
+
     # (d) PIT calibration ECDF (best-effort; band-hugging = calibrated).
     # ``azp.plot_ppc_pit`` cannot digest the multi-dim (isin, time, y_series)
     # response tensor — it coerces multi-element sub-arrays to scalars and dies
@@ -4422,10 +4729,22 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
 
     posterior = _posterior_dataset(idata)
     keep_vars = _non_empty_vars(posterior)
-    rhat_ds = azs.rhat(posterior[keep_vars])
-    ess_ds = azs.ess(posterior[keep_vars], method='bulk')
+    # Drop variables that are CONSTANT across draws before the sweep. A
+    # deterministically-anchored entry (the D>1 primary ICM loading / noise pinned
+    # at 1.0; historically the structurally-zero ``beta_t``) has zero within- AND
+    # between-chain variance, so arviz-stats evaluates 0/0 and emits
+    # "RuntimeWarning: invalid value encountered in scalar divide" before returning
+    # NaN. The nan-aware reductions below already ignored the NaN, but the warning
+    # still leaked into every run log. Excluding the constants removes it at source
+    # and keeps the sweep over quantities where R-hat is actually defined.
+    constant_vars = set(_degenerate_posterior_vars(idata, keep_vars))
+    swept_vars = [v for v in keep_vars if v not in constant_vars]
+    if not swept_vars:  # pragma: no cover - a wholly-degenerate posterior
+        raise RuntimeError('Every posterior variable is constant across draws.')
+    rhat_ds = azs.rhat(posterior[swept_vars])
+    ess_ds = azs.ess(posterior[swept_vars], method='bulk')
 
-    ess_tail_ds = azs.ess(posterior[keep_vars], method='tail')
+    ess_tail_ds = azs.ess(posterior[swept_vars], method='tail')
 
     # Use nan-aware reductions: deterministically-anchored entries (e.g. the
     # primary-series ICM loading ``mu_isin_loading``/noise ``sigma_series`` pinned
@@ -4652,6 +4971,199 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
 
 
 # =============================================================================
+# 9b. Model comparison (ELPD / LOO)
+# =============================================================================
+def _subsample_panel(panel: KalmanPanelInputs, max_isins: int,
+                     *, random_seed: int = RANDOM_SEED) -> KalmanPanelInputs:
+    """Return ``panel`` restricted to at most ``max_isins`` randomly-chosen names.
+
+    Model comparison needs a pointwise ``log_likelihood`` group, whose size is
+    ``chains × draws × n_isin × T × D`` floats — ~820 MB for the full T=4 panel
+    at 4×1000 draws over 6.4k ISINs, and it is paid once per arm. Comparing on a
+    random ISIN subsample keeps the ELPD contrast meaningful while making the
+    memory tractable.
+
+    Parameters
+    ----------
+    panel
+        The full panel.
+    max_isins
+        Upper bound on the retained ISIN count. Values ``<= 0`` or ``>= n_isin``
+        return ``panel`` unchanged.
+    random_seed
+        Seed for the subsample draw (reproducible).
+
+    Returns
+    -------
+    KalmanPanelInputs
+        A panel with every per-ISIN array, the frame and the coord index arrays
+        sliced consistently. Coord uniques are RE-derived from the retained rows
+        so a level that lost all its members does not linger as an empty group.
+    """
+    n = len(panel.isins)
+    if max_isins <= 0 or n <= max_isins:
+        return panel
+    rng = np.random.default_rng(random_seed)
+    keep = np.sort(rng.choice(n, size=max_isins, replace=False))
+    frame = panel.frame.iloc[keep].reset_index(drop=True)
+    coord_uniques: dict[str, np.ndarray] = {}
+    coord_idx: dict[str, np.ndarray] = {}
+    for col, idx in panel.coord_idx.items():
+        labels = np.asarray(panel.coord_uniques[col])[np.asarray(idx)[keep]]
+        uniques, reindexed = np.unique(labels, return_inverse=True)
+        coord_uniques[col] = uniques
+        coord_idx[col] = reindexed.astype('int64')
+    return replace(
+        panel, frame=frame, isins=panel.isins[keep], Y=panel.Y[keep],
+        t_scaled=panel.t_scaled[keep], X_drift=panel.X_drift[keep],
+        n_analysts=panel.n_analysts[keep],
+        sqrt_n_analysts=panel.sqrt_n_analysts[keep],
+        vol_drift=panel.vol_drift[keep], dispersion_cv=panel.dispersion_cv[keep],
+        avg_beta=panel.avg_beta[keep], size_ratio=panel.size_ratio[keep],
+        volume_ratio=panel.volume_ratio[keep],
+        coord_uniques=coord_uniques, coord_idx=coord_idx,
+    )
+
+
+def run_model_comparison(panel: KalmanPanelInputs, *,
+                         config: Optional[KalmanRunConfig] = None,
+                         robust: bool = True,
+                         volume_penalty: float = 0.25) -> Optional[pd.DataFrame]:
+    """Compare the local-level state model against its static twin on ELPD.
+
+    Closes the one ``❌`` in this module's Bayesian-workflow coverage row. The two
+    arms differ in exactly one thing — whether the per-ISIN latent may evolve
+    over the panel:
+
+    * ``local_level`` — ``state_innovation_scale`` from ``config`` (default 0.1);
+    * ``static`` — ``state_innovation_scale=0.0``, pinning the state at its t=0
+      anchor, i.e. the pre-0.9.9.14 time-constant build.
+
+    Both are refit on the same (subsampled) panel so the ELPD contrast is
+    like-for-like, then compared with :func:`arviz.compare`.
+
+    .. note::
+
+       ``log_likelihood`` is off project-wide and ``sample_posterior`` hard-codes
+       it to ``False``, so each arm's group is attached post-hoc with
+       :func:`~probabilistic_ml_model.pymc_models._workflow.attach_log_likelihood`
+       (``pm.compute_log_likelihood``). The ``idata_kwargs={'log_likelihood':
+       True}`` route does NOT work here: nutpie — the default sampler — ignores
+       ``idata_kwargs`` and ``build_sample_kwargs`` strips it.
+
+    Parameters
+    ----------
+    panel
+        The fused panel. Subsampled to ``config.comparison_max_isins`` names.
+    config
+        Run config supplying the NUTS budget, the innovation scale and the
+        subsample size. Defaults to :func:`get_run_config`.
+    robust, volume_penalty
+        Passed through to the builder so both arms match the production model.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        The ``az.compare`` table (also displayed / exported), or ``None`` when
+        the comparison could not be completed — a missing ``log_likelihood``
+        group is reported, never silently treated as a tie.
+    """
+    cfg = config if config is not None else get_run_config()
+    if panel.Y.shape[1] < 2:
+        print('Model comparison skipped: the state layer needs a T > 1 panel '
+              '(got T=1). Use panel_lookbacks=("6m","3m","1m").')
+        return None
+
+    sub = _subsample_panel(panel, cfg.comparison_max_isins,
+                           random_seed=cfg.random_seed)
+    n_full, n_sub = len(panel.isins), len(sub.isins)
+    # Never let a truncated comparison read as a full one.
+    print(f'Model comparison on {n_sub} of {n_full} ISINs '
+          f'({n_sub / max(n_full, 1):.0%}; cap={cfg.comparison_max_isins}), '
+          f'T={sub.Y.shape[1]}, D={sub.Y.shape[2]}, '
+          f'{cfg.chains} chains x {cfg.draws} draws.')
+
+    arms = {
+        'local_level': float(cfg.state_innovation_scale),
+        'static': 0.0,
+    }
+    # Same nutpie -> numpyro -> pymc priority as ``sample_posterior``: the
+    # pure-Python NUTS fallback is orders of magnitude slower under the project's
+    # forced PyTensor py-VM, and this stage pays for TWO fits.
+    candidate_samplers = [s for s in ('nutpie', 'numpyro')
+                          if _ilu.find_spec(s) is not None] + ['pymc']
+
+    fits: dict[str, Any] = {}
+    for name, scale in arms.items():
+        model = build_fused_kalman_pt_model(
+            sub, robust=robust, volume_penalty=volume_penalty,
+            state_innovation_scale=scale)
+        idata = None
+        for sampler in candidate_samplers:
+            try:
+                with model:
+                    idata = pm.sample(
+                        **build_sample_kwargs(
+                            samples=cfg.draws, tune=cfg.tune, chains=cfg.chains,
+                            target_accept=cfg.target_accept,
+                            random_seed=cfg.random_seed, cores=cfg.cores,
+                            nuts_sampler=sampler,
+                            model_name=f'kalman_pt[{name}]',
+                            # Two full fits back to back: the bars are noise, and
+                            # nutpie's thin-space glyphs crash a cp1252 console.
+                            progressbar=False))
+                break
+            except Exception as exc:
+                logger.warning('%s sampler failed for the %r arm (%s); '
+                               'falling back.', sampler, name, exc)
+        if idata is None:
+            print(f'Model comparison aborted: every sampler failed on the '
+                  f'{name!r} arm.')
+            return None
+        log_sample_diagnostics(idata, model_name=f'kalman_pt[{name}]')
+        attach_log_likelihood(idata, model)
+        if not hasattr(idata, 'log_likelihood'):
+            print(f'Model comparison aborted: could not attach a log_likelihood '
+                  f'group to the {name!r} arm (az.compare needs one).')
+            return None
+        fits[name] = idata
+        print(f'  [{name}] divergences='
+              f'{int(idata.sample_stats["diverging"].sum())}')
+
+    try:
+        cmp_df = azs.compare(fits)
+    except Exception as exc:
+        print(f'compare failed: {exc!r}')
+        return None
+
+    display(cmp_df, label='table')
+    # ArviZ 1.x exposes the value as ``.elpd``; ``.elpd_loo`` was REMOVED and a
+    # getattr fallback on the old name silently yields nan, even though the
+    # ELPDData repr still prints the "elpd_loo" row label.
+    for name, idata in fits.items():
+        with contextlib.suppress(Exception):
+            loo = azs.loo(idata)
+            print(f'  {name:12s} elpd={float(loo.elpd):10.2f}  '
+                  f'se={float(loo.se):7.2f}')
+    best = str(cmp_df.index[0])
+    print(f'Best by ELPD: {best!r}'
+          + ('  <-- the local-level state earns its parameters'
+             if best == 'local_level' else
+             '  <-- the static twin wins; the state layer is not paying for '
+             'itself on this panel'))
+    # Read the k-hat column, don't ignore it. The local-level arm carries a
+    # per-ISIN latent path, so a slice of the pointwise contributions is
+    # influential by construction and PSIS-LOO flags them (k-hat > 0.7); this is
+    # the documented weakness of LOO for models with per-observation latents, not
+    # evidence of a bad fit. Trust the verdict when |elpd_diff| is several times
+    # ``dse`` (empirically ~80 vs dse ~10 on the smoke panel); treat a margin
+    # inside ~2 dse as inconclusive rather than a win.
+    print('Note: high Pareto k-hat on the state arm is expected (per-ISIN latent '
+          'path). Judge the result on elpd_diff vs dse, not on k-hat alone.')
+    return cmp_df
+
+
+# =============================================================================
 # 10. Expected price targets — posterior summary
 # =============================================================================
 def summarize_panel_screen(idata, panel: KalmanPanelInputs,
@@ -4660,10 +5172,12 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
 
     The screen has two complementary readouts:
 
-    * **De-standardised upside** — the fused MvGRW baseline ``risk_adj_return`` mapped
-      back onto the primary ``feat_implied_upside`` series (:func:`panel_posterior_upside`)
-      gives ``expected_upside`` / ``expected_pt`` and their 94% HDI bands.
-    * **Structural-TS Monte-Carlo** — the per-ISIN ``risk_adj_return`` / ``sigma_isin``
+    * **De-standardised upside** — the decision latent (``state_now``, the
+      local-level state's filtered level at the snapshot; see
+      :func:`resolve_screen_latent`) mapped back onto the primary
+      ``feat_log_uplift`` series (:func:`panel_posterior_upside`) gives
+      ``expected_upside`` / ``expected_pt`` and their 94% HDI bands.
+    * **Structural-TS Monte-Carlo** — the same per-ISIN latent plus ``sigma_isin``
       / ``nu`` draws feed :func:`simulate_lagged_risk_adjusted_returns` /
       :func:`summarize_mc_returns` for the canonical risk-adjusted forward-return
       distribution (``er_mean``, percentiles, ``prob_pos``).
@@ -4682,7 +5196,11 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
     pt_lo = _ept_s.quantile(_HDI_LO, dim='s').values
     pt_hi = _ept_s.quantile(_HDI_HI, dim='s').values
     prob_pos = (eu > 0).mean(('chain', 'draw')).values
-    risk_adj = post['risk_adj_return'].mean(('chain', 'draw')).values
+    # The ``risk_adj_return`` column keeps its name/units for the analytics export
+    # and the dashboard, but now reports the FILTERED level (``state_now``) rather
+    # than the t=0 anchor — the two coincide when T == 1.
+    latent_da = resolve_screen_latent(post)
+    risk_adj = latent_da.mean(('chain', 'draw')).values
 
     # Structural-TS Monte-Carlo over the per-ISIN risk-adjusted-return latent.
     #
@@ -4700,7 +5218,7 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
             else 'feat_implied_upside' if 'feat_implied_upside' in _stats
     else panel.response_names[0])
     _mean, _std = _stats[_key]
-    mu_draws = (post['risk_adj_return'].stack(sample=('chain', 'draw'))
+    mu_draws = (latent_da.stack(sample=('chain', 'draw'))
                 .transpose('isin', 'sample').values) * _std + _mean
     sigma_draws = (post['sigma_isin'].stack(sample=('chain', 'draw'))
                    .transpose('isin', 'sample').values) * _std
@@ -4818,14 +5336,20 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
     (a) ``expected_return`` → ``risk_adj_return`` coloured by the per-ISIN average
         market beta — the ``- risk_loading * z(avg_beta)`` systematic-risk
         discount that is the Kalman-specific refinement.
-    (b) ``achieve_prob`` (= ``sigmoid(risk_adj_return)``) against the risk-adjusted return.
+    (b) ``achieve_prob`` (= ``sigmoid(state_now)``) against the risk-adjusted return.
     (c) the heteroscedastic ``sigma_isin`` against analyst count, coloured by the
         consensus dispersion CV (``sigma_isin = sigma_base * (1 + cv) / sqrt(n)``).
-    (d) the Model-B Gaussian-random-walk slope ``beta_t`` per ``y_series`` over time.
+    (d) the local-level ``state_path`` (median + 10–90 % cross-sectional band) over
+        time — falling back to the ``beta_t`` slope on an isin-varying time axis,
+        where the slope is identified and the state is not materialised.
     """
     post = idata.posterior
     er = post['expected_return'].mean(('chain', 'draw')).values
+    # Panel (a) genuinely wants the t=0 ANCHOR — it visualises the
+    # expected_return -> risk_adj_return tilt. Panel (b) wants the decision latent,
+    # since achieve_prob is now sigmoid(state_now).
     rar = post['risk_adj_return'].mean(('chain', 'draw')).values
+    latent = resolve_screen_latent(post).mean(('chain', 'draw')).values
     ap = post['achieve_prob'].mean(('chain', 'draw')).values
     si = post['sigma_isin'].mean(('chain', 'draw')).values
     avg_beta = np.asarray(panel.avg_beta, dtype='float64')
@@ -4857,15 +5381,16 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
     fig.update_yaxes(title_text='risk_adj_return = ER − λ·z(β) − γ·z(size)', row=1, col=1)
 
     # (b) Achievement probability vs risk-adjusted return.
-    fig.add_trace(go.Scatter(x=rar, y=ap, mode='markers',
+    fig.add_trace(go.Scatter(x=latent, y=ap, mode='markers',
                              marker=dict(color=C_FORECAST, size=6, opacity=0.6),
                              name='achieve_prob',
-                             hovertemplate=('RAR = %{x:.2f}<br>'
+                             hovertemplate=('latent = %{x:.2f}<br>'
                                             'P(achieve) = %{y:.0%}<extra></extra>'),
                              showlegend=False), row=1, col=2)
     _add_ref_line(fig, y=0.5, kind='zero', row=1, col=2)
-    fig.update_xaxes(title_text='risk_adj_return (standardised latent)', row=1, col=2)
-    fig.update_yaxes(title_text='achieve_prob (sigmoid risk-adj return)', range=[0, 1],
+    fig.update_xaxes(title_text=f'{KALMAN_SCREEN_LATENT} (standardised latent)',
+                     row=1, col=2)
+    fig.update_yaxes(title_text='achieve_prob (sigmoid filtered level)', range=[0, 1],
                      tickformat='.0%', row=1, col=2)
 
     # (c) Heteroscedastic measurement scale (log analyst axis).
@@ -4882,8 +5407,36 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
     fig.update_xaxes(title_text='n_analysts (log)', type='log', row=2, col=1)
     fig.update_yaxes(title_text='sigma_isin', row=2, col=1)
 
-    # (d) Model-B GRW trend slope per y_series over time.
-    if 'beta_t' in post.data_vars:
+    # (d) The local-level state path — the cross-sectional spread of the per-ISIN
+    # latent at each time step. This replaces the former ``beta_t`` slope panel,
+    # which on the default (isin-constant) time axis drew a flat line at zero: the
+    # slope is not identified there and is no longer materialised at all. The
+    # state path is the quantity that genuinely carries per-name time structure,
+    # so a visibly widening band from t=0 is the local-level layer doing its job;
+    # a flat band means ``sigma_state`` collapsed and the panel has no dynamics.
+    if 'state_path' in post.data_vars:
+        sp = post['state_path'].mean(('chain', 'draw'))  # (isin, time)
+        times = np.asarray(sp['time'].values)
+        vals = np.asarray(sp.transpose('time', 'isin').values, dtype='float64')
+        med = np.nanmedian(vals, axis=1)
+        lo = np.nanpercentile(vals, 10, axis=1)
+        hi = np.nanpercentile(vals, 90, axis=1)
+        fig.add_trace(go.Scatter(
+            x=np.r_[times, times[::-1]], y=np.r_[hi, lo[::-1]], fill='toself',
+            fillcolor=_hex_to_rgba(C_POSTERIOR, 0.20), line=dict(width=0),
+            hoverinfo='skip', showlegend=False), row=2, col=2)
+        fig.add_trace(go.Scatter(
+            x=times, y=med, mode='lines+markers', marker=dict(size=5),
+            line=dict(color=C_POSTERIOR, width=1.6), name='state_path (median)',
+            hovertemplate=('t = %{x}<br>median state = %{y:.3f}<extra></extra>'),
+            legendgroup='state'), row=2, col=2)
+        _add_ref_line(fig, y=0, kind='zero', row=2, col=2)
+        fig.update_xaxes(title_text='time index (lookback anchor, oldest → now)',
+                         row=2, col=2)
+        fig.update_yaxes(title_text='state_path (median, 10–90% band)', row=2, col=2)
+    elif 'beta_t' in post.data_vars:
+        # Isin-VARYING time axis (the T=1 days-to-event covariate): the per-series
+        # slope is identified and materialised, so show it.
         beta_t = post['beta_t'].mean(('chain', 'draw'))  # (time, y_series)
         times = np.asarray(beta_t['time'].values)
         for name in panel.response_names:
@@ -5430,7 +5983,12 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     _post = idata.posterior
     _est = screen.ept  # (chain, draw, isin) — de-standardised price target
     _eu = screen.eu  # (chain, draw, isin) — de-standardised implied upside
-    _rar = _post['risk_adj_return']  # (chain, draw, isin) — risk-adjusted return latent
+    # (chain, draw, isin) — the decision latent: the local-level state's FILTERED
+    # level at the snapshot (``state_now``), falling back to the t=0 anchor
+    # ``risk_adj_return`` for pre-state-layer inference objects. ``signal_strength``
+    # below is |mean| / sd of this latent, so it must be the same quantity the
+    # screen and the price-target Monte-Carlo used.
+    _rar = resolve_screen_latent(_post)
 
     kalman_estimate = _est.mean(('chain', 'draw')).values
     kalman_variance = _est.var(('chain', 'draw')).values
@@ -7736,11 +8294,14 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     # §3 state-space feature mapping + §4 fused-panel data containers.
     with export_section('03_features'):
         drift_features, _mapping = map_state_space_features(kalman_df, feature_catalogue)
-        panel = prepare_kalman_panel_inputs(kalman_df, roles, drift_features,
-                                            history_lookbacks=cfg.panel_lookbacks)
+        panel = prepare_kalman_panel_inputs(
+            kalman_df, roles, drift_features,
+            history_lookbacks=cfg.panel_lookbacks,
+            response_extra=cfg.panel_response_extra)
 
     # §5b fused model -> §6 prior -> §7 posterior -> §8 PPC.
-    model = build_panel_model(panel, robust=robust, volume_penalty=volume_penalty)
+    model = build_panel_model(panel, robust=robust, volume_penalty=volume_penalty,
+                              config=cfg)
     with export_section('06_prior'):
         prior_idata = run_prior_predictive(model, panel, cfg)
     with export_section('07_posterior'):
@@ -7748,9 +8309,16 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     with export_section('08_ppc'):
         run_posterior_predictive(model, idata, panel)
 
-    # §9 diagnostics -> §10 screening table -> §10b risk book -> §10c export.
+    # §9 diagnostics -> §9b comparison -> §10 screening table -> §10b risk book.
     with export_section('09_diagnostics'):
         run_diagnostics(idata, panel)
+    # §9b model comparison is OPT-IN: it refits BOTH arms on a subsampled panel
+    # and computes a pointwise log_likelihood for each, so it roughly triples the
+    # run's sampling cost. Enable with replace(cfg, enable_model_comparison=True).
+    if cfg.enable_model_comparison:
+        with export_section('09b_comparison'):
+            run_model_comparison(panel, config=cfg, robust=robust,
+                                 volume_penalty=volume_penalty)
     with export_section('10_screen'):
         screen = summarize_panel_screen(idata, panel,
                                         horizon=cfg.mc_horizon, rho=cfg.mc_rho)

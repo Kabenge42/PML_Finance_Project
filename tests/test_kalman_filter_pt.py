@@ -437,6 +437,265 @@ def test_builder_rejects_zero_variance_nonprimary_series():
 
 
 # ---------------------------------------------------------------------------
+# De-standardisation moments (Finding 2).
+#
+# The fused model standardises the response tensor on the POOLED (isin x time)
+# moments of the genuine *_ago trails. _panel_response_stats used to recompute
+# them by tiling the SNAPSHOT column across T — correct only for the removed
+# tile-based panel — which inflated every exported expected_upside /
+# expected_pt by ~1.5-2.3 percentage points. These guard the exact inverse.
+# ---------------------------------------------------------------------------
+def _history_panel_frame(n=60, seed=3):
+    """Frame carrying genuine price_target_{lb}_ago / price_{lb}_ago trails."""
+    rng = np.random.default_rng(seed)
+    df = _kalman_panel_frame(n=n, sparse_drift=False, seed=seed)
+    # Trails drift away from the snapshot so pooled != snapshot moments.
+    for lb, shift in (("6m", 0.85), ("3m", 0.90), ("1m", 0.95)):
+        df[f"price_{lb}_ago"] = df["last_price"] * shift
+        df[f"price_target_{lb}_ago"] = df["observed_pt"] * rng.uniform(
+            0.8, 1.0, len(df)
+        )
+        df[f"price_target_stddev_{lb}_ago"] = rng.uniform(1, 5, len(df))
+    return df
+
+
+def test_panel_records_the_moments_it_standardised_with():
+    import pymc_kalman_filter_pt as kf
+
+    panel = kf.prepare_kalman_panel_inputs(
+        _history_panel_frame(), drift_features=["feat_pt_drift"],
+        history_lookbacks=("6m", "3m", "1m"),
+    )
+    assert panel.Y.shape[1] == 4, "expected a T=4 history panel"
+    # The recorded moments must reproduce the standardisation exactly.
+    flat = panel.Y.reshape(-1, panel.Y.shape[-1])
+    assert np.allclose(flat.mean(axis=0), 0.0, atol=1e-9)
+    assert np.allclose(flat.std(axis=0), 1.0, atol=1e-9)
+    stats = kf._panel_response_stats(panel)
+    mean, std = stats[panel.response_names[0]]
+    assert mean == pytest.approx(float(panel.response_mean[0]))
+    assert std == pytest.approx(float(panel.response_std[0]))
+
+
+def test_pooled_moments_differ_from_snapshot_moments_on_a_history_panel():
+    """The bug this guards is silent: both paths return finite, plausible numbers."""
+    import pymc_kalman_filter_pt as kf
+
+    df = _history_panel_frame()
+    panel = kf.prepare_kalman_panel_inputs(
+        df, drift_features=["feat_pt_drift"],
+        history_lookbacks=("6m", "3m", "1m"),
+    )
+    pooled_mean, pooled_std = kf._panel_response_stats(panel)["feat_log_uplift"]
+    snap = panel.frame["feat_log_uplift"].to_numpy(dtype="float64")
+    # The legacy (snapshot-tiling) computation.
+    assert pooled_mean != pytest.approx(float(np.mean(snap)), abs=1e-6), (
+        "pooled and snapshot moments coincide; this fixture no longer "
+        "exercises the de-standardisation bug"
+    )
+    assert pooled_mean == pytest.approx(float(panel.response_mean[0]))
+    assert pooled_std == pytest.approx(float(panel.response_std[0]))
+
+
+def test_t1_panel_moments_match_the_snapshot():
+    """With T == 1 the pooled moments ARE the snapshot moments — no regression."""
+    import pymc_kalman_filter_pt as kf
+
+    panel = kf.prepare_kalman_panel_inputs(
+        _history_panel_frame(), drift_features=["feat_pt_drift"],
+        history_lookbacks=(),
+    )
+    assert panel.Y.shape[1] == 1
+    mean, std = kf._panel_response_stats(panel)["feat_log_uplift"]
+    snap = panel.frame["feat_log_uplift"].to_numpy(dtype="float64")
+    assert mean == pytest.approx(float(np.mean(snap)))
+    assert std == pytest.approx(float(np.std(snap)))
+
+
+def test_panel_response_stats_warns_without_recorded_moments(caplog):
+    """A pre-0.9.9.14 panel must fall back LOUDLY, never silently."""
+    import dataclasses
+    import logging
+
+    import pymc_kalman_filter_pt as kf
+
+    panel = kf.prepare_kalman_panel_inputs(
+        _history_panel_frame(), drift_features=["feat_pt_drift"],
+        history_lookbacks=("6m", "3m", "1m"),
+    )
+    legacy = dataclasses.replace(
+        panel, response_mean=np.empty(0), response_std=np.empty(0)
+    )
+    with caplog.at_level(logging.WARNING):
+        kf._panel_response_stats(legacy)
+    assert any("fit-time response moments" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Local-level state (Finding 1).
+#
+# beta_t was identically zero because prepare_kalman_panel_inputs tiles the
+# calendar time axis, so it is isin-CONSTANT and a per-series slope is exactly
+# spanned by the T free alpha_level intercepts. It is no longer materialised
+# there; per-ISIN time structure is carried by the state random walk instead.
+# ---------------------------------------------------------------------------
+def _built_model(**kw):
+    import pymc_kalman_filter_pt as kf
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        build_fused_kalman_pt_model,
+    )
+
+    lookbacks = kw.pop("history_lookbacks", ("6m", "3m", "1m"))
+    panel = kf.prepare_kalman_panel_inputs(
+        _history_panel_frame(), drift_features=["feat_pt_drift"],
+        history_lookbacks=lookbacks,
+    )
+    return panel, build_fused_kalman_pt_model(panel, **kw)
+
+
+def test_no_beta_t_on_an_isin_constant_time_axis():
+    panel, model = _built_model()
+    assert np.ptp(panel.t_scaled, axis=0).max() < 1e-12, (
+        "fixture must have a tiled (isin-constant) time axis"
+    )
+    assert "beta_t" not in model.named_vars
+    assert "beta_slope" not in model.named_vars
+
+
+def test_beta_t_returns_on_an_isin_varying_time_axis():
+    import dataclasses
+
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        build_fused_kalman_pt_model,
+    )
+
+    panel, _ = _built_model()
+    rng = np.random.default_rng(0)
+    varying = dataclasses.replace(
+        panel, t_scaled=rng.normal(size=panel.t_scaled.shape)
+    )
+    model = build_fused_kalman_pt_model(varying)
+    assert "beta_t" in model.named_vars
+    assert "beta_slope" in model.named_vars
+
+
+def test_state_layer_emits_the_decision_latent():
+    _, model = _built_model()
+    for name in ("state_path", "state_now", "sigma_state", "z_state"):
+        assert name in model.named_vars, f"{name} missing"
+    assert tuple(model.named_vars["state_now"].shape.eval()) == (60,)
+    # T-1 innovations: the walk is anchored at t=0.
+    assert model.coords["time_innov"] == tuple(range(3))
+
+
+def test_state_is_anchored_at_t0_and_cross_sectionally_centred():
+    """s[:, 0] == 0 (anchor) and mean_i s[i, t] == 0 (no alpha aliasing)."""
+    import pymc as pm
+
+    panel, model = _built_model()
+    with model:
+        draw = pm.draw(
+            [model.named_vars["state_path"], model.named_vars["mu_isin"]],
+            draws=1, random_seed=5,
+        )
+    state_path, mu_isin = np.asarray(draw[0]), np.asarray(draw[1])
+    assert np.allclose(state_path[:, 0], mu_isin, atol=1e-10), (
+        "t=0 slice must equal the structural anchor mu_isin"
+    )
+    dev = state_path - mu_isin[:, None]
+    assert np.allclose(dev.mean(axis=0), 0.0, atol=1e-8), (
+        "state deviations must be cross-sectionally centred at every step"
+    )
+
+
+def test_state_collapses_to_the_anchor_when_pinned_off():
+    _, model = _built_model(state_innovation_scale=0.0)
+    assert "sigma_state" not in model.named_vars
+    assert "z_state" not in model.named_vars
+    assert "time_innov" not in model.coords
+    # state_now still exists, so downstream consumers resolve unchanged.
+    assert "state_now" in model.named_vars
+
+
+def test_state_collapses_on_a_t1_cross_section():
+    _, model = _built_model(history_lookbacks=())
+    assert "sigma_state" not in model.named_vars
+    assert "state_now" in model.named_vars
+
+
+def test_screen_latent_resolves_with_fallback():
+    """state_now wins; risk_adj_return keeps pre-state-layer idata readable."""
+    import xarray as xr
+
+    import pymc_kalman_filter_pt as kf
+
+    both = xr.Dataset({"state_now": ("isin", [1.0, 2.0]),
+                       "risk_adj_return": ("isin", [9.0, 9.0])})
+    assert kf.resolve_screen_latent(both).values.tolist() == [1.0, 2.0]
+
+    legacy = xr.Dataset({"risk_adj_return": ("isin", [3.0, 4.0])})
+    assert kf.resolve_screen_latent(legacy).values.tolist() == [3.0, 4.0]
+
+    with pytest.raises(KeyError):
+        kf.resolve_screen_latent(xr.Dataset({"other": ("isin", [0.0])}))
+
+
+# ---------------------------------------------------------------------------
+# Optional second response series (D > 1) — opt-in ICM activation.
+# ---------------------------------------------------------------------------
+def test_response_extra_builds_a_second_series_with_a_real_trail():
+    import pymc_kalman_filter_pt as kf
+
+    panel = kf.prepare_kalman_panel_inputs(
+        _history_panel_frame(),
+        drift_features=["feat_pt_drift", "feat_pt_noise_drift"],
+        history_lookbacks=("6m", "3m", "1m"),
+        response_extra=("pt_dispersion",),
+    )
+    assert panel.response_names == ["feat_log_uplift", "pt_dispersion"]
+    assert panel.Y.shape[-1] == 2
+    # A genuine trail, not a snapshot-only column padded with NaN -> 0.
+    assert panel.Y[:, :, 1].std() > 1e-3
+    assert np.isfinite(panel.Y[:, :, 1]).all()
+    # Response <-> predictor disjointness: the level's own first difference
+    # must have been dropped from the drift design.
+    assert "feat_pt_noise_drift" not in panel.drift_names
+
+
+def test_response_extra_rejects_an_unknown_key():
+    import pymc_kalman_filter_pt as kf
+
+    with pytest.raises(ValueError, match="Unknown response_extra"):
+        kf.prepare_kalman_panel_inputs(
+            _history_panel_frame(), drift_features=["feat_pt_drift"],
+            response_extra=("not_a_series",),
+        )
+
+
+def test_comparison_subsample_keeps_arrays_aligned():
+    import pymc_kalman_filter_pt as kf
+
+    panel = kf.prepare_kalman_panel_inputs(
+        _history_panel_frame(n=60), drift_features=["feat_pt_drift"],
+        history_lookbacks=("6m", "3m", "1m"),
+    )
+    sub = kf._subsample_panel(panel, 20, random_seed=1)
+    assert len(sub.isins) == 20
+    assert sub.Y.shape == (20, 4, 1)
+    assert sub.X_drift.shape == (20, panel.X_drift.shape[1])
+    assert len(sub.frame) == 20
+    assert sub.frame["isin"].tolist() == list(sub.isins)
+    for col, idx in sub.coord_idx.items():
+        assert len(idx) == 20
+        # Re-derived uniques: every index must address a real level.
+        assert idx.max() < len(sub.coord_uniques[col])
+    # The de-standardisation moments must survive the slice unchanged.
+    assert np.allclose(sub.response_mean, panel.response_mean)
+    # A cap at/above n is a no-op.
+    assert kf._subsample_panel(panel, 10_000) is panel
+
+
+# ---------------------------------------------------------------------------
 # compute_cvar_aware_book — market-cap pre-selection gate (pure pandas/xarray;
 # the achieve_prob path is defensively wrapped, so a stub idata falls back to
 # kalman_gain = 1.0 and no sampler is required).

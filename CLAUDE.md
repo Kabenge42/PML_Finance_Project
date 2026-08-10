@@ -193,7 +193,7 @@ not as dead weight to imitate:
 |---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | EarningsBeatBayesian      | Beat probability                                                                                                                                                                                                                                     |
 | PriceTargetAchievement    | Return expectation                                                                                                                                                                                                                                   |
-| KalmanFilterPriceTarget   | Smoothed signals. Single-response hierarchical panel with learned risk/size/volume tilts. **The genuine `(isin, time)` T=4 log-uplift panel is now the DEFAULT** — built from the `price_target_{6m,3m,1m}_ago` / `price_{6m,3m,1m}_ago` trails via `KalmanRunConfig.panel_lookbacks = ('6m','3m','1m')`. Validated 2026-08-01 since the per-time direct-intercept reparameterisation: 0 divergences, worst r_hat 1.00, 15.7 min end-to-end. Collapse to the T=1 MV snapshot with `replace(cfg, panel_lookbacks=())`. See `build_fused_kalman_pt_model` |
+| KalmanFilterPriceTarget   | Smoothed signals. Single-response hierarchical panel with learned risk/size/volume tilts, over a **local-level state**: `state_path[i,t]` is a per-ISIN random walk anchored at `mu_isin`, and `state_now = state_path[:, -1]` (the filtered level) is the decision latent — resolve it via `KALMAN_SCREEN_LATENT` / `resolve_screen_latent`, never by reading `risk_adj_return` directly (that is now only the t=0 anchor). **The genuine `(isin, time)` T=4 log-uplift panel is the DEFAULT** — built from the `price_target_{6m,3m,1m}_ago` / `price_{6m,3m,1m}_ago` trails via `KalmanRunConfig.panel_lookbacks = ('6m','3m','1m')`. Collapse to the T=1 MV snapshot with `replace(cfg, panel_lookbacks=())`; pin the state off with `replace(cfg, state_innovation_scale=0.0)`. See `build_fused_kalman_pt_model` |
 | DCFPriceTarget            | Fair-value bands                                                                                                                                                                                                                                     |
 | DividendSafetyBayesian    | Cut probability                                                                                                                                                                                                                                      |
 | CreditRiskBayesian        | Distress risk                                                                                                                                                                                                                                        |
@@ -353,7 +353,7 @@ posterior predictive and §9 diagnostics there are the standard to match.
 | Computational implementation | `pm.Model(coords=…)` + `pm.Data`; `_hierarchy` helpers; `coerce_by_data_type`                     | `build_fused_kalman_pt_model`                                     |
 | Fitting & diagnostics        | `_workflow.build_sample_kwargs()` → `pm.sample` → `_workflow.log_sample_diagnostics()`            | `run_diagnostics` (`:4378`); gate `MIN_ESS_GATE = 400`            |
 | Model evaluation (PPC)       | `_workflow.posterior_predictive_check()` **plus ≥1 calibration statistic** (ECDF, t-stat, coverage, PIT) | `run_posterior_predictive` (`:4237`)                        |
-| Model comparison             | `_workflow.attach_log_likelihood(idata, model)` → `az.compare` — see below                        | *(no in-repo example yet)*                                        |
+| Model comparison             | `_workflow.attach_log_likelihood(idata, model)` → `az.compare` — see below                        | `run_model_comparison` (`pymc_kalman_filter_pt.py`, §9b)          |
 | Expansion / simplification   | Record it in the builder docstring: what was tried, its divergence / R-hat counts, why it was dropped | `KalmanFilterModel.py:2134-2145`, `:2373`, `:2450`, `:2535`   |
 | Decision analysis            | `_price_target_mc.summarize_mc_returns`; `RiskBookModel.compute_cvar_aware_book`                  | §10 screen / §10b risk book                                       |
 
@@ -367,7 +367,7 @@ hand-built path.
 
 | Module                          | Prior pred. | PPC                        | Diagnostics | Comparison | Decision analysis |
 |---------------------------------|-------------|----------------------------|-------------|------------|-------------------|
-| `pymc_kalman_filter_pt.py`      | ✅ `run_prior_predictive` | ✅ `run_posterior_predictive` | ✅ `run_diagnostics` | ❌ | ✅ screen + risk book |
+| `pymc_kalman_filter_pt.py`      | ✅ `run_prior_predictive` | ✅ `run_posterior_predictive` (per-`y_series` **and** per-time coverage + PIT) | ✅ `run_diagnostics` | ✅ `run_model_comparison` (§9b, opt-in) | ✅ screen + risk book |
 | KalmanFilterPriceTarget         | ❌          | ⚠️ `forecast()` hand-rolls predictions | ✅ `log_sample_diagnostics` | ❌ | ✅ `implied_upside_from_state` |
 | EarningsBeatBayesian            | ❌          | ❌                         | ✅          | ❌         | ❌                |
 | PriceTargetAchievement          | ❌          | ❌                         | ✅          | ❌         | ⚠️ `achieve_prob` latent |
@@ -381,12 +381,18 @@ hand-built path.
 Diagnostics became universal when `log_sample_diagnostics` was lifted into `_workflow.py`; **prior predictive is the
 largest remaining gap** in the model package — `prior_predictive_check()` now makes it a one-liner.
 
-### `log_likelihood` and why comparison is unavailable
+### `log_likelihood` and why comparison is opt-in
 
 `log_likelihood` is **off by default** everywhere. It roughly doubles `InferenceData` size and adds materially to
-wall-clock on a ~5k-ISIN cross-section, and no pipeline path consumes it. That is a deliberate trade-off, not an
-oversight — but the consequence is that **`az.loo` / `az.waic` / `az.compare` raise on every idata this repo
-produces**, and no test exercises ELPD comparison.
+wall-clock on a ~5k-ISIN cross-section, and no *production* pipeline path consumes it. That is a deliberate
+trade-off — but the consequence is that **`az.loo` / `az.waic` / `az.compare` raise on every idata this repo
+produces by default**.
+
+The one place that opts back in is `run_model_comparison` (`pymc_kalman_filter_pt.py` §9b, gated by
+`KalmanRunConfig.enable_model_comparison`), which attaches the group post-hoc with `attach_log_likelihood` and
+subsamples the ISIN axis to `comparison_max_isins` — the group is `chains × draws × n_isin × T × D` floats
+(~820 MB per arm at full T=4 panel size), and it is paid once per arm being compared. Follow that pattern rather
+than enabling `log_likelihood` on a production fit.
 
 Two escape hatches, one of which is a trap:
 
@@ -464,7 +470,19 @@ keeps its dataclass default and is overridden programmatically:
 ```python
 from dataclasses import replace
 cfg = replace(get_run_config(), panel_lookbacks=(), chains=8)   # T=1 cross-section, 8 chains
+cfg = replace(get_run_config(), state_innovation_scale=0.0)     # pin the local-level state off
+cfg = replace(get_run_config(), enable_model_comparison=True)   # run §9b (≈3× sampling cost)
+cfg = replace(get_run_config(), panel_response_extra=('pt_dispersion',))  # D=2, activates the ICM
 ```
+
+Local-level state / comparison knobs on `KalmanRunConfig`:
+
+| Field                     | Default | Purpose                                                                          |
+|---------------------------|---------|----------------------------------------------------------------------------------|
+| `state_innovation_scale`  | `0.1`   | `HalfNormal` prior scale of `sigma_state`, the per-step innovation sd of the per-ISIN random walk. `0.0` pins the state at its t=0 anchor (the static twin). Ignored when `T == 1`. |
+| `enable_model_comparison` | `False` | Run §9b. Refits both arms and computes a pointwise `log_likelihood` per arm (~820 MB each at full panel size), so ≈3× the sampling cost. |
+| `comparison_max_isins`    | `800`   | ISIN subsample used by §9b; the retained fraction is logged.                      |
+| `panel_response_extra`    | `()`    | Keys of `KALMAN_PANEL_RESPONSE_EXTRA` promoting a second response series (`D > 1`), which is what activates the otherwise-dormant rank-1 ICM. |
 
 **Section map** (the file is ~8.1k lines; sections are keyed to the Bayesian-workflow stages):
 
@@ -476,8 +494,9 @@ cfg = replace(get_run_config(), panel_lookbacks=(), chains=8)   # T=1 cross-sect
 | 5b    | `:3437` | Fused MvGRW panel model (Model A / Model B)   |
 | **6** | `:4007` | **Prior predictive checks**                   |
 | 7     | `:4093` | Posterior inference (NUTS)                    |
-| **8** | `:4235` | **Posterior predictive checks**               |
+| **8** | `:4235` | **Posterior predictive checks** (per-`y_series` **and** per-time coverage, PIT) |
 | **9** | `:4376` | **MCMC diagnostics**                          |
+| **9b**| —       | **Model comparison** — `run_model_comparison`: local-level vs static arm on ELPD; opt-in via `enable_model_comparison` |
 | 10 / 10b / 10c | `:4662` / `:5027` / `:5527` | Screen · CVaR risk book · analytics export |
 | 10K–13 | `:5880`–`:6765` | Universe fit, single-ISIN, mingled cohort, forest (± SV twins) |
 | 14    | `:7029` | Summary + recommendations                     |
@@ -493,6 +512,7 @@ panel path.
 
 **Artifact export (since 0.9.9.13).** Artifacts go to `KALMAN_PT_RESULTS_DIR` in a **per-section subdirectory**
 (`01_data/`, `02_eda/`, `03_features/`, `04_panel/`, `06_prior/`, `07_posterior/`, `08_ppc/`, `09_diagnostics/`,
+`09b_comparison/`,
 `10_screen/`, `10b_risk/`, `10c_analytics/`, `10k_universe/`, `11_single_isin/`, `11b_single_sv/`, `12_mingled/`,
 `12b_mingled_sv/`, `13_forest/`, `13b_further_views/`, `14_summary/`, `14b_recommendations/`, `00_misc/`). The
 directory is resolved from the artifact stem by `_export_dir_for` against the `_EXPORT_SECTION_DIRS` SSOT — do not
@@ -551,6 +571,16 @@ documented via `COMMENT ON COLUMN` in the analytics DDL.
 Monte-Carlo forward-return draws; `er_sd` is itself an exported column). Unit or
 schema changes to the export must ship as a pair: re-run
 `export_analytics(write=True)` **and** deploy the updated GEIB dashboard.
+
+> **0.9.9.14 changes the exported VALUES, not the schema.** Two corrections
+> compound: the de-standardisation fix removes a **+1.5 to +2.3 pp** upside
+> overstatement that affected every T>1 run, and the local-level state widens the
+> `expected_upside` HDIs (the previous build pseudo-replicated each name's `T`
+> serially-correlated observations as iid, shrinking the per-name posterior sd by
+> ~√T). The 82-column layout and the raw-decimal convention are unchanged, so no
+> DDL migration is needed — but run `scripts/validate_kalman_state.py` before
+> `export_analytics(write=True)`, and treat the export + dashboard deploy as the
+> usual pair.
 
 ```powershell
 . .\set_env.ps1   # sets DB_URL / DB_ANALYTICS_SCHEMA
@@ -885,6 +915,11 @@ The other ~45 files there are hand-written screen/analysis scripts unmanaged by 
 - Sampling & diagnostics: `pymc_models/_workflow.py`
 - Drift-feature exclusions: `KALMAN_DRIFT_EXCLUDED_FEATURES` in `KalmanFilterModel.py`
 - Artifact sections: `_EXPORT_SECTION_DIRS` in `pymc_kalman_filter_pt.py`
+- Kalman decision latent: `KALMAN_SCREEN_LATENT` / `resolve_screen_latent` in `pymc_kalman_filter_pt.py` — every
+  consumer (screen, price-target MC, risk book, analytics export, §13b plots, prior predictive) resolves the
+  per-ISIN latent through it. Never read `risk_adj_return` off the posterior directly: since the local-level state
+  landed that is the t=0 anchor, not the filtered level.
+- Optional second response series: `KALMAN_PANEL_RESPONSE_EXTRA` in `pymc_kalman_filter_pt.py`
 - Reference geometry: `_REF_LINE_KINDS` (`_add_ref_line` / `_add_ref_band`)
 
 ### 2. Lazy Loading

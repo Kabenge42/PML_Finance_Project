@@ -5,6 +5,116 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.14] - 2026-08-10
+
+### Fixed
+
+- **Exported price targets were ~1.5–2.3 pp too high on every T>1 run.**
+  `prepare_kalman_panel_inputs` standardises the response tensor on the **pooled
+  (isin × time)** moments of the genuine `price_target_{lb}_ago` /
+  `price_{lb}_ago` trails, but `_panel_response_stats` recomputed the inverse by
+  **tiling the snapshot column** across `T` — correct only for the tile-based
+  panel removed in 0.9.9.10, and asserted as such in its own docstring ("tiling
+  across `T` leaves the moments unchanged"). `panel_posterior_upside` therefore
+  de-standardised the posterior with the wrong `(mean, std)`. Measured on the
+  2026-08 6 401-name T=4 run: pooled `(0.207540, 0.249392)` vs snapshot
+  `(0.224745, 0.241625)`, inflating `expected_upside` by **+2.32 pp** at a
+  −0.5 latent through **+1.50 pp** at +1.0, with a 1.032 slope distortion. The
+  bias flowed into `10_screen_results`, the CVaR risk book and
+  `analytics.kalman_filtered_price_targets`. `KalmanPanelInputs` now carries the
+  fit-time `response_mean` / `response_std`, making the inverse exact by
+  construction; a panel lacking them falls back to the legacy computation with a
+  **warning**, never silently. **Re-export required** — see the unit/schema pair
+  rule in `CLAUDE.md`.
+- **`beta_t` was a structurally-zero posterior variable.**
+  `prepare_kalman_panel_inputs` builds the T>1 time axis with `np.tile`, so
+  `t_scaled` is identical for every ISIN and the `t_isin_varying` guard in
+  `build_fused_kalman_pt_model` always failed — a per-series slope is exactly
+  spanned by the `T` free `alpha_level[t, d]` intercepts there. It was still
+  published as a Deterministic pinned at 0, which read as a fitted-and-dead
+  parameter in the §9 summary, gave arviz a constant to divide 0/0 on (the
+  `RuntimeWarning: invalid value encountered in scalar divide` in every run log),
+  and drew a flat zero line in the §13b slope panel. It is no longer materialised
+  on an isin-constant axis; it returns unchanged when `t_scaled` genuinely varies.
+- **Constant posterior variables no longer pollute the R-hat/ESS sweep** —
+  `run_diagnostics` filters `keep_vars` through the existing
+  `_degenerate_posterior_vars` before `azs.rhat` / `azs.ess`, removing the
+  divide warning at source. The nan-aware reductions stay as a backstop.
+
+### Added
+
+- **Local-level state — the fused Kalman panel now actually filters.**
+  With `beta_t` zeroed, `D == 1`, and `expected_return` a pure Deterministic (no
+  per-ISIN random effect, dropped in an earlier release as non-identified on
+  `T == 1`), the entire time dimension contributed nothing but `T`
+  cross-sectionally-shared intercepts: each name's `T` strongly serially-correlated
+  log-uplift observations were treated as `T` iid draws around **one** constant
+  latent. That pseudo-replication shrank the per-name posterior sd by ~√T and
+  produced over-confident `expected_upside` HDIs downstream. The panel now carries
+  a per-ISIN Gaussian random walk anchored at `mu_isin`:
+
+  - `state_path` (`isin`, `time`) — non-centred (`sigma_state · z_state`) to avoid
+    the scale↔deviation funnel, and **cross-sectionally centred at each step** so
+    the walk carries only idiosyncratic deviation and cannot alias with the
+    market-wide `alpha_level[t, ·]` (that aliasing is the documented 2026-08-01
+    T=4 failure: 190 divergences, `alpha_level` R-hat 1.06, bulk-ESS ≈ 75);
+  - `state_now` = `state_path[:, -1]` — the **filtered** level at the snapshot, and
+    the new decision latent for the screen, the price-target Monte-Carlo, the risk
+    book and the analytics export. `achieve_prob` is now `sigmoid(state_now)`;
+  - `KalmanRunConfig.state_innovation_scale` (default `0.1`) sets its prior scale;
+    `0.0` pins the state at the anchor, recovering the previous build. On `T == 1`
+    the state collapses to `mu_isin` and no innovation parameters are created.
+
+  Parameter recovery on a synthetic panel with a known state (N=300, T=4,
+  σ_state 0.35): correlation between `state_now` and the true terminal state
+  **0.967** with the state on versus **0.125** with it pinned off; RMSE 0.253 vs
+  0.928; `sigma_base` 0.512 vs 0.863; mean per-name posterior sd 0.415 vs
+  **0.032** — i.e. the static build was ~29× over-confident relative to its own
+  error. 0 divergences in both arms.
+- **`resolve_screen_latent` / `KALMAN_SCREEN_LATENT`** — one name for the decision
+  latent, resolved at every consumer (`panel_posterior_upside`,
+  `summarize_panel_screen`, `export_analytics`, the §13b plots, the prior
+  predictive), with a documented fallback to `risk_adj_return` so pre-0.9.9.14
+  NetCDF artifacts and the notebook twin stay readable.
+- **§9b model comparison — the last `❌` in this module's workflow row.**
+  `run_model_comparison` refits the local-level and static arms on a common
+  subsample, attaches the pointwise likelihood with `attach_log_likelihood`
+  (`pm.compute_log_likelihood`; the `idata_kwargs` route is silently stripped
+  under nutpie) and reports `azs.compare` / `azs.loo`, reading **`.elpd`** —
+  `.elpd_loo` was removed in ArviZ 1.x and yields a silent `nan`. Opt-in via
+  `enable_model_comparison`, since the log-likelihood group is ~820 MB per arm at
+  full panel size; `comparison_max_isins` (default 800) bounds it and the retained
+  fraction is logged so a truncated comparison never reads as a full one.
+  New `09b_comparison` export section.
+- **Per-time posterior-predictive coverage** (§8) — the calibration statistic that
+  tests the state layer specifically. Pooled coverage can look correct while the
+  model is over-confident at the oldest lookbacks and over-dispersed at the
+  snapshot; a monotone drift across `t` indicates a mis-set innovation scale.
+- **Opt-in second response series** — `KalmanRunConfig.panel_response_extra` plus
+  the `KALMAN_PANEL_RESPONSE_EXTRA` registry activates the rank-1 ICM
+  (`mu_isin_loading` / `sigma_series`), dormant while `D == 1`. The one supplied
+  series, `pt_dispersion` = `log1p(price_target_stddev_{lb} / price_{lb})`, is a
+  distinct signal (disagreement, not direction) with a genuine `*_ago` trail, so
+  it populates the time panel rather than standardising to a near-constant column.
+  Promoting it drops the collinear drift predictor `feat_pt_noise_drift`
+  (response↔predictor disjointness) with a printed note. **Default off**: the
+  `D > 1` path is what produced the historic R-hat 4.45 / min-ESS 4.3 freeze.
+- **`scripts/validate_kalman_state.py`** — gates the re-export: convergence
+  (0 divergences, R-hat < 1.01, ESS > 400), `sigma_state` bounded away from 0,
+  the predicted `sigma_base`-falls / per-name-sd-widens signature versus the
+  static twin, per-time PPC coverage, and the de-standardisation delta.
+
+### Changed
+
+- §13b panel (d) now plots the `state_path` median and 10–90 % cross-sectional
+  band instead of the `beta_t` slope, falling back to `beta_t` on an isin-varying
+  time axis. A visibly widening band from t=0 is the state layer working; a flat
+  one means `sigma_state` collapsed.
+- The `risk_adj_return` **column** in the screen and analytics export keeps its
+  name and units but now reports the filtered level; `risk_adj_return` the
+  **posterior variable** remains the t=0 structural anchor. The two coincide when
+  `T == 1`.
+
 ## [0.9.9.13] - 2026-08-05
 
 ### Added
