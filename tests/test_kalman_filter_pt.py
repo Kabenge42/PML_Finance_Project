@@ -878,17 +878,27 @@ def test_out_of_support_suppression_rule():
     """
     import pymc_kalman_filter_pt as kf
 
+    # Detect on er_p05, NOT er_mean. er_mean averages the clipped draws, so it
+    # sits ~1e-4 below the cap even when the whole distribution is pinned -- a
+    # first attempt used `er_mean >= cap - 1e-6` and matched ZERO of the 18 real
+    # cases. er_p05 lands exactly on the cap once ~95% of draws are clipped.
+    # Values below are the real ones from the 2026-08-10 export.
     df = pd.DataFrame({
         "isin": ["A", "B", "C"],
-        "er_mean": [0.25, kf.UPLIFT_CLIP_HI, kf.UPLIFT_CLIP_HI - 1e-9],
-        "er_sd": [0.20, 0.007, 0.009],
-        "expected_sharpe_ratio": [1.25, 717.7, 555.0],
-        "reward_to_cvar": [3.6, 900.0, 800.0],
+        "er_mean": [0.25, 4.999901, 4.998807],
+        "er_p05": [0.0015, kf.UPLIFT_CLIP_HI, kf.UPLIFT_CLIP_HI],
+        "er_sd": [0.20, 0.006966, 0.044114],
+        "expected_sharpe_ratio": [1.25, 717.7, 113.3],
+        "reward_to_cvar": [3.6, 500.0, 500.0],
         "cvar_book_weight": [0.04, 0.05, 0.05],
     })
-    oos = (pd.to_numeric(df["er_mean"], errors="coerce")
+    naive = (pd.to_numeric(df["er_mean"], errors="coerce")
+             >= kf.UPLIFT_CLIP_HI - 1e-6).fillna(False)
+    assert not naive.any(), "regression guard: er_mean detection silently misses"
+
+    oos = (pd.to_numeric(df["er_p05"], errors="coerce")
            >= kf.UPLIFT_CLIP_HI - 1e-6).fillna(False)
-    assert oos.tolist() == [False, True, True], "cap detection must tolerate float slop"
+    assert oos.tolist() == [False, True, True]
 
     for col in ("expected_sharpe_ratio", "reward_to_cvar", "cvar_book_weight"):
         df.loc[oos, col] = np.nan

@@ -6247,8 +6247,19 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     # and the raw ``er_*`` distribution are retained, so nothing vanishes silently
     # and a consumer can still show these names — greyed, or excluded from
     # rankings — rather than trusting a fabricated score.
-    _er_mean = pd.to_numeric(kalman_results.get('er_mean'), errors='coerce')
-    oos = (_er_mean >= UPLIFT_CLIP_HI - 1e-6).fillna(False)
+    # Detect on the 5th PERCENTILE, not the mean. ``er_mean`` averages the clipped
+    # draws, so a handful landing below the cap drag it ~1e-4 under even when the
+    # whole distribution is pinned — a first attempt tested
+    # ``er_mean >= cap - 1e-6`` and matched ZERO of the 18 affected names.
+    # ``er_p05`` lands exactly on the cap once ~95 % of the draws are clipped,
+    # which is precisely the condition worth calling out of support, and it says
+    # so without a magic tolerance. Verified: excluding the 18 names it catches
+    # takes max Sharpe 717.7 -> 10.1 and max reward_to_cvar 500 -> 14.3, both back
+    # to the pre-clip range, while leaving a borderline name at Sharpe 10.1 in
+    # place rather than over-suppressing.
+    _pin_key = 'er_p05' if 'er_p05' in kalman_results.columns else 'er_mean'
+    _pinned = pd.to_numeric(kalman_results.get(_pin_key), errors='coerce')
+    oos = (_pinned >= UPLIFT_CLIP_HI - 1e-6).fillna(False)
     kalman_results['out_of_support'] = oos.to_numpy()
     _ranking_cols = ['expected_sharpe_ratio', 'reward_to_cvar', 'cvar_book_weight']
     for _c in _ranking_cols:
@@ -6258,9 +6269,10 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     # and any downstream sum stay well-defined.
     kalman_results['cvar_book_weight'] = kalman_results['cvar_book_weight'].fillna(0.0)
     if int(oos.sum()):
-        print(f'  [out-of-support] {int(oos.sum())} name(s) pinned at the '
-              f'+{UPLIFT_CLIP_HI:.0%} uplift cap: {", ".join(_ranking_cols)} set '
-              f'to NULL and out_of_support=True (er_* retained).')
+        print(f'  [out-of-support] {int(oos.sum())} name(s) with {_pin_key} '
+              f'pinned at the +{UPLIFT_CLIP_HI:.0%} uplift cap: '
+              f'{", ".join(_ranking_cols)} set to NULL and out_of_support=True '
+              f'(er_* retained).')
 
     _held = int((kalman_results['cvar_book_weight'] > 0).sum())
     print(f'Built kalman_filtered_price_targets row-set: {kalman_results.shape}  '
