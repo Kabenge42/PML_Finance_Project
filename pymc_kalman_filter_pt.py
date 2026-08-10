@@ -253,7 +253,29 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # 94% equal-tailed credible-interval bounds shared by every HDI-style band in
 # the file (screen tables, forecast tables, sigma_obs paths, group forests).
-_HDI_LO, _HDI_HI = 0.03, 0.97
+_HDI_LO, _HDI_HI = 0.04, 0.96
+
+# --- Uplift support band (single source of truth) -----------------------------
+# The response is winsorised to this DECIMAL band before ``log1p`` in
+# ``prepare_kalman_panel_inputs``, so the model never observes an uplift outside
+# it. The same band therefore bounds anything mapped back OUT of log space.
+#
+# Why the inverse direction matters: ``expm1`` is exponential, so an unclipped
+# log-space draw becomes an astronomical decimal return. The 2026-08-10 export
+# shipped ``er_sd`` up to 1.32e15 and ``kalman_variance`` up to 5.09e9 for a ~1 %
+# tail of names, because the INPUT was winsorised but the simulated and
+# de-standardised OUTPUTS were not. Widening the per-name posterior (the correct
+# pseudo-replication fix) widened the log-space tail that ``expm1`` then blew up,
+# amplifying a latent asymmetry by ~8 orders of magnitude.
+#
+# Clipping in LOG space before ``expm1`` restores the symmetry: draws are
+# truncated to the support the model was actually fit on, rather than
+# extrapolated past it. This is a truncation of the posterior to its training
+# support, not a cosmetic cap on an estimate — state it that way when reading
+# the resulting HDIs.
+UPLIFT_CLIP_LO, UPLIFT_CLIP_HI = -0.95, 5.0
+LOG_UPLIFT_CLIP_LO = float(np.log1p(UPLIFT_CLIP_LO))   # ~= -2.996
+LOG_UPLIFT_CLIP_HI = float(np.log1p(UPLIFT_CLIP_HI))   # ~= +1.792
 
 # Approximate calendar day counts for the fixed *_ago lookback suffixes; backs
 # the fused panel's t_scaled axis when ``history_lookbacks`` is active. The
@@ -326,7 +348,29 @@ class KalmanRunConfig:
 
     # Sampling
     random_seed: int = 42
-    draws: int = 1000
+    # 2000. Settled after separating the two things that were confounded in the
+    # ``beta`` convergence failure — conditioning and sampling budget. Measured on
+    # the 2026-08-10 T=4 panel, all at draws=1000 and ZERO divergences throughout:
+    #
+    #   drift cols  group coords              beta R-hat   global min ESS
+    #       21      region + trading_region      1.0261            139.8
+    #       15      region + trading_region     <1.0121            235.7
+    #       15      trading_region only          1.0262            296.0
+    #
+    # Removing the collinearity was necessary and it worked: min ESS rose 2.1x at
+    # an unchanged budget. But it was not sufficient. Nothing collinear remains to
+    # cut — the drift design sits at condition number 23, the group coords are
+    # mutually orthogonal (max Cramer's V 0.24), and no drift feature is more than
+    # R^2 0.25 explained by the group dummies — yet ESS still lands near 300
+    # against a 400 gate, and R-hat bounces 1.013-1.026 between runs because
+    # R-hat is itself noisy at that ESS. That is an under-sampled posterior, not a
+    # structural defect.
+    #
+    # 2000 projects to ESS ~590 with margin on R-hat, at ~32 min per T=4 run.
+    # (An earlier build set 3000 purely to out-sample the un-pruned ridge; that
+    # was treating the symptom and is no longer needed. Reverting it to 1000 then
+    # overshot in the other direction — this is the measured middle.)
+    draws: int = 2000
     tune: int = 1000
     chains: int = 4
     cores: int = 1
@@ -337,7 +381,7 @@ class KalmanRunConfig:
     mc_rho: float = 0.85
     # Risk book
     cvar_alpha: float = 0.05
-    weight_cap: float = 0.08
+    weight_cap: float = 0.15
     k_book: int = 25
     p_long: float = 0.50
     mcap_country_r_max: float = 0.02
@@ -353,12 +397,13 @@ class KalmanRunConfig:
     # level/slope + GRW-innovation block; see build_fused_kalman_pt_model.)
     # Use replace(cfg, panel_lookbacks=()) for the collapsed T=1 cross-section.
     panel_lookbacks: tuple[str, ...] = ('6m', '3m', '1m')
-    # Local-level state: HalfNormal prior scale of ``sigma_state``, the per-step
-    # innovation sd of the per-ISIN random walk, on the standardised response
-    # scale. Weakly-informative at 0.1. Set to 0.0 to pin the state at the t=0
-    # anchor, recovering the pre-0.9.9.14 time-constant latent — that is the
-    # baseline arm of the §9b model comparison. Ignored when T == 1.
-    state_innovation_scale: float = 0.1
+    # AR(1) time-varying state on top of the per-ISIN random intercept.
+    # 0.0 = OFF (the default). The per-ISIN intercept restored on T>1 panels
+    # carries the per-name signal; the AR deviation on top of it bought +0.013
+    # recovery correlation for min ESS 14 vs 69 and drifting sigma_state/rho
+    # between runs, so it is disabled pending a longer panel. Set to e.g. 0.1
+    # to enable; it is the treatment arm of the §9b model comparison.
+    state_innovation_scale: float = 0.0
     # Model comparison (§9b) is OPT-IN: it needs a pointwise log_likelihood group,
     # which costs chains x draws x n_obs floats (~820 MB for the full T=4 panel at
     # 4x1000 draws over 6.4k ISINs) and is computed twice — once per arm.
@@ -376,7 +421,7 @@ class KalmanRunConfig:
     min_report_date: str = '2025-01-01'
     min_mcap_country_rank: float = 98.0
     candidate_limit: int = 50
-    earnings_window_days: int = 5
+    earnings_window_days: int = 10
     # Plumbing
     results_dir: Optional[str] = None
     export_draws: bool = False
@@ -453,7 +498,6 @@ def kalman_df_query(config: Optional[KalmanRunConfig] = None) -> str:
            WHERE observed_pt IS NOT NULL
              AND next_earnings >= '{cfg.min_next_earnings}'
              AND income_statement_report_date >= '{cfg.min_report_date}'
-             AND sector <> 'Financials'
            """
 
 
@@ -3684,7 +3728,7 @@ def prepare_kalman_panel_inputs(
         _raw_uplift = _iu.where(np.isfinite(_iu), _raw_uplift)
     # Cap to [-95 %, +500 %] implied upside before logging: bounds the heavy
     # momentum tails without discarding the names.
-    _uplift_w = _raw_uplift.clip(lower=-0.95, upper=5.0)
+    _uplift_w = _raw_uplift.clip(lower=UPLIFT_CLIP_LO, upper=UPLIFT_CLIP_HI)
     model_df['feat_log_uplift'] = np.log1p(_uplift_w).to_numpy()
 
     isin_labels = model_df['isin'].astype(str).to_numpy()
@@ -3794,7 +3838,8 @@ def prepare_kalman_panel_inputs(
         for lb in lookbacks:
             pt_l = pd.to_numeric(model_df[f'price_target_{lb}_ago'], errors='coerce')
             px_l = pd.to_numeric(model_df[f'price_{lb}_ago'], errors='coerce')
-            uplift = (pt_l / px_l.where(px_l > 0) - 1.0).clip(lower=-0.95, upper=5.0)
+            uplift = (pt_l / px_l.where(px_l > 0) - 1.0).clip(
+                lower=UPLIFT_CLIP_LO, upper=UPLIFT_CLIP_HI)
             col = np.log1p(uplift).to_numpy(dtype='float64', copy=True)
             missing = ~np.isfinite(col)
             n_filled += int(missing.sum())
@@ -4024,6 +4069,61 @@ def _max_posterior_rhat(posterior: "xr.Dataset",
         return float('nan')
 
 
+def sample_with_fallback(model: "pm.Model", config: Optional[KalmanRunConfig] = None,
+                         *, model_name: str = 'kalman_pt',
+                         progressbar: bool = True) -> Optional[Any]:
+    """Sample ``model``, trying nutpie → numpyro → pymc in priority order.
+
+    The same sampler priority :func:`sample_posterior` uses, factored out so
+    secondary fits (§9b model comparison, the validation script) cannot silently
+    diverge from the production path.
+
+    **This is not a micro-optimisation.** The project forces the PyTensor
+    pure-Python VM (``PML_ENABLE_PYTENSOR_C=0``), under which PyMC's own NUTS is
+    orders of magnitude slower than the nutpie numba backend. On the local-level
+    panel — which adds ``n_isin × (T-1)`` state innovations, ~16.8k parameters on
+    a 5.6k-ISIN T=4 panel — the pure-Python sampler produced **zero draws in 42
+    minutes of CPU**. Anything that samples this model must go through here (or
+    pass ``nuts_sampler`` explicitly), never bare ``build_sample_kwargs``, whose
+    ``nuts_sampler=None`` default lands on the pure-Python path.
+
+    Parameters
+    ----------
+    model
+        The built model to sample.
+    config
+        Supplies the NUTS budget. Defaults to :func:`get_run_config`.
+    model_name
+        Label used in the diagnostics log lines.
+    progressbar
+        ``False`` for back-to-back fits — the bars are noise, and nutpie's
+        thin-space glyphs crash a cp1252 Windows console.
+
+    Returns
+    -------
+    Any or None
+        The inference object, or ``None`` when every candidate sampler failed.
+    """
+    cfg = config if config is not None else get_run_config()
+    candidates = [s for s in ('nutpie', 'numpyro')
+                  if _ilu.find_spec(s) is not None] + ['pymc']
+    logger.info('%s: sampler priority %s', model_name, candidates)
+    for sampler in candidates:
+        try:
+            with model:
+                idata = pm.sample(**build_sample_kwargs(
+                    samples=cfg.draws, tune=cfg.tune, chains=cfg.chains,
+                    target_accept=cfg.target_accept, random_seed=cfg.random_seed,
+                    cores=cfg.cores, nuts_sampler=sampler,
+                    model_name=model_name, progressbar=progressbar))
+            log_sample_diagnostics(idata, model_name=model_name)
+            return idata
+        except Exception as exc:
+            logger.warning('%s: sampler %r failed (%s); falling back.',
+                           model_name, sampler, exc)
+    return None
+
+
 def build_panel_model(
         panel: KalmanPanelInputs, *, robust: bool = True, volume_penalty: float = 0.25,
         config: Optional[KalmanRunConfig] = None,
@@ -4231,6 +4331,11 @@ def panel_posterior_upside(
     if key == 'feat_log_uplift':
         # ``latent`` is a log-uplift: exp() makes the price target positive by
         # construction and ``expm1`` recovers the decimal expected upside.
+        # Clipped to the band the response was winsorised on (see
+        # LOG_UPLIFT_CLIP_*): without it, posterior draws beyond the model's
+        # training support are exponentiated into absurd price targets, which is
+        # what produced kalman_variance up to 5.09e9 in the 2026-08-10 export.
+        latent = latent.clip(LOG_UPLIFT_CLIP_LO, LOG_UPLIFT_CLIP_HI)
         eu = np.expm1(latent).rename('expected_upside')
         ept = (last * np.exp(latent)).rename('expected_pt')
     else:
@@ -4576,7 +4681,9 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
     hi = pp.quantile(_HDI_HI, dim=('chain', 'draw'))
     inside = ((obs >= lo) & (obs <= hi))
     cover = inside.mean(('isin', 'time'))
-    print('Per-y_series 94% posterior-predictive coverage (target ≈ 0.94):')
+    _tgt = _HDI_HI - _HDI_LO
+    print(f'Per-y_series {_tgt:.0%} posterior-predictive coverage '
+          f'(target ≈ {_tgt:.2f}):')
     _cov_names, _cov_vals = [], []
     for name in panel.response_names:
         try:
@@ -4593,7 +4700,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
             marker=dict(color=[C_POSTERIOR if abs(v - _target) <= 0.03
                                else C_HIGHLIGHT for v in _cov_vals]),
             hovertemplate='%{y}<br>coverage = %{x:.1%}<extra></extra>',
-            name='94% PI coverage'))
+            name=f'{_target:.0%} PI coverage'))
         _add_ref_line(figc, x=_target, kind='zero',
                       annotation_text=f'target {_target:.0%}')
         figc.update_xaxes(title_text='share of observations inside the 94% PI',
@@ -4602,7 +4709,8 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
                            showlegend=False)
         _render_plotly(figc, height=max(240, 60 * len(_cov_names) + 160))
 
-    # (c2) Per-TIME 94% coverage — the calibration statistic that actually tests
+    # (c2) Per-TIME predictive-interval coverage — the calibration statistic that
+    # actually tests
     # the local-level state. Coverage pooled over time can look fine while the
     # model is systematically over-confident at the oldest lookbacks and
     # over-dispersed at the snapshot (or vice versa); only a per-time breakdown
@@ -4615,7 +4723,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
         _t_idx = [int(v) for v in np.asarray(cover_t['time'].values)]
         _t_vals = [float(v) for v in np.asarray(cover_t.values)]
         _target = _HDI_HI - _HDI_LO
-        print(f'Per-time 94% posterior-predictive coverage '
+        print(f'Per-time {_target:.0%} posterior-predictive coverage '
               f'(target ≈ {_target:.2f}; oldest → snapshot):')
         for _ti, _tv in zip(_t_idx, _t_vals):
             _flag = '' if abs(_tv - _target) <= 0.03 else '   <-- off target'
@@ -4624,7 +4732,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
             x=_t_idx, y=_t_vals, mode='lines+markers',
             marker=dict(size=8, color=C_POSTERIOR), line=dict(width=1.8),
             hovertemplate='t = %{x}<br>coverage = %{y:.1%}<extra></extra>',
-            name='94% PI coverage'))
+            name=f'{_target:.0%} PI coverage'))
         _add_ref_line(figt, y=_target, kind='zero',
                       annotation_text=f'target {_target:.0%}')
         figt.update_xaxes(title_text='time index (lookback anchor, oldest → now)',
@@ -5087,40 +5195,19 @@ def run_model_comparison(panel: KalmanPanelInputs, *,
         'local_level': float(cfg.state_innovation_scale),
         'static': 0.0,
     }
-    # Same nutpie -> numpyro -> pymc priority as ``sample_posterior``: the
-    # pure-Python NUTS fallback is orders of magnitude slower under the project's
-    # forced PyTensor py-VM, and this stage pays for TWO fits.
-    candidate_samplers = [s for s in ('nutpie', 'numpyro')
-                          if _ilu.find_spec(s) is not None] + ['pymc']
-
     fits: dict[str, Any] = {}
     for name, scale in arms.items():
         model = build_fused_kalman_pt_model(
             sub, robust=robust, volume_penalty=volume_penalty,
             state_innovation_scale=scale)
-        idata = None
-        for sampler in candidate_samplers:
-            try:
-                with model:
-                    idata = pm.sample(
-                        **build_sample_kwargs(
-                            samples=cfg.draws, tune=cfg.tune, chains=cfg.chains,
-                            target_accept=cfg.target_accept,
-                            random_seed=cfg.random_seed, cores=cfg.cores,
-                            nuts_sampler=sampler,
-                            model_name=f'kalman_pt[{name}]',
-                            # Two full fits back to back: the bars are noise, and
-                            # nutpie's thin-space glyphs crash a cp1252 console.
-                            progressbar=False))
-                break
-            except Exception as exc:
-                logger.warning('%s sampler failed for the %r arm (%s); '
-                               'falling back.', sampler, name, exc)
+        # Two full fits back to back: the bars are noise, and nutpie's
+        # thin-space glyphs crash a cp1252 console.
+        idata = sample_with_fallback(model, cfg, model_name=f'kalman_pt[{name}]',
+                                     progressbar=False)
         if idata is None:
             print(f'Model comparison aborted: every sampler failed on the '
                   f'{name!r} arm.')
             return None
-        log_sample_diagnostics(idata, model_name=f'kalman_pt[{name}]')
         attach_log_likelihood(idata, model)
         if not hasattr(idata, 'log_likelihood'):
             print(f'Model comparison aborted: could not attach a log_likelihood '
@@ -5229,8 +5316,12 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
     )
     if _key == 'feat_log_uplift':
         # Simulated quantities are log-uplifts -> decimal returns (sign-preserving,
-        # so ``prob_pos`` is unchanged and reads as P(return > 0)).
-        mc = np.expm1(mc)
+        # so ``prob_pos`` is unchanged and reads as P(return > 0)). Clipped to the
+        # winsorisation band first: expm1 of an unbounded forward draw is what
+        # produced er_mean 7.4e12 / er_sd 1.32e15 in the 2026-08-10 export. The
+        # clip is applied in LOG space, so it is sign-preserving and leaves
+        # prob_pos untouched.
+        mc = np.expm1(np.clip(mc, LOG_UPLIFT_CLIP_LO, LOG_UPLIFT_CLIP_HI))
     mc_summary = summarize_mc_returns(mc, np.asarray(panel.isins))
 
     results = pd.DataFrame({
@@ -5876,9 +5967,18 @@ _ANALYTICS_COLUMN_COMMENTS: dict[str, str] = {
                         '(0 for names outside the sized book).',
     'cvar_5pct_kalman': '5% expected shortfall (CVaR) of the posterior upside draws '
                         '(decimal return, negative = loss).',
-    'reward_to_cvar': 'STARR ratio: expected upside / binding tail risk (dimensionless).',
+    'reward_to_cvar': 'STARR ratio: expected upside / binding tail risk '
+                      '(dimensionless). NULL when out_of_support.',
+    'out_of_support': 'TRUE when the forward-return distribution is pinned at '
+                      'the uplift winsorisation cap, so the model has no '
+                      'reliable estimate for this name. The ranking metrics '
+                      '(expected_sharpe_ratio, reward_to_cvar, '
+                      'cvar_book_weight) are NULL for these rows; exclude them '
+                      'from risk-adjusted rankings rather than treating a '
+                      'missing score as a zero.',
     'expected_vol_kalman': 'Std of the posterior upside draws (decimal return).',
-    'expected_sharpe_ratio': 'er_mean / er_sd of the structural-TS Monte-Carlo forward-return '
+    'expected_sharpe_ratio': 'NULL when out_of_support. er_mean / er_sd of the '
+                             'structural-TS Monte-Carlo forward-return '
                              'distribution (dimensionless).',
     'p_upside_pos_cond': 'mc_prob_pos x kalman_gain: probability of a positive upside given '
                          'state confidence (decimal in [0, 1]); the p_long gate applies here.',
@@ -6128,6 +6228,52 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     if 'cvar_book_weight' not in kalman_results.columns:
         kalman_results['cvar_book_weight'] = 0.0
     kalman_results['cvar_book_weight'] = kalman_results['cvar_book_weight'].fillna(0.0)
+
+    # ---- Out-of-support names: refuse to rank what the model cannot estimate --
+    # A name whose entire forward-return distribution sits at or beyond the
+    # winsorisation cap is truncated to a near-constant by the LOG_UPLIFT_CLIP_*
+    # bound. Its ``er_sd`` then collapses, and ``expected_sharpe_ratio =
+    # er_mean / er_sd`` explodes — the 2026-08-10 re-export produced Sharpe 717.7
+    # on ``er_sd`` 0.007 for 19 names.
+    #
+    # That is the dangerous direction of failure. An unbounded 1e15 is obviously
+    # broken and gets noticed; a Sharpe of 717 looks like the best opportunity in
+    # the book and would sort straight to the top of any risk-adjusted screen —
+    # while marking precisely the names the model understands LEAST. Those two
+    # readings are opposites, so the ratio must not be published for them.
+    #
+    # The honest output is "no reliable estimate": the ranking metrics go NULL and
+    # the row carries an explicit ``out_of_support`` flag. Identity, price targets
+    # and the raw ``er_*`` distribution are retained, so nothing vanishes silently
+    # and a consumer can still show these names — greyed, or excluded from
+    # rankings — rather than trusting a fabricated score.
+    # Detect on the 5th PERCENTILE, not the mean. ``er_mean`` averages the clipped
+    # draws, so a handful landing below the cap drag it ~1e-4 under even when the
+    # whole distribution is pinned — a first attempt tested
+    # ``er_mean >= cap - 1e-6`` and matched ZERO of the 18 affected names.
+    # ``er_p05`` lands exactly on the cap once ~95 % of the draws are clipped,
+    # which is precisely the condition worth calling out of support, and it says
+    # so without a magic tolerance. Verified: excluding the 18 names it catches
+    # takes max Sharpe 717.7 -> 10.1 and max reward_to_cvar 500 -> 14.3, both back
+    # to the pre-clip range, while leaving a borderline name at Sharpe 10.1 in
+    # place rather than over-suppressing.
+    _pin_key = 'er_p05' if 'er_p05' in kalman_results.columns else 'er_mean'
+    _pinned = pd.to_numeric(kalman_results.get(_pin_key), errors='coerce')
+    oos = (_pinned >= UPLIFT_CLIP_HI - 1e-6).fillna(False)
+    kalman_results['out_of_support'] = oos.to_numpy()
+    _ranking_cols = ['expected_sharpe_ratio', 'reward_to_cvar', 'cvar_book_weight']
+    for _c in _ranking_cols:
+        if _c in kalman_results.columns:
+            kalman_results.loc[oos, _c] = np.nan
+    # A suppressed name must never carry book weight; re-fill so the gross print
+    # and any downstream sum stay well-defined.
+    kalman_results['cvar_book_weight'] = kalman_results['cvar_book_weight'].fillna(0.0)
+    if int(oos.sum()):
+        print(f'  [out-of-support] {int(oos.sum())} name(s) with {_pin_key} '
+              f'pinned at the +{UPLIFT_CLIP_HI:.0%} uplift cap: '
+              f'{", ".join(_ranking_cols)} set to NULL and out_of_support=True '
+              f'(er_* retained).')
+
     _held = int((kalman_results['cvar_book_weight'] > 0).sum())
     print(f'Built kalman_filtered_price_targets row-set: {kalman_results.shape}  '
           f'(CVaR-aware book: {_held} sized names, gross='

@@ -108,7 +108,8 @@ CREATE TABLE analytics.kalman_filtered_price_targets
 	reward_to_cvar                    double precision,
 	expected_vol_kalman               double precision,
 	expected_sharpe_ratio             double precision,
-	p_upside_pos_cond                 double precision
+	p_upside_pos_cond                 double precision,
+	out_of_support                    boolean
 );
 
 ALTER TABLE analytics.kalman_filtered_price_targets
@@ -166,13 +167,16 @@ COMMENT ON COLUMN analytics.kalman_filtered_price_targets."cvar_5pct_kalman"
 	IS '5% expected shortfall (CVaR) of the posterior upside draws (decimal return, negative = loss).';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."reward_to_cvar"
-	IS 'STARR ratio: expected upside / binding tail risk (dimensionless).';
+	IS 'STARR ratio: expected upside / binding tail risk (dimensionless). NULL when out_of_support.';
+
+COMMENT ON COLUMN analytics.kalman_filtered_price_targets."out_of_support"
+	IS 'TRUE when the forward-return distribution is pinned at the uplift winsorisation cap, so the model has no reliable estimate for this name. The ranking metrics (expected_sharpe_ratio, reward_to_cvar, cvar_book_weight) are NULL for these rows; exclude them from risk-adjusted rankings rather than treating a missing score as a zero.';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."expected_vol_kalman"
 	IS 'Std of the posterior upside draws (decimal return).';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."expected_sharpe_ratio"
-	IS 'er_mean / er_sd of the structural-TS Monte-Carlo forward-return distribution (dimensionless).';
+	IS 'NULL when out_of_support. er_mean / er_sd of the structural-TS Monte-Carlo forward-return distribution (dimensionless).';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."p_upside_pos_cond"
 	IS 'mc_prob_pos x kalman_gain: probability of a positive upside given state confidence (decimal in [0, 1]); the p_long gate applies here.';

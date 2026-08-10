@@ -193,7 +193,7 @@ not as dead weight to imitate:
 |---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | EarningsBeatBayesian      | Beat probability                                                                                                                                                                                                                                     |
 | PriceTargetAchievement    | Return expectation                                                                                                                                                                                                                                   |
-| KalmanFilterPriceTarget   | Smoothed signals. Single-response hierarchical panel with learned risk/size/volume tilts, over a **local-level state**: `state_path[i,t]` is a per-ISIN random walk anchored at `mu_isin`, and `state_now = state_path[:, -1]` (the filtered level) is the decision latent — resolve it via `KALMAN_SCREEN_LATENT` / `resolve_screen_latent`, never by reading `risk_adj_return` directly (that is now only the t=0 anchor). **The genuine `(isin, time)` T=4 log-uplift panel is the DEFAULT** — built from the `price_target_{6m,3m,1m}_ago` / `price_{6m,3m,1m}_ago` trails via `KalmanRunConfig.panel_lookbacks = ('6m','3m','1m')`. Collapse to the T=1 MV snapshot with `replace(cfg, panel_lookbacks=())`; pin the state off with `replace(cfg, state_innovation_scale=0.0)`. See `build_fused_kalman_pt_model` |
+| KalmanFilterPriceTarget   | Smoothed signals. Single-response hierarchical panel with learned risk/size/volume tilts. On a `T > 1` panel it carries a **per-ISIN random intercept** (`sigma_isin_level`) — restored because repeated observations identify it, which the T=1 cross-section could not. `state_now` is the decision latent — resolve it via `KALMAN_SCREEN_LATENT` / `resolve_screen_latent`, never by reading `risk_adj_return` directly. **The genuine `(isin, time)` T=4 log-uplift panel is the DEFAULT** — built from the `price_target_{6m,3m,1m}_ago` / `price_{6m,3m,1m}_ago` trails via `KalmanRunConfig.panel_lookbacks = ('6m','3m','1m')`. Collapse to the T=1 MV snapshot with `replace(cfg, panel_lookbacks=())`; an opt-in AR(1) state layer sits behind `state_innovation_scale` (off by default — see the config table). See `build_fused_kalman_pt_model` |
 | DCFPriceTarget            | Fair-value bands                                                                                                                                                                                                                                     |
 | DividendSafetyBayesian    | Cut probability                                                                                                                                                                                                                                      |
 | CreditRiskBayesian        | Distress risk                                                                                                                                                                                                                                        |
@@ -470,7 +470,7 @@ keeps its dataclass default and is overridden programmatically:
 ```python
 from dataclasses import replace
 cfg = replace(get_run_config(), panel_lookbacks=(), chains=8)   # T=1 cross-section, 8 chains
-cfg = replace(get_run_config(), state_innovation_scale=0.0)     # pin the local-level state off
+cfg = replace(get_run_config(), state_innovation_scale=0.1)     # enable the opt-in AR(1) state
 cfg = replace(get_run_config(), enable_model_comparison=True)   # run §9b (≈3× sampling cost)
 cfg = replace(get_run_config(), panel_response_extra=('pt_dispersion',))  # D=2, activates the ICM
 ```
@@ -479,7 +479,9 @@ Local-level state / comparison knobs on `KalmanRunConfig`:
 
 | Field                     | Default | Purpose                                                                          |
 |---------------------------|---------|----------------------------------------------------------------------------------|
-| `state_innovation_scale`  | `0.1`   | `HalfNormal` prior scale of `sigma_state`, the per-step innovation sd of the per-ISIN random walk. `0.0` pins the state at its t=0 anchor (the static twin). Ignored when `T == 1`. |
+| `draws`                   | `2000`  | Pruning the collinear features lifted min ESS 2.1x at draws=1000 but landed near 300 against the 400 gate; nothing collinear remains to cut (drift cond 23, coords orthogonal), so the residual is sampling budget. ~32 min per T=4 run. |
+| `state_innovation_scale`  | `0.0`   | **AR(1) time-varying state — OFF by default.** Tried and rejected at T=4: it bought +0.013 recovery correlation for min ESS 14 vs 69, with `sigma_state`/`rho` drifting between draw budgets. The per-ISIN intercept below carries the panel. Set to `0.1` to enable; revisit on a longer panel. |
+| `isin_level_scale` (builder arg) | `0.10` | Prior scale of `sigma_isin_level`, the per-ISIN random intercept restored on `T > 1`. This is the layer the panel actually buys. `0.0` pins it off (the pre-0.9.9.14 baseline). |
 | `enable_model_comparison` | `False` | Run §9b. Refits both arms and computes a pointwise `log_likelihood` per arm (~820 MB each at full panel size), so ≈3× the sampling cost. |
 | `comparison_max_isins`    | `800`   | ISIN subsample used by §9b; the retained fraction is logged.                      |
 | `panel_response_extra`    | `()`    | Keys of `KALMAN_PANEL_RESPONSE_EXTRA` promoting a second response series (`D > 1`), which is what activates the otherwise-dormant rank-1 ICM. |
@@ -913,12 +915,14 @@ The other ~45 files there are hand-written screen/analysis scripts unmanaged by 
 - Schema: `pml.pml_df_metadata` (DDL `pml_df_metadata.sql`, population `pml_df_metadata_populate.sql`)
 - Functions / MVs / catalogue views: `pml_feature_catalogue.sql`
 - Sampling & diagnostics: `pymc_models/_workflow.py`
-- Drift-feature exclusions: `KALMAN_DRIFT_EXCLUDED_FEATURES` in `KalmanFilterModel.py`
+- Drift-feature exclusions: `KALMAN_DRIFT_EXCLUDED_FEATURES` in `KalmanFilterModel.py` — 15 surviving columns (cond 23,
+  max VIF 3.8). Exclusions live HERE, never as a `pymc_role='excluded'` flip in SQL: that drops the row from
+  `vw_pymc_feature_catalogue` while the MV still emits the column, so `assert_pymc_catalogue_coverage()` raises
+  MISSING_FROM_CATALOGUE. Collapsed families keep one representative each (`feat_pt_drift`, `feat_analyst_rating`).
 - Artifact sections: `_EXPORT_SECTION_DIRS` in `pymc_kalman_filter_pt.py`
 - Kalman decision latent: `KALMAN_SCREEN_LATENT` / `resolve_screen_latent` in `pymc_kalman_filter_pt.py` — every
   consumer (screen, price-target MC, risk book, analytics export, §13b plots, prior predictive) resolves the
-  per-ISIN latent through it. Never read `risk_adj_return` off the posterior directly: since the local-level state
-  landed that is the t=0 anchor, not the filtered level.
+  per-ISIN latent through it, so the decision quantity has exactly one name.
 - Optional second response series: `KALMAN_PANEL_RESPONSE_EXTRA` in `pymc_kalman_filter_pt.py`
 - Reference geometry: `_REF_LINE_KINDS` (`_add_ref_line` / `_add_ref_band`)
 

@@ -9,6 +9,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`expm1` blow-up in the exported Monte-Carlo and price-target columns.**
+  The response is winsorised to a decimal `[-0.95, +5.0]` band before `log1p`, so
+  the model never observes an uplift outside it — but the two places that map
+  *back out* of log space (`panel_posterior_upside`'s `expm1(latent)` and
+  `summarize_panel_screen`'s `expm1(mc)`) were unbounded. Exponentiating an
+  unclipped tail produced, in the 2026-08-10 export, `er_mean` up to **7.4e12**,
+  `er_sd` up to **1.32e15** (82 names) and `kalman_variance` up to **5.09e9**
+  (1,980 names) — while medians stayed healthy at 0.17 / 0.13 / 1.31.
+
+  The asymmetry was latent: the pre-change table already showed `er_sd` mean
+  1,443 against a median of 0.258. Widening the per-name posterior ~5.4× (the
+  correct pseudo-replication fix) widened the log-space tail that `expm1` then
+  exponentiated, amplifying it by ~8 orders of magnitude.
+
+  Both directions now share one band — `UPLIFT_CLIP_{LO,HI}` /
+  `LOG_UPLIFT_CLIP_{LO,HI}` — and clipping happens in **log** space before
+  `expm1`, which is sign-preserving and therefore leaves `prob_pos` untouched.
+  Read the result honestly: this truncates the posterior to the support the model
+  was fit on, rather than extrapolating past it.
+
+- **Drift design matrix pruned 21 → 15 columns — the last failing convergence gate.**
+  `beta` was the only global parameter missing the gates on the full 6,540-name
+  T=4 validation: R-hat 1.026 / bulk-ESS 140 against 1.01 / 400, at **zero
+  divergences**. Zero divergences with slow mixing is the signature of poor
+  conditioning, not bad geometry — and the design carried condition number
+  **1,580** with a smallest eigenvalue of 0.004. Two families each restated one
+  signal:
+
+  - `feat_pt_{median,high,low}_drift` are the same `pml.target_drift()` run over
+    the median / high / low target trails as `feat_pt_drift` runs over the mean.
+    A consensus revision moves the whole band together: r = 0.81–0.89,
+    VIF = 162 / 77 / 25 / 6.6.
+  - `feat_analyst_{bullish_pct,bearish_pct,neutral_pct,conviction,rating}` are
+    all functions of the same six `num_*_ratings` buckets, with `conviction`
+    literally `|bullish − bearish|` and the three pct legs summing to ~1.
+    r(bullish, conviction) = 0.926, r(bullish, rating) = 0.909.
+
+  One representative survives per family — `feat_pt_drift` and
+  `feat_analyst_rating`. Measured on the live MV:
+
+  | set | k | cond | max VIF | R² |
+  |---|---|---|---|---|
+  | before | 21 | 1,580 | 162.5 | 0.6538 |
+  | after | **15** | **23** | **3.8** | **0.6499** |
+
+  69× better conditioning for a 0.6 % relative loss in explanatory power.
+  `feat_analyst_rating` was kept over the `bullish_pct` + `bearish_pct` pair
+  because it scored *higher* (R² 0.6499 vs 0.6463) using one fewer column, at
+  99.76 % coverage. An orthogonal replacement for the dropped drift siblings
+  (`high_drift − low_drift`, band-widening dynamics) was tried and rejected: it
+  correlates −0.003 with the response and moved R² by 0.0001 — the siblings are
+  duplication, not a distinct dispersion signal, which `feat_pt_noise_drift`
+  already carries.
+
+  This also retires the 2026-07-31 note in `KALMAN_DRIFT_EXCLUDED_FEATURES` that
+  flagged `feat_analyst_conviction` as a null beta "to revisit if it stays null
+  on the genuine panel". It did, and the reason is now clear.
+
+  Implemented in `KALMAN_DRIFT_EXCLUDED_FEATURES` (the SSOT CLAUDE.md names), NOT
+  in SQL: the columns stay in `mv_pymc_kalman_pt` and the catalogue, because they
+  remain valid for EDA / the analytics export and the analyst family is shared
+  with the `price_target` model. Flipping `pymc_role` to `'excluded'` would drop
+  them from `vw_pymc_feature_catalogue` while the MV still emits them, making
+  `assert_pymc_catalogue_coverage()` raise MISSING_FROM_CATALOGUE.
+  Verified after the change: `kalman_pt` reports 64 OK / 0 violations.
+- **`region` dropped from the crossed group effects.** It and `trading_region`
+  agree for **96.12 %** of the universe (Cramér's V **0.938**; only cross-listings
+  differ) against V ≤ 0.24 for every other coord pair — the same near-duplicate
+  pattern as the pruned drift families. Carrying both left the effects trading off
+  along a ridge, and once the per-ISIN intercept landed they became the two
+  worst-mixing globals (`region_effect` R-hat 1.0130 / ESS 243,
+  `trading_region_effect` 1.0121 / 236), blocking the convergence gate. They mixed
+  acceptably *before* the per-ISIN latent existed (R-hat 1.002, ESS ~1.4–1.6k), so
+  the redundancy was latent and only bit when another per-name absorber competed
+  for the same variance. `trading_region` is kept: listing venue determines analyst
+  coverage and currency, which is the mechanism the drift features measure.
+- **`KalmanRunConfig.draws` settled at 2000**, after separating the two effects
+  that were confounded in the `beta` failure. All measured at draws=1000, zero
+  divergences throughout:
+
+  | drift cols | group coords | `beta` R-hat | global min ESS |
+  |---|---|---|---|
+  | 21 | region + trading_region | 1.0261 | 139.8 |
+  | 15 | region + trading_region | <1.0121 | 235.7 |
+  | 15 | trading_region only | 1.0262 | 296.0 |
+
+  Removing the collinearity was necessary and it worked — min ESS rose **2.1×**
+  at an unchanged budget — but it was not sufficient. Nothing collinear remains:
+  drift design condition number 23, group coords orthogonal (max Cramér's V 0.24),
+  no drift feature more than R² 0.25 explained by the group dummies. ESS still
+  lands near 300 against a 400 gate, with R-hat bouncing 1.013–1.026 between runs
+  because R-hat is itself noisy at that ESS. That is an under-sampled posterior,
+  not a structural defect. An earlier build used 3000 to out-sample the *un-pruned*
+  ridge (treating the symptom); reverting to 1000 then overshot the other way.
+
 - **Exported price targets were ~1.5–2.3 pp too high on every T>1 run.**
   `prepare_kalman_panel_inputs` standardises the response tensor on the **pooled
   (isin × time)** moments of the genuine `price_target_{lb}_ago` /
@@ -43,34 +138,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Local-level state — the fused Kalman panel now actually filters.**
+- **Per-ISIN latent restored on genuine panels — the fused Kalman panel now uses
+  its time axis.**
   With `beta_t` zeroed, `D == 1`, and `expected_return` a pure Deterministic (no
-  per-ISIN random effect, dropped in an earlier release as non-identified on
-  `T == 1`), the entire time dimension contributed nothing but `T`
+  per-ISIN random effect), the entire time dimension contributed nothing but `T`
   cross-sectionally-shared intercepts: each name's `T` strongly serially-correlated
   log-uplift observations were treated as `T` iid draws around **one** constant
   latent. That pseudo-replication shrank the per-name posterior sd by ~√T and
-  produced over-confident `expected_upside` HDIs downstream. The panel now carries
-  a per-ISIN Gaussian random walk anchored at `mu_isin`:
+  produced over-confident `expected_upside` HDIs downstream.
 
-  - `state_path` (`isin`, `time`) — non-centred (`sigma_state · z_state`) to avoid
-    the scale↔deviation funnel, and **cross-sectionally centred at each step** so
-    the walk carries only idiosyncratic deviation and cannot alias with the
-    market-wide `alpha_level[t, ·]` (that aliasing is the documented 2026-08-01
-    T=4 failure: 190 divergences, `alpha_level` R-hat 1.06, bulk-ESS ≈ 75);
-  - `state_now` = `state_path[:, -1]` — the **filtered** level at the snapshot, and
-    the new decision latent for the screen, the price-target Monte-Carlo, the risk
-    book and the analytics export. `achieve_prob` is now `sigmoid(state_now)`;
-  - `KalmanRunConfig.state_innovation_scale` (default `0.1`) sets its prior scale;
-    `0.0` pins the state at the anchor, recovering the previous build. On `T == 1`
-    the state collapses to `mu_isin` and no innovation parameters are created.
+  The per-ISIN random intercept (`sigma_isin_level` × a `ZeroSumNormal`,
+  non-centred) is restored **for `T > 1` only**. It was dropped in an earlier
+  release as non-identified, which was correct *for the T=1 cross-section*; T
+  repeated observations per name identify it in the ordinary way.
+  `isin_level_scale=0.0` pins it off, recovering the previous build as a
+  comparison baseline.
 
-  Parameter recovery on a synthetic panel with a known state (N=300, T=4,
-  σ_state 0.35): correlation between `state_now` and the true terminal state
-  **0.967** with the state on versus **0.125** with it pinned off; RMSE 0.253 vs
-  0.928; `sigma_base` 0.512 vs 0.863; mean per-name posterior sd 0.415 vs
-  **0.032** — i.e. the static build was ~29× over-confident relative to its own
-  error. 0 divergences in both arms.
+  Measured on the live 5 605-name T=4 panel: `sigma_base` 0.3373 → 0.2871 (per-name
+  signal moves out of the residual) and mean per-name posterior sd 0.0545 → 0.2694
+  — the previous build was ~5× over-confident. On synthetic data with a known
+  per-name level, correlation between the recovered and true latent rises from
+  **0.047 to 0.951**.
+- **`state_now` / `state_path` decision latent + an opt-in AR(1) state layer.**
+  `state_now` is the per-ISIN quantity every decision consumer reads (screen,
+  price-target Monte-Carlo, risk book, analytics export, §13b plots, prior
+  predictive), resolved through `KALMAN_SCREEN_LATENT`. `achieve_prob` is now
+  `sigmoid(state_now)`.
+
+  `state_innovation_scale > 0` adds a stationary AR(1) deviation on top of the
+  intercept, letting a name's level move across the lookback window.
+  **It defaults to 0.0 (off)** — the expansion was tried, measured and rejected at
+  T=4, per the Bayesian workflow's expansion/simplification stage:
+
+  - A literal cumulative random walk mis-calibrates the panel. Its marginal
+    variance grows as √t, so the full-scale run produced per-time predictive
+    coverage of 89.9 % → 95.3 % → 97.2 % → 98.2 % against a 94 % target (too
+    narrow at the oldest lookback, too wide at the snapshot), max R-hat 1.054,
+    min ESS 74.
+  - An unstructured doubly-centred field fixes calibration and destroys
+    identification: with one observation per `(isin, time)` cell it has the same
+    diagonal covariance as the measurement noise. `sigma_state` collapsed to 0.027
+    against a true 0.35 and recovery correlation fell to 0.04.
+  - A stationary AR(1) supplies both the temporal correlation that identifies the
+    state and the constant marginal variance that calibrates it — but at T=4 it
+    still cannot be cleanly separated from the per-name intercept. It bought
+    +0.013 recovery correlation (0.964 vs 0.951) for min ESS 14 vs 69 and max
+    R-hat 1.13 vs 1.03, with `sigma_state`/`rho` drifting between draw budgets
+    (0.265→0.216, 0.63→0.49) — the "two fits disagree" signature of a
+    non-identified variance component.
+
+  The machinery is retained, tested and documented for a longer panel; `rho` is
+  capped at `_STATE_RHO_MAX = 0.95` because `rho → 1` degenerates it into a second
+  per-name intercept.
 - **`resolve_screen_latent` / `KALMAN_SCREEN_LATENT`** — one name for the decision
   latent, resolved at every consumer (`panel_posterior_upside`,
   `summarize_panel_screen`, `export_analytics`, the §13b plots, the prior

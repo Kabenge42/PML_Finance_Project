@@ -579,33 +579,92 @@ def test_beta_t_returns_on_an_isin_varying_time_axis():
     assert "beta_slope" in model.named_vars
 
 
-def test_state_layer_emits_the_decision_latent():
+def test_per_isin_latent_is_restored_on_a_panel():
+    """T>1 identifies a per-ISIN intercept; T==1 genuinely does not."""
     _, model = _built_model()
-    for name in ("state_path", "state_now", "sigma_state", "z_state"):
+    assert "sigma_isin_level" in model.named_vars
+    assert "z_isin_level" in model.named_vars
+    assert tuple(model.named_vars["z_isin_level"].shape.eval()) == (60,)
+
+    _, flat = _built_model(history_lookbacks=())
+    assert "sigma_isin_level" not in flat.named_vars, (
+        "the per-ISIN intercept must stay off on the T=1 cross-section, where it "
+        "is non-identified"
+    )
+
+
+def test_per_isin_latent_can_be_pinned_off_for_baseline_comparison():
+    _, model = _built_model(isin_level_scale=0.0)
+    assert "sigma_isin_level" not in model.named_vars
+    assert "z_isin_level" not in model.named_vars
+
+
+def test_ar_state_layer_is_off_by_default():
+    """It bought +0.013 recovery for min ESS 14 vs 69 at T=4 -- see the builder."""
+    _, model = _built_model()
+    assert "sigma_state" not in model.named_vars
+    assert "state_rho" not in model.named_vars
+    # The decision latent is still emitted, so consumers resolve unchanged.
+    assert "state_now" in model.named_vars
+    assert "state_path" in model.named_vars
+
+
+def test_ar_state_layer_emits_its_parameters_when_enabled():
+    _, model = _built_model(state_innovation_scale=0.1)
+    for name in ("state_path", "state_now", "sigma_state", "state_rho", "z_state"):
         assert name in model.named_vars, f"{name} missing"
     assert tuple(model.named_vars["state_now"].shape.eval()) == (60,)
-    # T-1 innovations: the walk is anchored at t=0.
-    assert model.coords["time_innov"] == tuple(range(3))
+    # PyMC's ZeroSumNormal constrains the TRAILING axis, so the field is laid out
+    # (time, isin) to zero-sum across names at each step.
+    assert tuple(model.named_vars["z_state"].shape.eval()) == (4, 60)
+    assert "time_innov" not in model.coords
 
 
-def test_state_is_anchored_at_t0_and_cross_sectionally_centred():
-    """s[:, 0] == 0 (anchor) and mean_i s[i, t] == 0 (no alpha aliasing)."""
+def test_ar_state_is_zero_sum_across_isin_at_every_step():
+    """Zero-sum across names is what keeps the field from aliasing alpha_level."""
     import pymc as pm
 
-    panel, model = _built_model()
+    _, model = _built_model(state_innovation_scale=0.1)
     with model:
         draw = pm.draw(
             [model.named_vars["state_path"], model.named_vars["mu_isin"]],
             draws=1, random_seed=5,
         )
-    state_path, mu_isin = np.asarray(draw[0]), np.asarray(draw[1])
-    assert np.allclose(state_path[:, 0], mu_isin, atol=1e-10), (
-        "t=0 slice must equal the structural anchor mu_isin"
+    dev = np.asarray(draw[0]) - np.asarray(draw[1])[:, None]
+    assert np.allclose(dev.mean(axis=0), 0.0, atol=1e-8)
+
+
+def test_ar_state_marginal_variance_is_flat_across_time():
+    """Stationarity: the property the cumulative random walk violated.
+
+    A walk's marginal sd grows as sqrt(t); on the 2026-08-10 full-scale run that
+    ramped per-time predictive coverage 89.9% -> 98.2% against a 94% target. The
+    sqrt(1 - rho^2) innovation scaling is what holds it flat.
+    """
+    import pymc as pm
+
+    _, model = _built_model(state_innovation_scale=0.1)
+    with model:
+        z = np.asarray(pm.draw(model.named_vars["z_state"], draws=600,
+                               random_seed=11))
+    sd_per_t = z.std(axis=(0, 2))  # (draws, time, isin) -> per time step
+    assert sd_per_t.max() / sd_per_t.min() < 1.25, (
+        f"marginal sd varies across time steps: {sd_per_t.round(3)}"
     )
-    dev = state_path - mu_isin[:, None]
-    assert np.allclose(dev.mean(axis=0), 0.0, atol=1e-8), (
-        "state deviations must be cross-sectionally centred at every step"
-    )
+
+
+def test_ar_state_rho_is_bounded_away_from_one():
+    """rho -> 1 degenerates the AR into a second per-name intercept."""
+    import pymc as pm
+
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import _STATE_RHO_MAX
+
+    _, model = _built_model(state_innovation_scale=0.1)
+    with model:
+        rho = np.asarray(pm.draw(model.named_vars["state_rho"], draws=500,
+                                 random_seed=3))
+    assert rho.max() < _STATE_RHO_MAX + 1e-9
+    assert rho.min() >= 0.0
 
 
 def test_state_collapses_to_the_anchor_when_pinned_off():
@@ -670,6 +729,186 @@ def test_response_extra_rejects_an_unknown_key():
             _history_panel_frame(), drift_features=["feat_pt_drift"],
             response_extra=("not_a_series",),
         )
+
+
+# ---------------------------------------------------------------------------
+# Drift-matrix collinearity pruning.
+#
+# The 21-column design had condition number 1580 / max VIF 162 because four
+# price-target drift columns and four analyst-sentiment columns each restated a
+# single signal. That left `beta` on thin ridges: R-hat 1.026 / bulk-ESS 140 at
+# ZERO divergences on the 2026-08-10 full-scale run -- the last failing gate.
+# Pruning to one representative apiece gives 15 columns / cond 23 / VIF 3.8.
+# ---------------------------------------------------------------------------
+_PRUNED_DRIFT_ALIASES = (
+    "feat_pt_median_drift", "feat_pt_high_drift", "feat_pt_low_drift",
+    "feat_analyst_bullish_pct", "feat_analyst_bearish_pct",
+    "feat_analyst_conviction",
+)
+_RETAINED_REPRESENTATIVES = ("feat_pt_drift", "feat_analyst_rating")
+
+
+@pytest.mark.parametrize("alias", _PRUNED_DRIFT_ALIASES)
+def test_collinear_drift_aliases_are_excluded(alias):
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KALMAN_DRIFT_EXCLUDED_FEATURES,
+    )
+
+    assert alias in KALMAN_DRIFT_EXCLUDED_FEATURES
+
+
+@pytest.mark.parametrize("alias", _RETAINED_REPRESENTATIVES)
+def test_drift_family_representatives_are_retained(alias):
+    """Each collapsed family must keep exactly one column in the design."""
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KALMAN_DRIFT_EXCLUDED_FEATURES,
+    )
+
+    assert alias not in KALMAN_DRIFT_EXCLUDED_FEATURES
+
+
+def test_select_drift_features_drops_the_collinear_families():
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KalmanFilterPriceTarget,
+    )
+
+    candidates = [
+        "feat_pt_drift", "feat_pt_median_drift", "feat_pt_high_drift",
+        "feat_pt_low_drift", "feat_analyst_rating", "feat_analyst_bullish_pct",
+        "feat_analyst_bearish_pct", "feat_analyst_conviction",
+        "feat_analyst_neutral_pct", "feat_price_drift", "feat_coverage_drift",
+    ]
+    kept = KalmanFilterPriceTarget.select_drift_features(candidates)
+    assert set(kept) == {
+        "feat_pt_drift", "feat_analyst_rating", "feat_price_drift",
+        "feat_coverage_drift",
+    }
+
+
+def test_pruned_drift_design_is_well_conditioned():
+    """The guard that actually regresses if a sibling feature is re-added.
+
+    Builds a synthetic design reproducing the measured correlation structure --
+    the target-band columns move almost rigidly together (r ~ 0.85) and the
+    analyst columns likewise -- then checks that the retained subset is far
+    better conditioned than the full one. Thresholds are loose because the
+    fixture is synthetic; the real numbers are 1580 -> 23.
+    """
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KALMAN_DRIFT_EXCLUDED_FEATURES,
+    )
+
+    rng = np.random.default_rng(0)
+    n = 2000
+    pt_signal = rng.normal(size=n)
+    analyst_signal = rng.normal(size=n)
+
+    def near(sig, rho=0.88):
+        return rho * sig + np.sqrt(1 - rho ** 2) * rng.normal(size=n)
+
+    cols = {
+        "feat_pt_drift": near(pt_signal),
+        "feat_pt_median_drift": near(pt_signal),
+        "feat_pt_high_drift": near(pt_signal),
+        "feat_pt_low_drift": near(pt_signal),
+        "feat_analyst_rating": near(analyst_signal),
+        "feat_analyst_bullish_pct": near(analyst_signal),
+        "feat_analyst_bearish_pct": -near(analyst_signal),
+        "feat_analyst_conviction": near(analyst_signal),
+        "feat_price_drift": rng.normal(size=n),
+        "feat_coverage_drift": rng.normal(size=n),
+    }
+    df = pd.DataFrame(cols)
+
+    def cond(frame):
+        z = (frame - frame.mean()) / frame.std(ddof=0)
+        ev = np.linalg.eigvalsh(z.corr().values)
+        return float(ev.max() / max(ev.min(), 1e-12))
+
+    kept = [c for c in df.columns if c not in KALMAN_DRIFT_EXCLUDED_FEATURES]
+    full_cond, kept_cond = cond(df), cond(df[kept])
+    assert kept_cond < full_cond / 5, (
+        f"pruning barely helped: {full_cond:.0f} -> {kept_cond:.0f}"
+    )
+    assert kept_cond < 100, f"retained design still ill-conditioned: {kept_cond:.0f}"
+
+
+def test_log_uplift_clip_band_matches_the_input_winsorisation():
+    """The inverse map must be bounded by the same support as the forward one."""
+    import pymc_kalman_filter_pt as kf
+
+    assert kf.LOG_UPLIFT_CLIP_LO == pytest.approx(np.log1p(kf.UPLIFT_CLIP_LO))
+    assert kf.LOG_UPLIFT_CLIP_HI == pytest.approx(np.log1p(kf.UPLIFT_CLIP_HI))
+    # Decimal returns recovered from the clipped band stay inside it.
+    assert np.expm1(kf.LOG_UPLIFT_CLIP_HI) == pytest.approx(kf.UPLIFT_CLIP_HI)
+    assert np.expm1(kf.LOG_UPLIFT_CLIP_LO) == pytest.approx(kf.UPLIFT_CLIP_LO)
+
+
+def test_clipping_bounds_expm1_blowup():
+    """Guard for the 2026-08-10 export: er_sd reached 1.32e15 without this.
+
+    expm1 is exponential, so an unclipped log-space tail becomes an astronomical
+    decimal return. Clipping in log space caps it at the winsorisation band and
+    is sign-preserving, so prob_pos is unaffected.
+    """
+    import pymc_kalman_filter_pt as kf
+
+    rng = np.random.default_rng(0)
+    # A heavy log-space tail of the kind a widened per-name posterior produces.
+    draws = np.r_[rng.normal(0, 0.3, 5000), np.array([12.0, 20.0, 35.0, -18.0])]
+
+    unclipped = np.expm1(draws)
+    clipped = np.expm1(np.clip(draws, kf.LOG_UPLIFT_CLIP_LO, kf.LOG_UPLIFT_CLIP_HI))
+
+    assert unclipped.max() > 1e5, "fixture no longer reproduces the blow-up"
+    assert clipped.max() == pytest.approx(kf.UPLIFT_CLIP_HI)
+    assert clipped.min() >= kf.UPLIFT_CLIP_LO - 1e-12
+    # Sign preservation: clipping in log space cannot flip P(return > 0).
+    assert ((unclipped > 0) == (clipped > 0)).all()
+
+
+def test_out_of_support_suppression_rule():
+    """Names pinned at the uplift cap must not carry a ranking score.
+
+    Truncation collapses er_sd for a name whose whole forward distribution sits
+    beyond the training support, so er_mean/er_sd explodes -- the 2026-08-10
+    re-export produced Sharpe 717.7 on er_sd 0.007. That failure sorts to the TOP
+    of a risk-adjusted screen while marking the least-understood names, which is
+    strictly more dangerous than an obviously-broken 1e15.
+    """
+    import pymc_kalman_filter_pt as kf
+
+    # Detect on er_p05, NOT er_mean. er_mean averages the clipped draws, so it
+    # sits ~1e-4 below the cap even when the whole distribution is pinned -- a
+    # first attempt used `er_mean >= cap - 1e-6` and matched ZERO of the 18 real
+    # cases. er_p05 lands exactly on the cap once ~95% of draws are clipped.
+    # Values below are the real ones from the 2026-08-10 export.
+    df = pd.DataFrame({
+        "isin": ["A", "B", "C"],
+        "er_mean": [0.25, 4.999901, 4.998807],
+        "er_p05": [0.0015, kf.UPLIFT_CLIP_HI, kf.UPLIFT_CLIP_HI],
+        "er_sd": [0.20, 0.006966, 0.044114],
+        "expected_sharpe_ratio": [1.25, 717.7, 113.3],
+        "reward_to_cvar": [3.6, 500.0, 500.0],
+        "cvar_book_weight": [0.04, 0.05, 0.05],
+    })
+    naive = (pd.to_numeric(df["er_mean"], errors="coerce")
+             >= kf.UPLIFT_CLIP_HI - 1e-6).fillna(False)
+    assert not naive.any(), "regression guard: er_mean detection silently misses"
+
+    oos = (pd.to_numeric(df["er_p05"], errors="coerce")
+           >= kf.UPLIFT_CLIP_HI - 1e-6).fillna(False)
+    assert oos.tolist() == [False, True, True]
+
+    for col in ("expected_sharpe_ratio", "reward_to_cvar", "cvar_book_weight"):
+        df.loc[oos, col] = np.nan
+    # The in-support name keeps its score; the pinned ones carry none.
+    assert df.loc[0, "expected_sharpe_ratio"] == pytest.approx(1.25)
+    assert df.loc[1:, "expected_sharpe_ratio"].isna().all()
+    assert df.loc[1:, "reward_to_cvar"].isna().all()
+    # er_* are RETAINED -- suppression hides the ranking, not the evidence.
+    assert df["er_mean"].notna().all()
+    assert df["er_sd"].notna().all()
 
 
 def test_comparison_subsample_keeps_arrays_aligned():
