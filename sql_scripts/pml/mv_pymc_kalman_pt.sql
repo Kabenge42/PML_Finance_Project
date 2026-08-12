@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW mv_pymc_kalman_pt AS
+create materialized view mv_pymc_kalman_pt as
 SELECT pml_df.isin,
        pml_df.ticker,
        pml_df.name,
@@ -121,16 +121,18 @@ SELECT pml_df.isin,
        pml_df.analyst_rating                                                                                                                                                                                                                         AS feat_analyst_rating,
        CASE
 	       WHEN pml_df.price_target_1y_ago > 0::double precision AND pml_df.last_price >= pml_df.price_target_1y_ago
-		       THEN 1.0::double precision
+		                                                         THEN 1.0::double precision
 	       WHEN pml_df.price_target_1y_ago > 0::double precision
-		       THEN safe_divide(pml_df.last_price, pml_df.price_target_1y_ago)
-	       ELSE NULL::double precision END                                                                                                                                                                                                           AS feat_pt_achievement_1y,
+		                                                         THEN safe_divide(pml_df.last_price, pml_df.price_target_1y_ago)
+		                                                         ELSE NULL::double precision
+	       END                                                                                                                                                                                                                                       AS feat_pt_achievement_1y,
        safe_divide(abs(pml_df.last_price - pml_df.price_target_1y_ago),
                    abs(pml_df.price_target_1y_ago))                                                                                                                                                                                                  AS feat_pt_accuracy_1y,
        CASE
 	       WHEN pml_df.last_price >= pml_df.price_target_low_1y_ago AND
 	            pml_df.last_price <= pml_df.price_target_high_1y_ago THEN 1.0
-	       ELSE 0.0 END                                                                                                                                                                                                                              AS feat_pt_range_hit_rate,
+	                                                                 ELSE 0.0
+	       END                                                                                                                                                                                                                                       AS feat_pt_range_hit_rate,
        winsorise(target_drift(
 		                 ARRAY [pml_df.price_target::numeric, pml_df.price_target_1w_ago::numeric, pml_df.price_target_1m_ago::numeric, pml_df.price_target_3m_ago::numeric, pml_df.price_target_6m_ago::numeric, pml_df.price_target_1y_ago::numeric],
 		                 2), '-1'::integer::numeric,
@@ -286,8 +288,12 @@ FROM pml_df
 	                                                   pml_df.shrs_out_neg4fy, pml_df.gross_profit_margin_pct_neg3fy,
 	                                                   pml_df.gross_profit_margin_pct_neg4fy,
 	                                                   pml_df.asset_turnover_neg3fy,
-	                                                   pml_df.asset_turnover_neg4fy)                               AS feat_piotroski_f_score_neg3fy) pio;
+	                                                   pml_df.asset_turnover_neg4fy)                               AS feat_piotroski_f_score_neg3fy) pio
+;
 
-ALTER MATERIALIZED VIEW mv_pymc_kalman_pt OWNER TO postgres;
+alter materialized view mv_pymc_kalman_pt owner to postgres
+;
 
-CREATE UNIQUE INDEX idx_mv_pymc_kalman_pt_isin ON mv_pymc_kalman_pt (isin);
+create unique index idx_mv_pymc_kalman_pt_isin
+	on mv_pymc_kalman_pt (isin)
+;

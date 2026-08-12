@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW mv_pymc_earnings_beat AS
+create materialized view mv_pymc_earnings_beat as
 WITH beats AS (SELECT pml_df.isin,
                       pml_df.ticker,
                       pml_df.trading_region,
@@ -46,8 +46,7 @@ WITH beats AS (SELECT pml_df.isin,
                       pml_df.market_cap_3yavg,
                       pml_df.enterprise_value,
                       pml_df.enterprise_value_3yavg
-               FROM pml_df
-              )
+               FROM pml_df)
 SELECT b.isin,
        b.ticker,
        b.trading_region,
@@ -121,8 +120,12 @@ FROM beats                                                b,
      LATERAL beat_counts(b.ebitda_surprises_q::numeric[]) bc_ebitda_q(n_total, n_beats),
      LATERAL beat_counts(b.ebitda_surprises_y::numeric[]) bc_ebitda_y(n_total, n_beats),
      LATERAL beat_counts(b.sales_surprises_q::numeric[])  bc_sales_q(n_total, n_beats),
-     LATERAL beat_counts(b.sales_surprises_y::numeric[])  bc_sales_y(n_total, n_beats);
+     LATERAL beat_counts(b.sales_surprises_y::numeric[])  bc_sales_y(n_total, n_beats)
+;
 
-ALTER MATERIALIZED VIEW mv_pymc_earnings_beat OWNER TO postgres;
+alter materialized view mv_pymc_earnings_beat owner to postgres
+;
 
-CREATE UNIQUE INDEX idx_mv_pymc_earnings_beat_isin ON mv_pymc_earnings_beat (isin);
+create unique index idx_mv_pymc_earnings_beat_isin
+	on mv_pymc_earnings_beat (isin)
+;

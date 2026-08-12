@@ -1,8 +1,9 @@
-CREATE FUNCTION calc_piotroski_f_score(p_isin text DEFAULT NULL::text)
-	RETURNS TABLE(isin text, piotroski_f_score integer)
-	STABLE PARALLEL SAFE
-	LANGUAGE sql
-AS
+create function calc_piotroski_f_score(p_isin text DEFAULT NULL::text)
+	returns TABLE(isin text, piotroski_f_score integer)
+	stable
+	parallel safe
+	language sql
+as
 $$
 SELECT isin AS isin,
        pml.piotroski_f_score(return_on_assets_roa_pct_ltm, return_on_assets_roa_pct_neg1fy,
@@ -15,6 +16,8 @@ SELECT isin AS isin,
 FROM pml.pml_df pd
 WHERE p_isin IS NULL
    OR isin = p_isin;
-$$;
+$$
+;
 
-ALTER FUNCTION calc_piotroski_f_score(text) OWNER TO postgres;
+alter function calc_piotroski_f_score(unknown) owner to postgres
+;

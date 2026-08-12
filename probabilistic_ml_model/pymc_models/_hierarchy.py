@@ -32,6 +32,7 @@ import pandas as pd
 HIERARCHICAL_CATEGORY_COLS: tuple[str, ...] = (
     "region",
     "country",
+    "trading_region",
     "trading_country",
     "exchange",
     "unit",
@@ -44,13 +45,14 @@ HIERARCHICAL_CATEGORY_COLS: tuple[str, ...] = (
 PARENT_MAP: dict[str, Optional[str]] = {
     "region": None,
     "country": "region",
-    "unit": None,
-    "trading_country": None,
-    "exchange": "country",
-    "sector": "exchange",
+    "trading_region": None,
+    "trading_country": "trading_region",
+    "exchange": "trading_country",
+    "unit": "exchange",
+    "sector": None,
     "industry": "sector",
     "style_class": None,
-    "size_class": "style_class",
+    "size_class": None,
 }
 
 

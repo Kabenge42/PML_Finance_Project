@@ -381,7 +381,7 @@ class KalmanRunConfig:
     mc_rho: float = 0.85
     # Risk book
     cvar_alpha: float = 0.05
-    weight_cap: float = 0.15
+    weight_cap: float = 0.08
     k_book: int = 25
     p_long: float = 0.50
     mcap_country_r_max: float = 0.02
@@ -418,7 +418,7 @@ class KalmanRunConfig:
     panel_response_extra: tuple[str, ...] = ()
     # Universe query
     min_next_earnings: str = '2026-01-01'
-    min_report_date: str = '2025-01-01'
+    min_report_date: str = '2025-12-01'
     min_mcap_country_rank: float = 98.0
     candidate_limit: int = 50
     earnings_window_days: int = 10
@@ -496,6 +496,7 @@ def kalman_df_query(config: Optional[KalmanRunConfig] = None) -> str:
            SELECT *
            FROM pml.mv_pymc_kalman_pt mpkp
            WHERE observed_pt IS NOT NULL
+             AND price_target_1m_ago IS NOT NULL
              AND next_earnings >= '{cfg.min_next_earnings}'
              AND income_statement_report_date >= '{cfg.min_report_date}'
            """
@@ -8043,7 +8044,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     univ_gain = float(gain_da.mean())
     if not np.isfinite(univ_gain) or univ_gain <= 0:
         univ_gain = 1.0
-    P_HI_BASE, P_LO_BASE = 0.67, 0.33
+    P_HI_BASE, P_LO_BASE = 0.80, 0.20
     P_HI, P_LO = P_HI_BASE * univ_gain, P_LO_BASE * univ_gain
 
     # Minimum-coverage gate for the §4 group allocation signals: coord groups
@@ -8365,7 +8366,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
 # Entry point
 # =============================================================================
 def main(*, run_eda_section: bool = True, write_analytics: bool = True,
-         robust: bool = False, volume_penalty: float = 0.25, export_results: bool = True,
+         robust: bool = True, volume_penalty: float = 0.25, export_results: bool = True,
          config: Optional[KalmanRunConfig] = None) -> dict[str, Any]:
     """Run the full Kalman price-target workflow end-to-end on the fused panel model.
 

@@ -1,17 +1,27 @@
-CREATE FUNCTION safe_logit(p numeric, eps numeric DEFAULT 0.000001) RETURNS numeric
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
+-- Cyclic dependencies found
+
+create function safe_logit(p double precision, eps double precision DEFAULT 0.000001) returns double precision
+	immutable
+	parallel safe
+	language sql
+as
 $$
 SELECT LN(GREATEST(eps, LEAST(1 - eps, p)) / (1 - GREATEST(eps, LEAST(1 - eps, p))));
-$$;
+$$
+;
 
-ALTER FUNCTION safe_logit(numeric, numeric) OWNER TO postgres;
+alter function safe_logit(unknown, unknown) owner to postgres
+;
 
-CREATE FUNCTION safe_logit(p double precision, eps double precision DEFAULT 0.000001) RETURNS double precision
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
+create function safe_logit(p numeric, eps numeric DEFAULT 0.000001) returns numeric
+	immutable
+	parallel safe
+	language sql
+as
 $$
 SELECT LN(GREATEST(eps, LEAST(1 - eps, p)) / (1 - GREATEST(eps, LEAST(1 - eps, p))));
-$$;
+$$
+;
 
-ALTER FUNCTION safe_logit(double precision, double precision) OWNER TO postgres;
+alter function safe_logit(unknown, unknown) owner to postgres
+;

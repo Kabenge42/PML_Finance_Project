@@ -1,17 +1,27 @@
-CREATE FUNCTION pct_change(current_val numeric, previous_val numeric) RETURNS numeric
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
-$$
-SELECT (current_val - previous_val) / NULLIF(previous_val, 0) * 100 AS result;
-$$;
+-- Cyclic dependencies found
 
-ALTER FUNCTION pct_change(numeric, numeric) OWNER TO postgres;
-
-CREATE FUNCTION pct_change(current_val double precision, previous_val double precision) RETURNS double precision
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
+create function pct_change(current_val double precision, previous_val double precision) returns double precision
+	immutable
+	parallel safe
+	language sql
+as
 $$
 SELECT (current_val - previous_val) / NULLIF(previous_val, 0) * 100;
-$$;
+$$
+;
 
-ALTER FUNCTION pct_change(double precision, double precision) OWNER TO postgres;
+alter function pct_change(unknown, unknown) owner to postgres
+;
+
+create function pct_change(current_val numeric, previous_val numeric) returns numeric
+	immutable
+	parallel safe
+	language sql
+as
+$$
+SELECT (current_val - previous_val) / NULLIF(previous_val, 0) * 100;
+$$
+;
+
+alter function pct_change(unknown, unknown) owner to postgres
+;

@@ -1,5 +1,5 @@
-CREATE VIEW vw_pymc_feature_catalogue
-			(model_target, pymc_role, column_name, category, feature_role, feature_alias, data_type, description) AS
+create view vw_pymc_feature_catalogue
+			(model_target, pymc_role, column_name, category, feature_role, feature_alias, data_type, description) as
 SELECT m.model_name                                                 AS model_target,
        COALESCE(fa.pymc_role, md.pymc_role)                         AS pymc_role,
        md.column_name,
@@ -12,7 +12,9 @@ FROM pml_df_metadata                                 md
 	     CROSS JOIN LATERAL unnest(md.model_targets) m(model_name)
 	     LEFT JOIN  pml_df_feature_alias             fa
 	                ON fa.column_name = md.column_name AND fa.model_target = m.model_name
-WHERE COALESCE(fa.pymc_role, md.pymc_role) <> 'excluded'::text;
+WHERE COALESCE(fa.pymc_role, md.pymc_role) <> 'excluded'::text
+;
 
-ALTER TABLE vw_pymc_feature_catalogue
-	OWNER TO postgres;
+alter table vw_pymc_feature_catalogue
+	owner to postgres
+;

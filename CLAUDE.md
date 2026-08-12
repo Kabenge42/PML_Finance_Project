@@ -1322,10 +1322,22 @@ is verified working on Python 3.14.6 + g++ 15.2.0 against a fresh compile cache.
 
 Opt back into the C backend by setting `PML_ENABLE_PYTENSOR_C=1` **before** import, and ensure
 `C:\msys64\ucrt64\bin` is first on `PATH` (`set_env.ps1` does both and sanity-compiles a probe before enabling;
-without the flag it falls back to the pure-Python/numba VM). The reference config in `environment_variables.txt`
-now ships with `PML_ENABLE_PYTENSOR_C=1` and the verified UCRT64 toolchain enabled. Model
+without the flag it falls back to the pure-Python/numba VM). Model
 `fit()` / sampling paths should also pass `compile_kwargs=get_pytensor_compile_kwargs()` (from
 `probabilistic_ml_model.pymc_models._pytensor_compat`), which forces the `Mode(linker="py")` VM at the call site.
+
+> **`environment_variables.txt` ships with the C backend OFF (`PML_ENABLE_PYTENSOR_C=0`, `cxx=`) as of
+> 2026-08-07.** It previously shipped `=1` with the UCRT64 `cxx` path, and — because it is the `ENV_FILES` entry of
+> the PyCharm run configurations (`pymc_kalman_filter_pt`, `expected_returns_v3`,
+> `global_equity_investment_dashboard`, see `.idea/workspace.xml`) — that re-armed the C backend on every IDE run no
+> matter what `set_env.ps1` did in a terminal. The PATH prerequisite had meanwhile been lost: `C:\msys64\ucrt64\bin`
+> was absent from the process, User **and** Machine `PATH`, so `cc1plus` could not load its DLLs and
+> `g++ -march=native` failed, producing
+> `INFO pytensor.link.c.cmodule: Call to 'g++ -march=native' failed` followed by a `CompileError` on the first
+> un-versioned op (`ExpandDims{axis=0}`) and an empty-stderr `pytensor_compilation_error_*` file in `%TEMP%`.
+> **Flip the env file, not just the shell** — and re-add the `ucrt64\bin` directory to `PATH` before ever setting it
+> back to `1`. Note that a cached compile can mask a broken toolchain: re-testing an op that PyTensor already has in
+> its compiledir succeeds without invoking `g++` at all.
 
 > **This opt-in was inert before 2026-08-06.** `_pytensor_env.py:27` defined
 > `ENABLE_C_ENV_VAR = "PYTENSOR_FLAGS"`, so the guard compared the *flag string* against `"1"` and never matched:

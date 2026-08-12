@@ -1,4 +1,4 @@
-CREATE TABLE analytics."04_panel_frame"
+create table analytics."04_panel_frame"
 (
 	isin                              text,
 	ticker                            text,
@@ -180,7 +180,9 @@ CREATE TABLE analytics."04_panel_frame"
 	feat_piotroski_f_score_neg3fy     bigint,
 	feat_median_piotroski_f_score     double precision,
 	feat_log_uplift                   double precision
-);
+)
+;
 
-ALTER TABLE analytics."04_panel_frame"
-	OWNER TO postgres;
+alter table analytics."04_panel_frame"
+	owner to postgres
+;

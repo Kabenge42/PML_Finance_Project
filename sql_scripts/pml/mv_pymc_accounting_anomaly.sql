@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW mv_pymc_accounting_anomaly AS
+create materialized view mv_pymc_accounting_anomaly as
 SELECT isin,
        ticker,
        trading_region,
@@ -31,8 +31,12 @@ SELECT isin,
        calc_change_ratio(market_cap, market_cap_neg1fy)                                             AS feat_mcap_trend_1y,
        safe_divide(market_cap, market_cap_3yavg)                                                    AS feat_mcap_vs_3yavg,
        safe_divide(enterprise_value, enterprise_value_3yavg)                                        AS feat_ev_vs_3yavg
-FROM pml_df;
+FROM pml_df
+;
 
-ALTER MATERIALIZED VIEW mv_pymc_accounting_anomaly OWNER TO postgres;
+alter materialized view mv_pymc_accounting_anomaly owner to postgres
+;
 
-CREATE UNIQUE INDEX idx_mv_pymc_accounting_anomaly_isin ON mv_pymc_accounting_anomaly (isin);
+create unique index idx_mv_pymc_accounting_anomaly_isin
+	on mv_pymc_accounting_anomaly (isin)
+;

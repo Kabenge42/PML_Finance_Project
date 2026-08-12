@@ -1,17 +1,27 @@
-CREATE FUNCTION safe_divide(numerator numeric, denominator numeric) RETURNS numeric
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
-$$
-SELECT numerator / NULLIF(denominator, 0) AS result;
-$$;
+-- Cyclic dependencies found
 
-ALTER FUNCTION safe_divide(numeric, numeric) OWNER TO postgres;
-
-CREATE FUNCTION safe_divide(numerator double precision, denominator double precision) RETURNS double precision
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
+create function safe_divide(numerator double precision, denominator double precision) returns double precision
+	immutable
+	parallel safe
+	language sql
+as
 $$
 SELECT numerator / NULLIF(denominator, 0);
-$$;
+$$
+;
 
-ALTER FUNCTION safe_divide(double precision, double precision) OWNER TO postgres;
+alter function safe_divide(unknown, unknown) owner to postgres
+;
+
+create function safe_divide(numerator numeric, denominator numeric) returns numeric
+	immutable
+	parallel safe
+	language sql
+as
+$$
+SELECT numerator / NULLIF(denominator, 0);
+$$
+;
+
+alter function safe_divide(unknown, unknown) owner to postgres
+;

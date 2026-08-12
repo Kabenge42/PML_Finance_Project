@@ -1,9 +1,12 @@
-CREATE TABLE currency_mapping
+create table currency_mapping
 (
 	unit      text
-		CONSTRAINT currency_mapping_pk UNIQUE,
+		constraint currency_mapping_pk
+			unique,
 	unit_name text
-);
+)
+;
 
-ALTER TABLE currency_mapping
-	OWNER TO postgres;
+alter table currency_mapping
+	owner to postgres
+;

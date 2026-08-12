@@ -1,10 +1,14 @@
-CREATE TABLE country_mapping
+create table country_mapping
 (
 	country      text
-		CONSTRAINT country__pk UNIQUE
-		CONSTRAINT country_mapping_currency_mapping_unit_fk REFERENCES currency_mapping (unit) NOT ENFORCED,
+		constraint country__pk
+			unique
+		constraint country_mapping_currency_mapping_unit_fk
+			references currency_mapping (unit) not enforced,
 	country_name text
-);
+)
+;
 
-ALTER TABLE country_mapping
-	OWNER TO postgres;
+alter table country_mapping
+	owner to postgres
+;

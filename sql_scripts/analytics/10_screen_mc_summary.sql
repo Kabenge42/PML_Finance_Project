@@ -1,4 +1,4 @@
-CREATE TABLE analytics."10_screen_mc_summary"
+create table analytics."10_screen_mc_summary"
 (
 	isin     text,
 	er_mean  double precision,
@@ -7,7 +7,9 @@ CREATE TABLE analytics."10_screen_mc_summary"
 	er_p50   double precision,
 	er_p95   double precision,
 	prob_pos double precision
-);
+)
+;
 
-ALTER TABLE analytics."10_screen_mc_summary"
-	OWNER TO postgres;
+alter table analytics."10_screen_mc_summary"
+	owner to postgres
+;

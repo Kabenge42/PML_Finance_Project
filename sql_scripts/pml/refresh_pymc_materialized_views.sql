@@ -1,5 +1,6 @@
-CREATE PROCEDURE refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT true, IN assert_coverage boolean DEFAULT false)
-	LANGUAGE plpgsql AS
+create procedure refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT true, IN assert_coverage boolean DEFAULT false)
+	language plpgsql
+as
 $$
 DECLARE
 	mv          TEXT;
@@ -23,6 +24,8 @@ BEGIN
 	-- Fail loudly if the MV feature surface and the catalogue have diverged.
 	IF assert_coverage THEN PERFORM pml.assert_pymc_catalogue_coverage(); END IF;
 END;
-$$;
+$$
+;
 
-ALTER PROCEDURE refresh_pymc_materialized_views(boolean, boolean) OWNER TO postgres;
+alter procedure refresh_pymc_materialized_views(unknown, unknown) owner to postgres
+;

@@ -408,7 +408,7 @@ Set via `set_env.ps1` (dot-source to persist in session: `. .\set_env.ps1`). Ref
 | `MODEL_VERSION`            | `v9_10` (`set_env.ps1`) / `v9_11` (`environment_variables.txt`) | Active model version tag                                      |
 | `RANDOM_SEED`              | `42`                                                        | Reproducibility seed                                              |
 | `N_JOBS`                   | `-1`                                                         | Parallel job count (`-1` = all cores)                             |
-| `PML_ENABLE_PYTENSOR_C`    | `1`                                                         | Opt-in flag to enable PyTensor's g++ C backend (MSYS2 UCRT64)     |
+| `PML_ENABLE_PYTENSOR_C`    | `0`                                                         | Opt-in flag to enable PyTensor's g++ C backend (MSYS2 UCRT64); `1` also requires `C:\msys64\ucrt64\bin` on `PATH` |
 | `PYTENSOR_FLAGS`           | `floatX=float64,cxx=`                                       | PyTensor configuration (default: pure-Python/numba VM; C backend enabled only when `PML_ENABLE_PYTENSOR_C=1`) |
 | `GEIB_DASHBOARD`           | `true`                                                       | Enable GEIB equities dashboard                                    |
 | `ENABLE_INTERACTIVE_PLOTS` | `true`                                                       | Toggle interactive visualizations                                 |

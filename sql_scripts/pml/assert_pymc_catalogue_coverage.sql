@@ -1,5 +1,6 @@
-CREATE FUNCTION assert_pymc_catalogue_coverage() RETURNS void
-	LANGUAGE plpgsql AS
+create function assert_pymc_catalogue_coverage() returns void
+	language plpgsql
+as
 $$
 DECLARE
 	v_count      INT;
@@ -16,6 +17,8 @@ BEGIN
 				'Every feat_/observed_/n_ column emitted by each mv_pymc_* must have exactly one pml.vw_pymc_feature_catalogue row with a matching feature_alias for its model_target (see pml.vw_pymc_catalogue_coverage_check).';
 	END IF;
 END;
-$$;
+$$
+;
 
-ALTER FUNCTION assert_pymc_catalogue_coverage() OWNER TO postgres;
+alter function assert_pymc_catalogue_coverage() owner to postgres
+;

@@ -1,4 +1,4 @@
-CREATE TABLE analytics."10b_risk_analytics"
+create table analytics."10b_risk_analytics"
 (
 	isin               text,
 	ticker             text,
@@ -46,7 +46,9 @@ CREATE TABLE analytics."10b_risk_analytics"
 	tail_risk          double precision,
 	starr              double precision,
 	book_weight        double precision
-);
+)
+;
 
-ALTER TABLE analytics."10b_risk_analytics"
-	OWNER TO postgres;
+alter table analytics."10b_risk_analytics"
+	owner to postgres
+;

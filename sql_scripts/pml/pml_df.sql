@@ -1,8 +1,9 @@
-CREATE TABLE pml_df
+create table pml_df
 (
 	ticker                            text,
-	isin                              text NOT NULL
-		CONSTRAINT pml_isin_pk PRIMARY KEY,
+	isin                              text not null
+		constraint pml_isin_pk
+			primary key,
 	name                              text,
 	description                       varchar,
 	trading_region                    text,
@@ -14,7 +15,8 @@ CREATE TABLE pml_df
 	unit_name                         text,
 	region                            text,
 	country                           text
-		CONSTRAINT pml_df_country_mapping_fk REFERENCES country_mapping (country) NOT ENFORCED,
+		constraint pml_df_country_mapping_fk
+			references country_mapping (country) not enforced,
 	country_name                      text,
 	sector                            text,
 	industry                          text,
@@ -678,7 +680,9 @@ CREATE TABLE pml_df
 	net_income_neg2fy                 double precision,
 	net_income_neg3fy                 double precision,
 	net_income_neg4fy                 double precision
-);
+)
+;
 
-ALTER TABLE pml_df
-	OWNER TO postgres;
+alter table pml_df
+	owner to postgres
+;

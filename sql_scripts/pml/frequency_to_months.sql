@@ -1,6 +1,7 @@
-CREATE FUNCTION frequency_to_months(earnings_report_frequency text, fy_end_date date DEFAULT NULL::date, next_fy_end_date date DEFAULT NULL::date) RETURNS integer
-	IMMUTABLE
-	LANGUAGE plpgsql AS
+create function frequency_to_months(earnings_report_frequency text, fy_end_date date DEFAULT NULL::date, next_fy_end_date date DEFAULT NULL::date) returns integer
+	immutable
+	language plpgsql
+as
 $$
 DECLARE
 	fy_range_months INT := 12;
@@ -17,6 +18,8 @@ BEGIN
 		       WHEN 'ANNUALLY' THEN fy_range_months
 		       ELSE fy_range_months / 4 END;
 END;
-$$;
+$$
+;
 
-ALTER FUNCTION frequency_to_months(text, date, date) OWNER TO postgres;
+alter function frequency_to_months(unknown, unknown, unknown) owner to postgres
+;

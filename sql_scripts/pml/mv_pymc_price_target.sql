@@ -1,4 +1,4 @@
-CREATE MATERIALIZED VIEW mv_pymc_price_target AS
+create materialized view mv_pymc_price_target as
 SELECT isin,
        ticker,
        trading_region,
@@ -76,16 +76,18 @@ SELECT isin,
        analyst_rating                                                                                 AS feat_analyst_rating,
        CASE
 	       WHEN price_target_1y_ago > 0::double precision AND last_price >= price_target_1y_ago
-		       THEN 1.0::double precision
+		                                                  THEN 1.0::double precision
 	       WHEN price_target_1y_ago > 0::double precision THEN safe_divide(last_price, price_target_1y_ago)
-	       ELSE NULL::double precision END                                                            AS feat_pt_achievement_1y,
+		                                                  ELSE NULL::double precision
+	       END                                                                                        AS feat_pt_achievement_1y,
        safe_divide(abs(last_price - price_target_1y_ago),
                    abs(price_target_1y_ago))                                                          AS feat_pt_accuracy_1y,
        safe_divide(price_target_1y_ago - last_price,
                    abs(price_target_1y_ago))                                                          AS feat_pt_optimism_bias,
        CASE
 	       WHEN last_price >= price_target_low_1y_ago AND last_price <= price_target_high_1y_ago THEN 1.0
-	       ELSE 0.0 END                                                                               AS feat_pt_range_hit_rate,
+	                                                                                             ELSE 0.0
+	       END                                                                                        AS feat_pt_range_hit_rate,
        safe_divide(price_target - price_target_median, price_target_median)                           AS feat_pt_median_vs_mean_spread,
        safe_divide(price_target_high - price_target_low, price_target_median) -
        safe_divide(price_target_high_1y_ago - price_target_low_1y_ago,
@@ -95,8 +97,12 @@ SELECT isin,
        calc_change_ratio(market_cap, market_cap_neg1fy)                                               AS feat_mcap_trend_1y,
        safe_divide(market_cap, market_cap_3yavg)                                                      AS feat_mcap_vs_3yavg,
        safe_divide(enterprise_value, enterprise_value_3yavg)                                          AS feat_ev_vs_3yavg
-FROM pml_df;
+FROM pml_df
+;
 
-ALTER MATERIALIZED VIEW mv_pymc_price_target OWNER TO postgres;
+alter materialized view mv_pymc_price_target owner to postgres
+;
 
-CREATE UNIQUE INDEX idx_mv_pymc_price_target_isin ON mv_pymc_price_target (isin);
+create unique index idx_mv_pymc_price_target_isin
+	on mv_pymc_price_target (isin)
+;

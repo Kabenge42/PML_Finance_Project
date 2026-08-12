@@ -24,7 +24,12 @@ from __future__ import annotations
 import os
 
 #: Env flag that re-enables PyTensor's C/g++ backend (advanced / opt-in).
-ENABLE_C_ENV_VAR = "PYTENSOR_FLAGS"
+#: Must stay in sync with ``set_env.ps1`` and ``environment_variables.txt``,
+#: which both export ``PML_ENABLE_PYTENSOR_C``. (This was previously set to
+#: ``"PYTENSOR_FLAGS"``, so the opt-in guard below compared the *flag string*
+#: against ``"1"`` and never matched — the C backend could not be re-enabled
+#: at all, and a valid ``cxx=<g++>`` was stripped on every import.)
+ENABLE_C_ENV_VAR = "PML_ENABLE_PYTENSOR_C"
 
 
 def force_python_vm() -> str:

@@ -65,8 +65,31 @@ MODEL_VERSION=v9_11
 # -----------------------------------------------------------------------------
 # PyTensor / PyMC Configuration
 # -----------------------------------------------------------------------------
-# Enable the C backend via MSYS2 MinGW g++ so the nutpie Rust NUTS sampler and
-# C-backed PyTensor graph compilation work on Windows + Python 3.14.
+# DEFAULT (active below): pure-Python / numba VM — PML_ENABLE_PYTENSOR_C=0 and
+# PYTENSOR_FLAGS=floatX=float64,cxx=  (empty cxx = C linker disabled).
+#
+# PyMC 6.x does NOT need PyTensor's C linker: nutpie compiles the logp through
+# its own numba backend, and model_to_graphviz / shape evaluation / prior- and
+# posterior-predictive draws all run on the Python VM. Leaving the C backend
+# armed only exposes the fragile MinGW-on-MSVC-CPython path, which surfaces as
+#   INFO  pytensor.link.c.cmodule: Call to 'g++ -march=native' failed ...
+#   INFO  pytensor.link.c.basic:  compiling un-versioned Apply ExpandDims{axis=0}(0)
+#   CompileError: Compilation failed (return status=1)   [+ an empty-stderr
+#   pytensor_compilation_error_*.tmp in %TEMP%]
+# during any graph evaluation in pymc_kalman_filter_pt.py. With cxx= empty that
+# code path is never entered.
+#
+# NOTE: this file is injected as the ENV_FILES entry of the PyCharm run
+# configurations (expected_returns_v3, pymc_kalman_filter_pt,
+# global_equity_investment_dashboard). Setting PML_ENABLE_PYTENSOR_C=1 here is
+# therefore enough to re-arm the C backend for every IDE run, independently of
+# what set_env.ps1 does in a terminal — flip it here, not just in the shell.
+#
+# ---- OPT-IN (advanced): C backend via MSYS2 MinGW g++ -------------------------
+# Set PML_ENABLE_PYTENSOR_C=1 and point cxx at g++ to enable C-backed PyTensor
+# graph compilation on Windows + Python 3.14:
+#   PML_ENABLE_PYTENSOR_C=1
+#   PYTENSOR_FLAGS=floatX=float64,cxx=C:/msys64/ucrt64/bin/g++.exe
 # Active toolchain: UCRT64 (modern UCRT C runtime, matches MSVC-built Python —
 # this IS the "matching official" toolchain for python.org CPython builds).
 #   Install:  pacman -S mingw-w64-ucrt-x86_64-gcc
@@ -100,8 +123,8 @@ MODEL_VERSION=v9_11
 # PML_ENABLE_PYTENSOR_C=1 is set BEFORE import (see _pytensor_env.py).
 # set_env.ps1 honours the same flag and sanity-compiles a probe before
 # enabling the C backend.
-PML_ENABLE_PYTENSOR_C=1
-PYTENSOR_FLAGS=floatX=float64,cxx=C:/msys64/ucrt64/bin/g++.exe
+PML_ENABLE_PYTENSOR_C=0
+PYTENSOR_FLAGS=floatX=float64,cxx=
 
 # -----------------------------------------------------------------------------
 # Performance Settings

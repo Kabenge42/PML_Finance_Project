@@ -1,17 +1,27 @@
-CREATE FUNCTION winsorise(val numeric, lo numeric, hi numeric) RETURNS numeric
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
+-- Cyclic dependencies found
+
+create function winsorise(val double precision, lo double precision, hi double precision) returns double precision
+	immutable
+	parallel safe
+	language sql
+as
 $$
 SELECT GREATEST(lo, LEAST(hi, val));
-$$;
+$$
+;
 
-ALTER FUNCTION winsorise(numeric, numeric, numeric) OWNER TO postgres;
+alter function winsorise(unknown, unknown, unknown) owner to postgres
+;
 
-CREATE FUNCTION winsorise(val double precision, lo double precision, hi double precision) RETURNS double precision
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
+create function winsorise(val numeric, lo numeric, hi numeric) returns numeric
+	immutable
+	parallel safe
+	language sql
+as
 $$
 SELECT GREATEST(lo, LEAST(hi, val));
-$$;
+$$
+;
 
-ALTER FUNCTION winsorise(double precision, double precision, double precision) OWNER TO postgres;
+alter function winsorise(unknown, unknown, unknown) owner to postgres
+;

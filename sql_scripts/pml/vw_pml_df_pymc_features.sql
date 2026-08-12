@@ -1,5 +1,5 @@
-CREATE VIEW vw_pml_df_pymc_features
-			(model_name, column_name, category, feature_role, pymc_role, data_type, ordinal_position, description) AS
+create view vw_pml_df_pymc_features
+			(model_name, column_name, category, feature_role, pymc_role, data_type, ordinal_position, description) as
 SELECT m.model_name,
        md.column_name,
        md.category,
@@ -10,7 +10,9 @@ SELECT m.model_name,
        md.description
 FROM pml_df_metadata                  md,
      LATERAL unnest(md.model_targets) m(model_name)
-WHERE md.pymc_role = ANY (ARRAY ['coord'::text, 'observed'::text, 'mutable_predictor'::text, 'constant_data'::text]);
+WHERE md.pymc_role = ANY (ARRAY ['coord'::text, 'observed'::text, 'mutable_predictor'::text, 'constant_data'::text])
+;
 
-ALTER TABLE vw_pml_df_pymc_features
-	OWNER TO postgres;
+alter table vw_pml_df_pymc_features
+	owner to postgres
+;

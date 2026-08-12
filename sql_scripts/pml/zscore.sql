@@ -1,17 +1,27 @@
-CREATE FUNCTION zscore(val numeric, mu numeric, sigma numeric) RETURNS numeric
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
+-- Cyclic dependencies found
+
+create function zscore(val double precision, mu double precision, sigma double precision) returns double precision
+	immutable
+	parallel safe
+	language sql
+as
 $$
 SELECT (val - mu) / NULLIF(sigma, 0);
-$$;
+$$
+;
 
-ALTER FUNCTION zscore(numeric, numeric, numeric) OWNER TO postgres;
+alter function zscore(unknown, unknown, unknown) owner to postgres
+;
 
-CREATE FUNCTION zscore(val double precision, mu double precision, sigma double precision) RETURNS double precision
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
+create function zscore(val numeric, mu numeric, sigma numeric) returns numeric
+	immutable
+	parallel safe
+	language sql
+as
 $$
 SELECT (val - mu) / NULLIF(sigma, 0);
-$$;
+$$
+;
 
-ALTER FUNCTION zscore(double precision, double precision, double precision) OWNER TO postgres;
+alter function zscore(unknown, unknown, unknown) owner to postgres
+;

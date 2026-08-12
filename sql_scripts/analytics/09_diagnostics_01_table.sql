@@ -1,4 +1,4 @@
-CREATE TABLE analytics."09_diagnostics_01_table"
+create table analytics."09_diagnostics_01_table"
 (
 	index     text,
 	mean      double precision,
@@ -10,7 +10,9 @@ CREATE TABLE analytics."09_diagnostics_01_table"
 	r_hat     double precision,
 	mcse_mean double precision,
 	mcse_sd   double precision
-);
+)
+;
 
-ALTER TABLE analytics."09_diagnostics_01_table"
-	OWNER TO postgres;
+alter table analytics."09_diagnostics_01_table"
+	owner to postgres
+;

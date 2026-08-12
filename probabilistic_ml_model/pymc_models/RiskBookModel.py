@@ -271,7 +271,7 @@ def compute_cvar_aware_book(
     # the NULL semantics of the §11–§13 SQL candidate filters.
     if 'mcap_country_r' in nm.columns:
         _mcap_r = pd.to_numeric(nm['mcap_country_r'], errors='coerce')
-        _mcap_ok = (_mcap_r < mcap_r_max).fillna(False).to_numpy(dtype=bool)
+        _mcap_ok = (_mcap_r <= mcap_r_max).fillna(False).to_numpy(dtype=bool)
     else:  # pre-0.9.9.12 results frame
         logger.warning('results frame lacks mcap_country_r — the market-cap '
                        'pre-selection gate (mcap_r_max=%.4f) is skipped.', mcap_r_max)

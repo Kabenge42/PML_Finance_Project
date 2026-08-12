@@ -1,4 +1,4 @@
-CREATE TABLE pml_bonds
+create table pml_bonds
 (
 	ticker     text,
 	name       text,
@@ -31,9 +31,12 @@ CREATE TABLE pml_bonds
 	"52w_low"  double precision,
 	"52w_high" double precision,
 	country    text
-		CONSTRAINT pml_bonds_country_mapping_country_fk REFERENCES country_mapping (country) NOT ENFORCED,
+		constraint pml_bonds_country_mapping_country_fk
+			references country_mapping (country) not enforced,
 	duration_y text
-);
+)
+;
 
-ALTER TABLE pml_bonds
-	OWNER TO postgres;
+alter table pml_bonds
+	owner to postgres
+;
