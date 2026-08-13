@@ -1,4 +1,4 @@
-create function calculate_next_fiscal_quarter(next_earnings date, income_statement_report_date date, fy_end_date date, earnings_report_frequency text DEFAULT 'Quarterly'::text) returns integer
+create function pml.calculate_next_fiscal_quarter(next_earnings date, income_statement_report_date date, fy_end_date date, earnings_report_frequency text DEFAULT 'Quarterly'::text) returns integer
 	immutable
 	language plpgsql
 as
@@ -48,5 +48,5 @@ END;
 $$
 ;
 
-alter function calculate_next_fiscal_quarter(unknown, unknown, unknown, unknown) owner to postgres
+alter function pml.calculate_next_fiscal_quarter(date, date, date, text) owner to postgres
 ;

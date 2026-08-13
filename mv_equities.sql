@@ -708,7 +708,7 @@ SELECT
     -- METADATA
     -- ═══════════════════════════════════════════════════════════════════════════════
     CURRENT_TIMESTAMP AS table_calculated_at
-FROM equities e;
+FROM equities_df e;
 
 -- Unique index on ISIN to support REFRESH MATERIALIZED VIEW CONCURRENTLY
 CREATE UNIQUE INDEX idx_mv_equities_isin ON mv_equities (isin);

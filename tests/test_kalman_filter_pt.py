@@ -353,7 +353,9 @@ def _kalman_panel_frame(n=40, *, sparse_drift=True, seed=0):
             "n_analysts": rng.integers(1, 20, n).astype(float),
             "feat_implied_upside": rng.normal(0.1, 0.3, n),
             "feat_avg_beta": rng.normal(1.0, 0.2, n),
-            "feat_mcap_vs_3yavg": rng.normal(1.0, 0.2, n),
+            # EPS drift signal (replaced feat_mcap_vs_3yavg when the price-derived
+            # market-cap / EV family left mv_pymc_kalman_pt).
+            "feat_net_eps_drift": rng.normal(0.05, 0.3, n),
             "feat_pt_noise_sigma": rng.uniform(1, 5, n),
             "sector": rng.choice(["Tech", "Energy"], n),
             "region": rng.choice(["US", "EU"], n),
@@ -747,6 +749,18 @@ _PRUNED_DRIFT_ALIASES = (
 )
 _RETAINED_REPRESENTATIVES = ("feat_pt_drift", "feat_analyst_rating")
 
+# 2026-08-13: the price-derived market-cap / EV family (feat_mv_ev_drift,
+# feat_mcap_trend_1y, feat_mcap_vs_3yavg, feat_ev_vs_3yavg) left
+# mv_pymc_kalman_pt entirely and was replaced by the EPS family below. Only the
+# valid-pair COUNTER is excluded from the drift matrix; the five signals are
+# retained. Guarding both directions catches the two ways this regresses: a
+# re-added counter (a metadata column masquerading as a signal) and a silently
+# dropped signal.
+_EPS_DRIFT_SIGNALS = (
+    "feat_net_eps_drift", "feat_last_q_surprise", "feat_last_y_surprise",
+    "feat_eps_beat_rate", "feat_eps_beat_rate_annual",
+)
+
 
 @pytest.mark.parametrize("alias", _PRUNED_DRIFT_ALIASES)
 def test_collinear_drift_aliases_are_excluded(alias):
@@ -783,6 +797,57 @@ def test_select_drift_features_drops_the_collinear_families():
         "feat_pt_drift", "feat_analyst_rating", "feat_price_drift",
         "feat_coverage_drift",
     }
+
+
+@pytest.mark.parametrize("alias", _EPS_DRIFT_SIGNALS)
+def test_eps_drift_signals_are_retained(alias):
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KALMAN_DRIFT_EXCLUDED_FEATURES,
+    )
+
+    assert alias not in KALMAN_DRIFT_EXCLUDED_FEATURES
+
+
+def test_eps_drift_support_counter_is_excluded():
+    """feat_net_eps_drift_n is a coverage diagnostic, not a signal."""
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KALMAN_DRIFT_SUPPORT_COUNTERS,
+        KALMAN_DRIFT_EXCLUDED_FEATURES,
+    )
+
+    assert "feat_net_eps_drift_n" in KALMAN_DRIFT_SUPPORT_COUNTERS
+    assert "feat_net_eps_drift_n" in KALMAN_DRIFT_EXCLUDED_FEATURES
+
+
+def test_select_drift_features_keeps_eps_family_without_the_counter():
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KalmanFilterPriceTarget,
+    )
+
+    kept = KalmanFilterPriceTarget.select_drift_features(
+        [*_EPS_DRIFT_SIGNALS, "feat_net_eps_drift_n"]
+    )
+    assert set(kept) == set(_EPS_DRIFT_SIGNALS)
+
+
+def test_drift_fallback_matches_the_shipped_selection():
+    """The offline literal must survive select_drift_features unchanged.
+
+    ``_DRIFT_FEATURE_FALLBACK`` is the last resort when neither the catalogue
+    frame nor the database is reachable. It drifted from the SSOT once already
+    (it listed the analyst composition legs long after
+    ``KALMAN_COLLINEAR_COMPOSITION_FEATURES`` started excluding them), which made
+    the literal misleading without changing behaviour. Assert the fixed point.
+    """
+    import pymc_kalman_filter_pt as kf
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
+        KalmanFilterPriceTarget,
+    )
+
+    fallback = list(kf._DRIFT_FEATURE_FALLBACK)
+    assert KalmanFilterPriceTarget.select_drift_features(fallback) == fallback
+    assert len(fallback) == 16
+    assert set(_EPS_DRIFT_SIGNALS).issubset(fallback)
 
 
 def test_pruned_drift_design_is_well_conditioned():

@@ -7,6 +7,8 @@
         <node kind="database" qname="postgres">
           <node kind="schema">
             <name qname="analytics" />
+            <name qname="information_schema" />
+            <name qname="pml" />
             <name qname="public" />
           </node>
         </node>

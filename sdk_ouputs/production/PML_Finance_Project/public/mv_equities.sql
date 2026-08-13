@@ -676,7 +676,7 @@ SELECT "Ticker"                                           AS ticker,
        "Fiscal Year"                                      AS fiscal_year,
        "Reporting Lag"                                    AS reporting_lag,
        CURRENT_TIMESTAMP                                  AS table_calculated_at
-FROM equities e;
+FROM equities_df e;
 
 comment on materialized view mv_equities is 'Aliased snapshot of the equities table. Column names sourced from equities_schema_metadata.column_alias. Refresh with: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_equities;';
 
@@ -699,4 +699,3 @@ create index idx_mv_equities_market_cap
 
 create index idx_mv_equities_fiscal
     on mv_equities (fiscal_year, fiscal_quarter, income_statement_report_date);
-

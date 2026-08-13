@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.15] - 2026-08-13
+
+### Changed
+
+- **`kalman_pt` swaps the price-derived market-cap / EV drift family for an EPS family.**
+  `mv_pymc_kalman_pt` no longer emits `feat_mv_ev_drift`, `feat_mcap_trend_1y`,
+  `feat_mcap_vs_3yavg`, `feat_ev_vs_3yavg`, or the eleven raw `market_cap_ev*`
+  columns `feat_mv_ev_drift` was built from. All four were price-derived —
+  `market_cap` is `last_price × shrs_out` — so they restated price history the
+  drift design already carried through `feat_price_drift`,
+  `feat_price_chg_pct_3m`, `feat_one_day_return` and the `feat_total_return_*`
+  family, without informing *why* analysts revise a target.
+
+  Replaced by five earnings-derived predictors plus one support counter:
+  `feat_net_eps_drift` (+ `feat_net_eps_drift_n`), `feat_last_q_surprise`,
+  `feat_last_y_surprise`, `feat_eps_beat_rate`, `feat_eps_beat_rate_annual`.
+  Drift design: **15 → 16 columns**.
+
+  Measured on the live 6,538-name MV under one consistent response construction:
+
+  | set | k | cond | max VIF | R² |
+  |---|---|---|---|---|
+  | mcap/EV family (previous) | 15 | 24.7 | 4.36 | 0.6695 |
+  | EPS family (this build) | 16 | 19.7 | 4.25 | 0.6672 |
+
+  **This is not an R² improvement** — explanatory power is flat (−0.3 % relative).
+  The mcap/EV columns scored as well as they did *because* they restate price, and
+  the response is analyst-implied upside off that same price, so their
+  contribution was closer to duplication than independent signal. What the swap
+  buys is modestly better conditioning and five predictors near-orthogonal to the
+  rest of the design: every new column lands at VIF ≤ 1.19, and the strongest
+  correlation among them is `r(eps_beat_rate, eps_beat_rate_annual) = +0.369`.
+
+  Coverage on the same MV: `feat_net_eps_drift` 100 %,
+  `feat_eps_beat_rate_annual` 85.2 %, `feat_last_y_surprise` 76.4 %,
+  `feat_eps_beat_rate` 54.3 %, `feat_last_q_surprise` 46.6 %. The two quarterly
+  columns are thin; a sparse *predictor* zero-fills to the column mean after
+  standardisation, shrinking its `beta` toward 0 without dropping a name — unlike
+  a sparse *response* series, which is what produced the rank-1 ICM identification
+  failure (max R-hat 4.45, min ESS 4.3). Watch those betas on the next full-scale
+  fit.
+
+  `feat_mcap_country_r` is **retained** — it is the size-tilt `pm.Data` container,
+  not a drift predictor. The cross-cutting trio survives unchanged in the other six
+  `mv_pymc_*` views; only the `kalman_pt` `model_target` was removed.
+
+### Added
+
+- **`pml.signed_drift(arr[, min_points])`** (NUMERIC + DOUBLE PRECISION overloads).
+  Identical to `pml.target_drift` except the denominator is `ABS(prev)`. Every
+  pre-existing drift feature runs over a strictly positive series (prices, targets,
+  coverage counts, realized vol), where the raw denominator is correct. EPS is not:
+  a loss narrowing from `-2.00` to `-1.00` scores `(-1 - -2) / -2 = -0.5` under
+  `target_drift`, recording an improvement as negative drift — and winsorising caps
+  the magnitude while preserving the wrong sign. Verified against the live database:
+  sign-flipped on negative series, bit-identical on positive ones, `min_points`
+  guard intact. There is deliberately no `signed_drift_n`; the validity rule is
+  unchanged, so `pml.target_drift_n` is the counter for both families.
+
+### Migration
+
+Schema/catalogue only — **the 82-column `analytics.kalman_filtered_price_targets`
+layout is unchanged**, so no DDL migration and no GEIB redeploy is required for the
+schema. `export_analytics` reads `market_cap` / `enterprise_value` /
+`mcap_country_r`, all retained. The exported **values** will change on the next fit
+(different drift design → different posterior), so the usual
+`scripts/validate_kalman_state.py` → `scripts/export_kalman_analytics.py` → deploy
+pair still applies when refreshing.
+
+Applied to the live database in this order: `pml.signed_drift` helpers →
+`DROP MATERIALIZED VIEW pml.mv_pymc_kalman_pt CASCADE` + recreate + unique index →
+metadata reconciliation (`pml_df_metadata_populate.sql` §7c.3, TASK 4/4b, §7j) →
+coverage check. `kalman_pt` reports **0 violations**; the one pre-existing DB-wide
+violation (`price_target` / `feat_pt_achievement_1y`) is unchanged.
+
+Note that TASK 4's `ON CONFLICT` only *unions* `model_targets`, so shrinking a tag
+set requires the explicit `array_remove` / `DELETE` in the new §7j block. Both
+statements are no-ops on a from-scratch run, so the script stays idempotent.
+
 ## [0.9.9.14] - 2026-08-10
 
 ### Fixed

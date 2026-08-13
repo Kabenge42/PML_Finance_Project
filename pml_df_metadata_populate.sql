@@ -156,10 +156,18 @@ WHERE column_name IN ('market_cap', 'enterprise_value', 'volume_shrs', 'rel_volu
                       'enterprise_value_3yavg', 'enterprise_value_5yavg',
                       'one_day_pct','price_chg_pct_3m');
 
+-- Market-cap percentile ranks (0-100, 100 = largest). Six nested scopes:
+-- global / region / country, each also sector-relative ("Sec R"). feature_role
+-- 'count' maps to pymc_role 'constant_data' via the CASE in the PYMC ALIGNMENT
+-- block below (re-asserted explicitly there): the RAW ranks are inert carriers.
+-- The modelling surface is the mv_pymc_kalman_pt feat_mcap_*_r ratio family
+-- registered as TASK 4 self-rows.
 UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
     feature_role = 'count'
-WHERE column_name IN ('market_cap_country_r');
+WHERE column_name IN ('market_cap_global_r', 'market_cap_global_sec_r',
+                      'market_cap_region_r', 'market_cap_region_sec_r',
+                      'market_cap_country_r', 'market_cap_country_sec_r');
 
 UPDATE pml.pml_df_metadata
 SET category     = 'market_data',
@@ -680,8 +688,23 @@ UPDATE pml.pml_df_metadata
 SET description = 'Shares outstanding 5-year average'
 WHERE column_name = 'shrs_out_5yavg';
 UPDATE pml.pml_df_metadata
-SET description = 'Market cap rank within country'
+SET description = 'Market cap percentile rank globally (0-100, 100 = largest)'
+WHERE column_name = 'market_cap_global_r';
+UPDATE pml.pml_df_metadata
+SET description = 'Market cap percentile rank within global sector (0-100, 100 = largest)'
+WHERE column_name = 'market_cap_global_sec_r';
+UPDATE pml.pml_df_metadata
+SET description = 'Market cap percentile rank within region (0-100, 100 = largest)'
+WHERE column_name = 'market_cap_region_r';
+UPDATE pml.pml_df_metadata
+SET description = 'Market cap percentile rank within region sector (0-100, 100 = largest)'
+WHERE column_name = 'market_cap_region_sec_r';
+UPDATE pml.pml_df_metadata
+SET description = 'Market cap percentile rank within country (0-100, 100 = largest)'
 WHERE column_name = 'market_cap_country_r';
+UPDATE pml.pml_df_metadata
+SET description = 'Market cap percentile rank within country sector (0-100, 100 = largest)'
+WHERE column_name = 'market_cap_country_sec_r';
 UPDATE pml.pml_df_metadata
 SET description = 'Lagged enterprise value (prior period)'
 WHERE column_name LIKE 'enterprise_value_neg%';
@@ -1291,7 +1314,9 @@ WHERE column_name IN ('price_target_num',
                       'num_hold_ratings', 'num_buys_ratings', 'num_sell_ratings',
                       'num_no_opinion_ratings',
                       'eps_norm_est_num_fy1e',
-                      'market_cap_country_r',
+                      'market_cap_global_r', 'market_cap_global_sec_r',
+                      'market_cap_region_r', 'market_cap_region_sec_r',
+                      'market_cap_country_r', 'market_cap_country_sec_r',
                       'full_time_employees_fq', 'full_time_employees_fy',
                       'avg_employees_5yavgfy');
 
@@ -1352,6 +1377,22 @@ SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY 
 WHERE column_name IN ('num_hold_ratings', 'num_strong_buys_ratings', 'num_buys_ratings',
                       'num_sell_ratings', 'num_strong_sell_ratings', 'num_no_opinion_ratings',
                       'analyst_rating');
+
+-- 7c.3 KalmanFilterPriceTarget: last realised EPS surprise carriers, aliased to
+--      feat_last_q_surprise / feat_last_y_surprise below (the same aliases
+--      mv_pymc_earnings_beat uses; the alias PK is (column_name, model_target),
+--      so there is no collision). The tag is REQUIRED, not optional:
+--      vw_pymc_feature_catalogue is
+--      `pml_df_metadata CROSS JOIN LATERAL UNNEST(model_targets) LEFT JOIN
+--      pml_df_feature_alias`, so an alias row whose base column does not carry
+--      'kalman_pt' produces no catalogue row at all — the column would then be
+--      MISSING_FROM_CATALOGUE and silently reindexed to 0.0 by the model.
+--      Only the neg0 carriers are tagged: the neg1..neg5 trail is
+--      pymc_role='derived_input' (§5a) and is consumed inside the MV's
+--      pml.beat_counts laterals for feat_eps_beat_rate{,_annual}.
+UPDATE pml.pml_df_metadata
+SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(model_targets || ARRAY ['kalman_pt'])))
+WHERE column_name IN ('eps_neg0fqsurprise_pct', 'eps_neg0fysurprise_pct');
 
 -- 7d. DCFPriceTarget: cash-flow predictors, FCF estimates, valuation,
 --     EV/EBITDA, profitability margins.
@@ -1814,12 +1855,17 @@ VALUES
 	                            ('feat_pt_drift_n',                    'analyst_targets', 'metadata',   'mutable_predictor', 'feat_pt_drift_n',                    ARRAY ['kalman_pt']                                                                                                   ),
 	                            ('feat_price_drift_n',                 'analyst_targets', 'metadata',   'mutable_predictor', 'feat_price_drift_n',                 ARRAY ['kalman_pt']                                                                                                   ),
 	                            ('feat_pt_range_norm',                 'analyst_targets', 'predictor',  'mutable_predictor', 'feat_pt_range_norm',                 ARRAY ['kalman_pt']                                                                                                   ),
-	-- Drift of the market_cap / enterprise_value ratio trail
-	-- (equity share of EV) across the fiscal-year lags. A
-	-- multi-source self-row (matched market_cap / EV lag pairs)
-	-- consumed by the fused panel as a state-transition (beta)
-	-- drift predictor — see feat_mv_ev_drift in mv_pymc_kalman_pt.
-	                            ('feat_mv_ev_drift',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mv_ev_drift',                   ARRAY ['kalman_pt']                                                                                                   ),
+	-- EPS trend / beat-frequency feats (mv_pymc_kalman_pt). These REPLACED the
+	-- market-cap & EV trend/drift family (feat_mv_ev_drift + the cross-cutting trio
+	-- below, which kalman_pt no longer tags): market_cap is last_price * shrs_out,
+	-- so those columns restated price history the drift matrix already carries.
+	-- Multi-source (lag trails / beat_counts laterals), so self-rows.
+	-- feat_net_eps_drift uses pml.signed_drift, not pml.target_drift — EPS crosses
+	-- zero and the raw denominator inverts the sign for loss-makers.
+	                            ('feat_net_eps_drift',                 'eps',             'predictor',  'mutable_predictor', 'feat_net_eps_drift',                 ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_net_eps_drift_n',               'eps',             'metadata',   'mutable_predictor', 'feat_net_eps_drift_n',               ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_eps_beat_rate',                 'eps',             'predictor',  'mutable_predictor', 'feat_eps_beat_rate',                 ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_eps_beat_rate_annual',          'eps',             'predictor',  'mutable_predictor', 'feat_eps_beat_rate_annual',          ARRAY ['kalman_pt']                                                                                                   ),
 	                            ('feat_avg_beta',                      'volatility',      'predictor',  'mutable_predictor', 'feat_avg_beta',                      ARRAY ['kalman_pt']                                                                                                   ),
 	-- Drift across the realized-vol term structure (volatility_{1m,3m,6m,1y}):
 	-- replaces the absolute feat_vol_* levels as the kalman_pt volatility signal
@@ -1865,14 +1911,36 @@ VALUES
 	                            ('feat_conviction_ratio',              'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_conviction_ratio',              ARRAY ['price_target']                                                                                                ),
 	-- Cross-cutting market-cap / EV size & trend feats. Each is multi-source
 	-- (raw level vs lag / average) so it cannot be a per-source alias row; it is
-	-- registered as its own self-row consumed by EVERY mv_pymc_* view.
-	                            ('feat_mcap_trend_1y',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_trend_1y',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
-	                            ('feat_mcap_vs_3yavg',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_vs_3yavg',                 ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
-	                            ('feat_ev_vs_3yavg',                   'market_data',     'predictor',  'mutable_predictor', 'feat_ev_vs_3yavg',                   ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']),
-	-- feat_mcap_country_r is emitted ONLY by mv_pymc_kalman_pt (the other MVs do
-	-- not carry it) — registering it for all seven models made it a
-	-- PHANTOM_CATALOGUE_ALIAS for the other six in vw_pymc_catalogue_coverage_check.
+	-- registered as its own self-row consumed by the OTHER SIX mv_pymc_* views.
+	-- kalman_pt is deliberately absent: mv_pymc_kalman_pt no longer emits these
+	-- three (nor feat_mv_ev_drift), having swapped the price-derived market-cap /
+	-- EV family for the EPS trend / surprise / beat-rate family above. Keeping the
+	-- tag here while the MV stopped emitting them would raise
+	-- PHANTOM_CATALOGUE_ALIAS. On a live DB the ON CONFLICT below only UNIONS
+	-- model_targets, so §7j below additionally array_removes the stale tag.
+	                            ('feat_mcap_trend_1y',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_trend_1y',                 ARRAY ['earnings_beat', 'price_target', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']              ),
+	                            ('feat_mcap_vs_3yavg',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_vs_3yavg',                 ARRAY ['earnings_beat', 'price_target', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']              ),
+	                            ('feat_ev_vs_3yavg',                   'market_data',     'predictor',  'mutable_predictor', 'feat_ev_vs_3yavg',                   ARRAY ['earnings_beat', 'price_target', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']              ),
+	-- Market-cap percentile-rank ratio family, (100 - market_cap_*_r) / 100 so ~0 =
+	-- largest. Emitted ONLY by mv_pymc_kalman_pt (the other MVs do not carry them)
+	-- — registering feat_mcap_country_r for all seven models made it a
+	-- PHANTOM_CATALOGUE_ALIAS for the other six in vw_pymc_catalogue_coverage_check,
+	-- so the whole family stays kalman_pt-only.
+	--
+	-- feat_mcap_country_r is the size TILT driver (KALMAN_TILT_FEATURE_ORDER, its
+	-- own pm.Data container + sign-fixed loading). The five siblings are 0.78-0.98
+	-- correlated with it and with each other, so they are EDA / screen / analytics
+	-- carriers only: KALMAN_SIZE_RANK_SIBLING_FEATURES keeps them out of the drift
+	-- design matrix. They are still 'mutable_predictor' here because the exclusion
+	-- is a Python-side concern — flipping pymc_role to 'excluded' would drop them
+	-- from vw_pymc_feature_catalogue while the MV still emits them, which is
+	-- MISSING_FROM_CATALOGUE (see the KALMAN_DRIFT_EXCLUDED_FEATURES header).
+	                            ('feat_mcap_global_r',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_global_r',                 ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_mcap_global_sec_r',             'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_global_sec_r',             ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_mcap_region_r',                 'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_region_r',                 ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_mcap_region_sec_r',             'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_region_sec_r',             ARRAY ['kalman_pt']                                                                                                   ),
 	                            ('feat_mcap_country_r',                   'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_country_r',                   ARRAY ['kalman_pt']),
+	                            ('feat_mcap_country_sec_r',            'market_data',     'predictor',  'mutable_predictor', 'feat_mcap_country_sec_r',            ARRAY ['kalman_pt']                                                                                                   ),
 	-- Piotroski F-score fundamental-quality trail (mv_pymc_kalman_pt): four
 	-- per-fiscal-year 9-signal composites (pml.piotroski_f_score over the ROA /
 	-- CFO / leverage / liquidity / share-count / margin / asset-turnover lag
@@ -1918,11 +1986,19 @@ FROM (VALUES ('feat_implied_upside', 'double precision', 'Consensus implied upsi
              ('feat_vol_drift_n', 'integer', 'Valid consecutive-pair count behind feat_vol_drift (coverage gate)'),
              ('feat_pt_range_norm', 'double precision', 'Inter-analyst target range (high - low) normalised by the mean price target'),
              ('feat_avg_beta', 'double precision', 'NULL-aware mean of beta_{1y,2y,5y}: the systematic-risk (CAPM) driver of risk_adj_return'),
-             ('feat_mv_ev_drift', 'double precision', 'Winsorised [-1, 1] drift of market_cap / enterprise_value across the fiscal-year trail (de-leveraging / equity re-rating)'),
+             ('feat_net_eps_drift', 'double precision', 'Winsorised [-1, 1] SIGN-PRESERVING drift of the net basic EPS fiscal-year trail (fy -> neg5fy) via pml.signed_drift: ABS denominator, so a narrowing loss scores positive'),
+             ('feat_net_eps_drift_n', 'integer', 'Valid consecutive-pair count behind feat_net_eps_drift (coverage gate)'),
+             ('feat_eps_beat_rate', 'double precision', 'Share of the last 5 quarterly EPS surprises that beat consensus (raw [0, 1] rate, NULL when no surprise history)'),
+             ('feat_eps_beat_rate_annual', 'double precision', 'Share of the last 6 annual EPS surprises that beat consensus (raw [0, 1] rate, NULL when no surprise history)'),
              ('feat_mcap_trend_1y', 'double precision', '1y market-cap change ratio: (market_cap - market_cap_neg1fy) / market_cap_neg1fy'),
              ('feat_mcap_vs_3yavg', 'double precision', 'Market cap relative to its own 3y average'),
              ('feat_ev_vs_3yavg', 'double precision', 'Enterprise value relative to its own 3y average'),
+             ('feat_mcap_global_r', 'double precision', 'Global market-cap rank ratio: (100 - market_cap_global_r) / 100, ~0 = largest globally (smaller = larger cap)'),
+             ('feat_mcap_global_sec_r', 'double precision', 'Global sector market-cap rank ratio: (100 - market_cap_global_sec_r) / 100, ~0 = largest in global sector (smaller = larger cap)'),
+             ('feat_mcap_region_r', 'double precision', 'Region market-cap rank ratio: (100 - market_cap_region_r) / 100, ~0 = largest in region (smaller = larger cap)'),
+             ('feat_mcap_region_sec_r', 'double precision', 'Region sector market-cap rank ratio: (100 - market_cap_region_sec_r) / 100, ~0 = largest in region sector (smaller = larger cap)'),
              ('feat_mcap_country_r', 'double precision', 'Country market-cap rank ratio: (100 - market_cap_country_r) / 100, ~0 = largest in country (smaller = larger cap)'),
+             ('feat_mcap_country_sec_r', 'double precision', 'Country sector market-cap rank ratio: (100 - market_cap_country_sec_r) / 100, ~0 = largest in country sector (smaller = larger cap)'),
              ('feat_buys', 'integer', 'Buy-side analyst rating count (strong buy + buy)'),
              ('feat_sells', 'integer', 'Sell-side analyst rating count (strong sell + sell)'),
              ('feat_pt_achievement_1y', 'double precision', 'Realised achievement of the 1y-ago mean target: 1.0 if reached, else last_price / price_target_1y_ago'),
@@ -2096,6 +2172,13 @@ VALUES
 	                                 ('price_chg_pct_3m',                       'kalman_pt',          'feat_price_chg_pct_3m',               'mutable_predictor'),
 	-- Relative trading volume: rel_volume -> feat_rel_volume (named tilt driver).
 	                                 ('rel_volume',                       'kalman_pt',          'feat_rel_volume',                   'mutable_predictor'),
+	-- Last realised EPS surprise, quarterly and annual. Single-source, so plain
+	-- alias rows (unlike feat_net_eps_drift / feat_eps_beat_rate*, which are
+	-- multi-source and registered as self-rows in TASK 4). Same aliases
+	-- mv_pymc_earnings_beat uses for these columns — no PK collision, the key is
+	-- (column_name, model_target). Requires the §7c.3 kalman_pt tag above.
+	                                 ('eps_neg0fqsurprise_pct',            'kalman_pt',          'feat_last_q_surprise',              'mutable_predictor'),
+	                                 ('eps_neg0fysurprise_pct',            'kalman_pt',          'feat_last_y_surprise',              'mutable_predictor'),
 	-- Raw beta windows: emitted un-prefixed by mv_pymc_kalman_pt as the
 	-- systematic-risk inputs to feat_avg_beta (the NULL-aware mean), which is the
 	-- model-facing risk-adjustment driver. Aliased == column name (present-check)
@@ -2507,6 +2590,30 @@ ON CONFLICT (column_name) DO UPDATE
 	    model_targets = (SELECT ARRAY(SELECT DISTINCT
 	                                  unnest(pml.pml_df_metadata.model_targets ||
 	                                         EXCLUDED.model_targets)));
+
+-- ---------------------------------------------------------------------------
+-- 7j. kalman_pt market-cap / EV -> EPS feature swap (live-DB reconciliation).
+--
+-- mv_pymc_kalman_pt no longer emits feat_mv_ev_drift, feat_mcap_trend_1y,
+-- feat_mcap_vs_3yavg or feat_ev_vs_3yavg (they were price-derived — market_cap
+-- is last_price * shrs_out — and restated the price trails already in the drift
+-- matrix; the EPS trend / surprise / beat-rate family replaced them). The TASK 4
+-- VALUES lists above already reflect that, but TASK 4's ON CONFLICT only UNIONS
+-- model_targets, so on an existing database the stale 'kalman_pt' tags survive
+-- and become PHANTOM_CATALOGUE_ALIAS. Shrinking requires an explicit
+-- array_remove / DELETE — the §7i.1 idiom. Both statements are no-ops on a
+-- from-scratch run, so the script stays idempotent either way.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_remove(model_targets, 'kalman_pt'),
+    updated_at    = CURRENT_TIMESTAMP
+WHERE column_name IN ('feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg')
+  AND 'kalman_pt' = ANY (model_targets);
+
+-- feat_mv_ev_drift was kalman_pt-ONLY, so the whole self-row goes. No alias row
+-- references it (it was multi-source), so there is no FK dependency to clear.
+DELETE
+FROM pml.pml_df_metadata
+WHERE column_name = 'feat_mv_ev_drift';
 
 -- Verify (should return no rows, i.e. the assertion below passes):
 --   SELECT * FROM pml.vw_pymc_catalogue_coverage_check WHERE status <> 'OK';

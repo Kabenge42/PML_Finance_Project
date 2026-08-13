@@ -762,10 +762,20 @@ CALL pml.refresh_pymc_materialized_views(
 Both arguments are easy to miss. `assert_coverage => TRUE` fails the refresh loudly if any MV `feat_`/`observed_`/`n_`
 column is unregistered, duplicated or phantom in the catalogue — see *Refreshing MVs* under Common Development Tasks.
 
-All seven MVs additionally carry a shared market-cap/EV size-&-trend trio:
+Six of the seven MVs carry a shared market-cap/EV size-&-trend trio:
 `feat_mcap_trend_1y`, `feat_mcap_vs_3yavg`, `feat_ev_vs_3yavg` (derived from the
 `market_cap_neg{1..4}f{q,y}` lags and `market_cap`/`enterprise_value` `_{3,5}yavg`
 columns added to `pml_df`).
+
+> **`mv_pymc_kalman_pt` is the exception (since 0.9.9.15).** It dropped the trio,
+> `feat_mv_ev_drift` and the eleven raw `market_cap_ev*` columns in favour of an EPS
+> family (`feat_net_eps_drift` + `_n`, `feat_last_{q,y}_surprise`,
+> `feat_eps_beat_rate{,_annual}`). The trio is *not* deleted — only the `kalman_pt`
+> `model_target` was `array_remove`d (`pml_df_metadata_populate.sql` §7j), because
+> `vw_pymc_feature_catalogue` is `metadata CROSS JOIN LATERAL UNNEST(model_targets)
+> LEFT JOIN feature_alias`: an MV that stops emitting a still-tagged column raises
+> `PHANTOM_CATALOGUE_ALIAS`. `feat_mcap_country_r` stays — it is the size-tilt
+> `pm.Data` container, not a drift predictor.
 
 > **`mv_pymc_kalman_pt` is not reproducible across refresh dates.** Its seven `days_*` horizons
 > (`days_to_next_earnings`, `days_since_last_report`, …) are computed against `CURRENT_DATE`, so refreshing on a
@@ -797,7 +807,7 @@ components, and `days_*` time covariates all stay out of the drift matrix — ED
 |------------------------------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `mv_pymc_earnings_beat`      | `n_total`, `n_beats`, `n_total_annual`, `n_beats_annual`                       | `feat_logit_beat_rate`, `feat_eps_fy1e`, `feat_rev_{1w,1m,3m,6m,1y}`, `feat_rev_accel_1m_6m`, `feat_last_q_surprise`                                      |
 | `mv_pymc_price_target`       | `observed_target_pct`, `observed_target_pct_med`, `price_target`, `n_analysts` | `feat_net_buy_sentiment`, `feat_implied_upside`, `feat_target_range_width`, `feat_pt_momentum_3m`, `feat_target_dispersion_cv`, `feat_52w_range_position` |
-| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_log_uplift` (the panel response), `feat_pt_drift(_n)`, `feat_price_drift(_n)`, `feat_pt_{high,low,median,noise}_drift`, `feat_coverage_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_analyst_rating`, `feat_{holds,buys,sells,no_opinion}`, `feat_pt_achievement_1y`, `feat_pt_accuracy_1y`, `feat_pt_range_hit_rate`, `feat_rel_volume`, `feat_avg_beta`, `feat_mcap_country_r`, `feat_mv_ev_drift`, `feat_one_day_return`, `feat_price_chg_pct_3m`, `feat_total_return_*` (14 windows), `feat_tr_cagr_{1y,3y,5y,10y}`, `feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`, `feat_median_piotroski_f_score`, plus raw `days_*` horizons |
+| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_log_uplift` (the panel response), `feat_pt_drift(_n)`, `feat_price_drift(_n)`, `feat_pt_{high,low,median,noise}_drift`, `feat_coverage_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_analyst_rating`, `feat_{holds,buys,sells,no_opinion}`, `feat_pt_achievement_1y`, `feat_pt_accuracy_1y`, `feat_pt_range_hit_rate`, `feat_rel_volume`, `feat_avg_beta`, `feat_mcap_country_r`, `feat_net_eps_drift(_n)`, `feat_last_{q,y}_surprise`, `feat_eps_beat_rate(_annual)`, `feat_one_day_return`, `feat_price_chg_pct_3m`, `feat_total_return_*` (14 windows), `feat_tr_cagr_{1y,3y,5y,10y}`, `feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`, `feat_median_piotroski_f_score`, plus raw `days_*` horizons |
 | `mv_pymc_dcf_pt`             | `observed_pt`                                                                  | `feat_fcf_growth_{1y,2y}`, `feat_fcf_terminal_growth`, `feat_reinvest_rate`, `feat_capex_to_fcf`, `feat_tr_cagr_{3y,10y}`                                 |
 | `mv_pymc_dividend_safety`    | `observed_div_yield`                                                           | `feat_fcf_coverage`, `feat_cfo_coverage`, `feat_eps_payout_ratio`, `feat_dps_growth_{1y,3y,5y}`, `feat_yield_spread_vs_5y`                                |
 | `mv_pymc_credit_risk`        | `observed_altman_z`                                                            | `feat_distress_zone`, `feat_z_trend_{1y,3y}`, `feat_cfo_capex_cov`, `feat_fcf_yield`, `feat_beta_2y`                                                      |
@@ -835,6 +845,11 @@ pml.calc_change_ratio(current_val, previous_val)   -- (cur - prev) / prev
 pml.target_drift(arr DOUBLE PRECISION[])           -- AVG of consecutive calc_change_ratio
 pml.target_drift(arr DOUBLE PRECISION[], min_points INT)  -- same, NULL unless >= min_points pairs
 pml.target_drift_n(arr DOUBLE PRECISION[]) → INT   -- count of valid consecutive pairs in target_drift
+pml.signed_drift(arr DOUBLE PRECISION[])           -- as target_drift, but denominator is ABS(prev)
+pml.signed_drift(arr DOUBLE PRECISION[], min_points INT)  -- sign-preserving; use for series that
+                                                   -- cross zero (EPS, net income, FCF). target_drift
+                                                   -- INVERTS those: -2.00 → -1.00 scores -0.5.
+                                                   -- No signed_drift_n — reuse target_drift_n.
 
 -- Transforms
 pml.clamp_score(val, min DEFAULT 0, max DEFAULT 100)
@@ -915,10 +930,12 @@ The other ~45 files there are hand-written screen/analysis scripts unmanaged by 
 - Schema: `pml.pml_df_metadata` (DDL `pml_df_metadata.sql`, population `pml_df_metadata_populate.sql`)
 - Functions / MVs / catalogue views: `pml_feature_catalogue.sql`
 - Sampling & diagnostics: `pymc_models/_workflow.py`
-- Drift-feature exclusions: `KALMAN_DRIFT_EXCLUDED_FEATURES` in `KalmanFilterModel.py` — 15 surviving columns (cond 23,
-  max VIF 3.8). Exclusions live HERE, never as a `pymc_role='excluded'` flip in SQL: that drops the row from
-  `vw_pymc_feature_catalogue` while the MV still emits the column, so `assert_pymc_catalogue_coverage()` raises
+- Drift-feature exclusions: `KALMAN_DRIFT_EXCLUDED_FEATURES` in `KalmanFilterModel.py` — 16 surviving columns
+  (cond 19.7, max VIF 4.25). Exclusions live HERE, never as a `pymc_role='excluded'` flip in SQL: that drops the row
+  from `vw_pymc_feature_catalogue` while the MV still emits the column, so `assert_pymc_catalogue_coverage()` raises
   MISSING_FROM_CATALOGUE. Collapsed families keep one representative each (`feat_pt_drift`, `feat_analyst_rating`).
+  **Excluding ≠ removing:** the price-derived market-cap/EV four left the MV *and* the catalogue in 0.9.9.15, so they
+  carry no exclusion entry; only `feat_net_eps_drift_n` (a support counter) was added to the union.
 - Artifact sections: `_EXPORT_SECTION_DIRS` in `pymc_kalman_filter_pt.py`
 - Kalman decision latent: `KALMAN_SCREEN_LATENT` / `resolve_screen_latent` in `pymc_kalman_filter_pt.py` — every
   consumer (screen, price-target MC, risk book, analytics export, §13b plots, prior predictive) resolves the

@@ -458,7 +458,7 @@ SELECT id.isin,
        emf.ebitda_per_employee,
        CURRENT_TIMESTAMP          AS feature_calculated_at
 FROM vw_identifier_columns id
-         JOIN equities e ON id.isin = e."ISIN"
+         JOIN equities_df e ON id.isin = e."ISIN"
          LEFT JOIN calc_growth_features() gf(isin, revenue_growth_yoy, ebitda_growth_yoy, operating_income_growth,
                                              fcf_growth, revenue_cagr_5y, forward_revenue_growth, revenue_vs_5y_avg)
                    ON id.isin = gf.isin
@@ -686,4 +686,3 @@ create index idx_mv_dcf_industry
 
 create index idx_mv_dcf_country
     on mv_dcf (country);
-

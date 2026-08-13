@@ -1,5 +1,5 @@
 -- Drop existing table if it exists
-DROP TABLE IF EXISTS equities CASCADE;
+DROP TABLE IF EXISTS equities_df CASCADE;
 
 CREATE TABLE equities
 (
@@ -731,7 +731,7 @@ CREATE TABLE equities
     "Fiscal Year"                                      INTEGER,                      -- feature: Fiscal year from report date | alias: fiscal_year
     "Reporting Lag"                                    NUMERIC                       -- feature: Reporting Lag | alias: reporting_lag
 ) TABLESPACE pg_default;
-COMMENT ON TABLE equities IS 'Equities screening data with financial metrics and company information';
+COMMENT ON TABLE equities_df IS 'Equities screening data with financial metrics and company information';
 
 -- ============================================================
 -- Index Optimization Migration for postgres.public schema
@@ -744,7 +744,7 @@ DROP INDEX IF EXISTS idx_equities_region;
 DROP INDEX IF EXISTS idx_equities_country;
 DROP INDEX IF EXISTS idx_equities_trading_country;
 DROP INDEX IF EXISTS idx_equities_exchange;
-CREATE INDEX idx_equities_geography ON equities ("Region", "Country", "Exchange");
+CREATE INDEX idx_equities_geography ON equities_df ("Region", "Country", "Exchange");
 
 -- 3. EQUITIES: Consolidate classification indexes
 DROP INDEX IF EXISTS idx_equities_sector;
@@ -752,16 +752,16 @@ DROP INDEX IF EXISTS idx_equities_industry;
 DROP INDEX IF EXISTS idx_equities_style_class;
 DROP INDEX IF EXISTS idx_equities_size_class;
 CREATE INDEX idx_equities_classification
-    ON equities ("Sector", "Industry", "Size Class", "Style Class");
+    ON equities_df ("Sector", "Industry", "Size Class", "Style Class");
 
 -- 4. EQUITIES: Optimize name index
 DROP INDEX IF EXISTS idx_equities_name;
-CREATE INDEX idx_equities_name ON equities ("Name" text_pattern_ops);
+CREATE INDEX idx_equities_name ON equities_df ("Name" text_pattern_ops);
 
 -- 5. EQUITIES: Add analytical indexes
 CREATE INDEX idx_equities_fiscal
-    ON equities ("Fiscal Year", "Fiscal Quarter", "Income Statement Report Date");
-CREATE INDEX idx_equities_market_cap ON equities ("Market Cap" DESC NULLS LAST);
+    ON equities_df ("Fiscal Year", "Fiscal Quarter", "Income Statement Report Date");
+CREATE INDEX idx_equities_market_cap ON equities_df ("Market Cap" DESC NULLS LAST);
 
 -- 6. MV_ALL_STOCK_FEATURES: Remove redundant ISIN index
 DROP INDEX IF EXISTS idx_mv_all_stock_features_isin;
@@ -770,4 +770,3 @@ DROP INDEX IF EXISTS idx_mv_all_stock_features_isin;
 -- DROP INDEX IF EXISTS idx_equities_schema_metadata_ddl;
 
 COMMIT;
-

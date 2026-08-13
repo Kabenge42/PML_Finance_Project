@@ -57,7 +57,7 @@ class RiskBook:
     ----------
     analytics : pandas.DataFrame
         Per-ISIN copy of the screen ``results`` table (including the
-        ``mcap_country_r`` size-rank ratio) augmented with the risk columns
+        ``mcap_global_r`` size-rank ratio) augmented with the risk columns
         ``p_upside_pos``, ``kalman_gain``, ``p_upside_pos_cond``, ``band_width``,
         ``exp_vol``, ``cvar05``, ``ret_vol_ratio``, ``tail_risk``, ``starr``,
         ``expected_sharpe`` and the normalised ``book_weight`` (0 for names
@@ -149,7 +149,7 @@ def compute_cvar_aware_book(
         decimals (``ScreenContext.eu``).
     results
         Per-ISIN screen table; must carry ``isin``, ``expected_pt``,
-        ``expected_pt_hdi_{lo,hi}`` and ``expected_upside``. ``mcap_country_r``,
+        ``expected_pt_hdi_{lo,hi}`` and ``expected_upside``. ``mcap_global_r``,
         ``mc_prob_pos`` and ``er_mean`` / ``er_sd`` / ``er_p05`` are used when
         present.
     alpha
@@ -164,7 +164,7 @@ def compute_cvar_aware_book(
         universe-average state confidence.
     mcap_r_max
         Market-cap pre-selection gate: candidates need
-        ``mcap_country_r < mcap_r_max``, where
+        ``mcap_global_r < mcap_r_max``, where
         ``feat_mcap_country_r = (100 - market_cap_country_r) / 100`` (smaller =
         larger cap). Names with a missing rank are excluded (strict, matching the
         NULL semantics of the SQL candidate filters).
@@ -265,15 +265,15 @@ def compute_cvar_aware_book(
         _md_disp.to_numpy(), _mc_loss.to_numpy(), np.full(len(nm), 0.01)])
     nm['starr'] = nm['expected_upside'] / nm['tail_risk']
 
-    # Market-cap pre-selection: only top-of-country names (mcap_country_r <
+    # Market-cap pre-selection: only top-of-country names (mcap_global_r <
     # mcap_r_max, i.e. raw market_cap_country_r > 98 at the 0.02 default) are
     # long-book eligible. Strict on missing ranks — NaN < x is False — matching
     # the NULL semantics of the §11–§13 SQL candidate filters.
-    if 'mcap_country_r' in nm.columns:
-        _mcap_r = pd.to_numeric(nm['mcap_country_r'], errors='coerce')
-        _mcap_ok = (_mcap_r <= mcap_r_max).fillna(False).to_numpy(dtype=bool)
+    if 'mcap_global_r' in nm.columns:
+        _mcap_r = pd.to_numeric(nm['mcap_global_r'], errors='coerce')
+        _mcap_ok = (_mcap_r < mcap_r_max).fillna(False).to_numpy(dtype=bool)
     else:  # pre-0.9.9.12 results frame
-        logger.warning('results frame lacks mcap_country_r — the market-cap '
+        logger.warning('results frame lacks mcap_global_r — the market-cap '
                        'pre-selection gate (mcap_r_max=%.4f) is skipped.', mcap_r_max)
         _mcap_ok = np.ones(len(nm), dtype=bool)
 

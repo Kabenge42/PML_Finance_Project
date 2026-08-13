@@ -1,6 +1,4 @@
--- Cyclic dependencies found
-
-create function beat_counts(surprises double precision[])
+create function pml.beat_counts(surprises numeric[])
 	returns TABLE(n_total integer, n_beats integer)
 	immutable
 	parallel safe
@@ -13,10 +11,10 @@ FROM UNNEST(surprises) AS s;
 $$
 ;
 
-alter function beat_counts(unknown) owner to postgres
+alter function pml.beat_counts(numeric[]) owner to postgres
 ;
 
-create function beat_counts(surprises numeric[])
+create function pml.beat_counts(surprises double precision[])
 	returns TABLE(n_total integer, n_beats integer)
 	immutable
 	parallel safe
@@ -29,5 +27,5 @@ FROM UNNEST(surprises) AS s;
 $$
 ;
 
-alter function beat_counts(unknown) owner to postgres
+alter function pml.beat_counts(double precision[]) owner to postgres
 ;

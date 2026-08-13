@@ -1,4 +1,4 @@
-create function assert_pymc_catalogue_coverage() returns void
+create function pml.assert_pymc_catalogue_coverage() returns void
 	language plpgsql
 as
 $$
@@ -20,5 +20,5 @@ END;
 $$
 ;
 
-alter function assert_pymc_catalogue_coverage() owner to postgres
+alter function pml.assert_pymc_catalogue_coverage() owner to postgres
 ;

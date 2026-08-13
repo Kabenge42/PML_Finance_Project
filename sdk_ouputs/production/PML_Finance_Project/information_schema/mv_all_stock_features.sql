@@ -818,7 +818,7 @@ SELECT id.isin,
        fcnf.forward_pe_vs_sector_proxy,
        CURRENT_TIMESTAMP                   AS feature_calculated_at
 FROM information_schema.vw_identifier_columns id
-         JOIN equities e ON id.isin = e."ISIN"
+         JOIN equities_df e ON id.isin = e."ISIN"
          LEFT JOIN information_schema.calc_valuation_features() vf(isin, p_e_ratio, p_b_ratio, ev_ebitda_ratio,
                                                                    ev_sales_ratio, dividend_yield, peg_ratio)
                    ON id.isin = vf.isin
@@ -1354,4 +1354,3 @@ create index idx_mv_all_stock_features_exchange
 
 create index idx_mv_all_stock_features_market_cap
     on information_schema.mv_all_stock_features (market_cap desc);
-

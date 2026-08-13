@@ -4,8 +4,11 @@
     <option name="LINE_SEPARATOR" value="&#13;&#10;" />
     <option name="FORMATTER_TAGS_ACCEPT_REGEXP" value="true" />
     <CsvCodeStyleSettings>
+      <option name="TRIM_LEADING_WHITE_SPACES" value="true" />
+      <option name="TRIM_TRAILING_WHITE_SPACES" value="true" />
       <option name="TABULARIZE" value="true" />
       <option name="WHITE_SPACES_OUTSIDE_QUOTES" value="true" />
+      <option name="LEADING_WHITE_SPACES" value="true" />
     </CsvCodeStyleSettings>
     <DBN-PSQL>
       <case-options enabled="true">
@@ -31,33 +34,44 @@
         <option name="ITERATION_ELEMENTS_WRAPPING" value="chop_down_if_not_single" />
       </formatting-settings>
     </DBN-SQL>
-    <SqlCodeStyleSettings version="7">
-      <option name="KEYWORD_CASE" value="2" />
-      <option name="IDENTIFIER_CASE" value="1" />
-      <option name="CUSTOM_TYPE_CASE" value="0" />
+    <PostgresCodeStyleSettings version="7">
+      <option name="USE_GENERAL_STYLE" value="false" />
+      <option name="TYPE_CASE" value="1" />
+      <option name="CUSTOM_TYPE_CASE" value="1" />
       <option name="ALIAS_CASE" value="1" />
-      <option name="BUILT_IN_CASE" value="0" />
+      <option name="QUOTE_IDENTIFIER" value="1" />
+      <option name="FROM_ALIGN_JOIN_TABLES" value="true" />
+      <option name="FROM_ALIGN_ALIASES" value="true" />
+      <option name="VIEW_WRAP_AS" value="true" />
+      <option name="ROUTINE_ARG_ALIGN_TYPES" value="true" />
+      <option name="SCRIPT_STMT_SEMICOLON_WRAP" value="1" />
+      <option name="IMP_IF_THEN_INDENT_THEN_ELSE" value="true" />
+      <option name="EXPR_CASE_THEN_ALIGN" value="true" />
+      <option name="EXPR_CASE_ELSE_ALIGN_THEN" value="true" />
+    </PostgresCodeStyleSettings>
+    <SqlCodeStyleSettings version="7">
+      <option name="IDENTIFIER_CASE" value="1" />
+      <option name="ALIAS_CASE" value="1" />
       <option name="QUOTED_IDENTIFIER_CASE" value="1" />
-      <option name="SUBQUERY_OPENING" value="1" />
-      <option name="SUBQUERY_CLOSING" value="4" />
-      <option name="SUBQUERY_PAR_SPACE_BEFORE" value="1" />
-      <option name="INSERT_MATRIX_ALIGN" value="true" />
-      <option name="INSERT_MATRIX_INCLUDING_HEADER" value="true" />
-      <option name="WITH_ALIGN_AS" value="true" />
-      <option name="SELECT_NEW_LINE_AFTER_ALL_DISTINCT" value="true" />
+      <option name="QUOTE_IDENTIFIER" value="1" />
       <option name="FROM_ALIGN_JOIN_TABLES" value="true" />
       <option name="FROM_ALIGN_ALIASES" value="true" />
       <option name="ROUTINE_ARG_ALIGN_TYPES" value="true" />
-      <option name="ROUTINE_PG_R_QUOTE_WRAP_AFTER" value="true" />
+      <option name="SCRIPT_STMT_SEMICOLON_WRAP" value="1" />
       <option name="IMP_IF_THEN_INDENT_THEN_ELSE" value="true" />
-      <option name="IMP_LOOP_END_INDENT" value="true" />
+      <option name="EXPR_CASE_THEN_ALIGN" value="true" />
+      <option name="EXPR_CASE_ELSE_ALIGN_THEN" value="true" />
     </SqlCodeStyleSettings>
     <editorconfig>
       <option name="ENABLED" value="false" />
     </editorconfig>
+    <codeStyleSettings language="PostgreSQL">
+      <indentOptions>
+        <option name="USE_TAB_CHARACTER" value="true" />
+        <option name="SMART_TABS" value="true" />
+      </indentOptions>
+    </codeStyleSettings>
     <codeStyleSettings language="SQL">
-      <option name="KEEP_LINE_BREAKS" value="false" />
-      <option name="KEEP_FIRST_COLUMN_COMMENT" value="false" />
       <indentOptions>
         <option name="USE_TAB_CHARACTER" value="true" />
         <option name="SMART_TABS" value="true" />

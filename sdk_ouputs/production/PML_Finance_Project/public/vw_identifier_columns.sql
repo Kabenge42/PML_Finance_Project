@@ -38,8 +38,7 @@ SELECT "ISIN"                              AS isin,
        "Next FY End Date"                  AS next_fy_end_date,
        "Next Income Statement Report Date" AS next_income_statement_report_date,
        "Reference Date"                    AS reference_date
-FROM equities e;
+FROM equities_df e;
 
 alter table vw_identifier_columns
     owner to postgres;
-

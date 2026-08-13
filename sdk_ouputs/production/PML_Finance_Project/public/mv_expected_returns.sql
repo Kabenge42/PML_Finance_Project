@@ -220,7 +220,7 @@ SELECT id.isin,
        fcf_cal.reporting_freshness_score,
        CURRENT_TIMESTAMP                     AS feature_calculated_at
 FROM vw_identifier_columns id
-         JOIN equities e ON id.isin = e."ISIN"
+         JOIN equities_df e ON id.isin = e."ISIN"
          LEFT JOIN calc_valuation_features() vf(isin, p_e_ratio, p_b_ratio, ev_ebitda_ratio, ev_sales_ratio,
                                                 dividend_yield, peg_ratio) ON id.isin = vf.isin
          LEFT JOIN calc_sentiment_features() sf(isin, analyst_bullish_pct, analyst_bearish_pct, analyst_neutral_pct,
@@ -350,4 +350,3 @@ create index idx_mv_expected_returns_sector_upside
 create index idx_mv_expected_returns_conviction
     on mv_expected_returns (analyst_conviction desc)
     where (analyst_conviction IS NOT NULL);
-

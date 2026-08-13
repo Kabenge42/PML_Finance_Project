@@ -1,4 +1,4 @@
-create procedure refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT true, IN assert_coverage boolean DEFAULT false)
+create procedure pml.refresh_pymc_materialized_views(IN use_concurrently boolean DEFAULT true, IN assert_coverage boolean DEFAULT false)
 	language plpgsql
 as
 $$
@@ -27,5 +27,5 @@ END;
 $$
 ;
 
-alter procedure refresh_pymc_materialized_views(unknown, unknown) owner to postgres
+alter procedure pml.refresh_pymc_materialized_views(boolean, boolean) owner to postgres
 ;

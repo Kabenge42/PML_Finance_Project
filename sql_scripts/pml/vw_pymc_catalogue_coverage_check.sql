@@ -1,4 +1,5 @@
-create view vw_pymc_catalogue_coverage_check(model_target, feat_name, catalogue_rows, status) as
+create view pml.vw_pymc_catalogue_coverage_check(model_target, feat_name, catalogue_rows, status)
+as
 WITH mv_map(mv_name, model_target) AS (VALUES ('mv_pymc_earnings_beat'::text, 'earnings_beat'::text),
                                               ('mv_pymc_price_target'::text, 'price_target'::text),
                                               ('mv_pymc_kalman_pt'::text, 'kalman_pt'::text),
@@ -18,7 +19,7 @@ WITH mv_map(mv_name, model_target) AS (VALUES ('mv_pymc_earnings_beat'::text, 'e
      cat AS (SELECT vw_pymc_feature_catalogue.model_target,
                     vw_pymc_feature_catalogue.feature_alias,
                     count(*) AS n_rows
-             FROM vw_pymc_feature_catalogue
+             FROM pml.vw_pymc_feature_catalogue
              WHERE vw_pymc_feature_catalogue.feature_alias ~~ 'feat\_%'::text
 	            OR vw_pymc_feature_catalogue.feature_alias ~~ 'observed\_%'::text
 	            OR vw_pymc_feature_catalogue.feature_alias ~~ 'n\_%'::text
@@ -43,6 +44,6 @@ FROM cat                   c
 WHERE mc.feat_name IS NULL
 ;
 
-alter table vw_pymc_catalogue_coverage_check
+alter table pml.vw_pymc_catalogue_coverage_check
 	owner to postgres
 ;

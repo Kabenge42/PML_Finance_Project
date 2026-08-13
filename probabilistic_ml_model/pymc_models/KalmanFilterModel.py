@@ -223,9 +223,39 @@ KALMAN_NOISE_WIDENER_FEATURES: frozenset[str] = frozenset({
 # would double-count them. The ordered tuple backs display frames; the
 # frozenset backs the drift-exclusion union.
 KALMAN_TILT_FEATURE_ORDER: tuple[str, ...] = (
-    "feat_avg_beta", "feat_mcap_country_r", "feat_rel_volume",
+    "feat_avg_beta", "feat_mcap_global_r", "feat_rel_volume",
 )
 KALMAN_TILT_FEATURES: frozenset[str] = frozenset(KALMAN_TILT_FEATURE_ORDER)
+
+# Market-cap percentile-rank siblings of the ``feat_mcap_global_r`` size tilt.
+#
+# ``mv_pymc_kalman_pt`` emits six nested rank-ratio scopes — global / region /
+# country, each also sector-relative — all built as ``(100 - rank) / 100``.
+# ``feat_mcap_global_r`` is the ONE the model consumes, as a tilt driver with its
+# own ``pm.Data`` container and sign-fixed loading; the other five restate the same
+# size contrast against a different peer set. Measured on the four regional CSV
+# snapshots (6 274 complete rows), the pairwise correlations run:
+#
+#     r(global_r, global_sec_r)   = +0.978
+#     r(region_r, country_r)      = +0.945
+#     r(global_r, country_sec_r)  = +0.783   <- the WEAKEST pair in the family
+#
+# Admitting them to the drift matrix would therefore add six near-duplicate
+# columns and wreck the conditioning the pruned matrix was tuned for (cond 19.7,
+# max VIF 4.25). Promoting them to additional tilt drivers is no better: ~0.9
+# correlated loadings are weakly identified and fight for the same signal.
+#
+# They stay in the MV and the catalogue because the screen, the §11-§13 candidate
+# cohorts, EDA and the analytics export all use them. As the header below spells
+# out, the drift matrix is a Python-side concern — this frozenset is where the
+# exclusion belongs, NOT a ``pymc_role='excluded'`` flip in SQL.
+KALMAN_SIZE_RANK_SIBLING_FEATURES: frozenset[str] = frozenset({
+    "feat_mcap_global_r",
+    "feat_mcap_global_sec_r",
+    "feat_mcap_region_r",
+    "feat_mcap_region_sec_r",
+    "feat_mcap_country_sec_r",
+})
 
 # Valid-pair counters behind the ``target_drift_n`` SQL helper
 # (feature_role='metadata'): drift-support diagnostics, not signals.
@@ -233,6 +263,7 @@ KALMAN_DRIFT_SUPPORT_COUNTERS: frozenset[str] = frozenset({
     "feat_pt_drift_n",
     "feat_price_drift_n",
     "feat_vol_drift_n",
+    "feat_net_eps_drift_n",
 })
 
 # Raw analyst-rating counts. ``feat_analyst_rating`` enters the drift matrix as
@@ -316,7 +347,25 @@ KALMAN_TIME_COVARIATE_PREFIX: str = "days_"
 # Union of every alias barred from the drift design matrix (``days_*`` columns
 # are excluded by prefix, see KALMAN_TIME_COVARIATE_PREFIX).
 #
-# The surviving drift set is 15 columns, down from 21. The 2026-07-31 note here
+# 2026-08-13 — MARKET-CAP / EV FAMILY SWAPPED FOR AN EPS FAMILY. Four columns
+# left ``mv_pymc_kalman_pt`` entirely (so they need no entry here):
+# ``feat_mv_ev_drift``, ``feat_mcap_trend_1y``, ``feat_mcap_vs_3yavg`` and
+# ``feat_ev_vs_3yavg``. All four were PRICE-derived — ``market_cap`` is
+# ``last_price * shrs_out`` — so they restated price history the design already
+# carried through ``feat_price_drift``, ``feat_price_chg_pct_3m``,
+# ``feat_one_day_return`` and the ``feat_total_return_*`` family, without saying
+# anything about WHY analysts revise a target. Their replacements are
+# earnings-derived and orthogonal to the price trails: ``feat_net_eps_drift``
+# (sign-preserving drift of the net-basic-EPS fiscal-year trail — see
+# ``pml.signed_drift``: EPS crosses zero, so the usual ``pml.target_drift``
+# denominator would invert the signal for loss-makers), ``feat_last_q_surprise``
+# / ``feat_last_y_surprise`` and ``feat_eps_beat_rate`` /
+# ``feat_eps_beat_rate_annual``. Only the support counter
+# ``feat_net_eps_drift_n`` is excluded, via KALMAN_DRIFT_SUPPORT_COUNTERS. The
+# trio survives unchanged in the other six ``mv_pymc_*`` views; only the
+# ``kalman_pt`` model_target was dropped.
+#
+# The surviving drift set is 16 columns. The 2026-07-31 note here
 # flagged ``feat_analyst_conviction`` as a null beta to "revisit if it stays null
 # on the genuine (isin, time) panel" — it did, and the T=4 panel supplied the
 # reason: conviction is ``|bullish - bearish|``, so it never carried information
@@ -336,9 +385,40 @@ KALMAN_TIME_COVARIATE_PREFIX: str = "days_"
 #     set                                  k    cond   maxVIF   R^2
 #     current                             21   1 580    162.5   0.6538
 #     - pt_drift siblings                 18     106     14.1   0.6518
-#     - + analyst family (this build)     15      23      3.8   0.6499
+#     - + analyst family                  15      23      3.8   0.6499
 #
 # i.e. 69x better conditioning for a 0.6 % relative loss in explanatory power.
+#
+# The 2026-08-13 mcap/EV -> EPS swap, re-measured on the live 6 538-name MV with
+# ONE consistent response construction (log1p of the support-clipped implied
+# upside) so the two arms are directly comparable — these numbers are NOT on the
+# same scale as the 21/18/15 rows above, which used the earlier construction:
+#
+#     set                                  k    cond   maxVIF   R^2
+#     mcap/EV family (previous)           15    24.7     4.36   0.6695
+#     EPS family (this build)             16    19.7     4.25   0.6672
+#
+# Read that honestly: explanatory power is FLAT (-0.3 % relative), not improved.
+# The swap is not an R^2 play. The mcap/EV columns scored as well as they did
+# precisely BECAUSE they restate price — and the response is analyst-implied
+# upside off that same price, so their contribution was closer to duplication
+# than to independent signal. What the swap buys is (a) modestly better
+# conditioning, and (b) five predictors that are near-orthogonal to everything
+# else in the design: every new column lands at VIF <= 1.19, and the strongest
+# correlation among them is r(eps_beat_rate, eps_beat_rate_annual) = +0.369 —
+# well inside the range where both legs are worth carrying.
+#
+# Coverage is the live caveat, measured on the same 6 540-row MV:
+# feat_net_eps_drift 100 %, feat_eps_beat_rate_annual 85.2 %,
+# feat_last_y_surprise 76.4 %, feat_eps_beat_rate 54.3 %,
+# feat_last_q_surprise 46.6 %. The two quarterly columns are thin. That is
+# tolerable HERE because a sparse PREDICTOR zero-fills to the column mean after
+# standardisation (``prepare_kalman_panel_inputs``), which shrinks its beta
+# toward 0 without dropping a single name — unlike a sparse RESPONSE series,
+# which is what produced the rank-1 ICM identification failure documented in
+# ``pml_feature_catalogue.sql`` (max R-hat 4.45, min ESS 4.3). If the quarterly
+# betas come back dead on the next full-scale fit, drop them here rather than in
+# SQL, for the reason given below.
 #
 # These columns are NOT removed from ``mv_pymc_kalman_pt`` or the catalogue. They
 # remain valid features for EDA and the analytics export, and the analyst family
@@ -351,6 +431,7 @@ KALMAN_DRIFT_EXCLUDED_FEATURES: frozenset[str] = (
     KALMAN_LEAKAGE_FEATURES
     | KALMAN_NOISE_WIDENER_FEATURES
     | KALMAN_TILT_FEATURES
+    | KALMAN_SIZE_RANK_SIBLING_FEATURES
     | KALMAN_DRIFT_SUPPORT_COUNTERS
     | KALMAN_RATING_COUNT_FEATURES
     | KALMAN_COLLINEAR_COMPOSITION_FEATURES
@@ -1877,7 +1958,7 @@ class KalmanFilterPriceTarget:
 # was still including it.
 #
 # So: keep ``country`` as the geography control (it is also the dimension
-# ``feat_mcap_country_r`` is defined against) and collapse ``industry`` to its
+# ``feat_mcap_global_r`` is defined against) and collapse ``industry`` to its
 # parent ``sector``, the standard de-collinearisation move for a near-nested
 # pair. Two orthogonal dimensions, both low-to-moderate cardinality.
 # ``region`` is deliberately absent: it and ``trading_region`` are the SAME
@@ -1966,17 +2047,19 @@ class KalmanPanelInputs:
         catalogue-driven ``kalman_pt`` mutable_predictor aliases surviving
         :meth:`KalmanFilterPriceTarget.select_drift_features`: the
         analyst-target / price drift trails, short/mid-horizon momentum, the
-        analyst-sentiment composition (``feat_analyst_bullish_pct`` /
-        ``feat_analyst_bearish_pct`` / ``feat_analyst_conviction`` /
-        ``feat_analyst_rating``), the 1-year price-target credibility trio
-        (``feat_pt_achievement_1y`` / ``feat_pt_accuracy_1y`` /
-        ``feat_pt_range_hit_rate``), the consensus-dispersion drift
-        (``feat_pt_noise_drift``), the market-cap / EV size-&-trend
-        signals (``feat_mcap_trend_1y`` / ``feat_mcap_vs_3yavg`` /
-        ``feat_ev_vs_3yavg`` / ``feat_mv_ev_drift``), and the
-        fundamental-quality level ``feat_median_piotroski_f_score`` (median of
-        the four per-fiscal-year Piotroski F-scores; the per-year components
-        are barred via :data:`KALMAN_PIOTROSKI_COMPONENT_FEATURES`).
+        analyst-sentiment representative ``feat_analyst_rating`` (the
+        composition legs are barred via
+        :data:`KALMAN_COLLINEAR_COMPOSITION_FEATURES`), the 1-year
+        price-target credibility trio (``feat_pt_achievement_1y`` /
+        ``feat_pt_accuracy_1y`` / ``feat_pt_range_hit_rate``), the
+        consensus-dispersion drift (``feat_pt_noise_drift``), the EPS trend /
+        surprise / beat-frequency family (``feat_net_eps_drift`` /
+        ``feat_last_q_surprise`` / ``feat_last_y_surprise`` /
+        ``feat_eps_beat_rate`` / ``feat_eps_beat_rate_annual``, which replaced
+        the price-derived market-cap & EV signals), and the fundamental-quality
+        level ``feat_median_piotroski_f_score`` (median of the four
+        per-fiscal-year Piotroski F-scores; the per-year components are barred
+        via :data:`KALMAN_PIOTROSKI_COMPONENT_FEATURES`).
     n_analysts, sqrt_n_analysts : numpy.ndarray
         Floored analyst count and its NumPy-precomputed square root (so the PyMC
         graph never applies an inplace ``Sqrt`` that NUTS rejects).
@@ -1989,7 +2072,7 @@ class KalmanPanelInputs:
         ``beta_{1y,2y,5y}``). The systematic-risk (CAPM) driver of the
         ``exp(-risk_penalty * z(avg_beta))`` risk adjustment.
     size_ratio : numpy.ndarray
-        Per-ISIN country market-cap rank ratio (``feat_mcap_country_r`` =
+        Per-ISIN country market-cap rank ratio (``feat_mcap_global_r`` =
         ``(100 - market_cap_country_r) / 100``): ~0 for the largest name in
         its country, larger for smaller caps. Carried raw and z-scored inside
         :func:`build_fused_kalman_pt_model`, where it discounts ``risk_adj_return``
@@ -2097,7 +2180,7 @@ def build_fused_kalman_pt_model(
 
     A second **size tilt** sits alongside the beta penalty on ``risk_adj_return``:
     ``risk_adj_return = expected_return - risk_loading * z(avg_beta)
-    - size_loading * z(feat_mcap_country_r)`` where ``feat_mcap_country_r =
+    - size_loading * z(feat_mcap_global_r)`` where ``feat_mcap_global_r =
     market_cap / market_cap_3yavg`` is the firm's current size relative to its own
     3-year average. With a positive ``size_loading`` names trading **above** their
     3-year average size (re-rated up) are discounted while names **below** it earn a
@@ -2278,8 +2361,8 @@ def build_fused_kalman_pt_model(
     size_penalty : float
         Prior scale (``HalfNormal`` sigma) of the learned, sign-fixed
         ``size_loading`` applied to ``risk_adj_return`` via the per-ISIN size ratio
-        ``feat_mcap_country_r`` (z-scored) as an additive tilt
-        ``- size_loading * z(feat_mcap_country_r)`` — discounting names trading above
+        ``feat_mcap_global_r`` (z-scored) as an additive tilt
+        ``- size_loading * z(feat_mcap_global_r)`` — discounting names trading above
         their 3-year average size. ``0.0`` disables the size factor entirely.
     volume_penalty : float
         Prior scale (``HalfNormal`` sigma) of the learned, sign-fixed
@@ -2405,7 +2488,7 @@ def build_fused_kalman_pt_model(
     )
 
     # Standardised size ratio for the learned size tilt on ``expected_return``.
-    # ``panel.size_ratio`` is ``feat_mcap_country_r`` (= market_cap / market_cap_3yavg):
+    # ``panel.size_ratio`` is ``feat_mcap_global_r`` (= market_cap / market_cap_3yavg):
     # the firm's current market cap relative to its own 3-year average. Raw values
     # are O(1) around 1.0, so z-scoring keeps the tilt a *relative* cross-sectional
     # factor (currently-shrunk vs currently-extended names) robust to level shifts,
@@ -2462,12 +2545,12 @@ def build_fused_kalman_pt_model(
         # provenance; the math consumes the standardised ``beta_z``.
         pm.Data("feat_avg_beta", avg_beta_filled, dims="isin")
         beta_z = pm.Data("feat_avg_beta_z", avg_beta_z, dims="isin")
-        # Size driver (feat_mcap_country_r = (100 - market_cap_country_r) / 100,
+        # Size driver (feat_mcap_global_r = (100 - market_cap_country_r) / 100,
         # ~0 = largest in country): the learned additive size tilt on
         # ``expected_return`` below. Raw container retained for provenance; the
         # math consumes the standardised ``size_z``.
-        pm.Data("feat_mcap_country_r", size_ratio_filled, dims="isin")
-        size_z = pm.Data("feat_mcap_country_r_z", size_ratio_z, dims="isin")
+        pm.Data("feat_mcap_global_r", size_ratio_filled, dims="isin")
+        size_z = pm.Data("feat_mcap_global_r_z", size_ratio_z, dims="isin")
         # Volume driver (feat_rel_volume, relative trading volume): the learned
         # additive volume tilt on ``risk_adj_return`` below. Raw container retained
         # for provenance; the math consumes the standardised ``volume_z``.
@@ -2666,7 +2749,7 @@ def build_fused_kalman_pt_model(
         #
         # The fix is an ADDITIVE tilt ``-loading · z`` which is monotone in the
         # feature regardless of the sign of ``expected_return``: higher systematic
-        # risk (``feat_avg_beta``) and a larger size-vs-own-history (``feat_mcap_country_r``,
+        # risk (``feat_avg_beta``) and a larger size-vs-own-history (``feat_mcap_global_r``,
         # = market_cap / market_cap_3yavg) ALWAYS reduce the risk-adjusted return.
         # The loadings are LEARNED (sign-fixed ``HalfNormal`` so the direction stays
         # a discount while the magnitude is identified from the cross-section), which

@@ -1,6 +1,4 @@
--- Cyclic dependencies found
-
-create function target_drift_n(arr double precision[]) returns integer
+create function pml.target_drift_n(arr numeric[]) returns integer
 	immutable
 	parallel safe
 	language sql
@@ -15,10 +13,10 @@ WHERE i < array_length(arr, 1)
 $$
 ;
 
-alter function target_drift_n(unknown) owner to postgres
+alter function pml.target_drift_n(numeric[]) owner to postgres
 ;
 
-create function target_drift_n(arr numeric[]) returns integer
+create function pml.target_drift_n(arr double precision[]) returns integer
 	immutable
 	parallel safe
 	language sql
@@ -33,5 +31,5 @@ WHERE i < array_length(arr, 1)
 $$
 ;
 
-alter function target_drift_n(unknown) owner to postgres
+alter function pml.target_drift_n(double precision[]) owner to postgres
 ;

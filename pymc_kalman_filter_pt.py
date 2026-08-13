@@ -190,12 +190,16 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
                   'feat_total_return_mtd', 'feat_total_return_qtd',
                   'feat_total_return_2025', 'feat_total_return_2024', 'feat_total_return_2023',
                   'feat_total_return_2022', 'feat_total_return_2021',
-                  # Drift of the market_cap / enterprise_value ratio trail (equity share
-                  # of EV) across the fiscal-year lags — a state-transition drift predictor.
-                  'feat_mv_ev_drift',
-                  # Cross-cutting market-cap / EV size & trend feats (added to every
-                  # mv_pymc_* view; provenance-only for the fused panel — see §note below).
-                  'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg',
+                  # EPS trend / surprise / beat-frequency family. Replaced the
+                  # price-derived market-cap & EV signals (feat_mv_ev_drift plus the
+                  # feat_mcap_trend_1y / feat_mcap_vs_3yavg / feat_ev_vs_3yavg trio,
+                  # which mv_pymc_kalman_pt no longer emits — market_cap is
+                  # last_price * shrs_out, so they restated the price trails above).
+                  # feat_net_eps_drift_n is the valid-pair counter and is barred from
+                  # the drift matrix by KALMAN_DRIFT_SUPPORT_COUNTERS.
+                  'feat_net_eps_drift', 'feat_net_eps_drift_n',
+                  'feat_last_q_surprise', 'feat_last_y_surprise',
+                  'feat_eps_beat_rate', 'feat_eps_beat_rate_annual',
                   # Piotroski F-score fundamental-quality trail: four per-fiscal-year
                   # 9-signal composites plus their median (the drift predictor; the
                   # per-year components are barred as collinear — see
@@ -208,21 +212,25 @@ KNOWN_FEATURES = ['feat_pt_drift', 'feat_price_drift',
 # the passed catalogue frame and the direct ``vw_pymc_feature_catalogue`` query
 # are unavailable (e.g. offline unit tests). Mirrors the catalogue-driven
 # selection: the ``kalman_pt`` mutable_predictor aliases surviving
-# ``KalmanFilterPriceTarget.select_drift_features`` as of 2026-07-30.
+# ``KalmanFilterPriceTarget.select_drift_features`` as of 2026-08-13 — 16 columns.
 _DRIFT_FEATURE_FALLBACK: tuple[str, ...] = (
     # Analyst-target / price / coverage drift trails.
     'feat_pt_drift', 'feat_price_drift','feat_coverage_drift',
     'feat_pt_noise_drift',
     # Short/mid-horizon momentum.
     'feat_one_day_return', 'feat_price_chg_pct_3m',
-    # Analyst-sentiment composition (neutral leg dropped as collinear).
-    'feat_analyst_bullish_pct', 'feat_analyst_bearish_pct',
-    'feat_analyst_conviction', 'feat_analyst_rating',
+    # Analyst sentiment: ONE representative. The bullish / bearish / neutral pct
+    # legs and feat_analyst_conviction are barred by
+    # KALMAN_COLLINEAR_COMPOSITION_FEATURES (all functions of the same six
+    # num_*_ratings buckets), so listing them here only misled the reader —
+    # select_drift_features filtered them out again on the way through.
+    'feat_analyst_rating',
     # 1y price-target credibility.
     'feat_pt_achievement_1y', 'feat_pt_accuracy_1y', 'feat_pt_range_hit_rate',
-    # Market-cap / EV size & trend.
-    'feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg',
-    'feat_mv_ev_drift',
+    # EPS trend / surprise / beat frequency (replaced the price-derived
+    # market-cap & EV size/trend signals).
+    'feat_net_eps_drift', 'feat_last_q_surprise', 'feat_last_y_surprise',
+    'feat_eps_beat_rate', 'feat_eps_beat_rate_annual',
     # Fundamental quality: median of the four per-fiscal-year Piotroski
     # F-scores (the components are barred as collinear with their median).
     'feat_median_piotroski_f_score',
@@ -320,8 +328,8 @@ class KalmanRunConfig:
         CVaR-aware book parameters (:func:`compute_cvar_aware_book`).
     mcap_country_r_max
         Market-cap pre-selection gate for the long book: candidates must have
-        ``mcap_country_r < mcap_country_r_max``, where ``mcap_country_r`` is
-        the MV-derived ``feat_mcap_country_r = (100 - market_cap_country_r) /
+        ``mcap_global_r < mcap_country_r_max``, where ``mcap_global_r`` is
+        the MV-derived ``feat_mcap_global_r = (100 - market_cap_country_r) /
         100`` ratio (smaller = larger cap). The 0.02 default keeps the top 2%
         of each country by market cap — the ratio-scale mirror of
         ``min_mcap_country_rank`` (98). Names with a missing rank are
@@ -421,7 +429,7 @@ class KalmanRunConfig:
     min_report_date: str = '2025-12-01'
     min_mcap_country_rank: float = 98.0
     candidate_limit: int = 50
-    earnings_window_days: int = 10
+    earnings_window_days: int = 15
     # Plumbing
     results_dir: Optional[str] = None
     export_draws: bool = False
@@ -2892,7 +2900,7 @@ def resolve_feature_roles(kalman_df: pd.DataFrame,
 # Interactive (Plotly) EDA helpers. Each is side-effecting (mirrors the
 # ``plt.show()`` / ``pc.show()`` convention) and aligned to the fused-panel drivers
 # the model actually consumes (build_fused_kalman_pt_model): the systematic-risk
-# ``feat_avg_beta`` penalty and the ``feat_mcap_country_r`` size discount on
+# ``feat_avg_beta`` penalty and the ``feat_mcap_global_r`` size discount on
 # ``risk_adj_return``, plus the new short-horizon momentum ``feat_one_day_return``.
 # When plotly is unavailable, ``run_eda`` falls back to the matplotlib panels.
 
@@ -2900,7 +2908,7 @@ def resolve_feature_roles(kalman_df: pd.DataFrame,
 # Only the columns present in the snapshot are plotted.
 _EDA_DRIVER_SPECS: tuple[tuple[str, str], ...] = (
     ('feat_avg_beta', 'avg beta — systematic-risk penalty'),
-    ('feat_mcap_country_r', 'mcap country rank — size discount'),
+    ('feat_mcap_global_r', 'mcap global rank — size discount'),
     ('feat_rel_volume', 'relative volume — liquidity tilt'),
     ('feat_one_day_return', 'one-day return — short-horizon momentum'),
     ('feat_price_chg_pct_3m', 'three-month return — mid-horizon momentum'),
@@ -2912,7 +2920,9 @@ _EDA_DRIVER_SPECS: tuple[tuple[str, str], ...] = (
     ('feat_analyst_conviction', 'net rating conviction — analyst sentiment'),
     ('feat_pt_achievement_1y', '1y PT achievement — target credibility'),
     ('feat_pt_accuracy_1y', '1y PT abs error — target credibility'),
-    ('feat_mcap_trend_1y', 'mcap 1y trend — size re-rating'),
+    ('feat_net_eps_drift', 'net EPS FY drift — fundamental trend'),
+    ('feat_eps_beat_rate', 'EPS beat frequency — delivery consistency'),
+    ('feat_last_q_surprise', 'last quarterly EPS surprise — recent delivery'),
     ('feat_median_piotroski_f_score', 'median Piotroski F — fundamental quality'),
 )
 
@@ -2948,7 +2958,7 @@ def _plot_upside_vs_drivers_plotly(kalman_df: pd.DataFrame) -> None:
 
     Refactors the former static §2.4e scatter into a hoverable Plotly view spanning the
     drivers ``build_fused_kalman_pt_model`` actually consumes — the systematic-risk
-    ``feat_avg_beta`` tilt and the ``feat_mcap_country_r`` size discount on
+    ``feat_avg_beta`` tilt and the ``feat_mcap_global_r`` size discount on
     ``risk_adj_return``, the consensus-noise / volatility ``sigma_obs`` wideners, and the
     new short-horizon momentum ``feat_one_day_return``. Each facet's x-axis is independent
     and winsorised to the 1/99 pct for readability; hover surfaces ticker / name.
@@ -3181,10 +3191,14 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
     eda_noise = [c for c in ('feat_pt_range_norm', 'feat_pt_noise_sigma',
                              'feat_vol_drift')
                  if c in kalman_df.columns]
-    # Size / valuation context (market-cap trend, size-vs-3y-avg, EV-vs-3y-avg).
-    eda_size = [c for c in ('feat_mcap_trend_1y', 'feat_mcap_vs_3yavg', 'feat_ev_vs_3yavg')
-                if c in kalman_df.columns]
-    eda_features = eda_drift + eda_noise + eda_size
+    # Earnings context (EPS FY trend, last realised surprises, beat frequency).
+    # Replaced the market-cap / EV size block: those were price-derived and
+    # duplicated the momentum ladder already in ``eda_drift``.
+    eda_eps = [c for c in ('feat_net_eps_drift', 'feat_last_q_surprise',
+                           'feat_last_y_surprise', 'feat_eps_beat_rate',
+                           'feat_eps_beat_rate_annual')
+               if c in kalman_df.columns]
+    eda_features = eda_drift + eda_noise + eda_eps
 
     _eda = kalman_df[eda_features].astype('float64')
     _lo = _eda.quantile(0.01)
@@ -3307,7 +3321,7 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
         plt.show()
 
     # 2.4e Implied upside vs the fused-panel risk/return drivers. Interactive Plotly
-    #      facets — systematic-risk feat_avg_beta, feat_mcap_country_r size discount,
+    #      facets — systematic-risk feat_avg_beta, feat_mcap_global_r size discount,
     #      short-horizon feat_one_day_return, plus the sigma_obs wideners — with
     #      ticker/name hover. Static seaborn scatter (noise-CV / 6m-vol) fallback.
     if _HAS_PLOTLY:
@@ -3414,7 +3428,7 @@ def map_state_space_features(
     — the SQL registry is the SSOT — filtered through
     :meth:`KalmanFilterPriceTarget.select_drift_features`, which drops the
     aliases consumed elsewhere in the fused model (noise wideners, the
-    ``feat_avg_beta`` / ``feat_mcap_country_r`` tilts, ``days_*`` time
+    ``feat_avg_beta`` / ``feat_mcap_global_r`` tilts, ``days_*`` time
     covariates, drift-support counters, raw rating counts, the per-fiscal-year
     Piotroski component scores — their median enters instead) and the
     response-leakage alias. Returns the drift-feature list and a tidy
@@ -3941,14 +3955,14 @@ def prepare_kalman_panel_inputs(
     else:
         avg_beta = np.full(n_isin, np.nan, dtype='float64')
 
-    # --- Size driver (feat_mcap_country_r) -------------------------------------
-    # feat_mcap_country_r == market_cap / market_cap_3yavg (mv_pymc_kalman_pt): the
+    # --- Size driver (feat_mcap_global_r) -------------------------------------
+    # feat_mcap_global_r == market_cap / market_cap_3yavg (mv_pymc_kalman_pt): the
     # firm's current size relative to its own 3y-average size. Carried raw here and
     # z-scored inside build_fused_kalman_pt_model, where it discounts risk_adj_return
     # additively via - size_loading * z(size). Falls back to NaN
     # (-> neutral 0.0 tilt after the model's nan_to_num) when the column is absent.
-    if 'feat_mcap_country_r' in model_df.columns:
-        size_ratio = pd.to_numeric(model_df['feat_mcap_country_r'], errors='coerce').to_numpy('float64')
+    if 'feat_mcap_global_r' in model_df.columns:
+        size_ratio = pd.to_numeric(model_df['feat_mcap_global_r'], errors='coerce').to_numpy('float64')
     else:
         size_ratio = np.full(n_isin, np.nan, dtype='float64')
 
@@ -4022,7 +4036,7 @@ FUSED_SCALAR_VARS: tuple[str, ...] = (
     # no per-name time dynamics and the state layer is dead weight.
     'sigma_base', 'nu', 'sigma_state',
     # Learned, sign-fixed risk / size loadings (additive tilts on the per-ISIN
-    # baseline keyed on feat_avg_beta / feat_mcap_country_r). Present only when the
+    # baseline keyed on feat_avg_beta / feat_mcap_global_r). Present only when the
     # corresponding penalty prior scale is > 0; run_diagnostics skips absent vars.
     'risk_loading', 'size_loading', 'volume_loading',
 )
@@ -5342,6 +5356,7 @@ def summarize_panel_screen(idata, panel: KalmanPanelInputs,
         # (100 - market_cap_country_r) / 100 — smaller = larger cap in country;
         # feeds the compute_cvar_aware_book mcap pre-selection gate.
         'mcap_country_r': frame.get('feat_mcap_country_r'),
+        'mcap_global_r': frame.get('feat_mcap_global_r'),
         'enterprise_value': frame.get('enterprise_value'),
         'last_price': frame['last_price'].to_numpy(),
         'observed_pt': frame['observed_pt'].to_numpy(),
@@ -6149,6 +6164,7 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
         'market_cap': model_df['market_cap'].to_numpy(),
         'enterprise_value': model_df['enterprise_value'].to_numpy(),
         'mcap_country_r': _numcol('feat_mcap_country_r'),
+        'mcap_global_r': _numcol('feat_mcap_global_r'),
         'beta': model_df['feat_avg_beta'].to_numpy(),
         'original_price': model_df['last_price'].to_numpy(),
         'original_target': model_df['observed_pt'].to_numpy(),
@@ -6854,7 +6870,7 @@ def run_single_isin_filter(frame: pd.DataFrame, engine,
     model_df = frame
     cfg = config if config is not None else get_run_config()
     try:
-        keep = ('isin', 'ticker', 'name', 'last_price', 'price_target', 'market_cap','market_cap_country_r', 'enterprise_value',
+        keep = ('isin', 'ticker', 'name', 'last_price', 'price_target', 'market_cap','market_cap_country_r','market_cap_global_r', 'enterprise_value',
                 'income_statement_report_date', 'next_earnings', 'fy_end_date', 'next_fiscal_quarter', 'last_updated',
                 'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date')
         hist_cols, col_sql = fetch_history_columns(engine, keep)
@@ -6869,7 +6885,7 @@ def run_single_isin_filter(frame: pd.DataFrame, engine,
                     f'SELECT {col_sql} FROM pml.pml_df '
                     'WHERE isin = ANY(:isins) '
                     '  AND next_earnings IS NOT NULL '
-                    '  AND market_cap_country_r >= :min_rank '
+                    '  AND market_cap_global_r >= :min_rank '
                     'ORDER BY ABS(next_earnings - CURRENT_DATE) , '
                     '         market_cap DESC '
                     'LIMIT :lim'
@@ -7038,7 +7054,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine,
     model_df = frame
     cfg = config if config is not None else get_run_config()
     try:
-        keep = ('isin', 'name', 'ticker', 'last_price', 'price_target', 'market_cap', 'market_cap_country_r', 'enterprise_value',
+        keep = ('isin', 'name', 'ticker', 'last_price', 'price_target', 'market_cap', 'market_cap_country_r','market_cap_global_r', 'enterprise_value',
                 'income_statement_report_date', 'next_earnings', 'fy_end_date', 'next_fiscal_quarter', 'last_updated',
                 'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date',)
         hist_cols, col_sql = fetch_history_columns(engine, keep)
@@ -7051,7 +7067,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine,
                       AND income_statement_report_date >= '{cfg.min_report_date}'
                       AND next_earnings >= current_date - INTERVAL ':w days'
                       AND next_earnings <= current_date + INTERVAL ':w days'
-                      AND market_cap_country_r > :min_rank
+                      AND market_cap_global_r >= :min_rank
                     ORDER BY market_cap DESC
                 """.replace(':w', str(int(cfg.earnings_window_days)))),
                 conn, params={'min_rank': cfg.min_mcap_country_rank},
@@ -7239,7 +7255,7 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
         keep_cols_tuple = ('isin', 'ticker', 'name', 'description', 'trading_region', 'region', 'country',
                            'trading_country', 'trading_country_name', 'exchange',
                            'unit', 'exchange_name', 'unit_name', 'country_name', 'sector',
-                           'industry', 'market_cap','market_cap_country_r', 'enterprise_value', 'last_price', 'price_target', 'next_earnings',
+                           'industry', 'market_cap','market_cap_country_r','market_cap_global_r', 'enterprise_value', 'last_price', 'price_target', 'next_earnings',
                            'days_to_earnings','fy_end_date', 'last_updated', 'next_fiscal_quarter',
                            'income_statement_report_date', 'next_income_statement_report_date', 'next_fy_end_date')
         _hist_cols, col_sql = fetch_history_columns(engine, keep_cols_tuple)
@@ -7257,7 +7273,7 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
                         WHERE income_statement_report_date >= '{cfg.min_report_date}'
                           AND next_earnings >= current_date - INTERVAL ':past_days days'
                           AND next_earnings <= current_date + INTERVAL ':future_days days'
-                          AND market_cap_country_r > :min_rank
+                          AND market_cap_global_r >= :min_rank
                     """.replace(':past_days', str(earnings_past_days))
                      .replace(':future_days', str(earnings_future_days))),
                 conn, params={'min_rank': cfg.min_mcap_country_rank},

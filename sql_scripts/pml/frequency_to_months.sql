@@ -1,4 +1,4 @@
-create function frequency_to_months(earnings_report_frequency text, fy_end_date date DEFAULT NULL::date, next_fy_end_date date DEFAULT NULL::date) returns integer
+create function pml.frequency_to_months(earnings_report_frequency text, fy_end_date date DEFAULT NULL::date, next_fy_end_date date DEFAULT NULL::date) returns integer
 	immutable
 	language plpgsql
 as
@@ -21,5 +21,5 @@ END;
 $$
 ;
 
-alter function frequency_to_months(unknown, unknown, unknown) owner to postgres
+alter function pml.frequency_to_months(text, date, date) owner to postgres
 ;

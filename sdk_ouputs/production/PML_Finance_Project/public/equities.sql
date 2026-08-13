@@ -679,23 +679,22 @@ create table equities
     "Target % (Avg)"                                   double precision
 );
 
-comment on table equities is 'Equities screening data with financial metrics and company information';
+comment on table equities_df is 'Equities screening data with financial metrics and company information';
 
-alter table equities
+alter table equities_df
     owner to postgres;
 
 create index idx_equities_geography
-    on equities ("Region", "Country", "Exchange");
+    on equities_df ("Region", "Country", "Exchange");
 
 create index idx_equities_classification
-    on equities ("Sector", "Industry", "Size Class", "Style Class");
+    on equities_df ("Sector", "Industry", "Size Class", "Style Class");
 
 create index idx_equities_name
-    on equities ("Name" text_pattern_ops);
+    on equities_df ("Name" text_pattern_ops);
 
 create index idx_equities_fiscal
-    on equities ("Fiscal Year", "Fiscal Quarter", "Income Statement Report Date");
+    on equities_df ("Fiscal Year", "Fiscal Quarter", "Income Statement Report Date");
 
 create index idx_equities_market_cap
-    on equities ("Market Cap" desc);
-
+    on equities_df ("Market Cap" desc);

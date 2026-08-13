@@ -1,4 +1,4 @@
-create function calc_piotroski_f_score(p_isin text DEFAULT NULL::text)
+create function pml.calc_piotroski_f_score(p_isin text DEFAULT NULL::text)
 	returns TABLE(isin text, piotroski_f_score integer)
 	stable
 	parallel safe
@@ -19,5 +19,5 @@ WHERE p_isin IS NULL
 $$
 ;
 
-alter function calc_piotroski_f_score(unknown) owner to postgres
+alter function pml.calc_piotroski_f_score(text) owner to postgres
 ;

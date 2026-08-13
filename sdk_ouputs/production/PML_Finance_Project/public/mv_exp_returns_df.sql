@@ -831,7 +831,7 @@ SELECT id.isin,
        fge.fcf_est_capex_implied_ratio,
        CURRENT_TIMESTAMP                   AS feature_calculated_at
 FROM vw_identifier_columns id
-         JOIN equities e ON id.isin = e."ISIN"
+         JOIN equities_df e ON id.isin = e."ISIN"
          LEFT JOIN calc_valuation_features() vf(isin, p_e_ratio, p_b_ratio, ev_ebitda_ratio, ev_sales_ratio,
                                                 dividend_yield, peg_ratio) ON id.isin = vf.isin
          LEFT JOIN calc_valuation_timeseries_features() vts(isin, ev_sales_trend_1y, ev_ebitda_momentum,
@@ -1210,4 +1210,3 @@ comment on materialized view mv_exp_returns_df is 'Unified materialized view con
     Refresh with: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_exp_returns_df;';
 
 alter materialized view mv_exp_returns_df owner to postgres;
-

@@ -1,6 +1,4 @@
--- Cyclic dependencies found
-
-create function coef_var(mu double precision, sigma double precision) returns double precision
+create function pml.coef_var(mu numeric, sigma numeric) returns numeric
 	immutable
 	parallel safe
 	language sql
@@ -10,10 +8,10 @@ SELECT sigma / NULLIF(ABS(mu), 0);
 $$
 ;
 
-alter function coef_var(unknown, unknown) owner to postgres
+alter function pml.coef_var(numeric, numeric) owner to postgres
 ;
 
-create function coef_var(mu numeric, sigma numeric) returns numeric
+create function pml.coef_var(mu double precision, sigma double precision) returns double precision
 	immutable
 	parallel safe
 	language sql
@@ -23,5 +21,5 @@ SELECT sigma / NULLIF(ABS(mu), 0);
 $$
 ;
 
-alter function coef_var(unknown, unknown) owner to postgres
+alter function pml.coef_var(double precision, double precision) owner to postgres
 ;

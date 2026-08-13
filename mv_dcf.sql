@@ -617,7 +617,7 @@ SELECT
 FROM vw_identifier_columns id
 
 -- Base equities for market data columns
-         JOIN equities e ON id.isin = e."ISIN"
+         JOIN equities_df e ON id.isin = e."ISIN"
 
 -- Section 1: Growth (5 functions)
          LEFT JOIN calc_growth_features() gf ON id.isin = gf.isin

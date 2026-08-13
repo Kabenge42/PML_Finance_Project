@@ -1,4 +1,4 @@
-create table pml_df
+create table pml.pml_df
 (
 	ticker                            text,
 	isin                              text not null
@@ -16,7 +16,7 @@ create table pml_df
 	region                            text,
 	country                           text
 		constraint pml_df_country_mapping_fk
-			references country_mapping (country) not enforced,
+			references pml.country_mapping (country) not enforced,
 	country_name                      text,
 	sector                            text,
 	industry                          text,
@@ -70,7 +70,12 @@ create table pml_df
 	num_buys_ratings                  integer,
 	num_sell_ratings                  integer,
 	num_no_opinion_ratings            integer,
+	market_cap_global_r               integer,
+	market_cap_global_sec_r           integer,
+	market_cap_region_r               integer,
+	market_cap_region_sec_r           integer,
 	market_cap_country_r              integer,
+	market_cap_country_sec_r          integer,
 	tot_return_pct_cagr_3y            double precision,
 	tot_return_pct_cagr_10y           double precision,
 	total_return_5y                   double precision,
@@ -683,6 +688,6 @@ create table pml_df
 )
 ;
 
-alter table pml_df
+alter table pml.pml_df
 	owner to postgres
 ;
