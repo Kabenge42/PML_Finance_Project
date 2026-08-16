@@ -1872,6 +1872,17 @@ VALUES
 	-- (sigma_obs widener), with its target_drift_n valid-pair count companion.
 	                            ('feat_vol_drift',                     'volatility',      'predictor',  'mutable_predictor', 'feat_vol_drift',                     ARRAY ['kalman_pt']                                                                                                   ),
 	                            ('feat_vol_drift_n',                   'volatility',      'metadata',   'mutable_predictor', 'feat_vol_drift_n',                   ARRAY ['kalman_pt']                                                                                                   ),
+	-- OBSERVATION-SCALE drivers (2026-08-16). These feed sigma_isin, NOT the drift
+	-- design matrix -- KALMAN_DRIFT_EXCLUDED_FEATURES bars them on the Python side.
+	-- Measured correlation with log|residual| after fitting the 17 drift features
+	-- (n = 6,533): feat_vol_level via volatility_1m +0.192 / volatility_1y +0.190,
+	-- feat_log_mcap -0.210. Both beat every term currently in sigma_isin except cv
+	-- (+0.225), and neither was previously reachable: the raw volatility_* columns
+	-- lost their kalman_pt tag when 0.9.9.6 swapped the levels for feat_vol_drift,
+	-- and market_cap never carried one. feat_vol_drift itself measures -0.035, so
+	-- that swap discarded the signal and kept the noise.
+	                            ('feat_vol_level',                     'volatility',      'predictor',  'mutable_predictor', 'feat_vol_level',                     ARRAY ['kalman_pt']                                                                                                   ),
+	                            ('feat_log_mcap',                      'market_data',     'predictor',  'mutable_predictor', 'feat_log_mcap',                      ARRAY ['kalman_pt']                                                                                                   ),
 	-- Analyst rating-mix aggregates (strong+plain buy / sell sums) shared by
 	-- mv_pymc_price_target and mv_pymc_kalman_pt. Multi-source, so self-rows.
 	                            ('feat_buys',                          'analyst_ratings', 'predictor',  'mutable_predictor', 'feat_buys',                          ARRAY ['price_target', 'kalman_pt']                                                                                   ),
@@ -1984,6 +1995,8 @@ FROM (VALUES ('feat_implied_upside', 'double precision', 'Consensus implied upsi
              ('feat_pt_drift_n', 'integer', 'Valid consecutive-pair count behind feat_pt_drift (coverage gate)'),
              ('feat_price_drift_n', 'integer', 'Valid consecutive-pair count behind feat_price_drift (coverage gate)'),
              ('feat_vol_drift_n', 'integer', 'Valid consecutive-pair count behind feat_vol_drift (coverage gate)'),
+             ('feat_vol_level', 'double precision', 'Winsorised [0, 300] MEDIAN of volatility_{1m,3m,6m,1y}: the realized-vol LEVEL, restored 2026-08-16 as a sigma_isin dispersion driver (corr +0.19 with log|residual| vs -0.03 for feat_vol_drift). Median over the four windows because they are 0.53-0.94 correlated; not a drift-matrix predictor'),
+             ('feat_log_mcap', 'double precision', 'ln(market_cap): size as a sigma_isin dispersion driver (corr -0.21 with log|residual|, the second strongest available). Logged because market_cap spans ~7 orders of magnitude; not a drift-matrix predictor'),
              ('feat_pt_range_norm', 'double precision', 'Inter-analyst target range (high - low) normalised by the mean price target'),
              ('feat_avg_beta', 'double precision', 'NULL-aware mean of beta_{1y,2y,5y}: the systematic-risk (CAPM) driver of risk_adj_return'),
              ('feat_net_eps_drift', 'double precision', 'Winsorised [-1, 1] SIGN-PRESERVING drift of the net basic EPS fiscal-year trail (fy -> neg5fy) via pml.signed_drift: ABS denominator, so a narrowing loss scores positive'),

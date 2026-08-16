@@ -5,6 +5,138 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.16] - 2026-08-16
+
+### Fixed
+
+- **The out-of-support detector was one-sided.** `export_analytics` tested only
+  `UPLIFT_CLIP_HI` (+500 %) and never the −95 % floor, so names whose entire
+  forward-return draw set pinned at the floor shipped
+  `expected_sharpe_ratio = −4.28e15` **unflagged** — the cap test matched **0 of
+  6,487** rows on the 2026-08-15 export. The test is now mirrored: `er_p05`
+  against the cap, `er_p95` against the floor, each direction reported
+  separately. It flags 4 names, all at the floor (Kioxia, Yuanjie
+  Semiconductor, AXTI, SNDK).
+
+  Test the *percentile*, not `er_sd`: Yuanjie has `er_sd = 0.0020`, not zero, so
+  a guard keyed on `er_sd == 0` would have missed it.
+
+- **No finite guard on the reward/risk ratios.** `RiskBookModel` guarded its
+  denominators with `> 0`, which a denormal `er_sd` of ~4e−16 passes. All three
+  ratios now floor at `MIN_RATIO_DENOMINATOR = 1e-4` and re-check `isfinite`.
+  Exported `expected_sharpe_ratio` spans −33.73 … 7.998 instead of reaching
+  −4.28e15; real values are unchanged (Tencent 7.4928 before and after).
+
+- **The analytics schema served two vintages, and the cause was structural.**
+  `export_all_artifacts` writes five of the seven curated frames, and
+  `scripts/export_kalman_analytics.py` **never called it** — the production path
+  wrote 2 of 7 tables by construction, so the divergence reappeared on *every*
+  refresh, not just once. Cross-table `er_mean` disagreement was 6,425 of 6,427;
+  it is now **0 of 6,487**. Every frame carries `run_id` / `exported_at` via
+  `stamp_export_provenance`, and `check_export_vintage()` reports them.
+
+- **The GEIB launcher could not reach the database.** Running
+  `dashboards/global_equity_investment_dashboard.py` puts `dashboards/` on
+  `sys.path[0]`, not the repo root, so `probabilistic_ml_model` was unimportable
+  and `geib/data.py`'s guarded import left `get_analytics_engine = None` — every
+  card rendered against an **empty frame** behind one WARNING line. The launcher
+  now inserts the repo root and that path logs at ERROR with the remedy.
+
+- **The Kelly card sized on the wrong denominator.** `charts/kelly.py` used
+  `abs(cvar_5pct_kalman)` as the loss leg of the odds ratio, but that column is a
+  positive *return level*, so `b` had a median of 1.28 with an sd of 23.7. It now
+  reuses the risk book's own `tail_risk` definition (median 4.27, sd 2.77).
+  **This changes allocation values, not just labels.**
+
+- **`_subsample_panel` dropped `response_mean` / `response_std`**, silently
+  pushing every subsampled run onto the legacy snapshot de-standardisation that
+  0.9.9.14 replaced. Affected `validate_kalman_state.py --isins N`.
+
+### Changed
+
+- **`sigma_isin` is now a log-linear observation-scale model.** It was
+  `sigma_base * (1 + cv) / precision_weight`, i.e. two drivers, one of them
+  mis-specified. Correlation of each candidate with `log |residual|` after an OLS
+  fit of the 17 drift features (n = 6,533):
+
+  | driver | corr | previously in the scale? |
+  |---|---|---|
+  | `cv = pt_stddev/price` | +0.2245 | yes |
+  | `feat_log_mcap` | −0.2100 | no — not even catalogued for `kalman_pt` |
+  | `volatility_1m` / `1y` | +0.192 / +0.190 | no |
+  | `log n_analysts` | −0.1696 | yes |
+  | `feat_pt_range_norm` | +0.1150 | **documented as yes; never wired** |
+  | `feat_vol_drift` | **−0.0349** | documented as yes; never wired |
+
+  0.9.9.6 replaced the absolute realized-vol **levels** with `feat_vol_drift`,
+  trading a +0.19 driver for a −0.03 one. The levels return as
+  `feat_vol_level` (winsorised median of `volatility_{1m,3m,6m,1y}`, which are
+  0.53–0.94 correlated so one composite replaces four columns), joined by
+  `feat_log_mcap`. Both are new `mv_pymc_kalman_pt` columns at 100 % coverage,
+  catalogued for `kalman_pt`, and barred from the drift design — they belong in
+  the variance.
+
+  The scale also gains a **sector-level offset** (`ZeroSumNormal` at
+  `GROUP_EFFECT_SCALE`): residual sd moves **2.14×** across sectors, 1.82× across
+  `size_class` and 1.68× across `trading_region`, and the model previously
+  carried group effects on the mean and none on the variance.
+
+  The old model is the exact special case `delta_* = 0, sigma_n_exponent = 1`.
+
+- **`sigma_n_exponent` replaces the pinned `1/√n` rate.** `sd ∝ n^-0.5` assumes
+  analysts are independent draws about a common truth; they anchor on each other,
+  so dispersion falls far more slowly. Measured over 24 coverage levels and 6,270
+  names the rate is **n^-0.306** (RMSE on log-sd 0.427 → 0.082). Learned, with the
+  prior centred on the *old* value so a posterior away from it is evidence rather
+  than a prior echo.
+
+- **`isin_level_scale` raised 0.10 → 0.40.** Still a fixed constant, not learned —
+  the identification argument against learning it is unchanged. Only the value was
+  wrong. Measured with a pooled OLS carrying shared slopes and free per-time
+  intercepts (the structure the model imposes) on the live T=4 panel:
+
+  | quantity | value |
+  |---|---|
+  | total residual sd | 0.6910 |
+  | **between-name level sd** | **0.4718** (46.6 % of residual variance) |
+  | within-name across-time sd | 0.5049 |
+
+  Deflating for the estimation noise in each name's own level (T = 4 observations)
+  gives ≈0.40. At 0.10 the per-name level could not be expressed and landed in
+  observation noise instead — uniformly across every time step.
+
+- **`build_fused_kalman_pt_model` gains `likelihood=`** (`'student_t'` /
+  `'mixture'` / `'normal'`). `None` resolves from `robust`, so every existing
+  caller is unchanged. The mixture is **opt-in and not recommended** — see below.
+
+- **Column semantics corrected without renaming.** `cvar_5pct_kalman` is a
+  conditional tail **mean**, positive for 5,475 of 6,487 rows, not a loss;
+  `expected_vol_kalman` is posterior dispersion (~2.5 %), not return volatility;
+  `expected_sharpe_ratio` is a t-statistic on log price-target uplift. The
+  `COMMENT ON COLUMN` text and GEIB labels now say so. No column renamed, so the
+  `dashboards/geib/data.py` contract is unchanged.
+
+### Measured but not fixed
+
+- **Calibration is improved, not resolved.** Cumulative effect on the probe panel
+  (1,500 ISINs, 500 draws): `nu` **2.73 → 7.50** (off its 2.5 floor and matching
+  the ν ≈ 5 the marginal kurtosis independently implies), PIT max deviation
+  0.0265 → 0.0225, pooled replicated std 1.55 → 1.22 against an observed 0.99.
+  **T = std still fails at every time step**, including the decision slice.
+
+  Three hypotheses were tested and refuted along the way, recorded so they are not
+  retried: the response clip (it winsorises **7 of 25,962** observations, 0.03 %);
+  a two-component mixture likelihood (it improved dispersion but *regressed* PIT
+  0.0265 → 0.0402); and response skew (marginal +0.766 but conditional **−0.464**,
+  it flips sign). A fourth — that the three large PT-history betas are collinear —
+  is also refuted: drift condition number **4.4**, max VIF **4.25**, and
+  `feat_pt_accuracy_1y ⟂ feat_pt_achievement_1y` at r = 0.0028.
+
+- **`sigma_time` remains over-fitted.** The model infers [2.30, 1.69, 1.14, 1.00]
+  across the lookbacks; the same pooled-OLS decomposition says [1.32, 1.16, 1.16,
+  1.00]. Part is genuine feature staleness — the snapshot drift design scores
+  R² 0.718 against "now" and 0.555 against 6m-ago — but not all of it. Open.
+
 ## [0.9.9.15] - 2026-08-13
 
 ### Changed

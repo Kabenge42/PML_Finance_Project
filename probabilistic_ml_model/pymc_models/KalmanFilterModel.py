@@ -211,10 +211,35 @@ KALMAN_LEAKAGE_FEATURES: frozenset[str] = frozenset({"feat_implied_upside"})
 KALMAN_RANGE_WIDENER_FEATURE: str = "feat_pt_range_norm"
 KALMAN_CONSENSUS_SIGMA_FEATURE: str = "feat_pt_noise_sigma"
 KALMAN_VOL_DRIFT_FEATURE: str = "feat_vol_drift"
+# Realized-vol LEVEL and log size, added 2026-08-16. Both are observation-scale
+# drivers, so they belong here (barred from the drift design) and enter
+# ``sigma_isin`` in ``build_fused_kalman_pt_model``.
+#
+# Why they exist: measured on the live 6,533-row MV, correlation with
+# log|residual| after an OLS fit of the 17 drift features --
+#
+#     cv = pt_stddev/price   +0.2245   (already in sigma_isin)
+#     feat_log_mcap          -0.2100   <- new
+#     volatility_1m          +0.1924   <- feat_vol_level
+#     volatility_1y          +0.1897   <- feat_vol_level
+#     log n_analysts         -0.1696   (already in sigma_isin)
+#     feat_pt_range_norm     +0.1150   (documented as a widener; was NEVER wired)
+#     feat_vol_drift         -0.0349   <- the drift is nearly useless
+#
+# 0.9.9.6 replaced the absolute vol LEVELS with feat_vol_drift on the reasoning
+# that the drift is the sigma_obs analogue of feat_pt_noise_drift. That traded a
+# +0.19 driver for a -0.03 one: how fast volatility is CHANGING says almost
+# nothing about how dispersed a name's implied upside is; how volatile it IS says
+# a great deal. ``feat_vol_drift`` is kept as a container for provenance and for
+# the EDA panel, but it is no longer the volatility term the scale model uses.
+KALMAN_VOL_LEVEL_FEATURE: str = "feat_vol_level"
+KALMAN_LOG_MCAP_FEATURE: str = "feat_log_mcap"
 KALMAN_NOISE_WIDENER_FEATURES: frozenset[str] = frozenset({
     KALMAN_RANGE_WIDENER_FEATURE,
     KALMAN_CONSENSUS_SIGMA_FEATURE,
     KALMAN_VOL_DRIFT_FEATURE,
+    KALMAN_VOL_LEVEL_FEATURE,
+    KALMAN_LOG_MCAP_FEATURE,
 })
 
 # Named tilt drivers with dedicated ``pm.Data`` containers + sign-fixed loadings
@@ -2134,6 +2159,25 @@ class KalmanPanelInputs:
     response_std: np.ndarray = field(
         default_factory=lambda: np.empty(0, dtype="float64")
     )
+    # ---- Observation-scale drivers (2026-08-16) ----------------------------
+    # Inputs to the log-linear ``sigma_isin`` model. Defaulted to empty so a
+    # panel built by older code still constructs; the builder falls back to a
+    # zero vector (i.e. that term drops out) when a driver is absent, so an old
+    # panel reproduces the previous two-term scale exactly.
+    #
+    # ``range_norm`` is not new data — ``feat_pt_range_norm`` has been emitted by
+    # the MV and documented as a widener in ``build_noise_wideners`` all along,
+    # but no ``pm.Data`` container for it ever existed and the likelihood never
+    # applied it. It correlates +0.115 with log|residual|.
+    vol_level: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype="float64")
+    )
+    log_mcap: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype="float64")
+    )
+    range_norm: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype="float64")
+    )
 
 
 def build_fused_kalman_pt_model(
@@ -2144,7 +2188,8 @@ def build_fused_kalman_pt_model(
         size_penalty: float = 0.25,
         volume_penalty: float = 0.1,
         robust: bool = True,
-        isin_level_scale: float = 0.10,
+        likelihood: Optional[str] = None,
+        isin_level_scale: float = 0.40,
         state_innovation_scale: float = 0.0,
 ) -> "pm_typing.Model":
     """Build the fused coregionalised cross-sectional Kalman price-target model.
@@ -2370,8 +2415,23 @@ def build_fused_kalman_pt_model(
         rel_volume (z-scored relative volume) as an additive tilt
         ``- volume_loading * z(feat_rel_volume)``. ``0.0`` disables the factor.
     robust : bool
-        ``True`` (default) → Student-t panel likelihood (absorbs analyst
-        outliers); ``False`` → Normal-likelihood twin.
+        Legacy two-way switch, kept so existing callers are unchanged. ``True``
+        (default) → Student-t panel likelihood; ``False`` → Normal twin. Ignored
+        when ``likelihood`` is given explicitly.
+    likelihood : Optional[str]
+        Observation model: ``'student_t'``, ``'mixture'`` or ``'normal'``.
+        ``None`` (default) resolves from ``robust`` so nothing changes for
+        existing callers.
+
+        ``'mixture'`` is a two-component scale mixture — a tight Normal core plus
+        a wider Normal outlier component sharing the same mean. It exists because
+        the Student-t's single shape parameter cannot be tight in the bulk and
+        heavy in the tail simultaneously: on the 2026-08-16 panel it pinned
+        ``nu`` at its 2.5 floor and over-dispersed the predictive by ~40 %,
+        failing the T=std, T=mean and PIT checks together. Fitted directly to the
+        standardised response the mixture beats the t by dBIC 877 and matches the
+        observed sd exactly. Under this branch ``nu`` is emitted as a *derived*
+        kurtosis-matched summary for downstream consumers, not as a fitted dof.
     isin_level_scale : float
         **Fixed** (not learned) sd of the per-ISIN ``ZeroSumNormal`` intercept
         restored on ``T > 1`` panels — the per-name analogue of
@@ -2517,6 +2577,25 @@ def build_fused_kalman_pt_model(
     # position alongside the raw signed drift.
     vol_drift_z, _ = _nan_zscore(panel.vol_drift)
 
+    # ---- Observation-scale drivers (2026-08-16) ------------------------------
+    # z-scored so each ``delta_*`` below reads as "log-sigma change per 1 sd of
+    # the driver", and so a driver that is absent (empty array on a pre-2026-08-16
+    # panel) contributes an all-zero vector, i.e. its term vanishes rather than
+    # shifting the intercept. ``feat_vol_level`` is logged first: realized vol is
+    # right-skewed and strictly positive, so its z-score would otherwise be
+    # dominated by a handful of 300-vol names sitting on the winsorisation cap.
+    def _driver_z(raw: np.ndarray, n: int, *, log1p: bool = False) -> np.ndarray:
+        arr = np.asarray(raw, dtype="float64")
+        if arr.size != n:
+            return np.zeros(n, dtype="float64")
+        if log1p:
+            arr = np.log1p(np.clip(arr, 0.0, None))
+        return _nan_zscore(arr)[0]
+
+    vol_level_z = _driver_z(panel.vol_level, n_isin, log1p=True)
+    log_mcap_z = _driver_z(panel.log_mcap, n_isin)
+    range_norm_z = _driver_z(panel.range_norm, n_isin)
+
     # Median-normalised analyst-count precision weight for the measurement scale.
     # The response tensor ``Y`` is z-scored per series (std ≈ 1), so dividing the
     # observation noise by the *raw* ``√n`` (n up to ~50) drove ``sigma_isin`` to
@@ -2566,6 +2645,11 @@ def build_fused_kalman_pt_model(
         cv_data = pm.Data(
             "feat_pt_noise_cv", np.nan_to_num(panel.dispersion_cv), dims="isin"
         )
+        # Observation-scale drivers, standardised. Unlike feat_vol_drift above
+        # these are NOT provenance-only: they enter sigma_isin directly.
+        vol_level_data = pm.Data("feat_vol_level_z", vol_level_z, dims="isin")
+        log_mcap_data = pm.Data("feat_log_mcap_z", log_mcap_z, dims="isin")
+        range_norm_data = pm.Data("feat_pt_range_norm_z", range_norm_z, dims="isin")
         pm.Data("n_analysts", np.nan_to_num(panel.n_analysts, nan=1.0), dims="isin")
         # Raw √n retained for provenance; the measurement scale uses the
         # median-normalised ``precision_weight`` below.
@@ -2718,9 +2802,40 @@ def build_fused_kalman_pt_model(
             # Fixing the scale deletes the stuck scalar from the sampler and
             # leaves a plain regularized per-name effect, exactly as
             # ``GROUP_EFFECT_SCALE`` does for the crossed intercepts.
-            # ``isin_level_scale`` is that constant. The default 0.10 brackets
-            # both learned estimates (0.032-0.089) with room above, so it
-            # regularizes without pinning the effect near zero.
+            # ``isin_level_scale`` is that constant.
+            #
+            # ---- 2026-08-16: the constant was 4x too SMALL --------------------
+            # It was set to 0.10 to bracket the two learned estimates (0.032 and
+            # 0.089) that the abandoned learned-scale attempt produced. Those
+            # estimates were themselves an artefact: at the time ``nu`` was pinned
+            # at its 2.5 floor and ``sigma_isin`` carried neither the realized-vol
+            # level, nor size, nor any group structure, so observation noise was
+            # inflated ~2x. With that much noise available, the per-name level
+            # looked unnecessary and the learned scale slid toward zero.
+            #
+            # Measured directly instead of inferred from a mis-specified fit --
+            # pooled OLS with shared slopes and free per-time intercepts, i.e. the
+            # exact structure this model imposes, on the live 6,487-name T=4
+            # panel:
+            #
+            #     total residual sd                    0.6910
+            #     BETWEEN-name level sd                0.4718   <- this parameter
+            #     WITHIN-name (across-time) sd         0.5049   <- genuine noise
+            #     per-name level share of residual var  46.6 %
+            #
+            # Deflating the between-name figure for the estimation noise in each
+            # name's own level (only T observations per name:
+            # Var_true = 0.4718^2 - 0.5049^2/4) gives ~0.40.
+            #
+            # Consequence of leaving it at 0.10: a per-name level the model cannot
+            # express has nowhere to go but the observation noise, uniformly
+            # across every time step. That is precisely the ~2x over-dispersion
+            # the 2026-08-16 PPC measured -- replicated std 1.39 against an
+            # observed 0.90 at t=now, with 95-97 % coverage against a 94 % target.
+            #
+            # Still FIXED, not learned: the identification argument above is
+            # unchanged, and a learned scale remains the wrong construction here.
+            # Only the constant is corrected.
             pm.Deterministic("sigma_isin_level", pt.constant(isin_level_scale))
             z_isin_level = pm.ZeroSumNormal(
                 "z_isin_level", sigma=float(isin_level_scale), dims="isin"
@@ -3024,12 +3139,100 @@ def build_fused_kalman_pt_model(
         # lands in the informative region of the Student-t and ``sigma_expected_return``
         # stays > 0 (no full-pooling collapse). The relative precision still widens
         # few-analyst names and tightens high-coverage names.
+        #
+        # The EXPONENT on that weight is LEARNED, not pinned at 1. Writing
+        # ``/ precision_weight`` asserts sd ∝ n^-0.5 — the textbook standard-error
+        # rate, which assumes analyst targets are independent draws about a common
+        # truth. They are not: analysts anchor on each other and on the same
+        # published guidance, so dispersion falls far more slowly than √n.
+        # Measured on the 2026-08-16 MV (24 coverage levels, 6,270 names), the
+        # observed sd of ``feat_log_uplift`` scales as **n^-0.306**, not n^-0.5:
+        #
+        #     n_analysts   observed sd   1/√n predicts   ratio
+        #        1-2          0.3489        0.3489       1.00
+        #        5-8          0.2056        0.1962       1.05
+        #        9-14         0.1957        0.1468       1.33
+        #       15-24         0.1580        0.1153       1.37
+        #       25-60         0.1404        0.0878       1.60
+        #
+        # Fixing the rate at 0.5 therefore hands well-covered names an observation
+        # scale up to 60 % too small, their standardised residuals run ~1.6× too
+        # large, and because ``nu`` is a single global parameter it collapses onto
+        # its 2.5 floor to accommodate them. At ν = 2.53 the Student-t variance is
+        # ν/(ν-2) = 4.77·σ², which over-disperses the whole predictive — the
+        # 2026-08-16 PPC measured a replicated std of 1.40-1.60 against an observed
+        # 1.03, and both the PIT ECDF and the mean t-statistic rejected.
+        #
+        # ``precision_weight`` is √n, so the exponent here is 2× the rate: the
+        # observed n^-0.306 corresponds to ≈ 0.61, and 1.0 reproduces the previous
+        # model exactly. The prior is deliberately centred on the OLD value rather
+        # than on the empirical estimate — a posterior that still lands near 0.6 is
+        # then evidence from the likelihood, not an echo of a prior fitted to the
+        # same data.
+        #
+        # Identification is clean: ``precision_weight`` is median-normalised, so the
+        # median name has weight 1 and ``sigma_isin`` = ``sigma_base·(1+cv)`` there
+        # for ANY exponent. ``sigma_base`` is fixed by the median, the exponent by
+        # the spread across coverage levels; they do not trade off.
         sigma_base = pm.Exponential("sigma_base", 1.0)
-        sigma_isin = pm.Deterministic(
-            "sigma_isin",
-            sigma_base * (1.0 + cv_data) / precision_weight_data,
-            dims="isin",
+        sigma_n_exponent = pm.TruncatedNormal(
+            "sigma_n_exponent", mu=1.0, sigma=0.5, lower=0.0, upper=2.0,
         )
+        # ---- Log-linear observation-scale model (2026-08-16) -----------------
+        # Previously this was ``sigma_base * (1 + cv) / precision_weight**tau`` --
+        # two drivers, of which one (coverage) was mis-specified. Measured on the
+        # live 6,533-row panel, correlation of each candidate with log|residual|
+        # after an OLS fit of the 17 drift features:
+        #
+        #     cv = pt_stddev/price   +0.2245   was in
+        #     log market_cap         -0.2100   NOT in, not even catalogued
+        #     volatility_1m          +0.1924   NOT in
+        #     volatility_1y          +0.1897   NOT in
+        #     log n_analysts         -0.1696   was in
+        #     feat_pt_range_norm     +0.1150   DOCUMENTED as in, never wired
+        #     feat_vol_drift         -0.0349   documented as in, never wired,
+        #                                      and useless regardless
+        #
+        # The scale is now log-linear in the z-scored drivers. Log-linear keeps
+        # positivity automatic (no clipping, no HalfNormal on a product) and makes
+        # each ``delta_*`` read directly as the log-sigma change per 1 sd of its
+        # driver. ``log1p(cv)`` preserves the previous multiplicative ``(1 + cv)``
+        # exactly, so the old model is the special case delta_* = 0, tau = 1.
+        #
+        # Identification: ``precision_weight`` is median-normalised and every
+        # driver is mean-zero after z-scoring, so ``sigma_base`` remains pinned by
+        # the median name and the deltas are identified by cross-sectional spread.
+        # They do not trade off with the intercept.
+        delta_vol = pm.Normal("sigma_delta_vol_level", 0.0, 0.5)
+        delta_mcap = pm.Normal("sigma_delta_log_mcap", 0.0, 0.5)
+        delta_range = pm.Normal("sigma_delta_range", 0.0, 0.5)
+
+        # ---- Group structure on the VARIANCE ---------------------------------
+        # The model carries crossed group effects on the MEAN but had none on the
+        # scale, while residual sd moves 2.14x across sectors (Health Care 0.184
+        # vs the tightest 0.086), 1.82x across size_class and 1.68x across
+        # trading_region. No per-name driver can absorb a group-level shift of
+        # that size, so a single global tail parameter was taking the strain --
+        # which is why ``nu`` pinned at its 2.5 floor.
+        #
+        # Fixed scale (GROUP_EFFECT_SCALE), ZeroSumNormal, exactly as the mean-side
+        # crossed effects: a learned hierarchical scale over a single cross-section
+        # is the non-identified construction this model already abandoned there.
+        # Sum-to-zero keeps it from aliasing with ``sigma_base``.
+        log_sigma = (
+            pt.log(sigma_base)
+            + pt.log1p(cv_data)
+            + delta_vol * vol_level_data
+            + delta_mcap * log_mcap_data
+            + delta_range * range_norm_data
+            - sigma_n_exponent * pt.log(precision_weight_data)
+        )
+        if "sector" in idx_data_vars:
+            sigma_sector = pm.ZeroSumNormal(
+                "sigma_sector_offset", sigma=GROUP_EFFECT_SCALE, dims="sector"
+            )
+            log_sigma = log_sigma + sigma_sector[idx_data_vars["sector"]]
+        sigma_isin = pm.Deterministic("sigma_isin", pt.exp(log_sigma), dims="isin")
         # Per-output noise diagonal (the ICM ``kappa``): each response series gets
         # its own multiplicative noise scale so a noisier output (feat_pt_drift)
         # does not inflate the primary series' σ (and vice-versa). The primary
@@ -3097,14 +3300,69 @@ def build_fused_kalman_pt_model(
         # ``2.5·log σ → −∞`` and the per-ISIN mean stays identified; the ``Gamma``
         # tail still lets the data choose genuinely heavy tails above the floor.
         # Exposed as the ``nu`` Deterministic so downstream consumers are unchanged.
-        nu = pm.Deterministic("nu", 2.5 + pm.Gamma("nu_tail", alpha=2.0, beta=0.1))
+        _lik = (likelihood or ("student_t" if robust else "normal")).lower()
+        if _lik not in ("student_t", "mixture", "normal"):
+            raise ValueError(
+                f"likelihood must be 'student_t', 'mixture' or 'normal', got {_lik!r}"
+            )
 
-        if robust:
+        if _lik == "student_t":
+            nu = pm.Deterministic("nu", 2.5 + pm.Gamma("nu_tail", alpha=2.0, beta=0.1))
             pm.StudentT(
                 "target_pct_obs",
                 nu=nu,
                 mu=regression,
                 sigma=sigma_full,
+                observed=Y_obs,
+                dims=("isin", "time", "y_series"),
+            )
+        elif _lik == "mixture":
+            # ---- Two-component scale mixture: tight core + wide outlier ----
+            # WHY, over the Student-t above. A t has ONE shape parameter, so it
+            # cannot be tight in the bulk and heavy in the tail at the same time:
+            # to cover the outliers it makes the whole distribution heavy, and the
+            # predictive over-disperses. Measured on the 2026-08-16 panel, the
+            # shipped t sat at nu ~ 2.6-2.7 (its 2.5 floor) and replicated a std of
+            # 1.31-1.39 against an observed 0.97, which is what failed the T=std,
+            # T=mean and PIT checks together.
+            #
+            # Fitting both families directly to the standardised response
+            # (n = 25,962) is unambiguous:
+            #
+            #     single Student-t (nu=3.76)   loglik -34872.4  k=3  BIC 69775.2
+            #     2-component normal mixture   loglik -34423.8  k=5  BIC 68898.3
+            #
+            # The mixture wins by dBIC 877, and its implied sd is 1.0000 against
+            # the data's 1.0000 (the single t manages 1.024). The fitted split is a
+            # 76 % core at sd 0.634 and a 24 % outlier component at sd 1.524, i.e.
+            # an inflation of ~2.4x -- which is the priors' rough location below.
+            #
+            # ``outlier_inflation >= 1`` by construction, so the second component
+            # is always the wider one and the label-switching that plagues free
+            # scale mixtures cannot occur.
+            outlier_weight = pm.Beta("outlier_weight", alpha=2.0, beta=8.0)
+            outlier_inflation = pm.Deterministic(
+                "outlier_inflation", 1.0 + pm.HalfNormal("outlier_inflation_excess", 2.0)
+            )
+            # ``nu`` is retained as a DERIVED summary, not a fitted parameter: the
+            # Student-t degrees of freedom whose excess kurtosis matches this
+            # mixture's. Downstream consumers read it (the forward-return Monte
+            # Carlo in _price_target_mc draws StudentT(df=nu), run_diagnostics
+            # summarises it), and dropping it would break them silently. It is a
+            # tail-weight summary of the fitted mixture -- do NOT read it as an
+            # estimated dof the way the student_t branch's ``nu`` is.
+            _w, _k2 = outlier_weight, outlier_inflation ** 2
+            _m2 = (1.0 - _w) + _w * _k2
+            _m4 = 3.0 * ((1.0 - _w) + _w * _k2 ** 2)
+            _exkurt = pt.maximum(_m4 / _m2 ** 2 - 3.0, 1e-6)
+            pm.Deterministic("nu", pt.clip(6.0 / _exkurt + 4.0, 2.5, 500.0))
+            pm.Mixture(
+                "target_pct_obs",
+                w=pt.stack([1.0 - outlier_weight, outlier_weight]),
+                comp_dists=[
+                    pm.Normal.dist(mu=regression, sigma=sigma_full),
+                    pm.Normal.dist(mu=regression, sigma=sigma_full * outlier_inflation),
+                ],
                 observed=Y_obs,
                 dims=("isin", "time", "y_series"),
             )

@@ -117,10 +117,12 @@ from probabilistic_ml_model.pymc_models.KalmanFilterModel import (
     FISCAL_HORIZONS,
     KALMAN_CONSENSUS_SIGMA_FEATURE,
     KALMAN_DRIFT_EXCLUDED_FEATURES,
+    KALMAN_LOG_MCAP_FEATURE,
     KALMAN_RANGE_WIDENER_FEATURE,
     KALMAN_TILT_FEATURE_ORDER,
     KALMAN_TIME_COVARIATE_PREFIX,
     KALMAN_VOL_DRIFT_FEATURE,
+    KALMAN_VOL_LEVEL_FEATURE,
     KalmanFilterPriceTarget,
     KalmanPanelInputs,
     build_fused_kalman_pt_model,
@@ -1783,30 +1785,62 @@ def plot_kalman_forecast_returns(idata_fit, pred, *, observed=None, dates=None,
 
 
 def build_noise_wideners(df: pd.DataFrame, *, fillna: bool = True) -> dict[str, np.ndarray]:
-    """Model-facing observation-noise wideners for one snapshot frame.
+    """Raw observation-noise widener inputs for one snapshot frame.
 
-    SINGLE SOURCE OF TRUTH for the observation-noise wideners shared by the §2.4c EDA
-    panel and the §4.2 model containers, so the picture and the likelihood agree by
-    construction. Each quantity is returned in the units the measurement model consumes
-    (``sigma_obs = sigma_obs_base * (1 + range + cv + 0.5*max(vol_drift, 0)) /
-    sqrt(n_analysts)`` — rising-vol regimes widen the observation noise; falling or
-    flat vol contributes 0 via the non-negativity clip).
+    Extracts the per-row quantities that feed the measurement scale, in their
+    source units. ``cv`` is consumed directly by
+    :func:`~probabilistic_ml_model.pymc_models.KalmanFilterModel.build_fused_kalman_pt_model`;
+    ``range`` reaches it via ``KalmanPanelInputs.range_norm``; ``sqrt_n`` is
+    reworked there into the median-normalised ``precision_weight``.
+
+    .. warning::
+
+       **``multiplier`` is an EDA display quantity. The likelihood does not apply
+       it.** Until 2026-08-16 this docstring claimed to be the "single source of
+       truth ... so the picture and the likelihood agree by construction" and
+       documented the scale as
+       ``sigma_obs_base * (1 + range + cv + 0.5*max(vol_drift, 0)) / sqrt(n)``.
+       That was never what the builder computed: it applied only
+       ``sigma_base * (1 + cv) / sqrt(n)``. There was no ``pm.Data`` container for
+       ``feat_pt_range_norm`` at all, and ``feat_vol_drift`` was — and remains —
+       annotated in the builder as *"retained as a provenance container"*, i.e.
+       stored and never read. So the §2.4c panel drew a multiplier the model had
+       never applied.
+
+       The scale actually fitted is now **log-linear** and lives in one place,
+       ``build_fused_kalman_pt_model``:
+
+       .. code-block:: text
+
+          log sigma_isin = log sigma_base
+                         + log1p(cv)                          <- this function
+                         + delta_vol   * z(log1p(vol_level))
+                         + delta_mcap  * z(log_mcap)
+                         + delta_range * z(range_norm)        <- this function
+                         - sigma_n_exponent * log(precision_weight)
+                         + sector_offset
+
+       ``vol_drift`` is **not** in it. Measured on the live 6,533-row panel it
+       correlates −0.035 with ``log |residual|``, against +0.19 for the realized-vol
+       LEVEL it replaced in 0.9.9.6. It is still returned here because the §2.4c
+       marginals plot it and the model keeps a provenance container for it.
 
     Parameters
     ----------
     df
         A ``kalman_df``-shaped frame (universe EDA or the modelling ``model_df``).
     fillna
-        ``True`` (the §4.2 model contract): missing inputs -> 0 and the non-negative
-        wideners are clipped at 0, so ``sigma_obs`` is always finite. ``False`` (the EDA
-        contract): keep NaNs and the raw signed values, so the marginals show the true
-        distribution before the model's 0-fill / clip.
+        ``True`` (the model contract): missing inputs -> 0 and the non-negative
+        wideners are clipped at 0. ``False`` (the EDA contract): keep NaNs and the
+        raw signed values, so the marginals show the true distribution before the
+        model's 0-fill / clip.
 
     Returns
     -------
     dict[str, np.ndarray]
-        Keys ``range``, ``cv``, ``vol_drift``, ``sqrt_n`` plus the realised per-row
-        ``multiplier`` = ``(1 + range + cv + 0.5*max(vol_drift, 0)) / sqrt_n``.
+        Keys ``range``, ``cv``, ``vol_drift``, ``sqrt_n``, plus ``multiplier`` =
+        ``(1 + range + cv + 0.5*max(vol_drift, 0)) / sqrt_n`` — retained for the
+        EDA panel and for backward compatibility only. See the warning above.
     """
     range_col = (KALMAN_RANGE_WIDENER_FEATURE
                  if KALMAN_RANGE_WIDENER_FEATURE in df.columns else None)
@@ -3999,6 +4033,26 @@ def prepare_kalman_panel_inputs(
     sqrt_n = _nw['sqrt_n']
     n_analysts = model_df['n_analysts'].astype('float64').clip(lower=1).to_numpy()
 
+    # --- Observation-scale drivers (2026-08-16) -------------------------------
+    # Inputs to the log-linear sigma_isin model. All three are carried NaN-bearing
+    # and z-scored inside build_fused_kalman_pt_model, matching how avg_beta /
+    # size_ratio / volume_ratio are handled; an absent column becomes an all-NaN
+    # vector and its term drops out of the scale.
+    #
+    # Measured correlation with log|residual| after fitting the drift design
+    # (n = 6,533): vol_level +0.19, log_mcap -0.21, range_norm +0.115 -- against
+    # -0.035 for the feat_vol_drift the model previously (nominally) used.
+    def _driver(col: str) -> np.ndarray:
+        if col in model_df.columns:
+            return pd.to_numeric(model_df[col], errors='coerce').to_numpy('float64')
+        logger.info('Observation-scale driver %s absent -- its term drops out '
+                    'of sigma_isin (pre-2026-08-16 MV?).', col)
+        return np.full(n_isin, np.nan, dtype='float64')
+
+    vol_level = _driver(KALMAN_VOL_LEVEL_FEATURE)
+    log_mcap = _driver(KALMAN_LOG_MCAP_FEATURE)
+    range_norm = _driver(KALMAN_RANGE_WIDENER_FEATURE)
+
     # --- Systematic-risk driver (feat_avg_beta) -------------------------------
     # feat_avg_beta == NULL-aware mean of beta_{1y,2y,5y} (mv_pymc_kalman_pt). It
     # is the risk_adj_return discount key (realized vol enters only via the
@@ -4062,12 +4116,16 @@ def prepare_kalman_panel_inputs(
           f'  volume_ratio(mean):{_safe_mean(volume_ratio):.3f}'
           f'  vol_drift(mean):{_safe_mean(vol_drift):.3f}'
           f'  cv(mean):{_safe_mean(dispersion_cv):.3f}')
+    print(f'  sigma drivers — vol_level(mean):{_safe_mean(vol_level):.2f}'
+          f'  log_mcap(mean):{_safe_mean(log_mcap):.2f}'
+          f'  range_norm(mean):{_safe_mean(range_norm):.3f}')
 
     return KalmanPanelInputs(
         frame=model_df, isins=isin_labels, Y=Y_std, t_scaled=t_scaled,
         X_drift=x_std, n_analysts=n_analysts, sqrt_n_analysts=sqrt_n,
         vol_drift=vol_drift, dispersion_cv=dispersion_cv, avg_beta=avg_beta,
         size_ratio=size_ratio, volume_ratio=volume_ratio,
+        vol_level=vol_level, log_mcap=log_mcap, range_norm=range_norm,
         drift_names=list(drift_features), response_names=list(resp),
         coord_uniques=coord_uniques, coord_idx=coord_idx,
         # The EXACT moments applied above — carried so the posterior can be
@@ -4090,6 +4148,18 @@ FUSED_SCALAR_VARS: tuple[str, ...] = (
     # absent vars. Watch it: a posterior pressed against 0 means the panel carries
     # no per-name time dynamics and the state layer is dead weight.
     'sigma_base', 'nu', 'sigma_state',
+    # Learned exponent on the median-normalised analyst-count precision weight
+    # (see build_fused_kalman_pt_model). 1.0 is the old pinned 1/sqrt(n) rate;
+    # the 2026-08-16 MV implies ~0.61. Read it together with ``nu``: the two are
+    # coupled, because an exponent that is too large starves well-covered names of
+    # observation scale and drags the shared tail parameter onto its floor.
+    'sigma_n_exponent',
+    # Log-linear observation-scale coefficients (2026-08-16). Each reads as the
+    # log-sigma change per 1 sd of its z-scored driver, so they are directly
+    # comparable to one another. Expected signs from the data: vol_level POSITIVE
+    # (volatile names have wider analyst dispersion), log_mcap NEGATIVE (large
+    # caps are better understood), range POSITIVE.
+    'sigma_delta_vol_level', 'sigma_delta_log_mcap', 'sigma_delta_range',
     # Learned, sign-fixed risk / size loadings (additive tilts on the per-ISIN
     # baseline keyed on feat_avg_beta / feat_mcap_global_r). Present only when the
     # corresponding penalty prior scale is > 0; run_diagnostics skips absent vars.
@@ -5199,7 +5269,21 @@ def _subsample_panel(panel: KalmanPanelInputs, max_isins: int,
         vol_drift=panel.vol_drift[keep], dispersion_cv=panel.dispersion_cv[keep],
         avg_beta=panel.avg_beta[keep], size_ratio=panel.size_ratio[keep],
         volume_ratio=panel.volume_ratio[keep],
+        # Observation-scale drivers. Sliced defensively: a panel built before
+        # 2026-08-16 carries empty arrays for these, and ``np.empty(0)[keep]``
+        # would raise rather than degrade.
+        vol_level=panel.vol_level[keep] if panel.vol_level.size else panel.vol_level,
+        log_mcap=panel.log_mcap[keep] if panel.log_mcap.size else panel.log_mcap,
+        range_norm=panel.range_norm[keep] if panel.range_norm.size else panel.range_norm,
         coord_uniques=coord_uniques, coord_idx=coord_idx,
+        # The fit-time response moments are NOT row-dependent -- they are the
+        # pooled scalars the response was standardised with -- so they carry over
+        # unsliced. Omitting them (as this function did until 2026-08-16) dropped
+        # them to their empty defaults, which silently pushed every subsampled
+        # run onto the LEGACY snapshot-based de-standardisation that 0.9.9.14
+        # replaced, warning but still shipping different numbers. That affected
+        # `validate_kalman_state.py --isins N` and every probe fit.
+        response_mean=panel.response_mean, response_std=panel.response_std,
     )
 
 
@@ -5590,7 +5674,7 @@ def plot_fused_model_effects(idata, panel: KalmanPanelInputs) -> None:
         fig.add_trace(go.Scatter(
             x=times, y=med, mode='lines+markers', marker=dict(size=5),
             line=dict(color=C_POSTERIOR, width=1.6), name='state_path (median)',
-            hovertemplate=('t = %{x}<br>median state = %{y:.3f}<extra></extra>'),
+            hovertemplate='t = %{x}<br>median state = %{y:.3f}<extra></extra>',
             legendgroup='state'), row=2, col=2)
         _add_ref_line(fig, y=0, kind='zero', row=2, col=2)
         fig.update_xaxes(title_text='time index (lookback anchor, oldest → now)',
@@ -5720,7 +5804,7 @@ def _plot_comparative_returns(eu, results: pd.DataFrame, model_df: pd.DataFrame)
         fig.add_trace(go.Scatter(
             x=_vals[_ok], y=_labels[_ok], mode='markers',
             marker=dict(color=_c2, size=_sz, symbol=_sym),
-            hovertemplate=(f'%{{y}}<br>{_lab2} = %{{x:.1f}}%<extra></extra>'),
+            hovertemplate=f'%{{y}}<br>{_lab2} = %{{x:.1f}}%<extra></extra>',
             name=_lab2))
     _add_ref_line(fig, x=0, kind='zero')
     fig.update_xaxes(title_text='return / upside (%)', ticksuffix='%')

@@ -1056,6 +1056,41 @@ SELECT isin,
 		                     2), -1,
                      1)                                                                                                                                                                                        AS feat_vol_drift,
        pml.target_drift_n(ARRAY [volatility_1m::NUMERIC, volatility_3m::NUMERIC, volatility_6m::NUMERIC, volatility_1y::NUMERIC])                                                                              AS feat_vol_drift_n,
+       -- ---------------------------------------------------------------------
+       -- OBSERVATION-SCALE drivers (they belong in sigma_isin, NOT in the drift
+       -- design matrix -- see KALMAN_DRIFT_EXCLUDED_FEATURES).
+       --
+       -- Measured 2026-08-16 on this MV: correlation of each candidate with
+       -- log|residual| after an OLS fit of the 17 drift features (n = 6,533).
+       --
+       --     cv = pt_stddev/price   +0.2245   already in sigma_isin
+       --     log market_cap         -0.2100   <- feat_log_mcap below
+       --     volatility_1m          +0.1924   <- feat_vol_level below
+       --     volatility_1y          +0.1897   <- feat_vol_level below
+       --     log n_analysts         -0.1696   already in sigma_isin
+       --     feat_vol_drift         -0.0349   <- the DRIFT is nearly useless
+       --
+       -- That last line is the point. 0.9.9.6 replaced the absolute
+       -- feat_vol_{1m,3m,6m,1y} LEVELS with feat_vol_drift on the reasoning that
+       -- the drift is "the sigma_obs widener analogue of feat_pt_noise_drift".
+       -- It traded a +0.19 driver for a -0.03 one: how fast volatility is
+       -- CHANGING says almost nothing about how dispersed a name's implied
+       -- upside is, whereas how volatile it IS says a great deal. The levels are
+       -- restored here as ONE composite rather than four columns because they are
+       -- 0.53-0.94 correlated with each other (1m~3m 0.88, 3m~6m 0.94).
+       --
+       -- The median (not the mean) is used so a single missing or spiking window
+       -- cannot move the composite; pml.winsorise bounds the residual tail.
+       pml.winsorise((SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v)
+                      FROM unnest(ARRAY [volatility_1m, volatility_3m,
+                                         volatility_6m, volatility_1y]) AS t(v)
+                      WHERE v IS NOT NULL)::NUMERIC, 0, 300)::DOUBLE PRECISION                                                                                                                                   AS feat_vol_level,
+       -- Size. Logged because market_cap spans ~7 orders of magnitude, so the
+       -- raw level would be a near-binary indicator after z-scoring. Small names
+       -- carry materially wider analyst dispersion; this is the second strongest
+       -- driver available and was not previously reachable by the model at all
+       -- (market_cap carries no kalman_pt tag in pml_df_metadata).
+       ln(NULLIF(GREATEST(market_cap, 0::double precision), 0))                                                                                                                                                  AS feat_log_mcap,
        -- Raw beta windows (systematic-risk inputs to feat_avg_beta below).
        beta_1y,
        beta_2y,

@@ -479,9 +479,9 @@ Local-level state / comparison knobs on `KalmanRunConfig`:
 
 | Field                     | Default | Purpose                                                                          |
 |---------------------------|---------|----------------------------------------------------------------------------------|
-| `draws`                   | `2000`  | Pruning the collinear features lifted min ESS 2.1x at draws=1000 but landed near 300 against the 400 gate; nothing collinear remains to cut (drift cond 23, coords orthogonal), so the residual is sampling budget. ~32 min per T=4 run. |
+| `draws`                   | `2000`  | Sampling budget. Measured on the 2026-08-16 full run: **0 divergences, max R-hat 1.0022, min bulk ESS 824, min tail ESS 1,274** — nothing under the 400 gate. (An earlier note here claimed this budget "landed near 300"; that was stale.) ~11 min for the fit itself at `cores=1`, ~33 min end-to-end. |
 | `state_innovation_scale`  | `0.0`   | **AR(1) time-varying state — OFF by default.** Tried and rejected at T=4: it bought +0.013 recovery correlation for min ESS 14 vs 69, with `sigma_state`/`rho` drifting between draw budgets. The per-ISIN intercept below carries the panel. Set to `0.1` to enable; revisit on a longer panel. |
-| `isin_level_scale` (builder arg) | `0.10` | Prior scale of `sigma_isin_level`, the per-ISIN random intercept restored on `T > 1`. This is the layer the panel actually buys. `0.0` pins it off (the pre-0.9.9.14 baseline). |
+| `isin_level_scale` (builder arg) | `0.40` | **FIXED scale (a constant, not a prior on a sampled parameter)** of the per-ISIN `ZeroSumNormal` intercept restored on `T > 1`. `sigma_isin_level` is emitted as `pm.Deterministic(pt.constant(...))`, so it reports sd 0, ESS == total draws and R-hat NaN by construction — do not read it as fitted. **Raised from 0.10 on 2026-08-16**: measured on the live T=4 panel the between-name level sd is 0.4718 and carries 46.6% of residual variance; the old 0.10 could not express it, so it landed in observation noise and over-dispersed the predictive ~2x. `0.0` pins the layer off. |
 | `enable_model_comparison` | `False` | Run §9b. Refits both arms and computes a pointwise `log_likelihood` per arm (~820 MB each at full panel size), so ≈3× the sampling cost. |
 | `comparison_max_isins`    | `800`   | ISIN subsample used by §9b; the retained fraction is logged.                      |
 | `panel_response_extra`    | `()`    | Keys of `KALMAN_PANEL_RESPONSE_EXTRA` promoting a second response series (`D > 1`), which is what activates the otherwise-dormant rank-1 ICM. |
@@ -807,7 +807,7 @@ components, and `days_*` time covariates all stay out of the drift matrix — ED
 |------------------------------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `mv_pymc_earnings_beat`      | `n_total`, `n_beats`, `n_total_annual`, `n_beats_annual`                       | `feat_logit_beat_rate`, `feat_eps_fy1e`, `feat_rev_{1w,1m,3m,6m,1y}`, `feat_rev_accel_1m_6m`, `feat_last_q_surprise`                                      |
 | `mv_pymc_price_target`       | `observed_target_pct`, `observed_target_pct_med`, `price_target`, `n_analysts` | `feat_net_buy_sentiment`, `feat_implied_upside`, `feat_target_range_width`, `feat_pt_momentum_3m`, `feat_target_dispersion_cv`, `feat_52w_range_position` |
-| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_log_uplift` (the panel response), `feat_pt_drift(_n)`, `feat_price_drift(_n)`, `feat_pt_{high,low,median,noise}_drift`, `feat_coverage_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_analyst_rating`, `feat_{holds,buys,sells,no_opinion}`, `feat_pt_achievement_1y`, `feat_pt_accuracy_1y`, `feat_pt_range_hit_rate`, `feat_rel_volume`, `feat_avg_beta`, `feat_mcap_country_r`, `feat_net_eps_drift(_n)`, `feat_last_{q,y}_surprise`, `feat_eps_beat_rate(_annual)`, `feat_one_day_return`, `feat_price_chg_pct_3m`, `feat_total_return_*` (14 windows), `feat_tr_cagr_{1y,3y,5y,10y}`, `feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`, `feat_median_piotroski_f_score`, plus raw `days_*` horizons |
+| `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_log_uplift` (the panel response), `feat_pt_drift(_n)`, `feat_price_drift(_n)`, `feat_pt_{high,low,median,noise}_drift`, `feat_coverage_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_analyst_rating`, `feat_{holds,buys,sells,no_opinion}`, `feat_pt_achievement_1y`, `feat_pt_accuracy_1y`, `feat_pt_range_hit_rate`, `feat_rel_volume`, `feat_avg_beta`, `feat_mcap_country_r`, `feat_vol_level`, `feat_log_mcap`, `feat_net_eps_drift(_n)`, `feat_last_{q,y}_surprise`, `feat_eps_beat_rate(_annual)`, `feat_one_day_return`, `feat_price_chg_pct_3m`, `feat_total_return_*` (14 windows), `feat_tr_cagr_{1y,3y,5y,10y}`, `feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`, `feat_median_piotroski_f_score`, plus raw `days_*` horizons |
 | `mv_pymc_dcf_pt`             | `observed_pt`                                                                  | `feat_fcf_growth_{1y,2y}`, `feat_fcf_terminal_growth`, `feat_reinvest_rate`, `feat_capex_to_fcf`, `feat_tr_cagr_{3y,10y}`                                 |
 | `mv_pymc_dividend_safety`    | `observed_div_yield`                                                           | `feat_fcf_coverage`, `feat_cfo_coverage`, `feat_eps_payout_ratio`, `feat_dps_growth_{1y,3y,5y}`, `feat_yield_spread_vs_5y`                                |
 | `mv_pymc_credit_risk`        | `observed_altman_z`                                                            | `feat_distress_zone`, `feat_z_trend_{1y,3y}`, `feat_cfo_capex_cov`, `feat_fcf_yield`, `feat_beta_2y`                                                      |
@@ -916,7 +916,7 @@ table **and** a generated `sql_scripts/analytics/<stem>.sql` DDL file:
 | `10b_risk_analytics` / `10b_risk_book` | + `p_upside_pos(_cond)`, `band_width`, `kalman_gain`, `cvar05`, `exp_vol`, `ret_vol_ratio`, `expected_sharpe`, `tail_risk`, `starr`, `book_weight`, `weight` |
 | `10c_kalman_results`      | feeds `analytics.kalman_filtered_price_targets`                                        |
 
-`analytics.kalman_filtered_price_targets` (82 columns) is the GEIB dashboard's only source and the **only** file in
+`analytics.kalman_filtered_price_targets` (**102 columns** — 100 plus the `run_id` / `exported_at` provenance pair) is the GEIB dashboard's only source and the **only** file in
 `sql_scripts/analytics/` carrying `COMMENT ON COLUMN` documentation and the raw-decimal unit header — keep it that way.
 The other ~45 files there are hand-written screen/analysis scripts unmanaged by the pipeline.
 
@@ -936,7 +936,26 @@ The other ~45 files there are hand-written screen/analysis scripts unmanaged by 
   MISSING_FROM_CATALOGUE. Collapsed families keep one representative each (`feat_pt_drift`, `feat_analyst_rating`).
   **Excluding ≠ removing:** the price-derived market-cap/EV four left the MV *and* the catalogue in 0.9.9.15, so they
   carry no exclusion entry; only `feat_net_eps_drift_n` (a support counter) was added to the union.
+- Observation-scale model: `sigma_isin` in `build_fused_kalman_pt_model` is **log-linear** since 0.9.9.16, and it is
+  the only place the measurement scale is defined:
+
+  ```
+  log sigma_isin = log sigma_base + log1p(cv)
+                 + delta_vol*z(log1p(feat_vol_level)) + delta_mcap*z(feat_log_mcap)
+                 + delta_range*z(feat_pt_range_norm)
+                 - sigma_n_exponent*log(precision_weight) + sector_offset
+  ```
+
+  `build_noise_wideners` is **not** a second source of truth despite its former docstring: its `multiplier` key is an
+  EDA display quantity the likelihood has never applied. `feat_vol_drift` is a provenance container only —
+  it correlates −0.035 with `log|residual|` against +0.19 for the `feat_vol_level` that 0.9.9.6 removed.
 - Artifact sections: `_EXPORT_SECTION_DIRS` in `pymc_kalman_filter_pt.py`
+- Export provenance: `PROVENANCE_COLUMNS` / `stamp_export_provenance` / `check_export_vintage` in
+  `pymc_kalman_filter_pt.py`. Every `_SQL_EXPORT_ARTIFACTS` frame and the analytics table carry `run_id` /
+  `exported_at`. Resolve which tables are stamped from `information_schema` **first** — a speculative
+  `SELECT run_id` aborts the PostgreSQL transaction and poisons every later query on that connection.
+- Reward/risk ratio floor: `MIN_RATIO_DENOMINATOR` in `RiskBookModel.py`. A bare `> 0` guard is not enough; a
+  denormal `er_sd` passes it and publishes a 1e15 ratio.
 - Kalman decision latent: `KALMAN_SCREEN_LATENT` / `resolve_screen_latent` in `pymc_kalman_filter_pt.py` — every
   consumer (screen, price-target MC, risk book, analytics export, §13b plots, prior predictive) resolves the
   per-ISIN latent through it, so the decision quantity has exactly one name.
@@ -1398,6 +1417,10 @@ $env:JAX_PLATFORM_NAME = "cpu"   # or "gpu" if CUDA available
 | `r_hat` / `ess_bulk` come back `NaN`                           | Fewer than 2 chains. `cores=1` is fine (chains run sequentially); `chains=1` is not — both statistics are between-chain. `build_sample_kwargs` warns. |
 | Jupyter kernel dies with "Connection to IDE-Managed Server is lost" | nutpie's parallel native workers crash an IDE-embedded kernel on Windows. Keep `cores=1` in notebooks; raise it only on the CLI path. |
 | A `visualizations` function vanished from `__all__`            | `visualizations/__init__.py:60-176` swallows `ImportError`, so a broken submodule silently disappears (exactly how a Python-2 `except` in `_shared.py` hid until 0.9.9.13). Import the submodule directly to see the real traceback. `earnings_quality.py` is never registered — always import it directly. |
+| `nu` sits pinned at its 2.5 floor                              | It is absorbing scale mis-specification, not measuring tail weight. Check `sigma_isin` before touching `nu` — **never relax the floor** (`KalmanFilterModel.py` records the improper-density corner it removes). On 2026-08-16, fixing the scale model and `isin_level_scale` lifted it 2.53 → 7.50 with no change to the likelihood family. |
+| PPC replicates over-disperse (T=std fails, coverage > target)   | Almost always the scale, not the likelihood. Diagnose by fitting a pooled OLS with shared slopes and free per-time intercepts — the exact structure the model imposes — and compare its BETWEEN-name and WITHIN-name residual sd against `isin_level_scale` and `sigma_isin`. Tightening the response clip and switching to a mixture likelihood were both tried in 0.9.9.16 and neither helped. |
+| A redirected run dies mid-way with `UnicodeEncodeError`         | Windows stdout falls back to cp1252 when piped to a file, and `run_eda` prints `Spearman ρ` (U+03C1). **`export PYTHONIOENCODING=utf-8`** before any redirected run. cp1252 encodes the em-dashes and arrows fine, so most output survives and only the Greek glyphs raise — after minutes of figure rendering. `validate_kalman_state.py` prints none, so it redirects cleanly and gives false reassurance. |
+| An MV "has 0 columns" per `information_schema`                  | PostgreSQL does not list **materialized view** columns in `information_schema.columns`. Use `pg_attribute` joined to `pg_class`/`pg_namespace`, or just `SELECT` the column. |
 
 ### Database Connection
 
@@ -1430,6 +1453,6 @@ catalog = get_feature_catalog(force_reload=True)
 
 ---
 
-**Version:** 0.9.9.13 (CHANGELOG; `pyproject.toml` and README badge lag at 0.9.9.5 pending the next packaging bump) |
+**Version:** 0.9.9.16 (CHANGELOG; `pyproject.toml` and README badge lag at 0.9.9.5 pending the next packaging bump) |
 **Python:** 3.12–3.14 | **PyMC:** >=6.2,<7 | **PyTensor:** >=3.2.2,<4 | **ArviZ:** >=1.1,<2 (arviz-base + arviz-stats +
 arviz-plots) | **JAX:** >=0.11,<1 | **License:** MIT | **DB:** PostgreSQL
