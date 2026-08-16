@@ -38,10 +38,13 @@ sort_by_options = [
     {"label": "Expected Return (Kalman)", "value": "expected_return_kalman"},
     {"label": "Probability of Positive Return", "value": "p_upside_pos_cond"},
     {"label": "Signal Strength", "value": "signal_strength"},
-    {"label": "Reward to CVaR", "value": "reward_to_cvar"},
+    {"label": "Reward / Tail Risk (STARR)", "value": "reward_to_cvar"},
     {"label": "Price Target (Kalman)", "value": "price_target_kalman"},
     {"label": "Beta", "value": "beta"},
-    {"label": "Expected Sharpe Ratio", "value": "expected_sharpe_ratio"},
+    # er_mean / er_sd over simulated LOG PRICE-TARGET UPLIFT — a t-statistic on
+    # the uplift estimate, not an investment Sharpe ratio. Labelled accordingly
+    # so nobody compares the 5-7 book values to a portfolio Sharpe.
+    {"label": "Uplift t-stat", "value": "expected_sharpe_ratio"},
 ]
 sort_by_default = ["expected_return_kalman"]
 
@@ -75,9 +78,9 @@ _COLUMNS = [
     ("expected_return_kalman", "Expected Return Kalman", 2),
     ("p_upside_pos_cond", "Cond Prob Pos", 2),
     ("beta", "Beta", 2),
-    ("expected_sharpe_ratio", "Expected Sharpe Ratio", 2),
+    ("expected_sharpe_ratio", "Uplift t-stat", 2),
     ("signal_strength", "Signal Strength", 2),
-    ("reward_to_cvar", "Reward To Cvar", 2),
+    ("reward_to_cvar", "Reward / Tail Risk", 2),
 ]
 
 title = "High Conviction Opportunities"

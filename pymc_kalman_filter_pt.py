@@ -59,6 +59,7 @@ import os
 import re
 import shutil
 import sys
+import uuid
 import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -389,10 +390,10 @@ class KalmanRunConfig:
     mc_rho: float = 0.85
     # Risk book
     cvar_alpha: float = 0.05
-    weight_cap: float = 0.08
+    weight_cap: float = 0.10
     k_book: int = 25
     p_long: float = 0.50
-    mcap_country_r_max: float = 0.02
+    mcap_country_r_max: float = 0.01
     # Fused-panel time axis: *_ago lookbacks building the genuine (isin, time)
     # log-uplift panel (oldest -> newest is resolved automatically; the current
     # snapshot is always the final step, so T = len(panel_lookbacks) + 1).
@@ -427,7 +428,7 @@ class KalmanRunConfig:
     # Universe query
     min_next_earnings: str = '2026-01-01'
     min_report_date: str = '2025-12-01'
-    min_mcap_country_rank: float = 98.0
+    min_mcap_country_rank: float = 99.0
     candidate_limit: int = 50
     earnings_window_days: int = 15
     # Plumbing
@@ -2075,6 +2076,18 @@ class _ExportState:
         suppresses the redundant ``10c_kalman_results`` table.
     cleaned
         Section directories already purged this run (``KALMAN_PT_CLEAN_RESULTS``).
+    run_id
+        Stable identifier for this workflow run, stamped onto every frame the
+        SQL sink writes (see :func:`stamp_export_provenance`). Assigned once, at
+        state construction, so every section of one run shares it — that is the
+        whole point. Before 2026-08-16 nothing recorded which run a row came
+        from, and the analytics schema silently served two vintages at once:
+        ``09_diagnostics_01_table`` / ``kalman_filtered_price_targets`` from the
+        2026-08-15 fit alongside five bulk frames from 2026-08-14, with 6 425 of
+        6 427 joinable ISINs carrying a different ``er_mean``. Nothing in the
+        schema made that visible; it took a value-level diff to find.
+    started_at
+        UTC timestamp of state construction, exported as ``exported_at``.
     """
 
     root: Path
@@ -2085,6 +2098,9 @@ class _ExportState:
     sql_ok: bool = True
     analytics_written: bool = False
     cleaned: set[str] = field(default_factory=set)
+    started_at: datetime.datetime = field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
 
 _export_state_instance: Optional[_ExportState] = None
@@ -2439,6 +2455,42 @@ def _sql_table_ddl(frame: pd.DataFrame, table: str, *,
     return ''.join(parts)
 
 
+#: Provenance columns appended to every frame the SQL sink writes. Kept as a
+#: tuple so consumers (and the §A5 validation gate) have one name to import
+#: rather than two string literals to keep in sync.
+PROVENANCE_COLUMNS: tuple[str, str] = ('run_id', 'exported_at')
+
+
+def stamp_export_provenance(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return ``frame`` with this run's :data:`PROVENANCE_COLUMNS` appended.
+
+    Every curated frame in :data:`_SQL_EXPORT_ARTIFACTS` and the analytics table
+    itself pass through here, so a mixed-vintage schema becomes a one-line query
+    (``SELECT count(DISTINCT run_id)``) instead of the value-level diff it used
+    to take. Both values come from :class:`_ExportState`, which assigns them once
+    per run — sections do not each get their own.
+
+    Idempotent: re-stamping an already-stamped frame overwrites in place rather
+    than duplicating, so a frame that passes through both the bulk sink and
+    :func:`export_analytics` keeps one pair of columns.
+
+    Parameters
+    ----------
+    frame
+        Frame to stamp. Not mutated; a shallow copy is returned.
+
+    Returns
+    -------
+    pandas.DataFrame
+        ``frame`` plus ``run_id`` (text) and ``exported_at`` (UTC timestamp).
+    """
+    state = get_export_state()
+    out = frame.copy(deep=False)
+    out['run_id'] = state.run_id
+    out['exported_at'] = pd.Timestamp(state.started_at)
+    return out
+
+
 def _export_table(frame: pd.DataFrame, name: str) -> bool:
     """Persist ``frame`` as ``analytics."{name}"`` plus a generated ``{name}.sql``.
 
@@ -2469,6 +2521,9 @@ def _export_table(frame: pd.DataFrame, name: str) -> bool:
     state = get_export_state()
     if not isinstance(frame.index, pd.RangeIndex):
         frame = frame.reset_index()
+    # Stamp BEFORE the DDL is rendered so the generated schema and the written
+    # table always agree on the provenance columns.
+    frame = stamp_export_provenance(frame)
 
     with contextlib.suppress(Exception):
         _export_path(name, 'sql').write_text(
@@ -5959,7 +6014,16 @@ _ANALYTICS_DDL_HEADER = """\
 -- UNIT CONVENTION (since 0.9.9.7): every return / risk column stores a **raw
 -- decimal** return (0.25 = +25%), including ``cvar_5pct_kalman`` and
 -- ``expected_vol_kalman``. Percent scaling happens only at visualization and
--- print boundaries. Probabilities are decimals in [0, 1]."""
+-- print boundaries. Probabilities are decimals in [0, 1].
+--
+-- WHAT THE "RISK" COLUMNS ACTUALLY MEASURE (read before building on them):
+-- ``cvar_5pct_kalman``, ``expected_vol_kalman`` and ``reward_to_cvar`` are all
+-- computed from the POSTERIOR expected-upside draws, so they quantify
+-- ESTIMATION uncertainty, not return risk. ``cvar_5pct_kalman`` is a tail MEAN
+-- and is positive for ~84% of rows -- it is not a loss. ``expected_sharpe_ratio``
+-- divides by the dispersion of simulated log price-target uplift, not of a
+-- realised return, so it behaves as a t-statistic. Per-column COMMENTs below
+-- carry the detail; see also RiskBookModel.compute_cvar_aware_book."""
 
 _ANALYTICS_COLUMN_COMMENTS: dict[str, str] = {
     'price_target_kalman': 'Posterior-mean Kalman-smoothed price target (price units).',
@@ -5981,21 +6045,51 @@ _ANALYTICS_COLUMN_COMMENTS: dict[str, str] = {
     'mc_prob_pos': 'Monte-Carlo probability of a positive forward return (decimal in [0, 1]).',
     'cvar_book_weight': 'Normalised CVaR-aware long-book weight; held names sum to 1 '
                         '(0 for names outside the sized book).',
-    'cvar_5pct_kalman': '5% expected shortfall (CVaR) of the posterior upside draws '
-                        '(decimal return, negative = loss).',
-    'reward_to_cvar': 'STARR ratio: expected upside / binding tail risk '
-                      '(dimensionless). NULL when out_of_support.',
+    'cvar_5pct_kalman': 'NOT A LOSS -- read the sign before using this. It is the '
+                        'conditional MEAN of the worst 5% of the POSTERIOR '
+                        'expected-upside draws, so it is positive whenever the '
+                        'upside posterior is wholly positive: on the 2026-08-15 '
+                        'export 5473 of 6487 rows were > 0, universe mean +0.186. '
+                        'A value of 0.48 is a +48% return, not a 48% loss. The '
+                        'dispersion measure is (expected_return_kalman - '
+                        'cvar_5pct_kalman); for a downside quantile of the '
+                        'forward-return distribution use er_p05 instead. '
+                        'Decimal return.',
+    'reward_to_cvar': 'STARR ratio: expected upside / tail_risk, where tail_risk '
+                      '= max(expected_upside - cvar05, -er_p05, 0.01). Measures '
+                      'reward per unit of POSTERIOR dispersion, so universe '
+                      'values of 4 and book values of 8-12 are normal and are '
+                      'not comparable to a return-based STARR. Dimensionless. '
+                      'NULL when out_of_support.',
     'out_of_support': 'TRUE when the forward-return distribution is pinned at '
-                      'the uplift winsorisation cap, so the model has no '
-                      'reliable estimate for this name. The ranking metrics '
-                      '(expected_sharpe_ratio, reward_to_cvar, '
+                      'EITHER uplift winsorisation bound -- the +500% cap (via '
+                      'er_p05) or the -95% floor (via er_p95) -- so the model '
+                      'has no reliable estimate for this name. The ranking '
+                      'metrics (expected_sharpe_ratio, reward_to_cvar, '
                       'cvar_book_weight) are NULL for these rows; exclude them '
                       'from risk-adjusted rankings rather than treating a '
                       'missing score as a zero.',
-    'expected_vol_kalman': 'Std of the posterior upside draws (decimal return).',
-    'expected_sharpe_ratio': 'NULL when out_of_support. er_mean / er_sd of the '
-                             'structural-TS Monte-Carlo forward-return '
-                             'distribution (dimensionless).',
+    'expected_vol_kalman': 'Std of the POSTERIOR upside draws -- estimation '
+                           'uncertainty, not return volatility. Universe mean is '
+                           '~0.025 (2.5%), roughly an order of magnitude below '
+                           'any realised equity vol; do not substitute it for one. '
+                           'Decimal return.',
+    'expected_sharpe_ratio': 'NOT AN INVESTMENT SHARPE RATIO. er_mean / er_sd over '
+                             'Monte-Carlo draws of the LOG PRICE-TARGET UPLIFT '
+                             '(the distance from price to the smoothed target), '
+                             'not of a realised return. It reads as a t-statistic '
+                             'on the uplift estimate, which is why book values of '
+                             '5-7 are routine here. Dimensionless; NULL when '
+                             'out_of_support or when er_sd falls below the '
+                             'MIN_RATIO_DENOMINATOR floor.',
+    # NOTE: the degenerate `prob_pos` (posterior P(upside > 0) — 4,960 of 6,487
+    # rows pinned at exactly 1.0 on 2026-08-16, so p25 == p50 == 1.0 and it
+    # cannot order a ranking) is NOT a column of this table. It lives in
+    # analytics."10_screen_results" / "10b_risk_analytics". What this table
+    # carries is `mc_prob_pos` (Monte-Carlo, avg 0.864 / p50 0.968, 2 pinned) and
+    # `p_upside_pos_cond` (avg 0.457, none pinned) — both discriminating, so no
+    # saturation warning belongs here. Commenting a column absent from the frame
+    # is silently skipped by _sql_table_ddl, so such an entry is dead weight.
     'p_upside_pos_cond': 'mc_prob_pos x kalman_gain: probability of a positive upside given '
                          'state confidence (decimal in [0, 1]); the p_long gate applies here.',
     'pt_achievement_1y': 'Historic 1y price-target achievement rate (decimal in [0, 1]).',
@@ -6004,7 +6098,116 @@ _ANALYTICS_COLUMN_COMMENTS: dict[str, str] = {
     'analyst_bearish_pct': 'Share of analysts rating the name a sell (decimal in [0, 1]).',
     'analyst_neutral_pct': 'Share of analysts rating the name a hold (decimal in [0, 1]).',
     'analyst_conviction': 'Net buy-minus-sell analyst conviction (decimal in [-1, 1]).',
+    'run_id': 'Identifier of the workflow run that produced this row. Constant '
+              'within one run and shared with the six other analytics frames '
+              'exported alongside it, so SELECT count(DISTINCT run_id) detects a '
+              'mixed-vintage schema and a join across tables can assert the '
+              'vintages match. Added 2026-08-16.',
+    'exported_at': 'UTC start time of the run identified by run_id. This is an '
+                   'export timestamp, NOT a data as-of date -- for data recency '
+                   'read last_updated, which varies per name.',
 }
+
+
+def _existing_analytics_tables(schema: str) -> set[str]:
+    """Return the base-table names present in ``schema`` (empty set on failure)."""
+    try:
+        from sqlalchemy import create_engine, text
+        engine = create_engine(resolve_db_url())
+        with engine.connect() as conn:
+            return {r[0] for r in conn.execute(text("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = :s AND table_type = 'BASE TABLE'
+            """), {'s': schema}).fetchall()}
+    except Exception:  # pragma: no cover - offline / no driver
+        return set()
+
+
+def check_export_vintage(*, verbose: bool = True) -> dict[str, Optional[str]]:
+    """Report the ``run_id`` carried by each analytics table this workflow owns.
+
+    The failure this exists to catch is silent: a run that writes only some of
+    the curated frames leaves the schema internally inconsistent, and nothing
+    about the tables says so. On 2026-08-15 exactly that happened —
+    ``09_diagnostics_01_table`` and ``kalman_filtered_price_targets`` were
+    refreshed while five bulk frames stayed on the 2026-08-14 fit, so any join
+    across them mixed two posteriors. It took a value-level ``er_mean`` diff to
+    notice.
+
+    Best-effort and never raises: an unreachable database or a table predating
+    :data:`PROVENANCE_COLUMNS` simply reports ``None`` for that entry, matching
+    the export sink's own "a failed export must not abort the workflow" rule.
+
+    Which tables carry ``run_id`` is resolved from ``information_schema`` FIRST,
+    and only those are then queried. Selecting the column speculatively and
+    catching the error does not work on PostgreSQL: an ``UndefinedColumn`` aborts
+    the surrounding transaction, so every later statement on the same connection
+    fails with ``InFailedSqlTransaction``. The first release of this function did
+    exactly that and reported all eight tables as unstamped — including the two
+    that were correctly stamped — because ``04_panel_frame`` sorts first and
+    poisoned the connection.
+
+    Parameters
+    ----------
+    verbose
+        Print a one-line-per-table report and a warning when the run ids differ.
+
+    Returns
+    -------
+    dict[str, Optional[str]]
+        ``{table: run_id}``; ``None`` where the table is absent or unstamped.
+    """
+    tables = sorted(_SQL_EXPORT_ARTIFACTS | {_ANALYTICS_TABLE})
+    found: dict[str, Optional[str]] = {t: None for t in tables}
+    try:
+        from sqlalchemy import create_engine, text
+        schema = _analytics_schema()
+        engine = create_engine(resolve_db_url())
+        with engine.connect() as conn:
+            stamped = {r[0] for r in conn.execute(text("""
+                SELECT table_name FROM information_schema.columns
+                WHERE table_schema = :s AND column_name = 'run_id'
+            """), {'s': schema}).fetchall()}
+            for tbl in tables:
+                if tbl not in stamped:
+                    continue
+                rows = conn.execute(text(
+                    f'SELECT DISTINCT run_id FROM {schema}."{tbl}" LIMIT 2'
+                )).fetchall()
+                found[tbl] = (str(rows[0][0])
+                              if len(rows) == 1 and rows[0][0] else None)
+    except Exception as exc:  # pragma: no cover - offline / no driver
+        logger.warning('Export-vintage check skipped: %r', exc)
+        return {t: None for t in tables}
+
+    if verbose:
+        distinct = {v for v in found.values() if v}
+        # A table that EXISTS but carries no run_id is not "unknown vintage" —
+        # it is a vintage that predates the stamping, i.e. demonstrably not this
+        # run's. Counting only the stamped tables would print OK over exactly the
+        # divergence this function exists to surface, which is what the first
+        # release did while five frames sat two days stale.
+        present = _existing_analytics_tables(_analytics_schema())
+        unstamped = sorted(t for t in found
+                           if found[t] is None and t in present)
+        print(f'Analytics vintage check ({_analytics_schema()}):')
+        for tbl, rid in found.items():
+            label = rid or ('-- present, UNSTAMPED --' if tbl in present
+                            else '-- absent --')
+            print(f'  {label:>26}  {tbl}')
+        if len(distinct) > 1 or unstamped:
+            n_vint = len(distinct) + (1 if unstamped else 0)
+            print(f'  WARNING: at least {n_vint} vintages across '
+                  f'{len(present & set(found))} existing tables.')
+            if unstamped:
+                print(f'           unstamped (pre-2026-08-16 or not rewritten '
+                      f'this run): {", ".join(unstamped)}')
+            print('           The schema is serving mixed vintages; re-run '
+                  'scripts/export_kalman_analytics.py so every frame comes from '
+                  'one fit before joining across them.')
+        elif len(distinct) == 1:
+            print('  OK: single vintage across every existing table.')
+    return found
 
 
 def write_analytics_ddl(frame: pd.DataFrame,
@@ -6073,13 +6276,17 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
 
     * ``cvar_book_weight`` — the normalised long-book weight (0 for names outside the
       sized book; the held names sum to 1 / 100% gross).
-    * ``cvar_5pct_kalman`` — per-name 5% expected shortfall (CVaR) of the posterior
-      upside draws (decimal return units).
+    * ``cvar_5pct_kalman`` — per-name conditional MEAN of the worst 5% of the
+      posterior upside draws (decimal return units). **Not a loss**: it is positive
+      whenever the upside posterior is wholly positive, which held for 5473 of 6487
+      rows on the 2026-08-15 export. The dispersion is ``expected_upside`` minus this.
     * ``expected_vol_kalman`` — per-name std of the posterior upside draws (decimal).
+      Estimation uncertainty, ~2.5% universe mean; not a return volatility.
     * ``reward_to_cvar`` — the STARR ratio (expected upside / binding tail risk) the
       weights are ranked on (dimensionless).
-    * ``expected_sharpe_ratio`` — ``er_mean / er_sd`` of the structural-TS MC
-      forward-return distribution (dimensionless).
+    * ``expected_sharpe_ratio`` — ``er_mean / er_sd`` over MC draws of the log
+      price-target uplift (dimensionless). A t-statistic on the uplift estimate,
+      **not** an investment Sharpe ratio — see ``RiskBookModel`` for why.
     * ``p_upside_pos_cond`` — conditional probability of a positive upside given the
       smoother's state confidence (``mc_prob_pos`` × ``kalman_gain``), the quantity
       the book's ``p_long`` eligibility gate is applied to.
@@ -6274,9 +6481,24 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     # takes max Sharpe 717.7 -> 10.1 and max reward_to_cvar 500 -> 14.3, both back
     # to the pre-clip range, while leaving a borderline name at Sharpe 10.1 in
     # place rather than over-suppressing.
-    _pin_key = 'er_p05' if 'er_p05' in kalman_results.columns else 'er_mean'
-    _pinned = pd.to_numeric(kalman_results.get(_pin_key), errors='coerce')
-    oos = (_pinned >= UPLIFT_CLIP_HI - 1e-6).fillna(False)
+    #
+    # BOTH directions, mirrored. The clip is two-sided
+    # (``UPLIFT_CLIP_LO, UPLIFT_CLIP_HI = -0.95, 5.0``) but this test was
+    # upper-only until 2026-08-16, and the floor is the side that actually fires
+    # in production: on the 2026-08-15 export the upper test matched 0 of 6 487
+    # rows while THREE names (SNDK, AXTI, Kioxia) sat with every draw pinned at
+    # -95 %, ``er_sd`` exactly 0.0 and ``expected_sharpe_ratio`` = -4.28e15 —
+    # unflagged, and poisoning every AVG / ORDER BY the dashboard ran over the
+    # column. The floor test is the mirror image of the cap test: a distribution
+    # is pinned at the LOWER bound exactly when its 95th percentile has reached
+    # it, so ``er_p95`` plays the role ``er_p05`` plays above.
+    _hi_key = 'er_p05' if 'er_p05' in kalman_results.columns else 'er_mean'
+    _lo_key = 'er_p95' if 'er_p95' in kalman_results.columns else 'er_mean'
+    _pinned_hi = (pd.to_numeric(kalman_results.get(_hi_key), errors='coerce')
+                  >= UPLIFT_CLIP_HI - 1e-6).fillna(False)
+    _pinned_lo = (pd.to_numeric(kalman_results.get(_lo_key), errors='coerce')
+                  <= UPLIFT_CLIP_LO + 1e-6).fillna(False)
+    oos = (_pinned_hi | _pinned_lo)
     kalman_results['out_of_support'] = oos.to_numpy()
     _ranking_cols = ['expected_sharpe_ratio', 'reward_to_cvar', 'cvar_book_weight']
     for _c in _ranking_cols:
@@ -6286,15 +6508,22 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     # and any downstream sum stay well-defined.
     kalman_results['cvar_book_weight'] = kalman_results['cvar_book_weight'].fillna(0.0)
     if int(oos.sum()):
-        print(f'  [out-of-support] {int(oos.sum())} name(s) with {_pin_key} '
-              f'pinned at the +{UPLIFT_CLIP_HI:.0%} uplift cap: '
+        print(f'  [out-of-support] {int(oos.sum())} name(s) pinned at an uplift '
+              f'clip bound ({int(_pinned_hi.sum())} at the +{UPLIFT_CLIP_HI:.0%} '
+              f'cap via {_hi_key}, {int(_pinned_lo.sum())} at the '
+              f'{UPLIFT_CLIP_LO:.0%} floor via {_lo_key}): '
               f'{", ".join(_ranking_cols)} set to NULL and out_of_support=True '
               f'(er_* retained).')
+
+    # Provenance, stamped once the row-set is final so the DDL below, the table
+    # write and the seven bulk frames all carry the same ``run_id``.
+    kalman_results = stamp_export_provenance(kalman_results)
 
     _held = int((kalman_results['cvar_book_weight'] > 0).sum())
     print(f'Built kalman_filtered_price_targets row-set: {kalman_results.shape}  '
           f'(CVaR-aware book: {_held} sized names, gross='
-          f'{kalman_results["cvar_book_weight"].sum() * 100:.0f}%).')
+          f'{kalman_results["cvar_book_weight"].sum() * 100:.0f}%, '
+          f'run_id={get_export_state().run_id}).')
 
     # Decision dashboard over the export columns (risk-return map, MC return fan,
     # gain conditioning, tail asymmetry). Display-only and best-effort — a plot
@@ -6347,6 +6576,10 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
                                     if_exists='replace')
         note_analytics_written()
         print(f'Replaced analytics.{_ANALYTICS_TABLE} with {_n} rows.')
+        # Surface a mixed-vintage schema at the moment it is created, rather
+        # than leaving it for a downstream join to trip over.
+        with contextlib.suppress(Exception):
+            check_export_vintage()
     else:
         print('write=False -> not persisted. Pass write=True to replace the DB sink.')
     return kalman_results
@@ -6526,7 +6759,7 @@ def fit_kalman_model(
         samples: int = 2000,
         tune: int = 1000,
         chains: int = 4,
-        target_accept: float = 0.95,
+        target_accept: float = 0.90,
         random_seed: int = RANDOM_SEED,
         trend: bool = True,
         trend_sigma: float = 0.5,
@@ -6993,8 +7226,8 @@ def run_single_isin_stochastic_vol(ctx: Optional[dict]) -> None:
         # Fit + forecast via the shared driver (SV path; spot anchoring adopted).
         res_sv = fit_kalman_model(price_targets=observed, isin=str(chosen), dates=dates, last_price=last_price,
                                   samples=2500, tune=2500, chains=4, random_seed=RANDOM_SEED, trend=True,
-                                  stochastic_volatility=False, parameterization='auto',
-                                  nuts_sampler='nutpie', forecast_df=_row, forecast_aggregate='first')
+                                  stochastic_volatility=False, parameterization='auto', nuts_sampler='nutpie',
+                                  forecast_df=_row, forecast_aggregate='first')
         kf_sv, kf_sv_idata = res_sv.kf, res_sv.idata
 
         print(f'Stochastic-volatility fit: {len(observed)} obs, divergences={res_sv.n_divergences}.')
@@ -7208,8 +7441,7 @@ def run_mingled_cohort_stochastic_vol(frame: pd.DataFrame, ctx: Optional[dict]) 
         # so ``forecast_df`` is omitted). Spot anchoring adopted.
         res_sv = fit_kalman_model(price_targets=_observed_sv, isin=label, dates=_dates_sv, last_price=last_price,
                                   samples=2500, tune=2500, chains=4, random_seed=RANDOM_SEED, trend=True,
-                                  stochastic_volatility=True, parameterization='non_centered',
-                                  nuts_sampler='nutpie')
+                                  stochastic_volatility=True, parameterization='non_centered', nuts_sampler='nutpie')
         kf_sv, kf_sv_idata = res_sv.kf, res_sv.idata
 
         print(f'Mingled-cohort stochastic-volatility fit: {len(_observed_sv)} obs, '

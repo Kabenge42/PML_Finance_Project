@@ -188,11 +188,24 @@ def _coerce_dtypes(df: pd.DataFrame) -> pd.DataFrame:
 def _load_from_db() -> pd.DataFrame:
     """Load the analytics table, failing soft to an empty frame."""
     if get_analytics_engine is None:
-        logger.warning("get_analytics_engine unavailable; returning empty frame")
+        # An IMPORT failure, not a connection failure — probabilistic_ml_model is
+        # not on sys.path. Every card then renders against an empty frame, which
+        # looks like "no data matched the filters" rather than a broken install,
+        # so say exactly what is wrong and how to fix it.
+        logger.error(
+            "probabilistic_ml_model.data_utils is not importable, so "
+            "get_analytics_engine is None and the board will render EMPTY. "
+            "The repo root is missing from sys.path — launch via "
+            "`python dashboards/global_equity_investment_dashboard.py` from the "
+            "repo root (its launcher inserts the root), or set PYTHONPATH to it."
+        )
         return _empty_frame()
 
     if not os.environ.get("DB_URL"):
-        logger.warning("DB_URL not set; returning empty frame")
+        logger.error(
+            "DB_URL is not set, so the board will render EMPTY. "
+            "Run `. .\\set_env.ps1` before launching."
+        )
         return _empty_frame()
 
     schema = os.environ.get("DB_ANALYTICS_SCHEMA", "analytics")

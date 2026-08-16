@@ -1,7 +1,7 @@
 """Six KPI cards summarising the filtered universe, plus a data-as-of stamp.
 
 Cards (left to right): Total Securities, Avg Market Cap (M), Avg Expected
-Return, Avg Signal Strength, Avg Reward/CVaR, Avg Beta. All cards update on
+Return, Avg Signal Strength, Avg Reward/Tail Risk, Avg Beta. All cards update on
 global-filter changes; they show "No Data" on an empty selection and "Error"
 on failure. The "Data as of" stamp reads the max ``last_updated`` of the
 *unfiltered* frame — it is a data-freshness indicator, not a selection
@@ -33,7 +33,7 @@ _CARDS = [
     (AVG_MKTCAP_ID, "Avg Market Cap (M)"),
     (AVG_ER_ID, "Avg Expected Return"),
     (AVG_SIGNAL_ID, "Avg Signal Strength"),
-    (AVG_RCVAR_ID, "Avg Reward/CVaR"),
+    (AVG_RCVAR_ID, "Avg Reward/Tail Risk"),
     (AVG_BETA_ID, "Avg Beta"),
 ]
 

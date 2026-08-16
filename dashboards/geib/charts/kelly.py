@@ -14,7 +14,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
-from ._common import coalesce, empty_figure, scoped_filter, sector_values
+from ._common import (
+    coalesce,
+    empty_figure,
+    finite_cell,
+    scoped_filter,
+    sector_values,
+)
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..components.probability_filter import (
     apply_probability_filter,
@@ -156,13 +162,25 @@ def _calculate_kelly_fraction(row) -> float:
     q = 1 - p
     if p <= 0 or p >= 1:
         return 0.0
-    # cvar_5pct_kalman is stored as a decimal return, same as expected_return_kalman.
-    cvar = row["cvar_5pct_kalman"]
     expected_return = row["expected_return_kalman"]
-    if cvar == 0 or expected_return <= 0:
+    if expected_return <= 0:
         return 0.0
-    b = expected_return / abs(cvar)
-    if b == 0:
+    # Kelly's ``b`` is the odds ratio: win size / LOSS size. The loss size is
+    # NOT ``abs(cvar_5pct_kalman)`` — that column is the conditional MEAN of the
+    # worst 5% of the posterior upside draws, a positive return level for ~84% of
+    # rows, not a loss. Dividing by it made b track expected_return itself: on the
+    # 2026-08-15 table it had a median of 1.28 with an sd of 23.7, exploding
+    # wherever cvar approached zero. Use the same binding-downside definition the
+    # risk book sizes on (RiskBookModel ``tail_risk``) so the card and the book
+    # cannot disagree: the larger of the simulated 5% loss and the posterior
+    # mean->tail dispersion, floored at 1pp. Same inputs, median b 4.27, sd 2.77.
+    loss = max(
+        -finite_cell(row, "er_p05", 0.0),
+        expected_return - finite_cell(row, "cvar_5pct_kalman", 0.0),
+        0.01,
+    )
+    b = expected_return / loss
+    if b <= 0:
         return 0.0
     return max(0.0, (p * b - q) / b)
 
@@ -170,8 +188,11 @@ def _calculate_kelly_fraction(row) -> float:
 def _create_table(df: pd.DataFrame) -> html.Div:
     cols = ["ticker", "name", "allocation_pct", "expected_return_kalman",
             "cvar_5pct_kalman", "p_upside_pos_cond"]
+    # "Upside p5" not "CVaR 5%": the column is the conditional MEAN of the worst
+    # 5% of posterior upside draws — a return level, positive for most names, not
+    # a loss. Labelling it CVaR invites reading +0.48 as a 48% drawdown.
     headers = ["Ticker", "Name", "Allocation (%)", "Expected Return (%)",
-               "CVaR 5% (%)", "Win Probability"]
+               "Upside p5 (%)", "Win Probability"]
     view = df[cols].copy()
     view["expected_return_kalman"] = (view["expected_return_kalman"] * 100).round(2)
     view["cvar_5pct_kalman"] = (view["cvar_5pct_kalman"] * 100).round(2)
@@ -200,8 +221,9 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     # three of the four selectable metrics are not in that column list.
     df = apply_probability_filter(df, component_id, kwargs)
 
+    # ``er_p05`` feeds the Kelly loss term (see _calculate_kelly_fraction).
     df = df[["ticker", "name", "sector", "market_cap", "p_upside_pos_cond",
-             "expected_return_kalman", "cvar_5pct_kalman",
+             "expected_return_kalman", "cvar_5pct_kalman", "er_p05",
              "cvar_book_weight", "reward_to_cvar"]].copy()
     logger.debug(schema(df))
 

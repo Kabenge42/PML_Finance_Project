@@ -269,11 +269,15 @@ def _build_table(row, terminal, num_simulations, horizon_days, initial_price) ->
         ("Simulated Std Dev", _fmt_pct(float(terminal.std())),
          "Dispersion of the simulated terminal returns"),
         # cvar_5pct_kalman is stored as a decimal return like er_p* /
-        # expected_return_kalman — format with the same percent renderer.
-        ("CVaR (5%)", _fmt_pct(finite_cell(row, "cvar_5pct_kalman")),
-         "Expected loss in the worst 5% tail"),
-        ("Reward-to-CVaR", _fmt_num(finite_cell(row, "reward_to_cvar")),
-         "Risk-adjusted return vs tail loss"),
+        # expected_return_kalman — format with the same percent renderer. It is
+        # NOT a loss: it is the conditional mean of the worst 5% of the posterior
+        # upside draws, and is positive for ~84% of names. er_p05 above is the
+        # actual downside quantile of the forward-return distribution.
+        ("Upside p5 (cond. mean)", _fmt_pct(finite_cell(row, "cvar_5pct_kalman")),
+         "Mean upside across the weakest 5% of posterior draws — a return "
+         "level, not a loss"),
+        ("Reward / tail risk", _fmt_num(finite_cell(row, "reward_to_cvar")),
+         "Expected upside per unit of posterior tail dispersion (STARR)"),
         ("Simulations Run", f"{num_simulations:,}", "Number of price paths simulated"),
         ("Forecast Horizon (days)", f"{horizon_days}", "Time horizon for the forecast"),
     ]

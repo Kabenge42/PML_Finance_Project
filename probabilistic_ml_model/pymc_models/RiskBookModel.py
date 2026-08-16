@@ -33,10 +33,21 @@ logger = logging.getLogger(__name__)
 #: Defaults mirroring the ``KalmanRunConfig`` fields of the same name, so a
 #: direct call to :func:`compute_cvar_aware_book` reproduces the workflow.
 DEFAULT_CVAR_ALPHA = 0.05
-DEFAULT_WEIGHT_CAP = 0.08
+DEFAULT_WEIGHT_CAP = 0.10
 DEFAULT_K_BOOK = 25
 DEFAULT_P_LONG = 0.50
-DEFAULT_MCAP_R_MAX = 0.02
+DEFAULT_MCAP_R_MAX = 0.01
+
+#: Smallest dispersion accepted as a reward-to-risk DENOMINATOR, in decimal
+#: return units. A ``> 0`` test is not enough: when every Monte-Carlo draw for a
+#: name lands on the same uplift-clip bound its ``er_sd`` collapses to a
+#: denormal (~4e-16) that is still strictly positive, and the ratio comes back
+#: at 1e15 rather than as a missing value. The 2026-08-15 export shipped
+#: ``expected_sharpe_ratio = -4.28e15`` for three names that way, which destroys
+#: any AVG / ORDER BY / axis scaling a consumer applies to the column. 1e-4 is
+#: 1bp of return dispersion — below that the ratio is an artefact of the clip,
+#: not a measurement, so it is published as NULL.
+MIN_RATIO_DENOMINATOR = 1e-4
 
 __all__ = [
     "DEFAULT_CVAR_ALPHA",
@@ -44,6 +55,7 @@ __all__ = [
     "DEFAULT_MCAP_R_MAX",
     "DEFAULT_P_LONG",
     "DEFAULT_WEIGHT_CAP",
+    "MIN_RATIO_DENOMINATOR",
     "RiskBook",
     "compute_cvar_aware_book",
 ]
@@ -242,20 +254,32 @@ def compute_cvar_aware_book(
     #   * ret_vol_ratio    - reward per unit posterior dispersion of the upside
     #     draws (estimation-uncertainty-adjusted reward; internal only, NOT a
     #     Sharpe ratio — the denominator is parameter uncertainty).
-    #   * expected_sharpe  - er_mean / er_sd of the structural-TS MC forward-return
-    #     distribution: a genuine forward-looking Sharpe (exported as
-    #     ``expected_sharpe_ratio``).
+    #   * expected_sharpe  - er_mean / er_sd over Monte-Carlo draws of the LOG
+    #     PRICE-TARGET UPLIFT (the distance from price to the smoothed target),
+    #     not of a realised equity return. It reads as a t-statistic on the
+    #     uplift estimate, so book values of 5-7 are normal and are NOT
+    #     investment Sharpe ratios. Exported as ``expected_sharpe_ratio``.
     #   * tail_risk        - binding downside: the larger of the posterior
     #     mean->CVaR dispersion and the Student-t MC 5% loss magnitude (floored
     #     at 1pp = 0.01). Names with a wide posterior OR a fat simulated tail
     #     both score high here.
     #   * starr            - reward per unit expected-shortfall (STARR ratio).
-    _exp_vol_pos = nm['exp_vol'].where(nm['exp_vol'] > 0)
-    nm['ret_vol_ratio'] = nm['expected_upside'] / _exp_vol_pos
+    #
+    # Every denominator is floored at ``MIN_RATIO_DENOMINATOR`` and every result
+    # re-checked for finiteness: a clip-pinned name yields a denormal-but-
+    # positive dispersion that a bare ``> 0`` guard lets through as ~1e15. See
+    # the constant's docstring. ``starr`` needs no floor — ``tail_risk`` already
+    # carries a hard 0.01 one — but is finiteness-checked for symmetry.
+    def _safe_ratio(num: pd.Series, den: pd.Series) -> pd.Series:
+        """Return ``num / den`` with a degenerate denominator mapped to NaN."""
+        _num = pd.to_numeric(num, errors='coerce')
+        _den = pd.to_numeric(den, errors='coerce')
+        out = _num / _den.where(_den >= MIN_RATIO_DENOMINATOR)
+        return out.where(np.isfinite(out))
+
+    nm['ret_vol_ratio'] = _safe_ratio(nm['expected_upside'], nm['exp_vol'])
     if {'er_mean', 'er_sd'} <= set(nm.columns):
-        _er_sd_pos = pd.to_numeric(nm['er_sd'], errors='coerce')
-        nm['expected_sharpe'] = (pd.to_numeric(nm['er_mean'], errors='coerce')
-                                 / _er_sd_pos.where(_er_sd_pos > 0))
+        nm['expected_sharpe'] = _safe_ratio(nm['er_mean'], nm['er_sd'])
     else:  # pragma: no cover - older screen frame without the MC summary
         nm['expected_sharpe'] = np.nan
     _md_disp = (nm['expected_upside'] - nm['cvar05']).fillna(0.0).clip(lower=0.0)
@@ -263,7 +287,7 @@ def compute_cvar_aware_book(
                 if 'er_p05' in nm.columns else pd.Series(0.0, index=nm.index)).fillna(0.0)
     nm['tail_risk'] = np.maximum.reduce([
         _md_disp.to_numpy(), _mc_loss.to_numpy(), np.full(len(nm), 0.01)])
-    nm['starr'] = nm['expected_upside'] / nm['tail_risk']
+    nm['starr'] = _safe_ratio(nm['expected_upside'], nm['tail_risk'])
 
     # Market-cap pre-selection: only top-of-country names (mcap_global_r <
     # mcap_r_max, i.e. raw market_cap_country_r > 98 at the 0.02 default) are

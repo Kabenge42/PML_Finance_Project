@@ -8,6 +8,15 @@
 -- decimal** return (0.25 = +25%), including ``cvar_5pct_kalman`` and
 -- ``expected_vol_kalman``. Percent scaling happens only at visualization and
 -- print boundaries. Probabilities are decimals in [0, 1].
+--
+-- WHAT THE "RISK" COLUMNS ACTUALLY MEASURE (read before building on them):
+-- ``cvar_5pct_kalman``, ``expected_vol_kalman`` and ``reward_to_cvar`` are all
+-- computed from the POSTERIOR expected-upside draws, so they quantify
+-- ESTIMATION uncertainty, not return risk. ``cvar_5pct_kalman`` is a tail MEAN
+-- and is positive for ~84% of rows -- it is not a loss. ``expected_sharpe_ratio``
+-- divides by the dispersion of simulated log price-target uplift, not of a
+-- realised return, so it behaves as a t-statistic. Per-column COMMENTs below
+-- carry the detail; see also RiskBookModel.compute_cvar_aware_book.
 
 CREATE TABLE analytics.kalman_filtered_price_targets
 (
@@ -110,7 +119,9 @@ CREATE TABLE analytics.kalman_filtered_price_targets
 	expected_vol_kalman               double precision,
 	expected_sharpe_ratio             double precision,
 	p_upside_pos_cond                 double precision,
-	out_of_support                    boolean
+	out_of_support                    boolean,
+	run_id                            text,
+	exported_at                       timestamp
 );
 
 ALTER TABLE analytics.kalman_filtered_price_targets
@@ -165,19 +176,19 @@ COMMENT ON COLUMN analytics.kalman_filtered_price_targets."cvar_book_weight"
 	IS 'Normalised CVaR-aware long-book weight; held names sum to 1 (0 for names outside the sized book).';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."cvar_5pct_kalman"
-	IS '5% expected shortfall (CVaR) of the posterior upside draws (decimal return, negative = loss).';
+	IS 'NOT A LOSS -- read the sign before using this. It is the conditional MEAN of the worst 5% of the POSTERIOR expected-upside draws, so it is positive whenever the upside posterior is wholly positive: on the 2026-08-15 export 5473 of 6487 rows were > 0, universe mean +0.186. A value of 0.48 is a +48% return, not a 48% loss. The dispersion measure is (expected_return_kalman - cvar_5pct_kalman); for a downside quantile of the forward-return distribution use er_p05 instead. Decimal return.';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."reward_to_cvar"
-	IS 'STARR ratio: expected upside / binding tail risk (dimensionless). NULL when out_of_support.';
+	IS 'STARR ratio: expected upside / tail_risk, where tail_risk = max(expected_upside - cvar05, -er_p05, 0.01). Measures reward per unit of POSTERIOR dispersion, so universe values of 4 and book values of 8-12 are normal and are not comparable to a return-based STARR. Dimensionless. NULL when out_of_support.';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."out_of_support"
-	IS 'TRUE when the forward-return distribution is pinned at the uplift winsorisation cap, so the model has no reliable estimate for this name. The ranking metrics (expected_sharpe_ratio, reward_to_cvar, cvar_book_weight) are NULL for these rows; exclude them from risk-adjusted rankings rather than treating a missing score as a zero.';
+	IS 'TRUE when the forward-return distribution is pinned at EITHER uplift winsorisation bound -- the +500% cap (via er_p05) or the -95% floor (via er_p95) -- so the model has no reliable estimate for this name. The ranking metrics (expected_sharpe_ratio, reward_to_cvar, cvar_book_weight) are NULL for these rows; exclude them from risk-adjusted rankings rather than treating a missing score as a zero.';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."expected_vol_kalman"
-	IS 'Std of the posterior upside draws (decimal return).';
+	IS 'Std of the POSTERIOR upside draws -- estimation uncertainty, not return volatility. Universe mean is ~0.025 (2.5%), roughly an order of magnitude below any realised equity vol; do not substitute it for one. Decimal return.';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."expected_sharpe_ratio"
-	IS 'NULL when out_of_support. er_mean / er_sd of the structural-TS Monte-Carlo forward-return distribution (dimensionless).';
+	IS 'NOT AN INVESTMENT SHARPE RATIO. er_mean / er_sd over Monte-Carlo draws of the LOG PRICE-TARGET UPLIFT (the distance from price to the smoothed target), not of a realised return. It reads as a t-statistic on the uplift estimate, which is why book values of 5-7 are routine here. Dimensionless; NULL when out_of_support or when er_sd falls below the MIN_RATIO_DENOMINATOR floor.';
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."p_upside_pos_cond"
 	IS 'mc_prob_pos x kalman_gain: probability of a positive upside given state confidence (decimal in [0, 1]); the p_long gate applies here.';
@@ -199,3 +210,9 @@ COMMENT ON COLUMN analytics.kalman_filtered_price_targets."analyst_neutral_pct"
 
 COMMENT ON COLUMN analytics.kalman_filtered_price_targets."analyst_conviction"
 	IS 'Net buy-minus-sell analyst conviction (decimal in [-1, 1]).';
+
+COMMENT ON COLUMN analytics.kalman_filtered_price_targets."run_id"
+	IS 'Identifier of the workflow run that produced this row. Constant within one run and shared with the six other analytics frames exported alongside it, so SELECT count(DISTINCT run_id) detects a mixed-vintage schema and a join across tables can assert the vintages match. Added 2026-08-16.';
+
+COMMENT ON COLUMN analytics.kalman_filtered_price_targets."exported_at"
+	IS 'UTC start time of the run identified by run_id. This is an export timestamp, NOT a data as-of date -- for data recency read last_updated, which varies per name.';

@@ -106,6 +106,29 @@ def main() -> int:
             idata, panel, screen, risk_book=risk_book,
             write=not args.dry_run)
 
+    # The other six curated frames. Without this the script writes only TWO of
+    # the seven _SQL_EXPORT_ARTIFACTS tables — kalman_filtered_price_targets here
+    # and 09_diagnostics_01_table inline from run_diagnostics — leaving
+    # 04_panel_frame / 10_screen_results / 10_screen_mc_summary /
+    # 10b_risk_analytics / 10b_risk_book on whatever fit last touched them. That
+    # is the actual origin of the mixed-vintage schema found on 2026-08-16: not a
+    # run that skipped them, but a production path that never wrote them, so the
+    # divergence reappeared on every refresh.
+    #
+    # ``prior_idata`` / ``idata`` are deliberately OMITTED from the dict:
+    # export_all_artifacts would otherwise re-dump the posterior DataTree, which
+    # is ~8 GB at full panel size and has nothing to do with an analytics
+    # refresh. Missing keys are skipped silently by design.
+    if not args.dry_run:
+        K.export_all_artifacts({
+            'panel': panel,
+            'results': screen.results,
+            'screen': screen,
+            'risk_book': risk_book,
+            'kalman_results': kalman_results,
+        })
+        K.check_export_vintage()
+
     n = len(kalman_results) if kalman_results is not None else 0
     print('')
     print('=' * 62)

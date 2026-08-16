@@ -37,6 +37,11 @@ What it checks
 5. **The de-standardisation correction** — reports the pooled vs snapshot
    response moments and the resulting shift in exported upside, so the downward
    correction is visible before it reaches the analytics table.
+6. **The exported analytics table** (added 2026-08-16) — read-only checks on
+   what is already in the schema, not on the new fit: no non-finite or |v| > 100
+   ranking metric, every clip-pinned row flagged ``out_of_support`` with its
+   ranking columns NULL, and a single ``run_id`` across all seven tables. Skips
+   rather than fails when the table predates the provenance columns.
 
 Exit status is non-zero if any hard gate fails.
 """
@@ -147,6 +152,116 @@ def _per_time_coverage(model, idata, panel) -> pd.Series:
     inside = (obs >= lo) & (obs <= hi)
     dims = [d for d in inside.dims if d != 'time']
     return inside.mean(dims).to_series()
+
+
+def _gate_exported_table(engine) -> list[str]:
+    """Gate 6: check the analytics table already in the schema, not the new fit.
+
+    These three checks all guard regressions that shipped silently once before,
+    so each one is worth a gate rather than a comment:
+
+    * **Ranking-metric sanity.** ``expected_sharpe_ratio`` reached -4.28e15 on
+      the 2026-08-15 export because a denormal ``er_sd`` passed a ``> 0``
+      denominator guard. Anything non-finite or beyond |100| is an artefact, not
+      a measurement.
+    * **Symmetric out-of-support.** The detector was upper-only until
+      2026-08-16, so names pinned at the -95% floor kept their ranking columns.
+      Every clip-pinned row must now be flagged AND have its ranking columns
+      NULL.
+    * **Single vintage.** Five of the seven curated frames were a run behind the
+      other two, and nothing in the schema said so.
+
+    Read-only and best-effort: a missing table or unreachable schema reports a
+    skip rather than a failure, so this cannot block a validation run performed
+    before the first stamped export.
+
+    **Advisory before the first fixed export, hard after it.** Judging a new fit
+    by the quality of the PREVIOUS export is circular — run against the pre-fix
+    table these checks fail on exactly the rows the imminent re-export is about
+    to clear, which would block the export precisely when it is most needed. The
+    discriminator is provenance: a table with no ``run_id`` was written by code
+    that predates the fixes, so its findings are stale-data notes; a table that
+    carries one was written by the current code, so the same findings are real
+    regressions and gate the run.
+
+    Parameters
+    ----------
+    engine
+        Live SQLAlchemy engine against the analytics database.
+
+    Returns
+    -------
+    list[str]
+        Hard-failure descriptions; empty when every check passes, is skipped, or
+        is advisory-only against a pre-provenance table.
+    """
+    from sqlalchemy import text
+
+    out: list[str] = []
+    schema = K._analytics_schema()
+    table = K._ANALYTICS_TABLE
+    print('\n=== gate 6: exported analytics table ===')
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text(f"""
+                SELECT count(*)                                              AS n,
+                       count(*) FILTER (WHERE expected_sharpe_ratio IS NOT NULL
+                                          AND (NOT (expected_sharpe_ratio
+                                                    BETWEEN -100 AND 100)))  AS bad_sharpe,
+                       count(*) FILTER (WHERE reward_to_cvar IS NOT NULL
+                                          AND (NOT (reward_to_cvar
+                                                    BETWEEN -100 AND 100)))  AS bad_starr,
+                       count(*) FILTER (WHERE (er_p05 >= {K.UPLIFT_CLIP_HI} - 1e-6
+                                            OR er_p95 <= {K.UPLIFT_CLIP_LO} + 1e-6)
+                                          AND NOT out_of_support)            AS missed_oos,
+                       count(*) FILTER (WHERE out_of_support
+                                          AND expected_sharpe_ratio IS NOT NULL)
+                                                                             AS leaked_rank,
+                       count(*) FILTER (WHERE out_of_support)                AS n_oos
+                FROM {schema}.{table}
+            """)).mappings().one()
+    except Exception as exc:
+        print(f'  SKIPPED — {table} not readable ({exc.__class__.__name__}). '
+              f'Expected before the first export with provenance.')
+        return out
+
+    # Provenance decides whether findings gate the run — see the docstring.
+    vintages = K.check_export_vintage(verbose=False)
+    distinct = {v for v in vintages.values() if v}
+    stamped = sum(1 for v in vintages.values() if v)
+    table_stamped = bool(vintages.get(table))
+    mode = 'HARD' if table_stamped else 'ADVISORY'
+    print(f'  rows={row["n"]}  out_of_support={row["n_oos"]}  [{mode}]')
+    if not table_stamped:
+        print('  NOTE: the live table carries no run_id, so it predates the '
+              '2026-08-16 fixes. Findings below are stale-data notes that the '
+              'pending re-export is expected to clear; they do NOT gate this run.')
+    for label, key, hint in (
+        ('non-finite / |v|>100 expected_sharpe_ratio', 'bad_sharpe',
+         'MIN_RATIO_DENOMINATOR guard in RiskBookModel'),
+        ('non-finite / |v|>100 reward_to_cvar', 'bad_starr',
+         'MIN_RATIO_DENOMINATOR guard in RiskBookModel'),
+        ('clip-pinned rows not flagged out_of_support', 'missed_oos',
+         'symmetric detector in export_analytics'),
+        ('out_of_support rows with a non-NULL ranking metric', 'leaked_rank',
+         '_ranking_cols NULL-ing in export_analytics'),
+    ):
+        n = int(row[key])
+        tag = 'OK  ' if not n else ('FAIL' if table_stamped else 'note')
+        print(f'  {tag}  {label}: {n}')
+        if n and table_stamped:
+            out.append(f'{label}: {n} row(s) — check the {hint}')
+
+    if not stamped:
+        print('  note  vintage — no table carries run_id yet (pre-provenance export)')
+    elif len(distinct) > 1:
+        print(f'  FAIL  vintage — {len(distinct)} distinct run ids across '
+              f'{stamped} stamped table(s)')
+        out.append(f'analytics schema serves {len(distinct)} vintages; '
+                   f're-run scripts/export_kalman_analytics.py')
+    else:
+        print(f'  OK    vintage — single run id across {stamped} stamped table(s)')
+    return out
 
 
 def main() -> int:
@@ -317,6 +432,8 @@ def main() -> int:
         print('\n=== §9b ELPD comparison ===')
         K.run_model_comparison(panel, config=replace(cfg, chains=cfg.chains),
                                robust=True, volume_penalty=0.25)
+
+    failures.extend(_gate_exported_table(engine))
 
     print('\n' + '=' * 62)
     if failures:

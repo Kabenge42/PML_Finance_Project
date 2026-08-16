@@ -31,6 +31,17 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+# ...and the REPO ROOT, so ``probabilistic_ml_model`` resolves too. Running
+# ``python dashboards/global_equity_investment_dashboard.py`` puts THIS file's
+# directory on sys.path[0], not the working directory, so the repo root is absent
+# unless PYTHONPATH supplies it. Without this line
+# ``geib.data``'s guarded import of ``get_analytics_engine`` falls back to None
+# and the board renders every card against an EMPTY frame -- with nothing worse
+# than one WARNING line to say so. Same pattern the scripts/ entry points use.
+_REPO_ROOT = _HERE.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from geib.app import app, server  # noqa: E402  (path setup must precede import)
 
 __all__ = ["app", "server"]
