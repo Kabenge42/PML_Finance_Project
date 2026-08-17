@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from typing import Optional
 from dataclasses import replace
 from pathlib import Path
 
@@ -70,7 +71,8 @@ RHAT_GATE = 1.01
 SIGMA_STATE_FLOOR = 0.01  # below this the walk is indistinguishable from static
 
 
-def _fit(panel, cfg, *, scale: float, label: str, isin_level: float = 0.10):
+def _fit(panel, cfg, *, scale: float, label: str,
+         isin_level: Optional[float] = None):
     """Build and sample one arm; returns (idata, model).
 
     Sampling goes through :func:`K.sample_with_fallback` (nutpie → numpyro →
@@ -78,11 +80,24 @@ def _fit(panel, cfg, *, scale: float, label: str, isin_level: float = 0.10):
     lands on PyMC's pure-Python NUTS, which under the project's forced PyTensor
     py-VM produced zero draws in 42 minutes of CPU on this model — the state
     layer adds ``n_isin × (T-1)`` ≈ 16.8k innovation parameters.
+
+    ``isin_level=None`` means **inherit the builder's default**, which is the
+    whole point: this file previously hard-coded ``0.10`` and passed it
+    explicitly, so when the builder default moved to 0.40 on 2026-08-16 the gate
+    silently kept fitting the old model. Validation and export would then have
+    disagreed about which model was being certified — a worse failure than either
+    value, because a green gate would not have described what ships.
+    ``scripts/export_kalman_analytics.py`` reaches the builder through
+    :func:`K.build_panel_model`, which passes no ``isin_level_scale`` at all, so
+    inheriting here is what keeps the two paths identical. Only the baseline arm
+    overrides, with an explicit ``0.0`` to pin the layer off.
     """
-    print(f'\n--- fitting {label} (state_innovation_scale={scale}) ---')
+    print(f'\n--- fitting {label} (state_innovation_scale={scale}, '
+          f'isin_level_scale={"builder default" if isin_level is None else isin_level}) ---')
+    kw = {} if isin_level is None else {'isin_level_scale': isin_level}
     model = K.build_fused_kalman_pt_model(
-        panel, robust=True, volume_penalty=0.25, isin_level_scale=isin_level,
-        state_innovation_scale=scale)
+        panel, robust=True, volume_penalty=0.25,
+        state_innovation_scale=scale, **kw)
     idata = K.sample_with_fallback(model, cfg, model_name=f'kalman_pt[{label}]',
                                    progressbar=False)
     if idata is None:
@@ -402,11 +417,29 @@ def main() -> int:
         print(f'  FAILED to compute: {exc!r}')
         failures.append(f'per-time coverage could not be computed ({exc})')
 
+    def _predictive_scale(p) -> tuple[float, float, float]:
+        """Return (sigma_base, nu, total predictive scale) for one arm.
+
+        ``sigma_base`` alone is NOT comparable across arms once ``nu`` is free.
+        A Student-t with scale s and df v has sd ``s * sqrt(v / (v - 2))``, so a
+        larger s at a higher v can be the same or less total dispersion. Until
+        2026-08-16 ``nu`` was pinned at its 2.5 floor in both arms, which made
+        raw ``sigma_base`` a fair proxy and is why this gate was written that way.
+        Phase B freed ``nu`` (2.5 -> ~7.5 in the production arm), and the gate
+        then reported a FALSE failure: sigma_base 0.1649 -> 0.2203 "RISES" while
+        the total predictive scale had in fact fallen.
+        """
+        s = float(p['sigma_base'].mean())
+        v = float(p['nu'].mean()) if 'nu' in p else float('inf')
+        infl = np.sqrt(v / (v - 2.0)) if np.isfinite(v) and v > 2.0 else 1.0
+        return s, v, s * infl
+
     latent = K.resolve_screen_latent(post)
     sd_state = float(latent.std(('chain', 'draw')).mean())
-    base_state = float(post['sigma_base'].mean())
+    base_state, nu_state, scale_state = _predictive_scale(post)
     print('\n=== gate 3: predicted signature vs the static twin ===')
-    print(f'  production: sigma_base={base_state:.4f}  '
+    print(f'  production: sigma_base={base_state:.4f}  nu={nu_state:.3f}  '
+          f'predictive scale={scale_state:.4f}  '
           f'mean per-name posterior sd={sd_state:.4f}')
 
     if not args.no_static:
@@ -416,15 +449,21 @@ def main() -> int:
         post_s = idata_s.posterior
         sd_static = float(
             K.resolve_screen_latent(post_s).std(('chain', 'draw')).mean())
-        base_static = float(post_s['sigma_base'].mean())
-        print(f'  baseline  : sigma_base={base_static:.4f}  '
+        base_static, nu_static, scale_static = _predictive_scale(post_s)
+        print(f'  baseline  : sigma_base={base_static:.4f}  nu={nu_static:.3f}  '
+              f'predictive scale={scale_static:.4f}  '
               f'mean per-name posterior sd={sd_static:.4f}')
-        print(f'  -> sigma_base {base_static:.4f} -> {base_state:.4f} '
-              f'({"FALLS as predicted" if base_state < base_static else "RISES — unexpected"})')
-        print(f'  -> per-name sd {sd_static:.4f} -> {sd_state:.4f} '
+        print(f'  -> raw sigma_base    {base_static:.4f} -> {base_state:.4f}   '
+              f'(informational only — not comparable across differing nu)')
+        print(f'  -> PREDICTIVE SCALE  {scale_static:.4f} -> {scale_state:.4f} '
+              f'({"FALLS as predicted" if scale_state < scale_static else "RISES — unexpected"})')
+        print(f'  -> per-name sd       {sd_static:.4f} -> {sd_state:.4f} '
               f'({"WIDENS as predicted" if sd_state > sd_static else "NARROWS — unexpected"})')
-        if base_state >= base_static:
-            failures.append('sigma_base did not fall versus the baseline')
+        # Gate on the total predictive scale, not on sigma_base.
+        if scale_state >= scale_static:
+            failures.append(
+                f'predictive scale did not fall versus the baseline '
+                f'({scale_static:.4f} -> {scale_state:.4f})')
         if sd_state <= sd_static:
             failures.append('per-name posterior sd did not widen')
 

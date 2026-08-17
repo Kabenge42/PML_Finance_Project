@@ -90,20 +90,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prior centred on the *old* value so a posterior away from it is evidence rather
   than a prior echo.
 
-- **`isin_level_scale` raised 0.10 → 0.40.** Still a fixed constant, not learned —
-  the identification argument against learning it is unchanged. Only the value was
-  wrong. Measured with a pooled OLS carrying shared slopes and free per-time
-  intercepts (the structure the model imposes) on the live T=4 panel:
+- **`isin_level_scale`: raising it 0.10 → 0.40 was tried and REVERTED.** The
+  marginal case is real and is recorded so it is not re-derived: a pooled OLS with
+  shared slopes and free per-time intercepts — the structure the model imposes —
+  puts the between-name level sd at **0.4718**, carrying **46.6 %** of residual
+  variance, and re-measuring with the crossed group effects in the design barely
+  moves it (0.3854), so it is not double-counting sector/region/style/size.
 
-  | quantity | value |
-  |---|---|
-  | total residual sd | 0.6910 |
-  | **between-name level sd** | **0.4718** (46.6 % of residual variance) |
-  | within-name across-time sd | 0.5049 |
+  At 0.40 the level does real work — realised effect sd 0.2383 (60 % of scale)
+  against 0.0468 at 0.10 — and `nu` rises further, 4.77 → 8.58. But `sigma_base`
+  rises *with* it, 0.1653 → 0.2205, so the level is added **on top of** the
+  observation noise rather than displacing it. Total predictive scale
+  `σ·√(ν/(ν−2))` goes **0.2168 → 0.2517**, per-time coverage over-shoots to
+  **98.4 %** against a 92 % target at the decision slice, and the validation
+  gate's "`sigma_base` falls versus the no-latent baseline" signature inverts.
 
-  Deflating for the estimation noise in each name's own level (T = 4 observations)
-  gives ≈0.40. At 0.10 the per-name level could not be expressed and landed in
-  observation noise instead — uniformly across every time step.
+  Reverted to 0.10. **The trap:** the arithmetic measures how much per-name level
+  *exists* in the residual, not how much this model can absorb without the rest of
+  the scale expanding to match.
+
+- **`draws` / `tune` raised 2000/1000 → 4000/4000.** The log-linear scale mixes
+  harder than the two-term form it replaced: at 2000/1000 the full fit gave max
+  global R-hat **1.0134** / min bulk ESS **460** at **zero divergences** — slow
+  mixing, not bad geometry. At 4000/4000, **R-hat 1.0063 / min ESS 884**. The
+  *tune* increase carries most of that. Both the validation gate and the export
+  read this config, so clearing the gate via a `--draws` CLI override alone would
+  certify a model the export never fits.
 
 - **`build_fused_kalman_pt_model` gains `likelihood=`** (`'student_t'` /
   `'mixture'` / `'normal'`). `None` resolves from `robust`, so every existing

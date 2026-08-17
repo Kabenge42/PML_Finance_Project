@@ -381,8 +381,20 @@ class KalmanRunConfig:
     # (An earlier build set 3000 purely to out-sample the un-pruned ridge; that
     # was treating the symptom and is no longer needed. Reverting it to 1000 then
     # overshot in the other direction — this is the measured middle.)
-    draws: int = 2000
-    tune: int = 1000
+    # Raised 2000/1000 -> 4000/4000 on 2026-08-17. The log-linear ``sigma_isin``
+    # model has a harder posterior geometry than the two-term scale it replaced:
+    # at 2000/1000 the full-scale fit came back with max global R-hat 1.0134 and
+    # min bulk ESS 460, failing the < 1.01 gate at zero divergences (slow mixing,
+    # not bad geometry). At 4000/4000 the same model reports R-hat 1.0063 and min
+    # ESS 884. Note the TUNE increase carries most of that -- R-hat responds to
+    # adaptation, not just to sample count.
+    #
+    # This is also a consistency requirement, not only a quality one:
+    # ``validate_kalman_state.py`` and ``scripts/export_kalman_analytics.py`` both
+    # read this config, so a budget that only clears the gate via a ``--draws``
+    # CLI override would certify a model the export never fits.
+    draws: int = 4000
+    tune: int = 4000
     chains: int = 4
     cores: int = 1
     target_accept: float = 0.9
@@ -4268,6 +4280,7 @@ def build_panel_model(
         panel: KalmanPanelInputs, *, robust: bool = True, volume_penalty: float = 0.25,
         config: Optional[KalmanRunConfig] = None,
         state_innovation_scale: Optional[float] = None,
+        isin_level_scale: Optional[float] = None,
 ) -> "pm.Model":
     """Build the fused local-level-state model and render its graph.
 
@@ -4284,13 +4297,24 @@ def build_panel_model(
     state_innovation_scale
         Explicit override of the local-level innovation prior scale. ``0.0``
         pins the state at its t=0 anchor (the static comparison baseline).
+    isin_level_scale
+        Explicit override of the FIXED per-ISIN intercept scale. ``None`` (the
+        default) inherits :func:`build_fused_kalman_pt_model`'s own default, and
+        that inheritance is deliberate: every production path must agree with the
+        validation gate on which model is being certified. On 2026-08-16 the
+        builder default moved 0.10 -> 0.40 while ``validate_kalman_state.py``
+        still passed a hard-coded 0.10, so the gate certified a model that would
+        never ship. Pass a value here only to pin the layer off (``0.0``) for a
+        baseline arm.
     """
     if state_innovation_scale is None:
         cfg = config if config is not None else get_run_config()
         state_innovation_scale = cfg.state_innovation_scale
+    _lvl = {} if isin_level_scale is None else {
+        'isin_level_scale': float(isin_level_scale)}
     model = build_fused_kalman_pt_model(
         panel, robust=robust, volume_penalty=volume_penalty,
-        state_innovation_scale=float(state_innovation_scale))
+        state_innovation_scale=float(state_innovation_scale), **_lvl)
     try:
         pm.model_to_graphviz(model)
     except Exception:  # pragma: no cover - graphviz optional

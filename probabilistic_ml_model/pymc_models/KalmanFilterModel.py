@@ -2189,7 +2189,7 @@ def build_fused_kalman_pt_model(
         volume_penalty: float = 0.1,
         robust: bool = True,
         likelihood: Optional[str] = None,
-        isin_level_scale: float = 0.40,
+        isin_level_scale: float = 0.10,
         state_innovation_scale: float = 0.0,
 ) -> "pm_typing.Model":
     """Build the fused coregionalised cross-sectional Kalman price-target model.
@@ -2802,40 +2802,47 @@ def build_fused_kalman_pt_model(
             # Fixing the scale deletes the stuck scalar from the sampler and
             # leaves a plain regularized per-name effect, exactly as
             # ``GROUP_EFFECT_SCALE`` does for the crossed intercepts.
-            # ``isin_level_scale`` is that constant.
+            # ``isin_level_scale`` is that constant. The default 0.10 brackets
+            # both learned estimates (0.032-0.089) with room above, so it
+            # regularizes without pinning the effect near zero.
             #
-            # ---- 2026-08-16: the constant was 4x too SMALL --------------------
-            # It was set to 0.10 to bracket the two learned estimates (0.032 and
-            # 0.089) that the abandoned learned-scale attempt produced. Those
-            # estimates were themselves an artefact: at the time ``nu`` was pinned
-            # at its 2.5 floor and ``sigma_isin`` carried neither the realized-vol
-            # level, nor size, nor any group structure, so observation noise was
-            # inflated ~2x. With that much noise available, the per-name level
-            # looked unnecessary and the learned scale slid toward zero.
-            #
-            # Measured directly instead of inferred from a mis-specified fit --
-            # pooled OLS with shared slopes and free per-time intercepts, i.e. the
-            # exact structure this model imposes, on the live 6,487-name T=4
-            # panel:
+            # ---- 2026-08-16/17: raising it to 0.40 was TRIED and REVERTED -----
+            # The marginal case for a larger value is real and is recorded here so
+            # it is not re-derived from scratch. A pooled OLS with shared slopes
+            # and free per-time intercepts -- the exact structure this model
+            # imposes -- on the live 6,487-name T=4 panel gives:
             #
             #     total residual sd                    0.6910
-            #     BETWEEN-name level sd                0.4718   <- this parameter
-            #     WITHIN-name (across-time) sd         0.5049   <- genuine noise
+            #     BETWEEN-name level sd                0.4718
+            #     WITHIN-name (across-time) sd         0.5049
             #     per-name level share of residual var  46.6 %
             #
-            # Deflating the between-name figure for the estimation noise in each
-            # name's own level (only T observations per name:
-            # Var_true = 0.4718^2 - 0.5049^2/4) gives ~0.40.
+            # Deflated for the estimation noise in each name's own level
+            # (Var_true = 0.4718^2 - 0.5049^2/T) that is ~0.40, and re-measuring
+            # with the crossed group effects in the design barely moves it
+            # (0.3854), so the figure is not double-counting sector/region/style/
+            # size variance. On that basis the constant was set to 0.40.
             #
-            # Consequence of leaving it at 0.10: a per-name level the model cannot
-            # express has nowhere to go but the observation noise, uniformly
-            # across every time step. That is precisely the ~2x over-dispersion
-            # the 2026-08-16 PPC measured -- replicated std 1.39 against an
-            # observed 0.90 at t=now, with 95-97 % coverage against a 94 % target.
+            # It did not behave as the arithmetic predicted. At 0.40 the per-name
+            # level does real work -- realised effect sd 0.2383, 60 % of the
+            # scale, against 0.0468 at 0.10 -- and ``nu`` rises further (4.77 ->
+            # 8.58). But ``sigma_base`` rises WITH it (0.1653 -> 0.2205) instead
+            # of falling, so the level is added ON TOP of the observation noise
+            # rather than displacing it. Total predictive scale
+            # sigma*sqrt(nu/(nu-2)) goes 0.2168 -> 0.2517, per-time PPC coverage
+            # over-shoots to 98.4 % against a 92 % target at the decision slice,
+            # and the validation gate's "sigma_base falls versus the no-latent
+            # baseline" signature inverts.
             #
-            # Still FIXED, not learned: the identification argument above is
-            # unchanged, and a learned scale remains the wrong construction here.
-            # Only the constant is corrected.
+            # Reverted to 0.10. The log-linear sigma_isin model (realized-vol
+            # level, size, analyst range, learned coverage exponent, sector
+            # offset) is retained -- it is what freed ``nu`` from its 2.5 floor
+            # and improved PIT, and it does so without inflating total dispersion.
+            #
+            # Why the arithmetic misleads: it measures how much per-name level
+            # EXISTS in the residual, not how much this model can absorb without
+            # the rest of the scale expanding to match. Re-deriving 0.4718 and
+            # concluding "therefore 0.40" is the trap.
             pm.Deterministic("sigma_isin_level", pt.constant(isin_level_scale))
             z_isin_level = pm.ZeroSumNormal(
                 "z_isin_level", sigma=float(isin_level_scale), dims="isin"
