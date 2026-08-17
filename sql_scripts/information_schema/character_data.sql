@@ -1,3 +1,5 @@
-CREATE DOMAIN information_schema.character_data AS varchar;
+create domain information_schema.character_data as varchar
+;
 
-ALTER DOMAIN information_schema.character_data OWNER TO postgres;
+alter domain information_schema.character_data owner to postgres
+;

@@ -137,7 +137,7 @@ else
 
 # Logging configuration
 $env:LOG_LEVEL = "INFO"
-$env:TF_CPP_MIN_LOG_LEVEL = "2"
+$env:TF_CPP_MIN_LOG_LEVEL = "1"
 
 # Database connection (update with your actual credentials)
 # TODO: Update credentials before use or set via secure credential management

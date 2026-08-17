@@ -14,6 +14,7 @@ create table analytics."10_screen_results"
 	style_class        text,
 	market_cap         double precision,
 	mcap_country_r     double precision,
+	mcap_global_r      double precision,
 	enterprise_value   double precision,
 	last_price         double precision,
 	observed_pt        double precision,
@@ -34,7 +35,9 @@ create table analytics."10_screen_results"
 	er_p05             double precision,
 	er_p50             double precision,
 	er_p95             double precision,
-	mc_prob_pos        double precision
+	mc_prob_pos        double precision,
+	run_id             text,
+	exported_at        timestamp with time zone
 )
 ;
 

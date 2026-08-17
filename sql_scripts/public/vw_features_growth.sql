@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_growth
+create view public.vw_features_growth
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -18,13 +18,15 @@ CREATE VIEW public.vw_features_growth
 			 revenue_fq_vs_4q_avg, revenue_growth_flag, revenue_stability_score, revenue_accelerating_flag,
 			 revenue_positive_qoq_streak, revenue_5yavgfq, revenue_5yavgltm, revenue_vs_5y_avg_fq,
 			 revenue_vs_5y_avg_ltm, revenue_fq_vs_avg, revenue_momentum)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_growth IS 'Growth metrics including revenue, EBITDA, FCF growth rates and forecasts.
+comment on view public.vw_features_growth is 'Growth metrics including revenue, EBITDA, FCF growth rates and forecasts.
     Source functions: calc_growth_features, calc_revenue_forecast_features,
-    calc_revenue_estimate_consensus, calc_revenue_quarterly_features, calc_total_revenues_temporal';
+    calc_revenue_estimate_consensus, calc_revenue_quarterly_features, calc_total_revenues_temporal'
+;
 
-ALTER TABLE public.vw_features_growth
-	OWNER TO postgres;
+alter table public.vw_features_growth
+	owner to postgres
+;

@@ -1,10 +1,13 @@
-CREATE FUNCTION public.frequency_to_months(earnings_report_frequency text, fy_end_date date default NULL::date, next_fy_end_date date default NULL::date) RETURNS integer
-	IMMUTABLE
-	LANGUAGE plpgsql AS
+create function public.frequency_to_months(earnings_report_frequency text, fy_end_date date default NULL::date, next_fy_end_date date default NULL::date) returns integer
+	immutable
+	language plpgsql
+as
 $$
-BEGIN
+begin
 	-- missing source code
-END;
-$$;
+end;
+$$
+;
 
-ALTER FUNCTION public.frequency_to_months(text, date, date) OWNER TO postgres;
+alter function public.frequency_to_months(text, date, date) owner to postgres
+;

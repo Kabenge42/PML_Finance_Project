@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_employment
+create view public.vw_features_employment
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -9,12 +9,14 @@ CREATE VIEW public.vw_features_employment
 			 workforce_stability, fte_growth_2y_pct, fte_acceleration, workforce_volatility, hiring_intensity,
 			 productivity_trend, headcount_vs_revenue, workforce_efficiency_gain, layoff_risk_flag, rapid_hiring_flag,
 			 sustainable_growth_flag)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_employment IS 'Employment metrics including productivity, workforce trends, and efficiency.
-    Source functions: calc_employment_features, calc_employment_dynamics';
+comment on view public.vw_features_employment is 'Employment metrics including productivity, workforce trends, and efficiency.
+    Source functions: calc_employment_features, calc_employment_dynamics'
+;
 
-ALTER TABLE public.vw_features_employment
-	OWNER TO postgres;
+alter table public.vw_features_employment
+	owner to postgres
+;

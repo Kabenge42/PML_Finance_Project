@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_quality_risk
+create view public.vw_features_quality_risk
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -15,13 +15,15 @@ CREATE VIEW public.vw_features_quality_risk
 			 asset_writedown_ltm, restructuring_ltm, has_goodwill_impairment_ltm, goodwill_impairment_frequency,
 			 asset_writedown_frequency, restructuring_frequency, exceptional_items_total_ltm,
 			 exceptional_items_to_ebitda_comp, quality_issues_count_5y, accounting_quality_score_comp)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_quality_risk IS 'Quality and risk metrics including accounting quality, financial distress, and beta analysis.
+comment on view public.vw_features_quality_risk is 'Quality and risk metrics including accounting quality, financial distress, and beta analysis.
     Source functions: calc_quality_features, calc_beta_risk_features, calc_financial_distress_features,
-    calc_accounting_quality_features, calc_quality_features_comprehensive';
+    calc_accounting_quality_features, calc_quality_features_comprehensive'
+;
 
-ALTER TABLE public.vw_features_quality_risk
-	OWNER TO postgres;
+alter table public.vw_features_quality_risk
+	owner to postgres
+;

@@ -1,6 +1,15 @@
-CREATE FUNCTION information_schema._pg_truetypmod(pg_attribute, pg_type) RETURNS integer
-	IMMUTABLE STRICT PARALLEL SAFE
-	LANGUAGE sql
-RETURN CASE WHEN (($2).typtype = 'd'::"char") THEN ($2).typtypmod ELSE ($1).atttypmod END;
+create function information_schema._pg_truetypmod(pg_attribute, pg_type) returns integer
+	immutable
+	strict
+	parallel safe
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION information_schema._pg_truetypmod(unknown, unknown) OWNER TO postgres;
+alter function information_schema._pg_truetypmod(pg_attribute, pg_type) owner to postgres
+;

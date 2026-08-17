@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_composite_scores
+create view public.vw_features_composite_scores
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -12,12 +12,14 @@ CREATE VIEW public.vw_features_composite_scores
 			 normalized_ni_5yavgltm, net_income_growth_yoy, net_income_margin_ltm, ni_adjustment_ratio,
 			 net_income_positive_years, earnings_quality_composite, net_income_qoq_growth, net_income_yoy_quarterly,
 			 net_income_vs_5y_avg, normalized_ni_vs_5y_avg)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_composite_scores IS 'Composite scoring metrics including Piotroski F-Score and earnings quality.
-    Source functions: calc_composite_scores, calc_net_income_comprehensive';
+comment on view public.vw_features_composite_scores is 'Composite scoring metrics including Piotroski F-Score and earnings quality.
+    Source functions: calc_composite_scores, calc_net_income_comprehensive'
+;
 
-ALTER TABLE public.vw_features_composite_scores
-	OWNER TO postgres;
+alter table public.vw_features_composite_scores
+	owner to postgres
+;

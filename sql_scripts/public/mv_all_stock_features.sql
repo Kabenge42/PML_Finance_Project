@@ -1,8 +1,9 @@
-CREATE MATERIALIZED VIEW public.mv_all_stock_features AS
+create materialized view public.mv_all_stock_features
+as
 -- missing source code
 ;
 
-COMMENT ON MATERIALIZED VIEW public.mv_all_stock_features IS 'Unified materialized view containing all calculated stock features.
+comment on materialized view public.mv_all_stock_features is 'Unified materialized view containing all calculated stock features.
     Covers 26 feature categories from 63 calc_* functions:
     1. Valuation Ratios (4 functions)
     2. Momentum (2 functions)
@@ -33,18 +34,32 @@ COMMENT ON MATERIALIZED VIEW public.mv_all_stock_features IS 'Unified materializ
 
     Direct reference columns include: Enhancement 1 (17 cols), Enhancement 6 (6 cols), Enhancement 7 (4 cols)
 
-    Refresh with: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_all_stock_features;';
+    Refresh with: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_all_stock_features;'
+;
 
-ALTER MATERIALIZED VIEW public.mv_all_stock_features OWNER TO postgres;
+alter materialized view public.mv_all_stock_features owner to postgres
+;
 
-CREATE UNIQUE INDEX idx_mv_all_stock_features_isin ON public.mv_all_stock_features (isin);
+create unique index idx_mv_all_stock_features_isin
+	on public.mv_all_stock_features (isin)
+;
 
-CREATE INDEX idx_mv_all_stock_features_ticker ON public.mv_all_stock_features (ticker);
+create index idx_mv_all_stock_features_ticker
+	on public.mv_all_stock_features (ticker)
+;
 
-CREATE INDEX idx_mv_all_stock_features_sector_industry ON public.mv_all_stock_features (sector, industry);
+create index idx_mv_all_stock_features_sector_industry
+	on public.mv_all_stock_features (sector, industry)
+;
 
-CREATE INDEX idx_mv_all_stock_features_region_country ON public.mv_all_stock_features (region, country, trading_country);
+create index idx_mv_all_stock_features_region_country
+	on public.mv_all_stock_features (region, country, trading_country)
+;
 
-CREATE INDEX idx_mv_all_stock_features_exchange ON public.mv_all_stock_features (exchange);
+create index idx_mv_all_stock_features_exchange
+	on public.mv_all_stock_features (exchange)
+;
 
-CREATE INDEX idx_mv_all_stock_features_market_cap ON public.mv_all_stock_features (market_cap DESC);
+create index idx_mv_all_stock_features_market_cap
+	on public.mv_all_stock_features (market_cap desc)
+;

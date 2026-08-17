@@ -14,6 +14,7 @@ create table analytics."10b_risk_analytics"
 	style_class        text,
 	market_cap         double precision,
 	mcap_country_r     double precision,
+	mcap_global_r      double precision,
 	enterprise_value   double precision,
 	last_price         double precision,
 	observed_pt        double precision,
@@ -45,7 +46,9 @@ create table analytics."10b_risk_analytics"
 	expected_sharpe    double precision,
 	tail_risk          double precision,
 	starr              double precision,
-	book_weight        double precision
+	book_weight        double precision,
+	run_id             text,
+	exported_at        timestamp with time zone
 )
 ;
 

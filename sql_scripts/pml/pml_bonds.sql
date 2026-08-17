@@ -1,4 +1,4 @@
-create table pml.pml_bonds
+create table pml_bonds
 (
 	ticker     text,
 	name       text,
@@ -32,11 +32,11 @@ create table pml.pml_bonds
 	"52w_high" double precision,
 	country    text
 		constraint pml_bonds_country_mapping_country_fk
-			references pml.country_mapping (country) not enforced,
+			references country_mapping (country) not enforced,
 	duration_y text
 )
 ;
 
-alter table pml.pml_bonds
+alter table pml_bonds
 	owner to postgres
 ;

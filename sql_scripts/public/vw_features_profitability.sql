@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_profitability
+create view public.vw_features_profitability
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -15,13 +15,15 @@ CREATE VIEW public.vw_features_profitability
 			 ebitda_cagr_3y, ebit_vs_5y_avg, ebitda_vs_5y_avg, gp_fq, gp_fy, gp_ltm, gp_1fqfq, gp_2fqfq, gp_3fqfq,
 			 gp_4fqfq, gp_1fy, gp_2fy, gp_3fy, gp_4fy, gp_qoq_growth, gp_yoy_growth, gp_margin_fq, gp_margin_trend,
 			 gp_positive_quarters, gp_margin_expansion)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_profitability IS 'Profitability metrics including ROE, ROA, margins, EBIT/EBITDA comprehensive analysis.
+comment on view public.vw_features_profitability is 'Profitability metrics including ROE, ROA, margins, EBIT/EBITDA comprehensive analysis.
     Source functions: calc_profitability_features, calc_margin_trends,
-    calc_ebit_ebitda_comprehensive, calc_gross_profit_temporal';
+    calc_ebit_ebitda_comprehensive, calc_gross_profit_temporal'
+;
 
-ALTER TABLE public.vw_features_profitability
-	OWNER TO postgres;
+alter table public.vw_features_profitability
+	owner to postgres
+;

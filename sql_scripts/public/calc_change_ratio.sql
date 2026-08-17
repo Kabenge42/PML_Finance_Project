@@ -1,9 +1,14 @@
-CREATE FUNCTION public.calc_change_ratio(current_val numeric, previous_val numeric) RETURNS numeric
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
-$$ BEGIN
-	-- missing source code
-END;
-$$;
+create function public.calc_change_ratio(current_val numeric, previous_val numeric) returns numeric
+	immutable
+	parallel safe
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION public.calc_change_ratio(numeric, numeric) OWNER TO postgres;
+alter function public.calc_change_ratio(numeric, numeric) owner to postgres
+;

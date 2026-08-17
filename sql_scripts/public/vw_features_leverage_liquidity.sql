@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_leverage_liquidity
+create view public.vw_features_leverage_liquidity
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -16,13 +16,15 @@ CREATE VIEW public.vw_features_leverage_liquidity
 			 debt_4q_trend, debt_3y_cagr, debt_deleveraging, debt_to_equity_trend, wc_ltm_deep, wc_fq_deep, wc_fy_deep,
 			 wc_to_revenue, wc_to_assets, wc_change_qoq_deep, wc_change_yoy_deep, days_working_capital,
 			 wc_efficiency_score, negative_wc_flag, wc_improvement_flag_deep)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_leverage_liquidity IS 'Leverage and liquidity metrics including debt ratios, working capital, and balance sheet dynamics.
+comment on view public.vw_features_leverage_liquidity is 'Leverage and liquidity metrics including debt ratios, working capital, and balance sheet dynamics.
     Source functions: calc_leverage_features, calc_efficiency_ratios, calc_balance_sheet_dynamics,
-    calc_working_capital_temporal, calc_total_debt_temporal, calc_working_capital_deep_features';
+    calc_working_capital_temporal, calc_total_debt_temporal, calc_working_capital_deep_features'
+;
 
-ALTER TABLE public.vw_features_leverage_liquidity
-	OWNER TO postgres;
+alter table public.vw_features_leverage_liquidity
+	owner to postgres
+;

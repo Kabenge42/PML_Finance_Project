@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_valuation_ratios
+create view public.vw_features_valuation_ratios
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -12,14 +12,16 @@ CREATE VIEW public.vw_features_valuation_ratios
 			 ev_ebitda_qoq_trend, p_b_momentum_yoy, valuation_compression, forward_pe_premium, tangible_book_value_fy,
 			 tangible_book_value_ltm, tangible_book_per_share, price_to_tangible_book, tangible_equity_ratio,
 			 intangibles_to_equity, goodwill_to_equity, tangible_asset_quality, tbv_yoy_growth, tbv_vs_calculated)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_valuation_ratios IS 'Valuation metrics including P/E, P/B, EV/EBITDA, tangible book value, and timeseries analysis.
+comment on view public.vw_features_valuation_ratios is 'Valuation metrics including P/E, P/B, EV/EBITDA, tangible book value, and timeseries analysis.
     Identifier columns inherited from vw_identifier_columns.
     Source functions: calc_valuation_features, calc_valuation_timeseries_features,
-    calc_extended_valuation_timeseries, calc_tangible_book_features';
+    calc_extended_valuation_timeseries, calc_tangible_book_features'
+;
 
-ALTER TABLE public.vw_features_valuation_ratios
-	OWNER TO postgres;
+alter table public.vw_features_valuation_ratios
+	owner to postgres
+;

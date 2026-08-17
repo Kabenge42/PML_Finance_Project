@@ -1,25 +1,29 @@
-create function pml.calc_change_ratio(current_val numeric, previous_val numeric) returns numeric
+create function calc_change_ratio(current_val numeric, previous_val numeric) returns numeric
 	immutable
 	parallel safe
 	language sql
 as
 $$
-SELECT (current_val - previous_val) / NULLIF(previous_val, 0) AS result;
+	begin
+-- missing source code
+end;
 $$
 ;
 
-alter function pml.calc_change_ratio(numeric, numeric) owner to postgres
+alter function calc_change_ratio(numeric, numeric) owner to postgres
 ;
 
-create function pml.calc_change_ratio(current_val double precision, previous_val double precision) returns double precision
+create function calc_change_ratio(current_val double precision, previous_val double precision) returns double precision
 	immutable
 	parallel safe
 	language sql
 as
 $$
-SELECT (current_val - previous_val) / NULLIF(previous_val, 0);
+	begin
+-- missing source code
+end;
 $$
 ;
 
-alter function pml.calc_change_ratio(double precision, double precision) owner to postgres
+alter function calc_change_ratio(double precision, double precision) owner to postgres
 ;

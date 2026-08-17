@@ -1,9 +1,14 @@
-CREATE FUNCTION public.pct_change(current_val numeric, previous_val numeric) RETURNS numeric
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
-$$ BEGIN
-	-- missing source code
-END;
-$$;
+create function public.pct_change(current_val numeric, previous_val numeric) returns numeric
+	immutable
+	parallel safe
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION public.pct_change(numeric, numeric) OWNER TO postgres;
+alter function public.pct_change(numeric, numeric) owner to postgres
+;

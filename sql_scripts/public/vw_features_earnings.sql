@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_earnings
+create view public.vw_features_earnings
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -19,13 +19,15 @@ CREATE VIEW public.vw_features_earnings
 			 earnings_quality_score, earnings_quality_warning, forward_eps_gaap_adj_spread, gaap_revision_momentum,
 			 gaap_revision_1m, gaap_revision_3m, gaap_revision_6m, gaap_revision_1y, gaap_vs_norm_revision_spread,
 			 gaap_revision_acceleration, gaap_positive_revision_flag, revision_quality_divergence)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_earnings IS 'Earnings metrics including EPS analysis, GAAP adjustments, and revision trends.
+comment on view public.vw_features_earnings is 'Earnings metrics including EPS analysis, GAAP adjustments, and revision trends.
     Source functions: calc_earnings_features, calc_eps_trajectory_features, calc_eps_comprehensive,
-    calc_eps_continuing_features, calc_gaap_adjusted_analytics, calc_gaap_revision_features';
+    calc_eps_continuing_features, calc_gaap_adjusted_analytics, calc_gaap_revision_features'
+;
 
-ALTER TABLE public.vw_features_earnings
-	OWNER TO postgres;
+alter table public.vw_features_earnings
+	owner to postgres
+;

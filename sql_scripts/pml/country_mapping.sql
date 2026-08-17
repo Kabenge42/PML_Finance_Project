@@ -1,14 +1,14 @@
-create table pml.country_mapping
+create table country_mapping
 (
 	country      text
 		constraint country__pk
 			unique
 		constraint country_mapping_currency_mapping_unit_fk
-			references pml.currency_mapping (unit) not enforced,
+			references currency_mapping (unit) not enforced,
 	country_name text
 )
 ;
 
-alter table pml.country_mapping
+alter table country_mapping
 	owner to postgres
 ;

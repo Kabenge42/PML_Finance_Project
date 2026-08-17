@@ -1,9 +1,11 @@
-CREATE VIEW information_schema.enabled_roles(role_name) AS
-SELECT rolname::information_schema.sql_identifier AS role_name
-FROM pg_authid a
-WHERE pg_has_role(oid, 'USAGE'::text);
+create view information_schema.enabled_roles(role_name)
+as
+-- missing source code
+;
 
-ALTER TABLE information_schema.enabled_roles
-	OWNER TO postgres;
+alter table information_schema.enabled_roles
+	owner to postgres
+;
 
-GRANT SELECT ON information_schema.enabled_roles TO PUBLIC;
+grant select on information_schema.enabled_roles to public
+;

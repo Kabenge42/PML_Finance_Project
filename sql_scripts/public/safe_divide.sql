@@ -1,9 +1,14 @@
-CREATE FUNCTION public.safe_divide(numerator numeric, denominator numeric) RETURNS numeric
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
-$$ BEGIN
-	-- missing source code
-END;
-$$;
+create function public.safe_divide(numerator numeric, denominator numeric) returns numeric
+	immutable
+	parallel safe
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION public.safe_divide(numeric, numeric) OWNER TO postgres;
+alter function public.safe_divide(numeric, numeric) owner to postgres
+;

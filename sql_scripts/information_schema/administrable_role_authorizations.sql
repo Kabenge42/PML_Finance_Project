@@ -1,9 +1,11 @@
-CREATE VIEW information_schema.administrable_role_authorizations(grantee, role_name, is_grantable) AS
-SELECT grantee, role_name, is_grantable
-FROM information_schema.applicable_roles
-WHERE is_grantable::text = 'YES'::text;
+create view information_schema.administrable_role_authorizations(grantee, role_name, is_grantable)
+as
+-- missing source code
+;
 
-ALTER TABLE information_schema.administrable_role_authorizations
-	OWNER TO postgres;
+alter table information_schema.administrable_role_authorizations
+	owner to postgres
+;
 
-GRANT SELECT ON information_schema.administrable_role_authorizations TO PUBLIC;
+grant select on information_schema.administrable_role_authorizations to public
+;

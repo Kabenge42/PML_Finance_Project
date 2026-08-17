@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_cost_structure
+create view public.vw_features_cost_structure
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -13,12 +13,14 @@ CREATE VIEW public.vw_features_cost_structure
 			 rnd_cut_flag, high_rnd_intensity_flag, interest_income_ltm, interest_expense_ltm, net_interest_income,
 			 interest_coverage_ratio, interest_income_to_revenue, interest_expense_to_revenue,
 			 net_interest_margin_proxy)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_cost_structure IS 'Cost structure metrics including SG&A, R&D intensity, and interest analysis.
-    Source functions: calc_cost_structure_features, calc_rnd_temporal_features, calc_interest_income_features';
+comment on view public.vw_features_cost_structure is 'Cost structure metrics including SG&A, R&D intensity, and interest analysis.
+    Source functions: calc_cost_structure_features, calc_rnd_temporal_features, calc_interest_income_features'
+;
 
-ALTER TABLE public.vw_features_cost_structure
-	OWNER TO postgres;
+alter table public.vw_features_cost_structure
+	owner to postgres
+;

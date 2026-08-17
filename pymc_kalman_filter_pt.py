@@ -80,7 +80,26 @@ import arviz_stats as azs
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.colors as _mcolors
-matplotlib.use("TkAgg")  # use a native window instead of PyCharm's plot tool
+
+
+def _in_ipython_kernel() -> bool:
+    """True when running inside a Jupyter / IPython kernel (not a plain script).
+
+    ``matplotlib.use("TkAgg")`` below is right for the script path — a native
+    window beats PyCharm's plot tool — but inside a notebook kernel it HIJACKS the
+    inline backend: figures open in an off-screen Tk window and the cell renders
+    nothing. That is invisible while every panel is Plotly, and becomes a hard
+    blocker the moment an arviz-plots panel is routed to the matplotlib backend
+    (see :data:`_AZP_BACKEND_HEAVY`), so the switch is conditional.
+    """
+    if 'ipykernel' in sys.modules:
+        return True
+    ipy = sys.modules.get('IPython')
+    return ipy is not None and getattr(ipy, 'get_ipython', lambda: None)() is not None
+
+
+if not _in_ipython_kernel():
+    matplotlib.use("TkAgg")  # native window instead of PyCharm's plot tool
 import numpy as np
 import pandas as pd
 import pymc as pm
@@ -266,6 +285,13 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # the file (screen tables, forecast tables, sigma_obs paths, group forests).
 _HDI_LO, _HDI_HI = 0.04, 0.96
 
+# Points per curve in the §8 posterior-predictive ECDF overlay. The overlay draws
+# 60 predictive draws plus the observed series; at one point per observation that
+# is 61 x 25,948 ~ 1.6 M coordinates in a single figure. An ECDF is monotone, so
+# evaluating its quantile function on this fixed grid is visually identical while
+# bounding the payload independently of panel size.
+_PPC_ECDF_GRID = 512
+
 # --- Uplift support band (single source of truth) -----------------------------
 # The response is winsorised to this DECIMAL band before ``log1p`` in
 # ``prepare_kalman_panel_inputs``, so the model never observes an uplift outside
@@ -389,16 +415,32 @@ class KalmanRunConfig:
     # ESS 884. Note the TUNE increase carries most of that -- R-hat responds to
     # adaptation, not just to sample count.
     #
+    # SPLIT ASYMMETRICALLY to 4000/2000 on 2026-08-17. The budget is two knobs and
+    # the 4000/4000 measurement says they are NOT interchangeable: tune bought the
+    # R-hat, draws bought the ESS. So cut the one with headroom. Bulk ESS came in at
+    # 884 against a MIN_ESS_GATE of 400 -- roughly 2x margin, and ESS scales about
+    # linearly in draws -- while R-hat had none to give. Halving *tune* instead
+    # (an uncommitted tune=1500 sat in the tree before this change) attacks exactly
+    # the half that carried the gain, and had never been through the gate.
+    #
     # This is also a consistency requirement, not only a quality one:
     # ``validate_kalman_state.py`` and ``scripts/export_kalman_analytics.py`` both
     # read this config, so a budget that only clears the gate via a ``--draws``
-    # CLI override would certify a model the export never fits.
-    draws: int = 4000
+    # CLI override would certify a model the export never fits. Re-run the gate
+    # after any change here; if bulk ESS lands under 400, put ``draws`` back to 4000.
+    draws: int = 2000
     tune: int = 4000
     chains: int = 4
     cores: int = 1
     target_accept: float = 0.9
     prior_draws: int = 1000
+    # Predictive draws retained for the §8 posterior-predictive checks (total across
+    # chains; 0 disables thinning). ``pm.sample_posterior_predictive`` replicates
+    # once per posterior sample and takes no draw count, so the un-thinned call
+    # replays the whole chains x draws grid through PyTensor's pure-Python VM --
+    # 8,000 forward passes over a (n_isin, T, D) tensor, for statistics that are
+    # averages over ~26k observations. See :func:`thin_posterior`.
+    ppc_draws: int = 1000
     # Screen / Monte-Carlo
     mc_horizon: int = 4
     mc_rho: float = 0.85
@@ -576,6 +618,44 @@ _ARVIZ_STYLE_CANDIDATES: tuple[str, ...] = ('arviz-tumma', 'arviz-variat')
 C_PANEL_BG = '#1e1e1e'     # figure / paper background (matplotlib + marker edges)
 C_AXES_BG = '#2a2a2a'      # axes (plot area) background
 
+# --- arviz-plots backend policy (single source of truth) ----------------------
+# Plotly serialises every coordinate it draws into the notebook. That is a fair
+# price for a panel a reader hovers over, and a ruinous one for the diagnostic
+# facet grids, which fan ONE FACET PER VECTOR ELEMENT (``beta`` is ~17-40) and
+# draw every chain's full draw sequence in each — a grid budgeted up to 6200 px
+# by :func:`_facet_grid_height_px`. Those panels are read, not interrogated, so
+# they render through the matplotlib backend and land in the notebook as a single
+# raster instead of tens of megabytes of JSON.
+#
+# Resolve every ``azp.plot_*`` backend through :func:`_azp_backend` rather than a
+# literal, so the split is one decision in one place. ``PML_AZP_HEAVY_BACKEND``
+# overrides it (set to ``plotly`` to get interactivity back for a debugging run).
+_AZP_BACKEND_LIGHT = 'plotly'        # bounded, hover-worthy panels
+_AZP_BACKEND_HEAVY = 'matplotlib'    # facet grids / draw-dense panels
+_AZP_HEAVY_BACKEND_ENV = 'PML_AZP_HEAVY_BACKEND'
+
+
+def _azp_backend(*, heavy: bool = False) -> str:
+    """Resolve the arviz-plots backend for a panel.
+
+    Parameters
+    ----------
+    heavy
+        ``True`` for facet grids and draw-dense panels (trace, rank-dist,
+        prior-posterior, ESS evolution, PPC t-stat) — anything whose payload
+        scales with ``chains x draws x n_elements``. ``False`` for bounded
+        panels, which stay interactive.
+
+    Returns
+    -------
+    str
+        ``'matplotlib'`` or ``'plotly'``.
+    """
+    if not heavy:
+        return _AZP_BACKEND_LIGHT
+    override = os.environ.get(_AZP_HEAVY_BACKEND_ENV, '').strip().lower()
+    return override if override in ('plotly', 'matplotlib', 'none') else _AZP_BACKEND_HEAVY
+
 # Continuous colour ramps. One sequential and one diverging ramp for the whole
 # module: panels had drifted across Viridis / Magma / flare (sequential) and vlag
 # (diverging), so two views of the same quantity read as different measurements.
@@ -587,30 +667,35 @@ CS_DIV_MPL = 'vlag'
 
 
 def setup_plotting() -> None:
-    """Pin arviz-plots to the **Plotly** backend and install the dark notebook theme.
+    """Set the default arviz-plots backend and install the dark notebook theme.
 
-    All ArviZ figures in this module render through the interactive Plotly backend.
-    The authoritative switch is ``arviz_base.rcParams['plot.backend']`` — every
-    ``azp.plot_*`` / :class:`arviz_plots.PlotCollection` call that does not pass an
-    explicit ``backend`` reads that default. (Assigning ``azp.backend`` has no effect:
-    ``arviz_plots.backend`` is a subpackage, so the attribute assignment merely shadows
-    the module and never reaches the plotting layer.) The dark ``arviz-tumma`` Plotly
-    template is registered as the default so composed collections inherit it.
+    ArviZ figures render through **Plotly by default and Matplotlib where the panel
+    is draw-dense** — every ``azp.plot_*`` call resolves its backend through
+    :func:`_azp_backend`, which is the SSOT for that split (see
+    :data:`_AZP_BACKEND_HEAVY` for why the heavy panels are raster). The
+    ``arviz_base.rcParams['plot.backend']`` default set below is the fallback for
+    any call that passes no ``backend`` at all. (Assigning ``azp.backend`` has no
+    effect: ``arviz_plots.backend`` is a subpackage, so the attribute assignment
+    merely shadows the module and never reaches the plotting layer.) The dark
+    ``arviz-tumma`` Plotly template is registered as the default so composed
+    collections inherit it.
 
     Notes
     -----
-    The residual hand-built Matplotlib / Seaborn panels (e.g.
+    The Matplotlib dark theme installed below is therefore no longer only for the
+    residual hand-built Matplotlib / Seaborn panels (e.g.
     :func:`plot_kalman_forecast`, the §2.4 observation-noise density panels and the
-    per-sector error-bar comparisons) are *not* ArviZ figures and keep the Matplotlib
-    dark theme installed below. seaborn installs its colour cycle as RGB tuples; those
-    are re-expressed as hex strings so any Matplotlib artist that reshapes the active
-    cycle behaves under the theme.
+    per-sector error-bar comparisons) — the heavy arviz-plots grids land on it too,
+    and :func:`_apply_mpl_dark` re-asserts it at display time for collections that
+    arviz composes against its own style. seaborn installs its colour cycle as RGB
+    tuples; those are re-expressed as hex strings so any Matplotlib artist that
+    reshapes the active cycle behaves under the theme.
     """
     warnings.filterwarnings('ignore', category=FutureWarning)
 
-    # ArviZ -> Plotly. ``rcParams['plot.backend']`` is the default read by every
-    # azp.plot_* / PlotCollection call that omits an explicit ``backend`` argument.
-    _az_rcparams['plot.backend'] = 'plotly'
+    # Fallback for any azp.plot_* / PlotCollection call that omits ``backend``.
+    # Call sites that care resolve it explicitly through _azp_backend().
+    _az_rcparams['plot.backend'] = _AZP_BACKEND_LIGHT
     try:
         import plotly.io as _pio
         _pio.templates.default = _PLOTLY_TEMPLATE  # dark ArviZ Plotly template
@@ -680,6 +765,18 @@ C_MUTED = '#7f7f7f'        # de-emphasised context points
 # Standard panel heights (px). Odd one-off heights remain inline where a panel
 # is genuinely bespoke; new figures should pick from this ladder.
 H_SHORT, H_STD, H_FORECAST, H_TALL, H_PANEL, H_GRID = 380, 440, 540, 560, 760, 900
+
+# --- Scatter decimation caps (SSOT; see :func:`_decimate_frame`) ---------------
+# Marker budget for the full-universe scatters. Plotly embeds every marker's
+# coordinates, colour, size and hover fields in the notebook, so an undecimated
+# ~6.5k-name panel costs megabytes and a 17-facet grid tens of them — while
+# rendering as a solid cloud in which no individual name is resolvable.
+#
+# _EDA_SCATTER_MAX_POINTS is per FACET (the §2.4e driver grid repeats the same
+# names across 17 facets); _SCREEN_SCATTER_MAX_POINTS applies to the single-panel
+# §14 screen scatters, which can afford more markers.
+_EDA_SCATTER_MAX_POINTS = 1200
+_SCREEN_SCATTER_MAX_POINTS = 2500
 
 
 def _display_width_px() -> int:
@@ -843,6 +940,56 @@ def _plotly_figure_of(obj) -> Optional[object]:
     return None
 
 
+def _mpl_figure_of(obj) -> Optional["matplotlib.figure.Figure"]:
+    """Best-effort: the underlying Matplotlib figure of ``obj``.
+
+    The Matplotlib mirror of :func:`_plotly_figure_of`. An ``arviz_plots``
+    PlotCollection built on the matplotlib backend stores its ``Figure`` in the
+    same ``viz['figure']`` node the Plotly backend uses for its own figure, so the
+    two resolvers differ only in the attribute they duck-type on (``savefig`` /
+    ``add_subplot`` rather than ``update_layout``). Returns ``None`` when ``obj``
+    is not — and does not wrap — a matplotlib figure.
+    """
+    if hasattr(obj, 'savefig') and hasattr(obj, 'add_subplot'):
+        return obj
+    viz = getattr(obj, 'viz', None)
+    if viz is None:
+        return None
+    for key in ('figure', 'chart'):
+        try:
+            fig = viz[key].item()
+            if hasattr(fig, 'savefig') and hasattr(fig, 'add_subplot'):
+                return fig
+        except Exception:
+            continue
+    try:
+        targets = np.asarray(viz['plot'].values).ravel()
+        for target in targets:
+            fig = getattr(target, 'figure', None)
+            if hasattr(fig, 'savefig') and hasattr(fig, 'add_subplot'):
+                return fig
+    except Exception:
+        pass
+    return None
+
+
+def _apply_mpl_dark(fig) -> None:
+    """Stamp the dark panel/axes colours onto a Matplotlib figure.
+
+    ``setup_plotting`` installs the dark theme through rcParams, but an
+    ``arviz_plots`` matplotlib PlotCollection composes some figures against its own
+    style, so a panel can reach the display funnel with a white canvas — the exact
+    divergence :func:`_apply_dark_template` exists to prevent on the Plotly side.
+    Best-effort: any failure leaves the figure as built.
+    """
+    try:
+        fig.patch.set_facecolor(C_PANEL_BG)
+        for ax in fig.get_axes():
+            ax.set_facecolor(C_AXES_BG)
+    except Exception:  # pragma: no cover - cosmetic only
+        pass
+
+
 def _autosize_plotly(obj) -> None:
     """Let a Plotly figure / PlotCollection stretch to the notebook/editor width.
 
@@ -877,8 +1024,15 @@ def _apply_dark_template(obj: object) -> None:
         fig = _plotly_figure_of(obj)
         if fig is not None:
             fig.update_layout(template=_PLOTLY_TEMPLATE)
+            return
     except Exception:  # pragma: no cover - cosmetic only
         pass
+    # Matplotlib-backed panels (the heavy arviz-plots grids) get the equivalent
+    # treatment, so the funnel's displayed-==-exported invariant holds for both
+    # backends rather than silently no-opping on one of them.
+    mfig = _mpl_figure_of(obj)
+    if mfig is not None:
+        _apply_mpl_dark(mfig)
 
 
 def _render_plotly(fig: object, *, height: Optional[int] = None,
@@ -941,6 +1095,29 @@ def _safe_show(obj: object, *, label: Optional[str] = None,
     _apply_dark_template(obj)  # displayed == exported theme
     _autosize_plotly(obj)  # width tracks the editor pane; heights stay explicit
     _export_figure(obj, label=label)
+
+    # Matplotlib-backed panels must NOT take the ``obj.show()`` path: under an
+    # interactive backend that blocks on a native window, and under the notebook
+    # inline backend a PlotCollection's ``show()`` does not emit the figure as a
+    # cell output. Hand it to IPython.display instead, then close it so the
+    # figure is not re-emitted by the kernel's own end-of-cell flush (which would
+    # duplicate every heavy raster in the notebook).
+    mfig = _mpl_figure_of(obj)
+    if mfig is not None:
+        # Outside a kernel there is nothing to display INTO: the PNG is already on
+        # disk from _export_figure above, and the alternatives both misbehave —
+        # ``plt.show()`` blocks the headless export script on a Tk window, and the
+        # non-IPython ``_display_impl`` fallback is ``print``, which would emit
+        # "Figure(1400x780)" into the log.
+        if _in_ipython_kernel():
+            try:
+                _display_impl(mfig)
+            except Exception as exc:  # pragma: no cover - renderer-dependent
+                logger.debug("Matplotlib display skipped: %r", exc)
+        with contextlib.suppress(Exception):
+            plt.close(mfig)
+        return
+
     try:
         obj.show()
     except Exception as exc:  # pragma: no cover - display transport is environment-dependent
@@ -1165,6 +1342,17 @@ def _degenerate_posterior_vars(idata, var_names: Sequence[str],
     delta-spike KDE that triggers ``density.py:672``; reporting them tells the
     reader *which* parameter collapsed (a real modelling signal) rather than
     leaving an anonymous warning in the log.
+
+    Notes
+    -----
+    The all-finite fast path is not a micro-optimisation at this scale. The
+    masked route allocates a full float64 copy per variable via ``np.where``, and
+    this is called over the WHOLE posterior — which carries ``state_path``
+    (``chains x draws x n_isin x T``, ~1.7 GB at the current budget) plus sixteen
+    ``dims="isin"`` deterministics. Non-finite draws are the rare case, so
+    probing for them first and reducing in place keeps the common path free of
+    multi-GB temporaries. The masked branch is retained verbatim because ``inf``
+    must be excluded from the spread and ``nanmax`` alone would not do it.
     """
     post = getattr(idata, 'posterior', idata)
     flagged: list[str] = []
@@ -1173,16 +1361,20 @@ def _degenerate_posterior_vars(idata, var_names: Sequence[str],
             continue
         da = post[v]
         arr = np.asarray(da.values, dtype='float64')
-        finite = np.isfinite(arr)
-        if not finite.any():
-            flagged.append(v)
-            continue
         sample_axes = tuple(i for i, d in enumerate(da.dims) if d in ('chain', 'draw'))
-        masked = np.where(finite, arr, np.nan)
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
-            spread = (np.nanmax(masked, axis=sample_axes)
-                      - np.nanmin(masked, axis=sample_axes))
+            if np.isfinite(arr).all():
+                spread = (np.max(arr, axis=sample_axes)
+                          - np.min(arr, axis=sample_axes))
+            else:
+                finite = np.isfinite(arr)
+                if not finite.any():
+                    flagged.append(v)
+                    continue
+                masked = np.where(finite, arr, np.nan)
+                spread = (np.nanmax(masked, axis=sample_axes)
+                          - np.nanmin(masked, axis=sample_axes))
         if not np.isfinite(spread).any() or float(np.nanmax(spread)) <= atol:
             flagged.append(v)
     return flagged
@@ -1270,7 +1462,7 @@ def plot_price_target_path(
 
     _fk = ({"figsize": figsize, "figsize_units": "dots"} if figsize is not None
            else _azp_figure_kwargs(520))
-    pc = azp.PlotCollection.grid(ds, backend="plotly", figure_kwargs=_fk)
+    pc = azp.PlotCollection.grid(ds, backend=_azp_backend(), figure_kwargs=_fk)
     target = pc.get_target(state_var, {})  # arviz_plots PlotlyPlot (figure + row/col)
 
     # Nested HDI bands: widest first with the lightest alpha so inner masses darken.
@@ -1397,6 +1589,159 @@ def _kde_xy(values, *, clip_low: Optional[float] = None, n: int = 200,
         lo, hi = float(v.min()), float(v.max())
     xs = np.linspace(lo, hi, n)
     return xs, kde(xs)
+
+
+def _binned_density_trace(values, *, bins: int = 80, color: str,
+                          name: Optional[str] = None,
+                          hovertemplate: Optional[str] = None,
+                          fill: bool = True, alpha: float = 0.6,
+                          width: float = 1.5, clip: Optional[tuple] = None,
+                          density: bool = True,
+                          showlegend: bool = True, **scatter_kwargs):
+    """Pre-binned density trace: the small-payload replacement for ``go.Histogram``.
+
+    ``go.Histogram`` serialises **every raw value** into the figure and bins them in
+    the browser. For posterior/prior arrays that is ruinous: the §6 prior-predictive
+    panel shipped three traces of ``prior_draws x n_isin`` (~6.5 M float64 each) and
+    weighed **207.7 MB** in the notebook, against a 122 KB PNG of the same figure.
+
+    Binning here instead sends ``bins`` numbers rather than millions, at identical
+    visual fidelity — a density plot never needed the raw sample. The stepped
+    ``shape='hvh'`` line is the matplotlib ``histtype='step'`` analogue already used
+    for the §6 empirical overlay; this helper is that pattern lifted to an SSOT.
+
+    Parameters
+    ----------
+    values
+        Raw sample; flattened, non-finite entries dropped.
+    bins
+        Histogram bin count (the payload size, near enough).
+    color
+        Hex series colour; the fill re-expresses it via :func:`_hex_to_rgba`.
+    fill
+        Fill to zero (histogram-like) rather than drawing an outline only.
+    clip
+        Optional ``(lo, hi)`` applied before binning, matching the callers that
+        winsorise for readability.
+    density
+        Normalise to a probability density (the ``histnorm='probability
+        density'`` equivalent). Pass ``False`` for raw counts so a panel whose
+        y-axis reads "count" keeps saying something true.
+
+    Returns
+    -------
+    plotly.graph_objects.Scatter or None
+        ``None`` when fewer than two finite values survive — the caller skips the
+        trace rather than emitting a degenerate spike.
+    """
+    v = np.asarray(values, dtype='float64').reshape(-1)
+    v = v[np.isfinite(v)]
+    if clip is not None:
+        v = np.clip(v, clip[0], clip[1])
+    if v.size < 2:
+        return None
+    dens, edges = np.histogram(v, bins=bins, density=density)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    trace_kwargs: dict[str, Any] = dict(
+        x=centers, y=dens, mode='lines',
+        line=dict(color=color, width=width, shape='hvh'),
+        name=name, showlegend=bool(showlegend and name),
+    )
+    if fill:
+        trace_kwargs['fill'] = 'tozeroy'
+        trace_kwargs['fillcolor'] = _hex_to_rgba(color, alpha)
+    if hovertemplate is not None:
+        trace_kwargs['hovertemplate'] = hovertemplate
+    trace_kwargs.update(scatter_kwargs)
+    return go.Scatter(**trace_kwargs)
+
+
+def _decimate_frame(df: pd.DataFrame, max_points: int, *,
+                    by: Optional[str] = None,
+                    seed: Optional[int] = None) -> tuple[pd.DataFrame, bool]:
+    """Uniformly subsample ``df`` to at most ``max_points`` rows for a scatter.
+
+    Plotly serialises every marker — coordinates, colour, size and each
+    ``hover_data`` field — into the notebook, so a full-universe scatter costs
+    megabytes per panel and a 17-facet grid costs tens of them. Beyond a few
+    thousand markers the plot is an opaque cloud anyway, so the points past that
+    buy overplotting rather than information.
+
+    The sample is **uniform**, not a top-N truncation. A rank-based cut (the
+    previous ``nlargest`` in :func:`plot_risk_return_scatter`) is fine as a no-op
+    guard set above the universe size, but the moment it binds it deletes one
+    tail of the distribution and the surviving cloud misrepresents the screen.
+    ``by`` stratifies so small sectors keep representation.
+
+    Parameters
+    ----------
+    df
+        Frame to subsample. Returned unchanged when already small enough.
+    max_points
+        Row cap; ``<= 0`` disables decimation.
+    by
+        Optional column to stratify on (proportional allocation).
+    seed
+        RNG seed; defaults to the run config's ``random_seed`` so a panel is
+        reproducible across runs.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, bool]
+        The (possibly subsampled) frame and whether decimation actually applied —
+        callers annotate the figure when it did, so a thinned panel never reads
+        as the full universe.
+    """
+    if max_points is None or max_points <= 0 or len(df) <= max_points:
+        return df, False
+    if seed is None:
+        seed = get_run_config().random_seed
+    if by is not None and by in df.columns:
+        # Select INDEX LABELS per group rather than ``groupby.apply``: pandas 3
+        # excludes the grouping columns from the frame handed to ``apply``, so a
+        # lambda returning ``g`` silently drops the stratifying column itself.
+        frac = float(max_points) / float(len(df))
+        keep: list = []
+        for _, idx in df.groupby(by, observed=True).groups.items():
+            take = max(1, int(round(len(idx) * frac)))
+            if take >= len(idx):
+                keep.extend(list(idx))
+            else:
+                keep.extend(list(pd.Index(idx).to_series()
+                                  .sample(take, random_state=seed)))
+        out = df.loc[keep]
+        if len(out) > max_points:
+            out = out.sample(max_points, random_state=seed)
+        return out, True
+    return df.sample(max_points, random_state=seed), True
+
+
+def _add_binned_density(fig, values, *, row=None, col=None, **kwargs) -> None:
+    """Add a :func:`_binned_density_trace` to ``fig``, skipping degenerate samples.
+
+    Wraps the ``None`` return so callers never hand ``fig.add_trace(None)`` a
+    degenerate series.
+    """
+    trace = _binned_density_trace(values, **kwargs)
+    if trace is not None:
+        fig.add_trace(trace, row=row, col=col)
+
+
+def _ecdf_xy(values, *, n: int = 512) -> tuple[np.ndarray, np.ndarray]:
+    """ECDF evaluated on a fixed ``n``-point probability grid.
+
+    A literal ECDF plots one point per observation, so overlaying 60 predictive
+    draws over a 25,948-cell response tensor emits ~1.6 M points into a single
+    figure. Sampling the quantile function on a fixed grid is visually
+    indistinguishable at any realistic figure width and bounds the payload at
+    ``n`` points per curve regardless of sample size.
+    """
+    v = np.asarray(values, dtype='float64').reshape(-1)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return np.empty(0), np.empty(0)
+    q = np.linspace(0.0, 1.0, int(n))
+    return np.quantile(v, q), q
 
 
 def _annotate_forecast_horizons(fig, fx, pg, *, color, row=1, col=1):
@@ -2325,9 +2670,12 @@ def _export_path(stem: str, ext: str) -> Path:
 def _next_stem(label: Optional[str] = None, obj: object = None) -> str:
     """Return the next auto-numbered ``{section}_{NN}[_{slug}]`` filename stem.
 
-    The slug comes from ``label`` when given, else (best-effort) from the Plotly
-    figure title of ``obj`` — meaningful names for free on most panels without
-    touching call sites.
+    The slug comes from ``label`` when given, else (best-effort) from the figure
+    title of ``obj`` — meaningful names for free on most panels without touching
+    call sites. Both backends are probed: Plotly stores the title on
+    ``layout.title.text``, Matplotlib on the figure ``suptitle`` (which is what
+    ``PlotCollection.add_title`` sets there), so routing a panel to the matplotlib
+    backend does not silently degrade its filename to a bare counter.
     """
     state = get_export_state()
     n = state.counters.get(state.section, 0) + 1
@@ -2338,6 +2686,16 @@ def _next_stem(label: Optional[str] = None, obj: object = None) -> str:
             slug = obj.layout.title.text  # type: ignore[attr-defined]
         except Exception:
             slug = None
+    if slug is None and obj is not None:
+        mfig = _mpl_figure_of(obj)
+        if mfig is not None:
+            with contextlib.suppress(Exception):
+                sup = mfig._suptitle  # type: ignore[attr-defined]
+                slug = sup.get_text() if sup is not None else None
+            if not slug:
+                with contextlib.suppress(Exception):
+                    axes = mfig.get_axes()
+                    slug = axes[0].get_title() if axes else None
     stem = f"{state.section}_{n:02d}"
     if slug:
         slug = _slugify(slug)
@@ -2377,29 +2735,36 @@ def _write_plotly_figure(fig: object, stem: str) -> None:
 def _export_figure(obj: object, *, label: Optional[str] = None) -> None:
     """Persist any displayed figure object under the active export section.
 
-    Handles a raw Plotly figure or an ``arviz_plots`` PlotCollection (both via
-    :func:`_plotly_figure_of`) and matplotlib figures. The matplotlib branch pins
-    the figure's own facecolor explicitly rather than relying on the seaborn
-    ``savefig.facecolor`` rc surviving — ``bbox_inches='tight'`` otherwise lets a
-    light background leak into the exported PNG. No-op while export is disabled;
-    never raises.
+    Handles a raw Plotly figure or an ``arviz_plots`` PlotCollection (via
+    :func:`_plotly_figure_of`) and matplotlib figures, raw or wrapped (via
+    :func:`_mpl_figure_of`). The matplotlib branch pins the figure's own facecolor
+    explicitly rather than relying on the seaborn ``savefig.facecolor`` rc
+    surviving — ``bbox_inches='tight'`` otherwise lets a light background leak into
+    the exported PNG.
+
+    Resolution order matters: a matplotlib-backed PlotCollection satisfies both
+    ``hasattr(obj, 'viz')`` and ``hasattr(obj, 'savefig')``, so it used to fall
+    into the untyped collection branch and export at the library's default dpi
+    with no facecolor. Resolving the real Figure first keeps every matplotlib
+    panel on one export path. No-op while export is disabled; never raises.
     """
     state = get_export_state()
     if not state.enabled or obj is None:
         return
     try:
         fig = _plotly_figure_of(obj)
+        mfig = None if fig is not None else _mpl_figure_of(obj)
         stem = _next_stem(label, fig if fig is not None else obj)
         if fig is not None:
             _write_plotly_figure(fig, stem)
+        elif mfig is not None:  # matplotlib Figure, raw or PlotCollection-wrapped
+            mfig.savefig(_export_path(stem, 'png'),
+                         dpi=_DEFAULT_EXPORT_DPI, bbox_inches='tight',
+                         facecolor=mfig.get_facecolor(), edgecolor='none')
         elif hasattr(obj, 'viz') and hasattr(obj, 'savefig'):
-            # PlotCollection whose figure node could not be resolved directly.
+            # PlotCollection whose figure node could not be resolved either way.
             ext = 'png' if state.png_ok else 'html'
             obj.savefig(str(_export_path(stem, ext)))
-        elif hasattr(obj, 'savefig'):  # matplotlib Figure
-            obj.savefig(_export_path(stem, 'png'),
-                        dpi=_DEFAULT_EXPORT_DPI, bbox_inches='tight',
-                        facecolor=obj.get_facecolor(), edgecolor='none')
         else:
             logger.debug("Figure export skipped (unrecognised type %s)", type(obj))
     except Exception as exc:
@@ -3062,7 +3427,17 @@ def _plot_upside_vs_drivers_plotly(kalman_df: pd.DataFrame) -> None:
     ``feat_avg_beta`` tilt and the ``feat_mcap_global_r`` size discount on
     ``risk_adj_return``, the consensus-noise / volatility ``sigma_obs`` wideners, and the
     new short-horizon momentum ``feat_one_day_return``. Each facet's x-axis is independent
-    and winsorised to the 1/99 pct for readability; hover surfaces ticker / name.
+    and winsorised to the 1/99 pct for readability.
+
+    Notes
+    -----
+    The panel is **decimated to** :data:`_EDA_SCATTER_MAX_POINTS` **markers per
+    facet** and carries no per-point identity strings. At full size it was 17
+    facets x ~6.5k names, each marker shipping its ticker and company name as
+    ``hover_data`` — 21.5 MB of notebook payload for a cloud far too dense to
+    resolve an individual name in. The Spearman rho annotated on each facet title
+    is computed on the FULL frame ``d`` (not the plotted subset), as is the OLS
+    trendline, so the quantitative content of the panel is unchanged.
     """
     d = _eda_upside_frame(kalman_df)
     if d.empty:
@@ -3071,18 +3446,19 @@ def _plot_upside_vs_drivers_plotly(kalman_df: pd.DataFrame) -> None:
     if not drivers:
         return
     g = _sector_grouped(d)
-    id_cols = [c for c in ('ticker', 'name') if c in g.columns]
+    # Decimate ONCE, before the melt, so every facet shows the same names and the
+    # per-facet marker count is exactly the cap.
+    _n_total = len(g)
+    g, _thinned = _decimate_frame(g, _EDA_SCATTER_MAX_POINTS, by='sector_grp')
     frames = []
     for col, lab in drivers:
-        sub = g[[col, 'upside_pct', 'sector_grp', *id_cols]].copy()
+        sub = g[[col, 'upside_pct', 'sector_grp']].copy()
         lo, hi = sub[col].astype('float64').quantile([0.01, 0.99])
         sub[col] = sub[col].astype('float64').clip(lo, hi)
         sub = sub.rename(columns={col: 'driver_value'})
         sub['driver'] = lab
         frames.append(sub)
     long = pd.concat(frames, ignore_index=True)
-    hover = {c: True for c in id_cols}
-    hover.update({'driver': False, 'sector_grp': False})
     # Per-driver Spearman ρ (signal strength), annotated on each facet title so
     # the reader sees strength without cross-referencing the §2.4g momentum bar.
     rho_by_label: dict[str, float] = {}
@@ -3095,7 +3471,8 @@ def _plot_upside_vs_drivers_plotly(kalman_df: pd.DataFrame) -> None:
                  if _ilu.find_spec('statsmodels') is not None else {})
     fig = px.scatter(
         long, x='driver_value', y='upside_pct', color='sector_grp',
-        facet_col='driver', facet_col_wrap=3, opacity=0.55, hover_data=hover,
+        facet_col='driver', facet_col_wrap=3, opacity=0.55,
+        render_mode='webgl',
         category_orders={'driver': [lab for _, lab in drivers]},
         labels={'sector_grp': 'sector', 'driver_value': 'value',
                 'upside_pct': 'implied upside (%)'},
@@ -3112,8 +3489,11 @@ def _plot_upside_vs_drivers_plotly(kalman_df: pd.DataFrame) -> None:
 
     fig.for_each_annotation(_facet_title)
     _add_ref_line(fig, y=0, kind='zero')
+    _n_note = (f'  —  {len(g):,} of {_n_total:,} names sampled'
+               if _thinned else '')
     fig.update_layout(
-        title='Implied upside vs fused-panel risk / return drivers (interactive)',
+        title=('Implied upside vs fused-panel risk / return drivers '
+               f'(interactive; ρ on full universe){_n_note}'),
         legend_title_text='sector',
     )
     _render_plotly(fig, height=H_TALL)
@@ -3374,10 +3754,9 @@ def run_eda(kalman_df: pd.DataFrame, roles: FeatureRoles) -> None:
 
     mult = _w['multiplier']
     mult = mult[np.isfinite(mult)]
-    fig.add_trace(go.Histogram(
-        x=mult, histnorm='probability density', nbinsx=80,
-        marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.35)),
-        name='multiplier', showlegend=False), row=1, col=2)
+    _add_binned_density(
+        fig, mult, row=1, col=2, bins=80, color=C_POSTERIOR, alpha=0.35,
+        name='multiplier', showlegend=False)
     _xs_m, _ys_m = _kde_xy(mult, clip_low=0.0)
     if _xs_m is not None:
         fig.add_trace(go.Scatter(x=_xs_m, y=_ys_m, mode='lines',
@@ -4580,41 +4959,44 @@ def run_prior_predictive(model: "pm.Model", panel: KalmanPanelInputs,
     # Percent boundary: prior/empirical upside are decimals — scale ×100 here so
     # this panel matches every other upside axis in the module (0.9.9.11 fix of
     # the sole decimal-scale figure).
-    fig.add_trace(go.Histogram(
-        x=np.clip(prior_up, -1, 2) * 100.0, histnorm='probability density', nbinsx=80,
-        marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.6)),
+    #
+    # All three prior traces are PRE-BINNED via _binned_density_trace. As raw
+    # ``go.Histogram`` traces this single figure serialised
+    # ``prior_draws x n_isin`` (~6.5 M float64) three times over and weighed
+    # 207.7 MB in the notebook — against a 122 KB PNG of the same figure.
+    _add_binned_density(
+        fig, prior_up * 100.0, row=1, col=1,
+        bins=80, clip=(-100.0, 200.0), color=C_POSTERIOR, alpha=0.6,
         hovertemplate='prior upside = %{x:.0f}%<extra></extra>',
-        name='prior expected_upside'), row=1, col=1)
+        name='prior expected_upside')
     # Empirical distribution as a stepped outline (matplotlib ``histtype='step'`` analogue).
-    _emp = np.clip(emp_up[np.isfinite(emp_up)], -1, 2) * 100.0
-    _eh, _ee = np.histogram(_emp, bins=80, density=True)
-    _ec = 0.5 * (_ee[:-1] + _ee[1:])
-    fig.add_trace(go.Scatter(
-        x=_ec, y=_eh, mode='lines', line=dict(color=C_OBSERVED, width=1.5, shape='hvh'),
+    _add_binned_density(
+        fig, emp_up * 100.0, row=1, col=1,
+        bins=80, clip=(-100.0, 200.0), color=C_OBSERVED, fill=False,
         hovertemplate='empirical upside = %{x:.0f}%<extra></extra>',
-        name='empirical observed_pt/last_price − 1'), row=1, col=1)
+        name='empirical observed_pt/last_price − 1')
     _add_ref_line(fig, x=0, kind='zero', row=1, col=1)
     fig.update_xaxes(title_text='implied upside (%)', ticksuffix='%', row=1, col=1)
     fig.update_yaxes(title_text='density', row=1, col=1)
 
     # Model-A achievement probability prior (= sigmoid(risk_adj_return)).
     ap = prior_idata.prior['achieve_prob'].values.reshape(-1)
-    fig.add_trace(go.Histogram(
-        x=ap, histnorm='probability density', nbinsx=60,
-        marker=dict(color=_hex_to_rgba(C_FORECAST, 0.7)),
+    _add_binned_density(
+        fig, ap, row=1, col=2, bins=60, color=C_FORECAST, alpha=0.7,
         hovertemplate='P(achieve) = %{x:.0%}<extra></extra>',
-        name='achieve_prob', showlegend=False), row=1, col=2)
+        name='achieve_prob', showlegend=False)
     fig.update_xaxes(title_text='P(achieve)', range=[0, 1], tickformat='.0%',
                      row=1, col=2)
 
     # Heteroscedastic measurement scale sigma_isin = sigma_base * (1 + cv) / sqrt(n).
     si = prior_idata.prior['sigma_isin'].values.reshape(-1)
     si = si[np.isfinite(si)]
-    fig.add_trace(go.Histogram(
-        x=np.clip(si, 0, np.nanpercentile(si, 99)), histnorm='probability density',
-        nbinsx=60, marker=dict(color=_hex_to_rgba(C_ACCENT, 0.7)),
+    _add_binned_density(
+        fig, si, row=1, col=3, bins=60,
+        clip=(0.0, float(np.nanpercentile(si, 99))) if si.size else None,
+        color=C_ACCENT, alpha=0.7,
         hovertemplate='σ_isin = %{x:.3f}<extra></extra>',
-        name='sigma_isin', showlegend=False), row=1, col=3)
+        name='sigma_isin', showlegend=False)
     fig.update_xaxes(title_text='sigma_isin (standardised scale)', row=1, col=3)
     fig.update_layout(showlegend=True, legend=dict(font_size=_LEGEND_FONT_SIZE))
     _render_plotly(fig, height=H_SHORT)
@@ -4770,7 +5152,50 @@ def sample_posterior(model: "pm.Model", prior_idata, *, cores: Optional[int] = N
 # =============================================================================
 # 8. Posterior predictive checks
 # =============================================================================
-def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs) -> None:
+def thin_posterior(idata, target_draws: int):
+    """Return ``idata`` thinned along ``draw`` to ~``target_draws`` total samples.
+
+    ``pm.sample_posterior_predictive`` replicates **once per posterior sample** and
+    has no draw argument, so an un-thinned call replays the entire
+    ``chains x draws`` grid — 16,000 forward passes at the 0.9.9.16 budget. The
+    calibration statistics §8 computes (interval coverage, PIT, t-stat) are
+    averages over ~26k observations; their Monte-Carlo error at 1,000 predictive
+    draws is far below the 0.03 threshold the per-time report flags on, so the
+    extra 15,000 replications buy nothing and cost linearly.
+
+    Thinning by a stride (rather than taking a head slice) preserves each chain's
+    full sweep of the posterior, so the retained draws stay representative.
+
+    Parameters
+    ----------
+    idata
+        Fitted inference object; must carry a ``posterior`` group.
+    target_draws
+        Approximate total sample count to retain across all chains. ``<= 0``
+        disables thinning and returns ``idata`` unchanged.
+
+    Returns
+    -------
+    The thinned object, or ``idata`` itself when no thinning applies.
+    """
+    post = getattr(idata, 'posterior', None)
+    if target_draws is None or target_draws <= 0 or post is None:
+        return idata
+    n_chains = int(post.sizes.get('chain', 1))
+    n_draws = int(post.sizes.get('draw', 0))
+    total = n_chains * n_draws
+    if total <= target_draws or n_draws == 0:
+        return idata
+    step = max(1, int(np.ceil(total / float(target_draws))))
+    thinned = idata.sel(draw=slice(None, None, step))
+    kept = int(thinned.posterior.sizes['draw']) * n_chains
+    logger.info('PPC posterior thinned %d -> %d samples (stride %d).',
+                total, kept, step)
+    return thinned
+
+
+def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs,
+                             config: Optional[KalmanRunConfig] = None) -> None:
     """Sample the fused-panel posterior predictive and draw calibration diagnostics.
 
     The fused likelihood ``target_pct_obs`` is the standardised ``(isin, time,
@@ -4778,10 +5203,53 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
     observed standardised responses: an ECDF overlay, a t-stat calibration check,
     a per-``y_series`` 94% coverage table, and (best-effort) a PIT calibration
     ECDF via ``azp.plot_ecdf_pit`` on manually computed PIT values.
+
+    Notes
+    -----
+    Three properties of the sampling call are load-bearing for runtime, and each
+    was previously the opposite:
+
+    * **``var_names`` is whitelisted.** Without it PyMC replicates every
+      observed-dependent deterministic — and the builder registers sixteen
+      ``dims="isin"`` deterministics plus ``state_path`` — rather than the one
+      response tensor the checks read. :func:`run_prior_predictive` has always
+      whitelisted for exactly this reason.
+    * **The posterior is thinned** (:func:`thin_posterior`, ``config.ppc_draws``).
+    * **The predictive group is welded onto a THINNED COPY, never the production
+      ``idata``.** At full budget the group is ``chains x draws x n_isin x T x D``
+      float64 — ~1.7 GB — and ``extend_inferencedata=True`` on the real object
+      made it permanent: it then rode into ``07_posterior_idata.nc`` (already
+      8.2 GB from an 8,000-sample run) and was swept again by §9's R-hat / ESS
+      pass. The caller's ``idata`` is left untouched.
+
+    The binding constraint is **memory, not arithmetic**. Measured on this
+    machine (33.6 GB RAM, ~17 GB free): forward sampling costs only ~1.4 s per
+    1,000 draws even under the pure-Python VM, but the posterior alone is ~8 GB
+    at ``draws=2000`` — it carries ``state_path`` plus sixteen ``dims="isin"``
+    deterministics — so welding a multi-GB predictive group on top pushes the
+    working set past free RAM and the run goes to swap.
+
+    Two things were tried here and are recorded so they are not retried:
+
+    * **PyTensor's numba mode for the predictive call.** It is a *pessimisation*
+      at these draw counts: graph compilation costs ~1.5 s against ~1.4 s of
+      forward sampling per 1,000 draws, so it lost 2.80 s to 1.35 s on a faithful
+      (n=6487, T=4, 17-variable) reproduction. nutpie already bypasses this mode
+      for NUTS; the predictive path is small enough that the VM is not the
+      bottleneck. Left on ``Mode(linker="py")``.
+    * **Relying on ``var_names`` alone for the speed-up.** It is correct and kept
+      — it stops PyMC replicating the observed-dependent deterministics — but
+      measured at only ~7 % (1.44 s to 1.35 s). The thinning and the un-welding
+      are what matter.
+
+    None of this changes the posterior or any exported number; it changes how many
+    replicate draws the *diagnostics* are computed from.
     """
+    cfg = config if config is not None else get_run_config()
+    ppc_idata = thin_posterior(idata, cfg.ppc_draws)
     with model:
         pm.sample_posterior_predictive(
-            idata, extend_inferencedata=True,
+            ppc_idata, var_names=['target_pct_obs'], extend_inferencedata=True,
             random_seed=RANDOM_SEED, progressbar=True,
             compile_kwargs=get_pytensor_compile_kwargs(),
         )
@@ -4796,8 +5264,8 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
     for _stat in ('mean', 'std'):
         try:
             pc_t = azp.plot_ppc_tstat(
-                idata, var_names=["target_pct_obs"], t_stat=_stat,
-                backend="plotly",
+                ppc_idata, var_names=["target_pct_obs"], t_stat=_stat,
+                backend=_azp_backend(heavy=True),
                 figure_kwargs=_azp_figure_kwargs(380, width_frac=0.6),
             )
             pc_t.add_title(f'PPC t-stat calibration — T = {_stat}')
@@ -4805,27 +5273,35 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
         except Exception as e:  # pragma: no cover - best-effort diagnostic
             print(f"arviz plot_ppc_tstat({_stat!r}) skipped: {e!r}")
 
-    pp = idata.posterior_predictive['target_pct_obs']
-    obs = idata.observed_data['target_pct_obs']
+    pp = ppc_idata.posterior_predictive['target_pct_obs']
+    obs = ppc_idata.observed_data['target_pct_obs'] \
+        if 'target_pct_obs' in getattr(ppc_idata, 'observed_data', {}) \
+        else idata.observed_data['target_pct_obs']
 
-    # (b) Robust pooled ECDF overlay (observed standardised response vs predictive draws).
+    # (b) Robust pooled ECDF overlay (observed standardised response vs predictive
+    # draws). Both axes are thinned: ``pick`` bounds the SAMPLE axis at 60 draws,
+    # and _ecdf_xy bounds each curve's OBSERVATION axis at _PPC_ECDF_GRID points.
+    # Only the first thinning existed before, so the figure carried 60 x 25,948 =
+    # ~1.6 M points — serialised into the notebook and rasterised by Chromium at
+    # 2x scale. An ECDF is a monotone step function; sampling its quantile
+    # function on a fixed grid is indistinguishable at any real figure width.
     pp_stack = pp.stack(sample=('chain', 'draw'))
     n_samp = pp_stack.sizes['sample']
     pick = np.linspace(0, n_samp - 1, min(60, n_samp)).astype(int)
     obs_flat = np.asarray(obs.values).reshape(-1)
     obs_flat = obs_flat[np.isfinite(obs_flat)]
-    obs_sorted = np.sort(obs_flat)
-    ecdf_y = np.linspace(0, 1, len(obs_sorted))
 
     fig = go.Figure()
     _pp_rgba = _hex_to_rgba(C_POSTERIOR, 0.12)
     for s in pick:
-        rep = np.asarray(pp_stack.isel(sample=s).values).reshape(-1)
-        rep = np.sort(rep[np.isfinite(rep)])
-        fig.add_trace(go.Scatter(x=rep, y=np.linspace(0, 1, len(rep)), mode='lines',
+        rep_x, rep_y = _ecdf_xy(pp_stack.isel(sample=s).values, n=_PPC_ECDF_GRID)
+        if rep_x.size == 0:
+            continue
+        fig.add_trace(go.Scatter(x=rep_x, y=rep_y, mode='lines',
                                  line=dict(color=_pp_rgba, width=0.8),
                                  hoverinfo='skip', showlegend=False))
-    fig.add_trace(go.Scatter(x=obs_sorted, y=ecdf_y, mode='lines',
+    obs_x, obs_y = _ecdf_xy(obs_flat, n=_PPC_ECDF_GRID)
+    fig.add_trace(go.Scatter(x=obs_x, y=obs_y, mode='lines',
                              line=dict(color=C_OBSERVED, width=2.2), name='observed',
                              hovertemplate=('standardised response = %{x:.2f}<br>'
                                             'ECDF = %{y:.0%}<extra></extra>')))
@@ -4841,8 +5317,15 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
 
     # (c) Per-y_series 94% predictive-interval coverage — printed AND charted
     # against the 0.94 target so miscalibration is visible at a glance.
-    lo = pp.quantile(_HDI_LO, dim=('chain', 'draw'))
-    hi = pp.quantile(_HDI_HI, dim=('chain', 'draw'))
+    #
+    # ONE quantile pass for both edges, with skipna=False. xarray defaults
+    # skipna=None, which for a float dtype dispatches to np.nanquantile — that
+    # copies the array AND builds a NaN mask before partitioning. The standardised
+    # response tensor is nan_to_num'd in prepare_kalman_panel_inputs, so there are
+    # no NaNs to skip; asking for two quantiles at once then halves what remains.
+    _q = pp.quantile([_HDI_LO, _HDI_HI], dim=('chain', 'draw'), skipna=False)
+    lo = _q.sel(quantile=_HDI_LO, drop=True)
+    hi = _q.sel(quantile=_HDI_HI, drop=True)
     inside = ((obs >= lo) & (obs <= hi))
     cover = inside.mean(('isin', 'time'))
     _tgt = _HDI_HI - _HDI_LO
@@ -4930,7 +5413,7 @@ def run_posterior_predictive(model: "pm.Model", idata, panel: KalmanPanelInputs)
                 continue
             _pit_ds = xr.Dataset({'pit': (('chain', 'draw'), pit_flat[None, :])})
             pc_pit = azp.plot_ecdf_pit(
-                _pit_ds, var_names=['pit'], backend='plotly',
+                _pit_ds, var_names=['pit'], backend=_azp_backend(),
                 figure_kwargs=_azp_figure_kwargs(400, width_frac=0.7),
             )
             title = (f'PPC PIT ECDF — {sv}' if sv is not None else 'PPC PIT ECDF')
@@ -5016,7 +5499,15 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
     rhat_ds = azs.rhat(posterior[swept_vars])
     ess_ds = azs.ess(posterior[swept_vars], method='bulk')
 
-    ess_tail_ds = azs.ess(posterior[swept_vars], method='tail')
+    # Tail-ESS is reported for the group-effect scales ONLY (grp_report below) --
+    # it feeds no aggregate. Sweeping it over the whole posterior therefore cost a
+    # third of the most expensive block in this function for numbers nothing read:
+    # R-hat / ESS are per-element FFT autocorrelations, and the posterior carries
+    # ``state_path`` plus sixteen ``dims="isin"`` deterministics, i.e. ~130k
+    # independent elements against a handful of scalars actually reported.
+    # Restricting the sweep leaves every printed value identical.
+    _tail_vars = [f'sigma_{g}' for g in group_effects if f'sigma_{g}' in swept_vars]
+    ess_tail_ds = azs.ess(posterior[_tail_vars], method='tail') if _tail_vars else None
 
     # Use nan-aware reductions: deterministically-anchored entries (e.g. the
     # primary-series ICM loading ``mu_isin_loading``/noise ``sigma_series`` pinned
@@ -5033,9 +5524,12 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
     # funnel partners are visible side by side.
     grp_report: dict[str, tuple[float, float, float]] = {}
     for v in grp_keys:
+        _tail = (float(ess_tail_ds[v].min())
+                 if ess_tail_ds is not None and v in ess_tail_ds.data_vars
+                 else float('nan'))
         grp_report[v] = (float(rhat_ds[v].max()),
                          float(ess_ds[v].min()),
-                         float(ess_tail_ds[v].min()))
+                         _tail)
 
     print(f'Divergences: {n_div}'
           + ('  <-- non-zero: inspect the funnel partners below' if n_div else ''))
@@ -5125,7 +5619,7 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
     def _show_trace(_vars):
         with _quiet_degenerate_density():
             pc = azp.plot_trace(
-                idata, var_names=_vars, backend='plotly',
+                idata, var_names=_vars, backend=_azp_backend(heavy=True),
                 figure_kwargs=_diag_figure_kwargs(post_trace, _vars),
             )
             with contextlib.suppress(Exception):
@@ -5154,7 +5648,7 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
     def _show_rank_dist(_vars):
         with _quiet_degenerate_density():
             pc = azp.plot_rank_dist(
-                idata, var_names=_vars, backend='plotly',
+                idata, var_names=_vars, backend=_azp_backend(heavy=True),
                 figure_kwargs=_rank_dist_figure_kwargs(_vars),
             )
             pc.add_title('Fractional-rank Δ-ECDF — ' + ', '.join(_vars))
@@ -5180,6 +5674,7 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
         with _quiet_degenerate_density():
             pc = azp.plot_forest(
                 idata, var_names=forest_vars, combined=True,
+                backend=_azp_backend(heavy=True),
                 figure_kwargs=_azp_figure_kwargs(_forest_height_px(_n_rows)),
             )
             pc.add_title('Group-effect scales (sigma_<coord>), drift slopes (beta) '
@@ -5192,7 +5687,7 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
     # overlap. Poor overlap (low BFMI) flags a sampler that cannot explore the
     # heavy Student-t tails — complementary to R-hat / ESS above.
     try:
-        pc_e = azp.plot_energy(idata, backend='plotly',
+        pc_e = azp.plot_energy(idata, backend=_azp_backend(),
                                figure_kwargs=_azp_figure_kwargs(400, width_frac=0.7))
         pc_e.add_title('NUTS energy — marginal vs transition (E-BFMI check)')
         _safe_show(pc_e)
@@ -5212,7 +5707,7 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
         if _pp_vars:
             with _quiet_degenerate_density():
                 pc_pp = azp.plot_prior_posterior(
-                    idata, var_names=_pp_vars, backend='plotly',
+                    idata, var_names=_pp_vars, backend=_azp_backend(heavy=True),
                     figure_kwargs=_diag_figure_kwargs(posterior, _pp_vars),
                 )
                 pc_pp.add_title('Prior vs posterior — global hyper-parameters '
@@ -5231,7 +5726,7 @@ def run_diagnostics(idata, panel: KalmanPanelInputs) -> None:
     if scalar_vars:
         try:
             pc_ess = azp.plot_ess_evolution(
-                idata, var_names=scalar_vars, backend='plotly',
+                idata, var_names=scalar_vars, backend=_azp_backend(heavy=True),
                 figure_kwargs=_diag_figure_kwargs(post_trace, scalar_vars),
             )
             pc_ess.add_title('ESS evolution (bulk / tail) — should grow ~linearly '
@@ -7487,7 +7982,7 @@ def run_mingled_cohort_filter(frame: pd.DataFrame, engine,
         _state = kf_idata.posterior['state']
         _state = _state.assign_coords(time=[d.strftime('%Y-%m-%d') for d in dates])
         pc_state = azp.plot_forest(_state.to_dataset(), var_names=['state'],
-                                   combined=True, backend='plotly',
+                                   combined=True, backend=_azp_backend(),
                                    figure_kwargs=_azp_figure_kwargs(
                                        _forest_height_px(len(dates), per_row=30)))
         _ax_state = pc_state.viz['plot'].sel(column='forest').item()  # PlotlyPlot
@@ -7668,7 +8163,7 @@ def run_granular_forest(idata, results: pd.DataFrame, panel: KalmanPanelInputs,
 
         pc = azp.plot_forest(
             ppc_tree, group='posterior', combined=True,
-            labels=['isin'], backend='plotly',
+            labels=['isin'], backend=_azp_backend(),
             figure_kwargs=_azp_figure_kwargs(_forest_height_px(len(forest_isins))),
         )
         pc.map(azv.scatter_x, 'observations', data=ppc_tree.observed_data.ds,
@@ -7724,7 +8219,7 @@ def run_granular_further_views(prior_idata, panel: KalmanPanelInputs,
     band_med = float(np.nanmedian(keep['expected_pt']))
 
     pc2 = azp.plot_forest(ppc_tree, group='posterior', combined=True,
-                          labels=['isin'], backend='plotly',
+                          labels=['isin'], backend=_azp_backend(),
                           figure_kwargs=_azp_figure_kwargs(
                               _forest_height_px(len(forest_isins))))
     pc2.map(azv.scatter_x, 'observations', data=ppc_tree.observed_data.ds,
@@ -7787,7 +8282,7 @@ def run_granular_further_views(prior_idata, panel: KalmanPanelInputs,
     for da, sample_dims, style, _ in series:
         pc3 = azp.plot_dist(
             da.to_dataset(), kind='kde', var_names=[VAR], sample_dims=sample_dims,
-            backend='plotly', plot_collection=pc3, visuals={'dist': style},
+            backend=_azp_backend(), plot_collection=pc3, visuals={'dist': style},
             **({'figure_kwargs': _azp_figure_kwargs(480)} if pc3 is None else {}),
         )
     if pc3 is None:
@@ -8031,11 +8526,12 @@ def plot_screen_overview(results_df: pd.DataFrame, *, top_n: int = 15) -> None:
                                         'distribution',
                                         f'Top {top_n} by expected upside '
                                         '(94% HDI)'))
-    fig.add_trace(go.Histogram(
-        x=eu_pct.clip(*np.nanpercentile(eu_pct, [0.5, 99.5])), nbinsx=60,
-        marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.8)),
-        hovertemplate='upside = %{x:.0f}%<extra></extra>',
-        name='expected upside', showlegend=False), row=1, col=1)
+    _add_binned_density(
+        fig, eu_pct, row=1, col=1, bins=60, density=False,
+        clip=tuple(np.nanpercentile(eu_pct, [0.5, 99.5])),
+        color=C_POSTERIOR, alpha=0.8,
+        hovertemplate='upside = %{x:.0f}%<br>%{y:.0f} ISINs<extra></extra>',
+        name='expected upside', showlegend=False)
     _add_ref_line(fig, x=float(eu_pct.median()), kind='emphasis',
                   annotation_text=f'median {eu_pct.median():.1f}%', row=1, col=1)
     _add_ref_line(fig, x=0, kind='zero', row=1, col=1)
@@ -8072,12 +8568,21 @@ def plot_screen_overview(results_df: pd.DataFrame, *, top_n: int = 15) -> None:
 
 
 def plot_risk_return_scatter(results_df: pd.DataFrame, *,
-                             max_points: int = 7000) -> None:
+                             max_points: int = _SCREEN_SCATTER_MAX_POINTS) -> None:
     """Interactive expected-upside vs posterior-uncertainty screen (promoted
     from the former notebook §14.2 inline cell — SSOT now lives here).
 
     Uncertainty = the 94% HDI band width of ``expected_pt`` as a fraction of
     ``last_price``; colour = sector, size = market cap.
+
+    Notes
+    -----
+    ``max_points`` decimates **uniformly** (:func:`_decimate_frame`), and the
+    sampled count is stated in the title. It previously kept
+    ``nlargest(max_points, 'expected_upside')`` at a cap of 7000 — above the
+    universe size, so it never bound. Lowering the cap without changing the rule
+    would have silently deleted the entire lower tail of the y-axis and left a
+    cloud that reads as a uniformly positive screen.
     """
     if not _HAS_PLOTLY or results_df is None or len(results_df) == 0:
         return
@@ -8092,8 +8597,9 @@ def plot_risk_return_scatter(results_df: pd.DataFrame, *,
     _tk = df.get('ticker', pd.Series(index=df.index, dtype=object))
     df['label'] = [t if isinstance(t, str) and t.strip() else str(i)[:6]
                    for t, i in zip(_tk, df['isin'])]
-    if len(df) > max_points:
-        df = df.nlargest(max_points, 'expected_upside')
+    _n_total = len(df)
+    df, _thinned = _decimate_frame(df, max_points, by='sector')
+    _n_note = f'  —  {len(df):,} of {_n_total:,} names sampled' if _thinned else ''
     fig = px.scatter(
         df, x='uncertainty_pct', y='expected_upside_pct',
         color=df['sector'].fillna('Unknown').astype(str), size='market_cap',
@@ -8105,7 +8611,8 @@ def plot_risk_return_scatter(results_df: pd.DataFrame, *,
                                    'last price (%)',
                 'expected_upside_pct': 'expected upside (%)',
                 'color': 'sector'},
-        title='Expected upside vs posterior uncertainty (94% HDI width)')
+        title=('Expected upside vs posterior uncertainty (94% HDI width)'
+               f'{_n_note}'))
     _add_ref_line(fig, y=0, kind='zero')
     fig.update_xaxes(ticksuffix='%')
     fig.update_yaxes(ticksuffix='%')
@@ -8134,7 +8641,7 @@ def plot_top_candidate_forest(screen_ctx: ScreenContext,
     eu = eu.assign_coords(isin=labels)
     _ds = xr.Dataset({'expected_upside_pct': eu})
     pc = azp.plot_forest(_ds, var_names=['expected_upside_pct'], combined=True,
-                         backend='plotly',
+                         backend=_azp_backend(),
                          figure_kwargs=_azp_figure_kwargs(
                              _forest_height_px(len(labels), per_row=30)))
     pc.add_title(f'Top {len(labels)} candidates — posterior expected upside '
@@ -8324,7 +8831,7 @@ def run_summary(results: pd.DataFrame, screen: ScreenContext,
                 pc_sum = azp.plot_dist(
                     _stacked.to_dataset(), kind='kde',
                     var_names=['avg_expected_upside_pct'],
-                    sample_dims=['chain', 'draw'], backend='plotly',
+                    sample_dims=['chain', 'draw'], backend=_azp_backend(),
                     figure_kwargs=_azp_figure_kwargs(420, width_frac=0.75),
                 )
                 pc_sum.add_title('Expected upside (%): earnings cohort vs universe '
@@ -8723,7 +9230,8 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
 # =============================================================================
 def main(*, run_eda_section: bool = True, write_analytics: bool = True,
          robust: bool = True, volume_penalty: float = 0.25, export_results: bool = True,
-         config: Optional[KalmanRunConfig] = None) -> dict[str, Any]:
+         config: Optional[KalmanRunConfig] = None,
+         cores: Optional[int] = None) -> dict[str, Any]:
     """Run the full Kalman price-target workflow end-to-end on the fused panel model.
 
     The cross-sectional spine is the §5b fused MvGRW + volatility-conditioned model
@@ -8756,6 +9264,15 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
         Optional :class:`KalmanRunConfig` overriding the env-resolved defaults
         (sampling budget, screen / risk-book knobs, universe-query dates).
         Installed as the module run config for the duration of the call.
+    cores
+        Chains to run in PARALLEL, overriding ``config.cores``. ``None`` keeps
+        the config value (``1``), which is the kernel-safe default and the only
+        safe choice inside an IDE-managed Jupyter kernel — nutpie's parallel
+        native workers crash such a kernel on Windows with an uncatchable fault.
+        On the standalone CLI path there is no such constraint, so the
+        ``__main__`` block below passes ``cores=4`` and the four chains run
+        concurrently instead of sequentially. This changes wall-clock only: the
+        chains, seeds and posterior are identical either way.
 
     Returns
     -------
@@ -8808,9 +9325,10 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     with export_section('06_prior'):
         prior_idata = run_prior_predictive(model, panel, cfg)
     with export_section('07_posterior'):
-        idata = sample_posterior(model, prior_idata, panel=panel, config=cfg)
+        idata = sample_posterior(model, prior_idata, cores=cores, panel=panel,
+                                 config=cfg)
     with export_section('08_ppc'):
-        run_posterior_predictive(model, idata, panel)
+        run_posterior_predictive(model, idata, panel, cfg)
 
     # §9 diagnostics -> §9b comparison -> §10 screening table -> §10b risk book.
     with export_section('09_diagnostics'):
@@ -8872,6 +9390,13 @@ def main(*, run_eda_section: bool = True, write_analytics: bool = True,
     return artifacts
 
 
+# Parallel chains on the standalone CLI path. The kernel-safe ``cores=1`` on
+# KalmanRunConfig is a NOTEBOOK constraint (see sample_posterior's docstring),
+# but main() and both scripts inherited it, so four chains ran sequentially even
+# headless. Matches ``chains=4``; raising it above the chain count does nothing.
+_CLI_DEFAULT_CORES = 4
+
+
 def _parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     """Parse the script's command-line arguments.
 
@@ -8893,6 +9418,13 @@ def _parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         '--results-dir', default=None,
         help='Override the results directory for --migrate-layout.')
+    parser.add_argument(
+        '--cores', type=int, default=_CLI_DEFAULT_CORES,
+        help=f'Chains to run in parallel (default: {_CLI_DEFAULT_CORES}). The '
+             'KalmanRunConfig default of 1 exists only because nutpie\'s parallel '
+             'native workers crash an IDE-managed Jupyter kernel on Windows; the '
+             'CLI has no such constraint, so chains run concurrently here. '
+             'Wall-clock only -- the posterior is identical.')
     return parser.parse_args(argv)
 
 
@@ -8902,4 +9434,4 @@ if __name__ == '__main__':
         logging.basicConfig(level=logging.INFO)
         migrate_results_layout(_args.results_dir, dry_run=not _args.apply)
     else:
-        main()
+        main(cores=_args.cores)

@@ -50,6 +50,10 @@ def main() -> int:
     ap.add_argument('--dry-run', action='store_true',
                     help='run everything except the analytics table write')
     ap.add_argument('--no-eda', action='store_true', help='skip the §2 EDA panels')
+    ap.add_argument('--cores', type=int, default=K._CLI_DEFAULT_CORES,
+                    help='chains to run in parallel (default: %(default)s). The '
+                         'config default of 1 is a Jupyter-kernel constraint, not '
+                         'a headless one; wall-clock only, posterior identical.')
     args = ap.parse_args()
 
     from sqlalchemy import create_engine
@@ -60,7 +64,8 @@ def main() -> int:
     K.enable_artifact_export()
     print(f'Artifact export -> {K.get_export_state().root}')
     print(f'Config: draws={cfg.draws} tune={cfg.tune} chains={cfg.chains} '
-          f'cores={cfg.cores} target_accept={cfg.target_accept}')
+          f'cores={args.cores} target_accept={cfg.target_accept}')
+    print(f'        ppc_draws={cfg.ppc_draws} (§8 predictive thinning)')
     print(f'        panel_lookbacks={cfg.panel_lookbacks} '
           f'state_innovation_scale={cfg.state_innovation_scale}')
     print(f'        robust={ROBUST} (Student-t)  volume_penalty={VOLUME_PENALTY}')
@@ -89,9 +94,10 @@ def main() -> int:
     with K.export_section('06_prior'):
         prior_idata = K.run_prior_predictive(model, panel, cfg)
     with K.export_section('07_posterior'):
-        idata = K.sample_posterior(model, prior_idata, panel=panel, config=cfg)
+        idata = K.sample_posterior(model, prior_idata, cores=args.cores,
+                                   panel=panel, config=cfg)
     with K.export_section('08_ppc'):
-        K.run_posterior_predictive(model, idata, panel)
+        K.run_posterior_predictive(model, idata, panel, cfg)
     with K.export_section('09_diagnostics'):
         K.run_diagnostics(idata, panel)
 

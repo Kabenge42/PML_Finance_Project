@@ -1,4 +1,4 @@
-create table pml.pml_df
+create table pml_df
 (
 	ticker                            text,
 	isin                              text not null
@@ -16,7 +16,7 @@ create table pml.pml_df
 	region                            text,
 	country                           text
 		constraint pml_df_country_mapping_fk
-			references pml.country_mapping (country) not enforced,
+			references country_mapping (country) not enforced,
 	country_name                      text,
 	sector                            text,
 	industry                          text,
@@ -688,6 +688,6 @@ create table pml.pml_df
 )
 ;
 
-alter table pml.pml_df
+alter table pml_df
 	owner to postgres
 ;

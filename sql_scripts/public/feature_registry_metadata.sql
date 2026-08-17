@@ -1,18 +1,29 @@
-CREATE TABLE public.feature_registry_metadata
+create table public.feature_registry_metadata
 (
-	function_name     varchar(128) NOT NULL PRIMARY KEY,
-	category          varchar(64)  NOT NULL,
+	function_name     varchar(128) not null
+		primary key
+		constraint calc_feat_fk
+			references public.calculated_features_registry not enforced,
+	category          varchar(64)  not null,
 	feature_count     smallint,
 	description       text,
 	python_equivalent varchar(128),
-	updated_at        timestamp DEFAULT CURRENT_TIMESTAMP
-);
+	updated_at        timestamp default CURRENT_TIMESTAMP
+)
+;
 
-ALTER TABLE public.feature_registry_metadata
-	OWNER TO postgres;
+alter table public.feature_registry_metadata
+	owner to postgres
+;
 
-CREATE INDEX idx_feature_registry_category ON public.feature_registry_metadata (category);
+create index idx_feature_registry_category
+	on public.feature_registry_metadata (category)
+;
 
-CREATE INDEX idx_feature_registry_python_equiv ON public.feature_registry_metadata (python_equivalent);
+create index idx_feature_registry_python_equiv
+	on public.feature_registry_metadata (python_equivalent)
+;
 
-CREATE UNIQUE INDEX idx_uq_feature_registry_function_name ON public.feature_registry_metadata (function_name);
+create unique index idx_uq_feature_registry_function_name
+	on public.feature_registry_metadata (function_name)
+;

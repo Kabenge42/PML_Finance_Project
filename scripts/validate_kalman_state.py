@@ -19,6 +19,8 @@ Options::
     --compare            also run the §9b ELPD comparison (roughly triples runtime)
     --no-static          skip the baseline refit (drops the sd/sigma_base deltas)
     --isins N            subsample to N names (default: full panel)
+    --cores N            chains run in parallel (default 4). Wall-clock only --
+                         this gate fits twice, so it is the biggest beneficiary.
 
 What it checks
 --------------
@@ -287,6 +289,14 @@ def main() -> int:
     ap.add_argument('--compare', action='store_true')
     ap.add_argument('--no-static', action='store_true')
     ap.add_argument('--isins', type=int, default=0)
+    ap.add_argument('--cores', type=int, default=K._CLI_DEFAULT_CORES,
+                    help='chains to run in parallel (default: %(default)s). The '
+                         'config default of 1 is a Jupyter-kernel constraint '
+                         '(nutpie\'s native workers crash an IDE-managed kernel '
+                         'on Windows), not a headless one. This gate fits TWICE, '
+                         'so it is the biggest beneficiary. Wall-clock only -- '
+                         'chains, seeds and posterior are identical, so it does '
+                         'not change what the gate certifies.')
     args = ap.parse_args()
 
     from sqlalchemy import create_engine
@@ -296,6 +306,8 @@ def main() -> int:
         cfg = replace(cfg, draws=300, tune=300)
     if args.draws:
         cfg = replace(cfg, draws=args.draws, tune=args.draws)
+    if args.cores:
+        cfg = replace(cfg, cores=args.cores)
     logging.basicConfig(level=cfg.log_level)
 
     engine = create_engine(K.resolve_db_url())
@@ -312,6 +324,11 @@ def main() -> int:
     n_isin, T, D = panel.Y.shape
     print(f'\n=== panel: {n_isin} ISINs, T={T}, D={D}, '
           f'{len(panel.drift_names)} drift features ===')
+    # Echo the budget being certified: the gate is only meaningful if it fits the
+    # same budget the export does (0.9.9.16 recorded a --draws override making a
+    # green gate describe a model that never ships).
+    print(f'=== budget: draws={cfg.draws} tune={cfg.tune} chains={cfg.chains} '
+          f'cores={cfg.cores} target_accept={cfg.target_accept} ===')
     if T < 2:
         print('FAIL: T=1 panel — the state layer needs panel_lookbacks set.')
         return 1

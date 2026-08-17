@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_dividends
+create view public.vw_features_dividends
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -11,12 +11,14 @@ CREATE VIEW public.vw_features_dividends
 			 dividend_yield_vs_5y_avg, div_yield_ltm, div_yield_ntm, div_yield_ind, div_yield_1fy_ind, div_yield_5y_avg,
 			 div_yield_vs_5y_avg, div_yield_growth_expected, dividend_streak_comp, high_yield_flag,
 			 sustainable_dividend_flag)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_dividends IS 'Dividend metrics including yield, payout ratios, timing, and sustainability.
-    Source functions: calc_dividend_features, calc_dividend_timing, calc_dividend_yield_comprehensive';
+comment on view public.vw_features_dividends is 'Dividend metrics including yield, payout ratios, timing, and sustainability.
+    Source functions: calc_dividend_features, calc_dividend_timing, calc_dividend_yield_comprehensive'
+;
 
-ALTER TABLE public.vw_features_dividends
-	OWNER TO postgres;
+alter table public.vw_features_dividends
+	owner to postgres
+;

@@ -479,7 +479,9 @@ Local-level state / comparison knobs on `KalmanRunConfig`:
 
 | Field                     | Default | Purpose                                                                          |
 |---------------------------|---------|----------------------------------------------------------------------------------|
-| `draws` / `tune`          | `4000` / `4000` | Raised from 2000/1000 on 2026-08-17. The log-linear `sigma_isin` model mixes harder than the two-term scale it replaced: at 2000/1000 the full fit gave max global R-hat 1.0134 / min bulk ESS 460 at **zero divergences** — slow mixing, not bad geometry. At 4000/4000: **R-hat 1.0063, min ESS 884**. The tune increase carries most of that. Both `validate_kalman_state.py` and `export_kalman_analytics.py` read this, so clearing the gate only via a `--draws` override would certify a model the export never fits. ~30 min per fit at `cores=1`. |
+| `draws` / `tune`          | `2000` / `4000` | Raised 2000/1000 → 4000/4000 on 2026-08-17, then **split asymmetrically to 2000/4000** in 0.9.9.17. The log-linear `sigma_isin` model mixes harder than the two-term scale it replaced: at 2000/1000 the full fit gave max global R-hat 1.0134 / min bulk ESS 460 at **zero divergences** — slow mixing, not bad geometry. At 4000/4000: **R-hat 1.0063, min ESS 884**. The two knobs are **not interchangeable** — tune bought the R-hat, draws bought the ESS — so the cut goes where the headroom is: ESS 884 against a 400 gate is ~2× margin and scales about linearly in draws, while R-hat had none to give. Cutting *tune* instead attacks the half that carried the gain. Both `validate_kalman_state.py` and `export_kalman_analytics.py` read this, so clearing the gate only via a `--draws` override would certify a model the export never fits. |
+| `ppc_draws`               | `1000`  | Predictive draws retained for §8 (total across chains; `0` disables). `pm.sample_posterior_predictive` replicates once per posterior sample and takes no draw count, so an un-thinned call replays the whole `chains × draws` grid for statistics that are averages over ~26k observations. See `thin_posterior`. |
+| `cores` (CLI)             | `4`     | `KalmanRunConfig.cores = 1` is a **notebook** constraint (nutpie's parallel native workers crash an IDE-managed Jupyter kernel on Windows), but `main()` and both scripts inherited it, so four chains ran sequentially even headless. `main(cores=…)` and `--cores` (default `_CLI_DEFAULT_CORES = 4`) override it on the script paths. Wall-clock only — chains, seeds and posterior are identical. |
 | `state_innovation_scale`  | `0.0`   | **AR(1) time-varying state — OFF by default.** Tried and rejected at T=4: it bought +0.013 recovery correlation for min ESS 14 vs 69, with `sigma_state`/`rho` drifting between draw budgets. The per-ISIN intercept below carries the panel. Set to `0.1` to enable; revisit on a longer panel. |
 | `isin_level_scale` (builder arg) | `0.10` | **FIXED scale (a constant, not a prior on a sampled parameter)** of the per-ISIN `ZeroSumNormal` intercept on `T > 1`. `sigma_isin_level` is `pm.Deterministic(pt.constant(...))`, so it reports sd 0, ESS == total draws and R-hat NaN by construction — do not read it as fitted. **Raising it to 0.40 was tried on 2026-08-16 and reverted**: the measured between-name level sd is 0.4718 (0.3854 after group effects), but at 0.40 `sigma_base` rose *with* the level instead of falling, total predictive scale went 0.2168 → 0.2517 and coverage over-shot to 98.4% against a 92% target. The arithmetic measures how much level *exists*, not how much the model absorbs without the rest of the scale expanding. `0.0` pins the layer off. |
 | `enable_model_comparison` | `False` | Run §9b. Refits both arms and computes a pointwise `log_likelihood` per arm (~820 MB each at full panel size), so ≈3× the sampling cost. |
@@ -535,7 +537,24 @@ per cell (there is no enclosing `with` block per cell).
 fallback) applied in exactly one place — `_apply_dark_template`, called from the `_safe_show` funnel — so displayed
 and exported figures cannot diverge. Reference geometry (zero lines, break-even markers, y=x guides, now-boundaries,
 horizon markers) goes through `_add_ref_line` / `_add_ref_band` keyed on a role (`zero` / `anchor` / `emphasis`) from
-`_REF_LINE_KINDS`; never call `add_hline` / `add_vline` / `add_vrect` directly.
+`_REF_LINE_KINDS`; never call `add_hline` / `add_vline` / `add_vrect` directly. `_safe_show` handles **both** backends:
+matplotlib figures (raw or `PlotCollection`-wrapped, resolved by `_mpl_figure_of`) go to `IPython.display` and are
+closed; Plotly figures take `.show()`.
+
+**Figure payload budget (since 0.9.9.17).** Plotly serialises every coordinate it draws into the notebook, so a panel's
+data volume is a design constraint, not an afterthought. Three SSOTs govern it — a figure that ignores them is how the
+v4 notebook reached **233 MB, 207.7 MB of it in a single prior-predictive figure**:
+
+| Concern | Use | Never |
+|---|---|---|
+| Densities / histograms | `_binned_density_trace` / `_add_binned_density` (`density=False` for count axes) | `go.Histogram` — it ships every raw value and bins client-side (measured 87.6 MB vs 9.0 KB for 6.5 M values) |
+| ECDF curves | `_ecdf_xy(values, n=_PPC_ECDF_GRID)` | one point per observation (42.2 MB vs 0.86 MB for the §8 overlay) |
+| Full-universe scatters | `_decimate_frame(df, cap, by=…)` + state the sampled count in the title; caps are `_EDA_SCATTER_MAX_POINTS` / `_SCREEN_SCATTER_MAX_POINTS` | a rank-based `nlargest` cut — when it binds it deletes one tail and the surviving cloud misrepresents the screen |
+| arviz-plots backend | `_azp_backend(heavy=True)` for facet grids and draw-dense panels (`PML_AZP_HEAVY_BACKEND` overrides) | a `backend='plotly'` literal |
+
+Per-point `hover_data` identity strings (ticker / name) are the bulk of a large scatter's payload and are unreadable in
+a dense cloud — leave them off. Summary statistics annotated on a decimated panel (Spearman ρ, OLS trendlines) must be
+computed on the **full** frame.
 
 Console-script entry points declared in `pyproject.toml` `[project.scripts]`:
 `finance-ml`, `finance-ml-analyze`, `finance-ml-validate` (→ `cli:*`) and
@@ -1453,6 +1472,6 @@ catalog = get_feature_catalog(force_reload=True)
 
 ---
 
-**Version:** 0.9.9.16 (CHANGELOG; `pyproject.toml` and README badge lag at 0.9.9.5 pending the next packaging bump) |
+**Version:** 0.9.9.17 (CHANGELOG; `pyproject.toml` and README badge lag at 0.9.9.5 pending the next packaging bump) |
 **Python:** 3.12–3.14 | **PyMC:** >=6.2,<7 | **PyTensor:** >=3.2.2,<4 | **ArviZ:** >=1.1,<2 (arviz-base + arviz-stats +
 arviz-plots) | **JAX:** >=0.11,<1 | **License:** MIT | **DB:** PostgreSQL

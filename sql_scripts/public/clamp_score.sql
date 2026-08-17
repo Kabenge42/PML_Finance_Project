@@ -1,9 +1,14 @@
-CREATE FUNCTION public.clamp_score(val numeric, min_val numeric default 0, max_val numeric default 100) RETURNS numeric
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
-$$ BEGIN
-	-- missing source code
-END;
-$$;
+create function public.clamp_score(val numeric, min_val numeric default 0, max_val numeric default 100) returns numeric
+	immutable
+	parallel safe
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION public.clamp_score(numeric, numeric, numeric) OWNER TO postgres;
+alter function public.clamp_score(numeric, numeric, numeric) owner to postgres
+;

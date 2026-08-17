@@ -5,6 +5,173 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9.17] - 2026-08-17
+
+### Fixed
+
+- **The Kalman notebook was 233 MB, and 232.1 MB of it was nine Plotly outputs.**
+  Profiling `pymc_kalman_filter_pt_v4.ipynb` by MIME type put
+  `application/vnd.plotly.v1+json` at 232.1 MB against 0.5 MB for everything else
+  — and the notebook was not even fully run (only §2 EDA and §6 prior had output).
+
+  **207.7 MB came from one figure**: the §6 prior-predictive panel, whose three
+  `go.Histogram` traces each shipped `prior_draws × n_isin` ≈ 6.5 M float64 to
+  the browser to be binned client-side. The largest single line in the file was
+  **69.2 MB of base64**. The same figure exports as a **122 KB PNG** — nothing in
+  it ever needed the raw sample.
+
+  Traces are now pre-binned through `_binned_density_trace` (an SSOT lift of the
+  `np.histogram` → `go.Scatter(shape='hvh')` pattern that already sat ten lines
+  below the first offender, for the empirical overlay). Measured on a faithful
+  6,487,000-value array: **87.6 MB → 9.0 KB per trace, a 9,700× reduction**, with
+  hover preserved and the exported PNG unchanged. A `density=False` mode keeps
+  the one count-axis histogram (`plot_screen_overview`) honest.
+
+- **`matplotlib.use("TkAgg")` at import made the matplotlib backend unusable in a
+  notebook.** It overrides the inline backend, so an mpl figure opens in an
+  off-screen Tk window and the cell renders nothing. Now conditional on
+  `_in_ipython_kernel()`. This was invisible while every panel was Plotly and is
+  a hard blocker for the change below.
+
+### Changed
+
+- **The dense arviz-plots diagnostics render through matplotlib.** Backend choice
+  is now one decision in one place (`_azp_backend(heavy=...)`, overridable with
+  `PML_AZP_HEAVY_BACKEND`) rather than fourteen `backend='plotly'` literals.
+  Heavy = the panels that fan one facet per vector element and draw every chain's
+  full draw sequence: trace, rank-dist, prior-posterior, ESS-evolution, the §9.4
+  scale forest and the PPC t-stat. Measured on a 4 × 2000 × 17 `beta` trace grid:
+  **2.25 MB of Plotly JSON → 0.38 MB of PNG**, and the raster is flat in draw
+  count where the JSON is linear. Bounded panels (PIT ECDF, energy, the capped
+  forests, the ridges that carry `_add_ref_line` geometry) stay interactive.
+
+  Three supporting fixes, since nothing but `_export_figure` had ever seen a
+  matplotlib figure: `_safe_show` now routes them to `IPython.display` and closes
+  them (a bare `.show()` neither displays nor blocks correctly); `_apply_dark_template`
+  no longer silently no-ops on them; and `_next_stem` reads the mpl suptitle, so
+  filenames keep their descriptive slugs instead of degrading to bare counters.
+
+- **Full-universe scatters are decimated uniformly, and say so.** `_decimate_frame`
+  caps the §2.4e driver grid at 1,200 markers per facet (it was 17 facets ×
+  ~6.5 k names, each shipping its ticker and company name as `hover_data` — 21.5 MB)
+  and the §14 screen scatter at 2,500. The per-driver Spearman ρ and the OLS
+  trendline are still computed on the **full** frame, so the quantitative content
+  is unchanged, and the sampled count is stated in the title.
+
+  The sampling is **uniform, not top-N**. `plot_risk_return_scatter` previously
+  cut with `nlargest(max_points, 'expected_upside')` at a cap of 7000 — above the
+  universe size, so it never bound. Lowering that cap without changing the rule
+  would have deleted the entire lower tail of the y-axis and left a cloud that
+  reads as a uniformly positive screen.
+
+- **§8 posterior-predictive: thinned, whitelisted, and no longer welded onto the
+  production `idata`.** `pm.sample_posterior_predictive` replicates once per
+  posterior sample and takes no draw count, so it replayed the whole
+  `chains × draws` grid. It now runs against a **thinned copy**
+  (`thin_posterior`, `KalmanRunConfig.ppc_draws = 1000`) with
+  `var_names=['target_pct_obs']` — the pattern `validate_kalman_state.py:159` and
+  `run_prior_predictive` already used — and `extend_inferencedata=True` targets
+  that copy, so the multi-GB predictive group no longer rides into
+  `07_posterior_idata.nc` or gets swept again by §9.
+
+  **The binding constraint is memory, not arithmetic**, and measuring said so:
+  forward sampling costs only ~1.4 s per 1,000 draws even under the pure-Python
+  VM, but the posterior alone is 8.16 GB on disk (it carries `state_path` plus
+  sixteen `dims="isin"` deterministics) against ~17 GB of free RAM, so welding a
+  predictive group on top pushed the working set into swap.
+
+  Two candidates were tried and **rejected**, recorded so they are not retried:
+  **PyTensor's numba mode** for the predictive call is a *pessimisation* at these
+  draw counts (~1.5 s of graph compilation against ~1.4 s of sampling per 1,000
+  draws; 2.80 s vs 1.35 s on a faithful n=6487, T=4, 17-variable reproduction) —
+  nutpie already bypasses the mode for NUTS, so the predictive path is the only
+  place the VM runs, and it is not the bottleneck. And **`var_names` alone** is
+  worth only ~7 % (1.44 s → 1.35 s); it is kept because it is correct, not because
+  it is the win.
+
+  Also: one `quantile` call for both interval edges instead of two, with
+  `skipna=False` — xarray's default dispatches to `np.nanquantile`, which copies
+  the array and builds a NaN mask that the `nan_to_num`'d response tensor does not
+  need. Measured 11.60 s → 3.78 s on a 1.66 GB group.
+
+- **The §8 ECDF overlay was 1.6 M points.** `pick` thinned the sample axis to 60
+  draws but never the observation axis, so each of 61 curves carried all 25,948
+  cells. Curves are now evaluated on a fixed 512-point probability grid
+  (`_ecdf_xy`) — **42.2 MB → 0.86 MB of JSON**, max deviation 0.0000, and the
+  kaleido rasterisation halves.
+
+- **§9 stopped computing tail-ESS for numbers nothing reads.** `ess_tail_ds` was
+  swept over the whole posterior — ~130k independent per-element FFT
+  autocorrelations — and then read only for the handful of `sigma_<coord>`
+  scalars in the group-effect report. The sweep is restricted to exactly those.
+  **Every printed value is identical.** `_degenerate_posterior_vars` also gained
+  an all-finite fast path, avoiding a full float64 `np.where` copy per variable
+  (~1.7 GB for `state_path` alone) in the common case.
+
+- **`draws` / `tune` split asymmetrically to 2000 / 4000.** The 0.9.9.16
+  measurement is explicit that the two knobs are not interchangeable — tune bought
+  the R-hat, draws bought the ESS — so the cut goes where the headroom is. Bulk
+  ESS came in at **884 against a `MIN_ESS_GATE` of 400** (~2× margin, and ESS
+  scales about linearly in draws) while R-hat had none to give.
+
+  This also resolves an **uncommitted `tune: int = 1500`** that was sitting in the
+  working tree, contradicting HEAD, the comment directly above it, CLAUDE.md and
+  the 0.9.9.16 entry. It attacked precisely the half that carried the gain and had
+  never been through the gate.
+
+- **`cores=1` was a notebook constraint applied everywhere.** nutpie's parallel
+  native workers crash an IDE-managed Jupyter kernel on Windows, which is why the
+  config default is 1 — but `main()` and both scripts inherited it, so four chains
+  ran **sequentially even headless**. `main(cores=...)` plus a `--cores` flag
+  (default 4) on both `pymc_kalman_filter_pt.py` and
+  `scripts/export_kalman_analytics.py`. Wall-clock only; the chains, seeds and
+  posterior are identical.
+
+### Validation (2026-08-17, full 6,489-ISIN panel, both arms)
+
+**The budget change is certified.** Gate 1 at 2000/4000 against a control run at
+the previously certified 4000/4000, same day, same panel:
+
+|                     | 2000/4000  | 4000/4000 (control) | gate   |
+|---------------------|------------|---------------------|--------|
+| divergences         | 0          | 0                   | 0      |
+| global max R-hat    | **1.0037** | 1.0016              | < 1.01 |
+| global min bulk ESS | **698.5**  | 1393.8              | > 400  |
+
+ESS scaled almost exactly linearly in draws (698.5 × 2 = 1397 against a measured
+1393.8), which is the premise the asymmetric split rested on, and R-hat stayed far
+inside the gate because *tune* is untouched. Gates 2, 4 and 6 pass at both budgets;
+per-time PPC coverage is 93.0 / 93.8 / 93.8 / 94.1 % against a 92 % target
+(spread 0.011 against a 0.10 fail threshold), with no off-target step.
+
+**Gate 3 fails, and it is PRE-EXISTING — not caused by the budget change.** The two
+runs are identical to four significant figures:
+
+|                                         | 2000/4000           | 4000/4000           |
+|-----------------------------------------|---------------------|---------------------|
+| production `sigma_base` / `nu`          | 0.1777 / 5.528      | 0.1777 / 5.530      |
+| baseline `sigma_base` / `nu`            | 0.1676 / 4.822      | 0.1676 / 4.821      |
+| predictive scale, baseline → production | 0.2191 → **0.2224** | 0.2191 → **0.2224** |
+| mean per-name posterior sd              | 0.0141 → 0.0861     | 0.0141 → 0.0861     |
+
+Doubling the draws moves the gate-3 statistic by ~0.0002 (`nu`'s fourth decimal)
+and does not move the verdict at all. This is the **same signature 0.9.9.16
+recorded at `isin_level_scale = 0.40`** — the per-name level is added *on top of*
+the observation noise rather than displacing it, so `sigma_base` rises with it
+(0.1676 → 0.1777) instead of falling. The revert to 0.10 reduced its magnitude by
+an order of magnitude (a +1.5 % rise in total predictive scale here, against
++16 % at 0.40) but did **not** eliminate it. The per-name sd widens 6× as
+predicted, so the latent is doing its job; what fails is the displacement half of
+the signature.
+
+**Consequence: `export_analytics(write=True)` was already blocked before this
+release, and still is.** Nothing here made it worse. Resolving gate 3 is a
+calibration question about the observation-scale model, deliberately out of scope
+for this entry — it belongs with the two open items 0.9.9.16 left under *Measured
+but not fixed* (T = std fails; `sigma_time` over-fitted).
+
+Logs: `validation_0.9.9.17.log`, `validation_control_4000.log`.
+
 ## [0.9.9.16] - 2026-08-16
 
 ### Fixed
@@ -59,14 +226,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mis-specified. Correlation of each candidate with `log |residual|` after an OLS
   fit of the 17 drift features (n = 6,533):
 
-  | driver | corr | previously in the scale? |
-  |---|---|---|
-  | `cv = pt_stddev/price` | +0.2245 | yes |
-  | `feat_log_mcap` | −0.2100 | no — not even catalogued for `kalman_pt` |
-  | `volatility_1m` / `1y` | +0.192 / +0.190 | no |
-  | `log n_analysts` | −0.1696 | yes |
-  | `feat_pt_range_norm` | +0.1150 | **documented as yes; never wired** |
-  | `feat_vol_drift` | **−0.0349** | documented as yes; never wired |
+  | driver                 | corr            | previously in the scale?                 |
+  |------------------------|-----------------|------------------------------------------|
+  | `cv = pt_stddev/price` | +0.2245         | yes                                      |
+  | `feat_log_mcap`        | −0.2100         | no — not even catalogued for `kalman_pt` |
+  | `volatility_1m` / `1y` | +0.192 / +0.190 | no                                       |
+  | `log n_analysts`       | −0.1696         | yes                                      |
+  | `feat_pt_range_norm`   | +0.1150         | **documented as yes; never wired**       |
+  | `feat_vol_drift`       | **−0.0349**     | documented as yes; never wired           |
 
   0.9.9.6 replaced the absolute realized-vol **levels** with `feat_vol_drift`,
   trading a +0.19 driver for a −0.03 one. The levels return as
@@ -169,10 +336,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Measured on the live 6,538-name MV under one consistent response construction:
 
-  | set | k | cond | max VIF | R² |
-  |---|---|---|---|---|
-  | mcap/EV family (previous) | 15 | 24.7 | 4.36 | 0.6695 |
-  | EPS family (this build) | 16 | 19.7 | 4.25 | 0.6672 |
+  | set                       | k  | cond | max VIF | R²     |
+  |---------------------------|----|------|---------|--------|
+  | mcap/EV family (previous) | 15 | 24.7 | 4.36    | 0.6695 |
+  | EPS family (this build)   | 16 | 19.7 | 4.25    | 0.6672 |
 
   **This is not an R² improvement** — explanatory power is flat (−0.3 % relative).
   The mcap/EV columns scored as well as they did *because* they restate price, and
@@ -272,10 +439,10 @@ statements are no-ops on a from-scratch run, so the script stays idempotent.
   One representative survives per family — `feat_pt_drift` and
   `feat_analyst_rating`. Measured on the live MV:
 
-  | set | k | cond | max VIF | R² |
-  |---|---|---|---|---|
-  | before | 21 | 1,580 | 162.5 | 0.6538 |
-  | after | **15** | **23** | **3.8** | **0.6499** |
+  | set    | k      | cond   | max VIF | R²         |
+  |--------|--------|--------|---------|------------|
+  | before | 21     | 1,580  | 162.5   | 0.6538     |
+  | after  | **15** | **23** | **3.8** | **0.6499** |
 
   69× better conditioning for a 0.6 % relative loss in explanatory power.
   `feat_analyst_rating` was kept over the `bullish_pct` + `bearish_pct` pair
@@ -312,11 +479,11 @@ statements are no-ops on a from-scratch run, so the script stays idempotent.
   that were confounded in the `beta` failure. All measured at draws=1000, zero
   divergences throughout:
 
-  | drift cols | group coords | `beta` R-hat | global min ESS |
-  |---|---|---|---|
-  | 21 | region + trading_region | 1.0261 | 139.8 |
-  | 15 | region + trading_region | <1.0121 | 235.7 |
-  | 15 | trading_region only | 1.0262 | 296.0 |
+  | drift cols | group coords            | `beta` R-hat | global min ESS |
+  |------------|-------------------------|--------------|----------------|
+  | 21         | region + trading_region | 1.0261       | 139.8          |
+  | 15         | region + trading_region | <1.0121      | 235.7          |
+  | 15         | trading_region only     | 1.0262       | 296.0          |
 
   Removing the collinearity was necessary and it worked — min ESS rose **2.1×**
   at an unchanged budget — but it was not sufficient. Nothing collinear remains:

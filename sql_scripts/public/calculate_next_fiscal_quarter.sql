@@ -1,10 +1,13 @@
-CREATE FUNCTION public.calculate_next_fiscal_quarter(next_earnings_date date, income_statement_report_date date, fy_end_date date, earnings_report_frequency text default 'Quarterly'::text) RETURNS integer
-	IMMUTABLE
-	LANGUAGE plpgsql AS
+create function public.calculate_next_fiscal_quarter(next_earnings_date date, income_statement_report_date date, fy_end_date date, earnings_report_frequency text default 'Quarterly'::text) returns integer
+	immutable
+	language plpgsql
+as
 $$
-BEGIN
+begin
 	-- missing source code
-END;
-$$;
+end;
+$$
+;
 
-ALTER FUNCTION public.calculate_next_fiscal_quarter(date, date, date, text) OWNER TO postgres;
+alter function public.calculate_next_fiscal_quarter(date, date, date, text) owner to postgres
+;

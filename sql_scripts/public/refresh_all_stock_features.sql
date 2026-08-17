@@ -1,12 +1,16 @@
-CREATE FUNCTION public.refresh_all_stock_features() RETURNS void
-	LANGUAGE plpgsql AS
+create function public.refresh_all_stock_features() returns void
+	language plpgsql
+as
 $$
-BEGIN
+begin
 	-- missing source code
-END;
-$$;
+end;
+$$
+;
 
-COMMENT ON FUNCTION public.refresh_all_stock_features() IS 'Refreshes the mv_all_stock_features materialized view concurrently (non-blocking).
-    Call periodically after equities table updates.';
+comment on function public.refresh_all_stock_features() is 'Refreshes the mv_all_stock_features materialized view concurrently (non-blocking).
+    Call periodically after equities table updates.'
+;
 
-ALTER FUNCTION public.refresh_all_stock_features() OWNER TO postgres;
+alter function public.refresh_all_stock_features() owner to postgres
+;

@@ -1,11 +1,14 @@
-CREATE FUNCTION public.get_feature_registry_summary()
-	RETURNS table("category" text, "function_count" integer, "total_features" integer)
-	STABLE
-	LANGUAGE sql
-AS
-$$ BEGIN
-	-- missing source code
-END;
-$$;
+create function public.get_feature_registry_summary()
+	returns table("category" text, "function_count" integer, "total_features" integer)
+	stable
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION public.get_feature_registry_summary() OWNER TO postgres;
+alter function public.get_feature_registry_summary() owner to postgres
+;

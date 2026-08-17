@@ -1085,3 +1085,203 @@ def test_run_config_mcap_gate_default():
     import pymc_kalman_filter_pt as kf
 
     assert kf.KalmanRunConfig().mcap_country_r_max == pytest.approx(0.02)
+
+
+# ---------------------------------------------------------------------------
+# 0.9.9.17 figure-payload + PPC-thinning helpers (pure NumPy / pandas)
+#
+# These guard the notebook-size regression that put the v4 notebook at 233 MB,
+# 207.7 MB of it in ONE prior-predictive figure whose ``go.Histogram`` traces
+# shipped ~6.5 M raw float64 each to be binned client-side.
+# ---------------------------------------------------------------------------
+class TestBinnedDensityTrace:
+    def test_payload_is_bounded_by_bins_not_sample_size(self):
+        import pymc_kalman_filter_pt as kf
+
+        rng = np.random.default_rng(0)
+        small = kf._binned_density_trace(rng.normal(size=1_000), bins=80,
+                                         color="#56b4e9", name="x")
+        large = kf._binned_density_trace(rng.normal(size=500_000), bins=80,
+                                         color="#56b4e9", name="x")
+        # The whole point: 500x the sample, same number of plotted coordinates.
+        assert len(small.x) == len(large.x) == 80
+        assert len(small.y) == len(large.y) == 80
+
+    def test_density_normalises_and_counts_do_not(self):
+        import pymc_kalman_filter_pt as kf
+
+        v = np.repeat([0.0, 1.0], 500)
+        dens = kf._binned_density_trace(v, bins=10, color="#ffffff", density=True)
+        cnts = kf._binned_density_trace(v, bins=10, color="#ffffff", density=False)
+        # A count trace must sum to n, so a "count" axis label stays truthful.
+        assert float(np.sum(cnts.y)) == pytest.approx(1000.0)
+        assert float(np.sum(dens.y)) != pytest.approx(1000.0)
+
+    def test_clip_is_applied_before_binning(self):
+        import pymc_kalman_filter_pt as kf
+
+        v = np.array([-50.0, 0.0, 0.5, 1.0, 50.0])
+        tr = kf._binned_density_trace(v, bins=4, color="#ffffff", clip=(0.0, 1.0))
+        assert float(np.min(tr.x)) >= 0.0
+        assert float(np.max(tr.x)) <= 1.0
+
+    def test_degenerate_sample_returns_none(self):
+        import pymc_kalman_filter_pt as kf
+
+        assert kf._binned_density_trace(np.array([]), color="#ffffff") is None
+        assert kf._binned_density_trace(np.array([np.nan, np.inf]),
+                                        color="#ffffff") is None
+
+    def test_add_binned_density_skips_a_degenerate_series(self):
+        import plotly.graph_objects as go
+
+        import pymc_kalman_filter_pt as kf
+
+        fig = go.Figure()
+        kf._add_binned_density(fig, np.array([np.nan]), color="#ffffff")
+        assert len(fig.data) == 0  # never fig.add_trace(None)
+
+
+class TestEcdfGrid:
+    def test_grid_reproduces_the_empirical_quantiles(self):
+        import pymc_kalman_filter_pt as kf
+
+        rng = np.random.default_rng(1)
+        v = rng.normal(size=25_948)  # the real (isin x time) response cell count
+        xs, ys = kf._ecdf_xy(v, n=512)
+        assert xs.size == ys.size == 512
+        # Sampling the quantile function IS the ECDF, so the curve is exact at
+        # every plotted point -- the reduction is in points, not in fidelity.
+        np.testing.assert_allclose(xs, np.quantile(v, ys), atol=1e-12)
+
+    def test_empty_input_returns_empty_arrays(self):
+        import pymc_kalman_filter_pt as kf
+
+        xs, ys = kf._ecdf_xy(np.array([np.nan, np.nan]))
+        assert xs.size == 0 and ys.size == 0
+
+
+class TestDecimateFrame:
+    @staticmethod
+    def _frame(n=5_000):
+        rng = np.random.default_rng(2)
+        return pd.DataFrame({"v": rng.normal(size=n),
+                             "sector": rng.choice(list("ABCDEF"), n)})
+
+    def test_no_op_below_the_cap(self):
+        import pymc_kalman_filter_pt as kf
+
+        df = self._frame(100)
+        out, thinned = kf._decimate_frame(df, 1_000, by="sector")
+        assert thinned is False
+        assert out is df  # not even a copy
+
+    def test_disabled_by_non_positive_cap(self):
+        import pymc_kalman_filter_pt as kf
+
+        df = self._frame(100)
+        out, thinned = kf._decimate_frame(df, 0)
+        assert thinned is False and out is df
+
+    def test_stratified_sample_keeps_the_grouping_column(self):
+        import pymc_kalman_filter_pt as kf
+
+        # Regression guard: pandas 3 excludes grouping columns from the frame
+        # handed to ``groupby.apply``, so an apply-based implementation silently
+        # dropped the very column it stratified on.
+        out, thinned = kf._decimate_frame(self._frame(), 1_200, by="sector")
+        assert thinned is True
+        assert "sector" in out.columns
+        assert len(out) == 1_200
+        assert out["sector"].nunique() == 6  # every stratum survives
+
+    def test_sample_is_uniform_not_a_top_n_cut(self):
+        import pymc_kalman_filter_pt as kf
+
+        # A rank-based cut would delete one tail entirely and leave a cloud that
+        # misrepresents the screen; a uniform sample preserves both tails.
+        df = self._frame()
+        out, _ = kf._decimate_frame(df, 1_200, by="sector")
+        assert out["v"].min() < df["v"].quantile(0.02)
+        assert out["v"].max() > df["v"].quantile(0.98)
+
+    def test_is_reproducible_for_a_fixed_seed(self):
+        import pymc_kalman_filter_pt as kf
+
+        df = self._frame()
+        a, _ = kf._decimate_frame(df, 900, by="sector", seed=7)
+        b, _ = kf._decimate_frame(df, 900, by="sector", seed=7)
+        pd.testing.assert_frame_equal(a, b)
+
+
+class TestThinPosterior:
+    @staticmethod
+    def _idata(chains=4, draws=2000):
+        azb = pytest.importorskip("arviz_base")
+        rng = np.random.default_rng(3)
+        return azb.from_dict({
+            "posterior": {"beta": rng.normal(size=(chains, draws, 5))},
+            "prior": {"beta": rng.normal(size=(1, 1000, 5))},
+            "observed_data": {"target_pct_obs": rng.normal(size=(50, 4))},
+        })
+
+    def test_thins_to_approximately_the_target_total(self):
+        import pymc_kalman_filter_pt as kf
+
+        out = kf.thin_posterior(self._idata(), 1_000)
+        sizes = out.posterior.sizes
+        assert sizes["chain"] * sizes["draw"] == 1_000
+
+    def test_leaves_the_production_object_untouched(self):
+        import pymc_kalman_filter_pt as kf
+
+        # §8 must not weld its predictive group onto the real idata: it would
+        # ride into 07_posterior_idata.nc and be swept again by §9.
+        idata = self._idata()
+        kf.thin_posterior(idata, 1_000)
+        assert idata.posterior.sizes["draw"] == 2000
+
+    def test_preserves_groups_without_a_draw_dim(self):
+        import pymc_kalman_filter_pt as kf
+
+        out = kf.thin_posterior(self._idata(), 1_000)
+        assert out.observed_data["target_pct_obs"].shape == (50, 4)
+
+    @pytest.mark.parametrize("target", [0, -1, 10 ** 9])
+    def test_no_op_returns_the_same_object(self, target):
+        import pymc_kalman_filter_pt as kf
+
+        idata = self._idata()
+        assert kf.thin_posterior(idata, target) is idata
+
+
+def test_azp_backend_split_and_env_override(monkeypatch):
+    import pymc_kalman_filter_pt as kf
+
+    monkeypatch.delenv(kf._AZP_HEAVY_BACKEND_ENV, raising=False)
+    assert kf._azp_backend() == "plotly"
+    assert kf._azp_backend(heavy=True) == "matplotlib"
+
+    monkeypatch.setenv(kf._AZP_HEAVY_BACKEND_ENV, "plotly")
+    assert kf._azp_backend(heavy=True) == "plotly"
+    assert kf._azp_backend() == "plotly"  # light panels are never overridden
+
+    monkeypatch.setenv(kf._AZP_HEAVY_BACKEND_ENV, "nonsense")
+    assert kf._azp_backend(heavy=True) == "matplotlib"  # junk falls back
+
+
+def test_mpl_figure_of_resolves_raw_and_wrapped_figures():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    import pymc_kalman_filter_pt as kf
+
+    fig = plt.figure()
+    try:
+        assert kf._mpl_figure_of(fig) is fig
+        assert kf._plotly_figure_of(fig) is None
+        assert kf._mpl_figure_of(object()) is None
+    finally:
+        plt.close(fig)

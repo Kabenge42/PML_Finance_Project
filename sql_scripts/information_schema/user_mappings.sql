@@ -1,8 +1,11 @@
-CREATE VIEW information_schema.user_mappings(authorization_identifier, foreign_server_catalog, foreign_server_name) AS
-SELECT authorization_identifier, foreign_server_catalog, foreign_server_name
-FROM information_schema._pg_user_mappings;
+create view information_schema.user_mappings(authorization_identifier, foreign_server_catalog, foreign_server_name)
+as
+-- missing source code
+;
 
-ALTER TABLE information_schema.user_mappings
-	OWNER TO postgres;
+alter table information_schema.user_mappings
+	owner to postgres
+;
 
-GRANT SELECT ON information_schema.user_mappings TO PUBLIC;
+grant select on information_schema.user_mappings to public
+;

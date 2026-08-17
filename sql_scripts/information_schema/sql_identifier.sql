@@ -1,3 +1,5 @@
-CREATE DOMAIN information_schema.sql_identifier AS name;
+create domain information_schema.sql_identifier as name
+;
 
-ALTER DOMAIN information_schema.sql_identifier OWNER TO postgres;
+alter domain information_schema.sql_identifier owner to postgres
+;

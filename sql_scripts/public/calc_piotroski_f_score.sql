@@ -1,11 +1,15 @@
-CREATE FUNCTION public.calc_piotroski_f_score(p_isin text default NULL::text)
-	RETURNS table("isin" text, "piotroski_f_score" integer)
-	STABLE PARALLEL SAFE
-	LANGUAGE sql
-AS
-$$ BEGIN
-	-- missing source code
-END;
-$$;
+create function public.calc_piotroski_f_score(p_isin text default NULL::text)
+	returns table("isin" text, "piotroski_f_score" integer)
+	stable
+	parallel safe
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION public.calc_piotroski_f_score(text) OWNER TO postgres;
+alter function public.calc_piotroski_f_score(text) owner to postgres
+;

@@ -1,9 +1,14 @@
-CREATE FUNCTION public.ema_crossover_signal(fast_ema numeric, slow_ema numeric) RETURNS integer
-	IMMUTABLE PARALLEL SAFE
-	LANGUAGE sql AS
-$$ BEGIN
-	-- missing source code
-END;
-$$;
+create function public.ema_crossover_signal(fast_ema numeric, slow_ema numeric) returns integer
+	immutable
+	parallel safe
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION public.ema_crossover_signal(numeric, numeric) OWNER TO postgres;
+alter function public.ema_crossover_signal(numeric, numeric) owner to postgres
+;

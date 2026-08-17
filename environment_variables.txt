@@ -8,7 +8,7 @@
 # Logging Configuration
 # -----------------------------------------------------------------------------
 # TensorFlow log level: 0=DEBUG, 1=INFO, 2=WARNING, 3=ERROR
-TF_CPP_MIN_LOG_LEVEL=2
+TF_CPP_MIN_LOG_LEVEL=1
 # Python logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_LEVEL=INFO
 

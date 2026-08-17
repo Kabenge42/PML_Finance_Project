@@ -1,7 +1,11 @@
-CREATE VIEW information_schema.information_schema_catalog_name(catalog_name) AS
-SELECT current_database()::information_schema.sql_identifier AS catalog_name;
+create view information_schema.information_schema_catalog_name(catalog_name)
+as
+-- missing source code
+;
 
-ALTER TABLE information_schema.information_schema_catalog_name
-	OWNER TO postgres;
+alter table information_schema.information_schema_catalog_name
+	owner to postgres
+;
 
-GRANT SELECT ON information_schema.information_schema_catalog_name TO PUBLIC;
+grant select on information_schema.information_schema_catalog_name to public
+;

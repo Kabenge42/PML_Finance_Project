@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_balance_sheet
+create view public.vw_features_balance_sheet
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -15,12 +15,14 @@ CREATE VIEW public.vw_features_balance_sheet
 			 goodwill_2fy, goodwill_3fy, goodwill_4fy, goodwill_qoq_change, goodwill_yoy_change, goodwill_3y_growth,
 			 goodwill_vs_5y_avg, recent_acquisition_flag, goodwill_accumulation_rate, goodwill_to_assets_trend,
 			 impairment_risk_score, goodwill_concentration)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_balance_sheet IS 'Balance sheet temporal analysis including assets, inventory, and goodwill trends.
-    Source functions: calc_total_assets_temporal, calc_inventory_temporal_features, calc_goodwill_temporal_features';
+comment on view public.vw_features_balance_sheet is 'Balance sheet temporal analysis including assets, inventory, and goodwill trends.
+    Source functions: calc_total_assets_temporal, calc_inventory_temporal_features, calc_goodwill_temporal_features'
+;
 
-ALTER TABLE public.vw_features_balance_sheet
-	OWNER TO postgres;
+alter table public.vw_features_balance_sheet
+	owner to postgres
+;

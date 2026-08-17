@@ -1,19 +1,34 @@
-CREATE MATERIALIZED VIEW public.mv_equities AS
+create materialized view public.mv_equities
+as
 -- missing source code
 ;
 
-COMMENT ON MATERIALIZED VIEW public.mv_equities IS 'Aliased snapshot of the equities table. Column names sourced from equities_schema_metadata.column_alias. Refresh with: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_equities;';
+comment on materialized view public.mv_equities is 'Aliased snapshot of the equities table. Column names sourced from equities_schema_metadata.column_alias. Refresh with: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_equities;'
+;
 
-ALTER MATERIALIZED VIEW public.mv_equities OWNER TO postgres;
+alter materialized view public.mv_equities owner to postgres
+;
 
-CREATE UNIQUE INDEX idx_mv_equities_isin ON public.mv_equities (isin);
+create unique index idx_mv_equities_isin
+	on public.mv_equities (isin)
+;
 
-CREATE INDEX idx_mv_equities_ticker ON public.mv_equities (ticker);
+create index idx_mv_equities_ticker
+	on public.mv_equities (ticker)
+;
 
-CREATE INDEX idx_mv_equities_geography ON public.mv_equities (region, country, exchange);
+create index idx_mv_equities_geography
+	on public.mv_equities (region, country, exchange)
+;
 
-CREATE INDEX idx_mv_equities_class ON public.mv_equities (sector, industry, size_class, style_class);
+create index idx_mv_equities_class
+	on public.mv_equities (sector, industry, size_class, style_class)
+;
 
-CREATE INDEX idx_mv_equities_market_cap ON public.mv_equities (market_cap DESC);
+create index idx_mv_equities_market_cap
+	on public.mv_equities (market_cap desc)
+;
 
-CREATE INDEX idx_mv_equities_fiscal ON public.mv_equities (fiscal_year, fiscal_quarter, income_statement_report_date);
+create index idx_mv_equities_fiscal
+	on public.mv_equities (fiscal_year, fiscal_quarter, income_statement_report_date)
+;

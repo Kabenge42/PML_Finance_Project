@@ -1,6 +1,15 @@
-CREATE FUNCTION information_schema._pg_truetypid(pg_attribute, pg_type) RETURNS oid
-	IMMUTABLE STRICT PARALLEL SAFE
-	LANGUAGE sql
-RETURN CASE WHEN (($2).typtype = 'd'::"char") THEN ($2).typbasetype ELSE ($1).atttypid END;
+create function information_schema._pg_truetypid(pg_attribute, pg_type) returns oid
+	immutable
+	strict
+	parallel safe
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION information_schema._pg_truetypid(unknown, unknown) OWNER TO postgres;
+alter function information_schema._pg_truetypid(pg_attribute, pg_type) owner to postgres
+;

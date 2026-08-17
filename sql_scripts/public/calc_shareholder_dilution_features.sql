@@ -1,11 +1,15 @@
-CREATE FUNCTION public.calc_shareholder_dilution_features(p_isin text default NULL::text)
-	RETURNS table("isin" text, "dilution_score" numeric)
-	STABLE PARALLEL SAFE
-	LANGUAGE sql
-AS
-$$ BEGIN
-	-- missing source code
-END;
-$$;
+create function public.calc_shareholder_dilution_features(p_isin text default NULL::text)
+	returns table("isin" text, "dilution_score" numeric)
+	stable
+	parallel safe
+	language sql
+as
+$$
+	begin
+-- missing source code
+end;
+$$
+;
 
-ALTER FUNCTION public.calc_shareholder_dilution_features(text) OWNER TO postgres;
+alter function public.calc_shareholder_dilution_features(text) owner to postgres
+;

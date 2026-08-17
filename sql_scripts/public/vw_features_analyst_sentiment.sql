@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_analyst_sentiment
+create view public.vw_features_analyst_sentiment
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -11,12 +11,14 @@ CREATE VIEW public.vw_features_analyst_sentiment
 			 pt_median_momentum_1m, pt_median_momentum_3m, pt_acceleration_short, pt_acceleration_long,
 			 pt_consensus_convergence, analyst_coverage_change_1m, analyst_coverage_change_3m,
 			 analyst_coverage_change_1y, pt_vs_price_momentum, analyst_coverage_trend)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_analyst_sentiment IS 'Analyst sentiment metrics including ratings distribution and price target dynamics.
-    Source functions: calc_sentiment_features, calc_price_target_dynamics';
+comment on view public.vw_features_analyst_sentiment is 'Analyst sentiment metrics including ratings distribution and price target dynamics.
+    Source functions: calc_sentiment_features, calc_price_target_dynamics'
+;
 
-ALTER TABLE public.vw_features_analyst_sentiment
-	OWNER TO postgres;
+alter table public.vw_features_analyst_sentiment
+	owner to postgres
+;

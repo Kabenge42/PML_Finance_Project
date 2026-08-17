@@ -1,4 +1,4 @@
-CREATE VIEW public.vw_features_cashflow
+create view public.vw_features_cashflow
 			(isin, ticker, name, description, region, country, trading_country, exchange, sector, industry,
 			 dividend_record_frequency, earnings_report_frequency, fy_end, next_earnings_report, next_earnings_status,
 			 next_earnings_when, next_fiscal_quarter, reporting_interval, size_class, style_class, unit,
@@ -22,13 +22,15 @@ CREATE VIEW public.vw_features_cashflow
 			 fcf_est_cagr_5y, fcf_est_margin_fy1, fcf_est_yield_fy1, fcf_est_growth_acceleration,
 			 fcf_est_growth_deceleration, fcf_est_trajectory_score, fcf_est_always_positive, fcf_est_vs_historical,
 			 fcf_est_capex_implied_ratio)
-AS
+as
 -- missing source code
 ;
 
-COMMENT ON VIEW public.vw_features_cashflow IS 'Cash flow metrics including CFO, FCF, CapEx analysis, and cash flow quality.
+comment on view public.vw_features_cashflow is 'Cash flow metrics including CFO, FCF, CapEx analysis, and cash flow quality.
     Source functions: calc_cashflow_features, calc_enhanced_cashflow_features,
-    calc_cashflow_temporal_features, calc_cashflow_comprehensive';
+    calc_cashflow_temporal_features, calc_cashflow_comprehensive'
+;
 
-ALTER TABLE public.vw_features_cashflow
-	OWNER TO postgres;
+alter table public.vw_features_cashflow
+	owner to postgres
+;
