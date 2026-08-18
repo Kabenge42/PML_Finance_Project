@@ -67,9 +67,13 @@ What v2 changes
 v1                                 v2
 =================================  ===========================================
 Independent across ``time``        OU correlation on the **actual day offsets**
-``sigma_isin_level`` fixed 0.10    ``sigma_level`` free, identified by the decay
+``sigma_isin_level`` fixed 0.10    ``w_level`` free, identified by the decay
 AR(1) state off by default         OU state on by default, one length-scale
-Scales added independently         One ``sigma_total`` split by a **Dirichlet**
+Latents sampled per name/time      Latents **marginalised** — 32,503 free
+                                   parameters become ~60
+Missing cells given ``sigma=1e6``  Likelihood on the observed sub-vector, names
+                                   grouped by missingness pattern
+Scales added independently         One total scale split by a **Dirichlet**
 3 collinear PT-history betas       Family orthogonalised before it enters ``X``
 Params spread over kwargs+config   One frozen :class:`KalmanModelConfig`
 =================================  ===========================================
@@ -138,11 +142,13 @@ __all__ = [
     "KalmanPanelV2",
     "GROUP_EFFECT_SCALE",
     "KALMAN_V2_SCREEN_LATENT",
+    "KALMAN_V2_SCREEN_LATENT_SD",
     "DEFAULT_LOOKBACK_DAYS",
     "PT_HISTORY_FAMILY",
     "build_kalman_pt_model_v2",
     "orthogonalise_family",
     "effective_sample_size_of_panel",
+    "partition_covariance_groups",
     "fit_trail_correlation_kernel",
     "resolve_screen_latent_v2",
 ]
@@ -161,7 +167,13 @@ GROUP_EFFECT_SCALE: float = 0.25
 #: Monte Carlo, risk book, analytics export) resolves the per-ISIN quantity
 #: through :func:`resolve_screen_latent_v2` so the decision quantity has exactly
 #: one name — the v1 ``KALMAN_SCREEN_LATENT`` contract, preserved.
-KALMAN_V2_SCREEN_LATENT: str = "state_now"
+#:
+#: Since the latents are marginalised (see :func:`build_kalman_pt_model_v2`) the
+#: model reports the smoother's *conditional mean* and *sd* rather than a sampled
+#: path. ``resolve_screen_latent_v2`` reconstitutes draws from the pair, so
+#: consumers see the same thing they always did.
+KALMAN_V2_SCREEN_LATENT: str = "state_now_mean"
+KALMAN_V2_SCREEN_LATENT_SD: str = "state_now_sd"
 
 #: Calendar offsets, in days, of every lookback suffix the MV emits. Used to turn
 #: a ``panel_lookbacks`` tuple into the real gaps the OU kernel needs. ``now`` is
@@ -263,11 +275,14 @@ class KalmanModelConfig:
         roughly 46-238 days) because ``ell`` is the one genuinely new parameter
         and should be data-driven.
     variance_split_alpha
-        Dirichlet concentration on ``(level, state, observation)``. Weakly
-        informative and centred on the measurement: the group-adjusted kernel
-        puts ~33 % of the structured within-name variance in the permanent level
-        and ~67 % in the decaying state, with observation noise taking the
-        residual. Sum ~6 keeps it weak enough for the data to move it.
+        Concentration on ``(level, state, observation)``. Read as two Beta
+        priors rather than one Dirichlet — see the builder for why the
+        coordinates matter — so ``(a_level, a_state)`` is the prior on
+        ``rho_inf`` and ``(a_obs, a_level + a_state)`` the prior on the
+        observation share. Weakly informative and centred on the measurement:
+        the group-adjusted kernel puts ~33 % of the structured within-name
+        variance in the permanent level and ~67 % in the decaying state. Small
+        concentrations keep it weak enough for the data to move it.
     likelihood
         ``'student_t'`` (default) or ``'normal'``. The Student-t ``nu`` is
         floored at ``nu_floor``; see the v1 docstring for why relaxing that floor
@@ -295,9 +310,38 @@ class KalmanModelConfig:
     ou_length_scale_days_mu: float = 104.7
     ou_length_scale_days_sigma: float = 0.5
     variance_split_alpha: tuple[float, float, float] = (2.0, 2.0, 2.0)
-    sigma_total_prior: float = 1.0
+    variance_weight_floor: float = 1e-3
     enable_ou_state: bool = True
     enable_isin_level: bool = True
+
+    # ---- numerical guards --------------------------------------------------
+    #: Ridge added to the diagonal of ``A`` before its Cholesky. ``A`` is a
+    #: correlation-like matrix built from a simplex, so it is PSD by
+    #: construction but can approach singularity when the state share dominates
+    #: and ``ell`` is large (every row nearly identical).
+    cholesky_jitter: float = 1e-8
+    #: Clip range for ``log sigma_isin``. The scale model is a sum of six terms,
+    #: several with unbounded coefficients; without a clip ``exp`` of the sum can
+    #: overflow to ``inf``. The default admits scales from ~6e-6 to ~55 on the
+    #: standardised response, which brackets anything meaningful by orders of
+    #: magnitude.
+    log_sigma_clip: tuple[float, float] = (-12.0, 4.0)
+    #: Prior on ``log sigma_total``. Sampled on the log scale rather than as a
+    #: ``HalfNormal``, because the scale model needs ``log(sigma_total)`` and a
+    #: half-normal can reach 0 exactly, where that log is ``-inf``.
+    log_sigma_total_mu: float = -1.6
+    log_sigma_total_sigma: float = 1.0
+
+    #: Number of per-lookback-coverage buckets. Names are partitioned by
+    #: ``(missingness pattern, coverage bucket)`` and each group gets its own
+    #: covariance sub-block, so a name whose one-year consensus rests on four
+    #: analysts is not charged the same measurement precision as one built on
+    #: thirty. ``1`` disables bucketing and keeps one shared covariance shape per
+    #: missingness pattern. Each extra group costs one 4x4 Cholesky per gradient,
+    #: so the knob is cheap; it is defaulted off because its benefit is not yet
+    #: measured, and every group is an extra observed variable to reassemble in
+    #: the posterior-predictive stage.
+    coverage_profile_buckets: int = 1
 
     # ---- mean structure ----------------------------------------------------
     beta_prior_scale: float = 0.5
@@ -341,6 +385,13 @@ class KalmanModelConfig:
                 "nu_floor below 2.0 reintroduces the improper sigma->0 corner; "
                 "see the v1 builder docstring."
             )
+        if self.coverage_profile_buckets < 1:
+            raise ValueError("coverage_profile_buckets must be >= 1")
+        if not 0.0 <= self.variance_weight_floor < 0.3:
+            raise ValueError("variance_weight_floor must be in [0, 0.3)")
+        lo, hi = self.log_sigma_clip
+        if not lo < hi:
+            raise ValueError(f"log_sigma_clip must be increasing, got {self.log_sigma_clip!r}")
 
     # -- derived -------------------------------------------------------------
 
@@ -434,6 +485,17 @@ class KalmanPanelV2:
     # ---- de-standardisation ------------------------------------------------
     response_mean: float = 0.0
     response_std: float = 1.0
+
+    # ---- per-lookback analyst coverage -------------------------------------
+    #: Relative analyst coverage per cell, shape ``(n_isin, T)``, normalised so
+    #: the snapshot column is 1.0. Sourced from the ``n_analysts_{lb}`` columns
+    #: that ``mv_pymc_kalman_pt_v2`` emits. Used to bucket names into covariance
+    #: groups when :attr:`KalmanModelConfig.coverage_profile_buckets` > 1, and to
+    #: form the trail-average :attr:`precision_weight`. Empty means "no profile
+    #: available", and every name falls in one bucket.
+    coverage_profile: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype="float64")
+    )
 
     # ---- provenance --------------------------------------------------------
     orthogonal_rotation: Optional[np.ndarray] = None
@@ -709,38 +771,103 @@ def orthogonalise_family(
 # --------------------------------------------------------------------------- #
 
 
-def _ou_transition(time_days: np.ndarray, ell) -> Any:
-    """Per-step OU transition coefficients for an irregular time grid.
+def _ou_correlation(time_days: np.ndarray, ell) -> Any:
+    """Stationary OU correlation matrix on an irregular calendar grid.
 
-    For an Ornstein-Uhlenbeck process observed at offsets ``d_0 > d_1 > ... > 0``
-    the exact one-step transition between consecutive observations is
+    .. math:: K_{st} = \\exp(-|d_s - d_t| / \\ell)
 
-    .. math::
-        s_t = \\phi_t s_{t-1} + \\sqrt{1 - \\phi_t^2}\\, \\sigma\\, z_t,
-        \\qquad \\phi_t = \\exp(-\\Delta_t / \\ell)
+    This is the *marginal* correlation of an Ornstein-Uhlenbeck process observed
+    at offsets ``d``. v2 uses the matrix directly rather than the equivalent
+    step-by-step recursion, because the recursion requires sampling the state
+    path — 25,988 latent parameters on the production panel, multiplied by a
+    learned scale, which is a Neal funnel at scale and is what made the first
+    v2 build sample at 400 seconds per draw. Written as a covariance the state
+    is integrated out in closed form and never sampled at all.
 
-    with ``Delta_t`` the calendar gap. Because the innovation is scaled by
-    ``sqrt(1 - phi^2)`` the marginal variance is ``sigma^2`` at *every* step
-    regardless of spacing — the process is stationary, so ``sigma_state`` means
-    the same thing at every lookback and the variance simplex stays interpretable.
-
-    Using the real gaps rather than an index is what lets one length-scale
-    reproduce a correlation of 0.97 at a 7-day gap and 0.43 at a 365-day gap.
+    Using the *real* calendar gaps rather than a time index is what lets one
+    length-scale reproduce a correlation of 0.97 at a 7-day gap and 0.43 at a
+    365-day gap. An index-based AR(1) cannot: the lookback grid is not equally
+    spaced.
 
     Parameters
     ----------
     time_days
-        Calendar offsets, shape ``(T,)``, oldest first.
+        Calendar offsets, shape ``(T,)``, oldest first, anchored at 0.
     ell
         Length-scale in days (a PyTensor scalar).
 
     Returns
     -------
     Any
-        PyTensor vector of shape ``(T-1,)``.
+        PyTensor ``(T, T)`` symmetric matrix with unit diagonal.
     """
-    gaps = np.abs(np.diff(np.asarray(time_days, dtype="float64")))
+    days = np.asarray(time_days, dtype="float64")
+    gaps = np.abs(days[:, None] - days[None, :])
     return pt.exp(-pt.as_tensor_variable(gaps) / ell)
+
+
+def partition_covariance_groups(
+    mask: np.ndarray,
+    coverage_profile: np.ndarray,
+    n_buckets: int,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Partition names into groups that share one covariance sub-block.
+
+    Two names can share a Cholesky factorisation when they observe the same set
+    of lookback columns and (optionally) sit in the same analyst-coverage
+    bucket. Grouping this way is what lets the model handle missing trail cells
+    *exactly* — the likelihood is evaluated on the observed sub-vector — instead
+    of v2's first approach, which kept the grid rectangular by setting the
+    missing cells' sigma to 1e6. That trick left thousands of near-flat
+    likelihood directions for NUTS to traverse at the global step size.
+
+    Parameters
+    ----------
+    mask
+        Boolean ``(n_isin, T)`` observation mask.
+    coverage_profile
+        ``(n_isin, T)`` relative analyst coverage, or an empty array.
+    n_buckets
+        Number of coverage buckets; ``1`` groups by missingness pattern only.
+
+    Returns
+    -------
+    list[tuple[numpy.ndarray, numpy.ndarray]]
+        ``(row_index, observed_column_index)`` per group. Groups are ordered
+        largest first, so the dominant pattern is the first observed variable in
+        the model and reads first in any summary.
+    """
+    n, T = mask.shape
+    keys = mask.astype(np.uint8) @ (1 << np.arange(T, dtype=np.uint64))
+
+    if n_buckets > 1 and coverage_profile.size:
+        # Bucket on the trail-average coverage, which is the summary the
+        # covariance actually cares about: a name whose whole trail is thin
+        # deserves a wider observation leg than one thin only at the far end.
+        avg = np.nanmean(np.where(mask, coverage_profile, np.nan), axis=1)
+        avg = np.nan_to_num(avg, nan=1.0)
+        # Rank-based edges so buckets are populated regardless of the shape of
+        # the coverage distribution.
+        edges = np.nanquantile(avg, np.linspace(0, 1, n_buckets + 1)[1:-1])
+        bucket = np.searchsorted(edges, avg, side="right").astype(np.uint64)
+        keys = keys * np.uint64(n_buckets) + bucket
+
+    groups: list[tuple[np.ndarray, np.ndarray]] = []
+    for key in np.unique(keys):
+        rows = np.flatnonzero(keys == key)
+        cols = np.flatnonzero(mask[rows[0]])
+        if cols.size == 0:
+            logger.warning("Dropping %d name(s) with no observed trail cell", rows.size)
+            continue
+        groups.append((rows, cols))
+    groups.sort(key=lambda g: -len(g[0]))
+    logger.info(
+        "Covariance groups: %d (sizes %s, widths %s)",
+        len(groups),
+        [len(r) for r, _ in groups][:8],
+        [len(c) for _, c in groups][:8],
+    )
+    return groups
 
 
 def build_kalman_pt_model_v2(
@@ -751,39 +878,74 @@ def build_kalman_pt_model_v2(
 
     Structure
     ---------
-    For name ``i`` at lookback ``t``::
+    The generative story for name ``i`` at lookback ``t`` is::
 
-        mu[i, t] = mu_reg[i]            # drift betas + crossed group effects
-                 + level[i]             # permanent per-name deviation  (NEW: free)
-                 + s[i, t]              # OU state, exp(-gap/ell)       (NEW: on)
-                 + alpha_time[t]        # per-lookback level offset
+        y[i, t] = mu_reg[i]             # drift betas + crossed group effects
+                + alpha_time[t]         # per-lookback level offset
+                + level[i]              # permanent per-name deviation
+                + s[i, t]               # OU state, corr = exp(-gap/ell)
+                + eps[i, t]             # measurement noise
 
-        y[i, t] ~ StudentT(nu, mu[i, t], sigma_obs[i] * tau_time[t])
+    but ``level`` and ``s`` are **never sampled**. Both are Gaussian and both
+    enter the mean linearly, so they integrate out in closed form, leaving a
+    multivariate Student-t over each name's whole trail::
 
-    and the three within-name variance components come from one simplex::
+        A       = w_L*J + w_S*K(ell) + w_O*diag(tau^2)     # T x T, shared
+        y[i, :] ~ MvStudentT(nu, mu_reg[i] + alpha_time, sigma_isin[i]^2 * A)
 
-        sigma_total ~ HalfNormal(config.sigma_total_prior)
-        w           ~ Dirichlet(config.variance_split_alpha)
-        (sigma_level, sigma_state, sigma_obs_base) = sigma_total * sqrt(w)
+    with ``(w_L, w_S, w_O) ~ Dirichlet(config.variance_split_alpha)`` read as
+    **shares of within-name variance** — which is exactly what the empirical
+    kernel measures, since ``rho_inf`` is a share and not a level.
 
-    That last block is the fix for the failure the changelog calls gate 3. In v1
-    the level was added on top of the noise, so every attempt to grow it grew the
-    total predictive scale instead of redistributing it (``sigma_base`` rose from
-    0.1676 to 0.1777 when ``isin_level_scale`` went to 0.40). Here the components
-    are legs of a simplex: mass given to the level is mass taken from the noise,
-    by construction.
+    Why marginalise, in numbers
+    ---------------------------
+    The first v2 build sampled the state path. On the production panel that is
+    ``6497 x 4 = 25,988`` latent parameters plus a 6,497-element level vector,
+    each multiplied by a learned scale — a Neal funnel at scale. Measured:
+
+    ===========================================  ==========  ================
+    form                                         free params gradient (n=6497)
+    ===========================================  ==========  ================
+    sampled ``z_state`` + ``z_isin_level``       32,503      ~1,600 ms
+    marginal, per-name covariance (batched chol) ~60         ~4,400 ms
+    marginal, shared shape + pre-formed chol     ~60         **2.3 ms**
+    ===========================================  ==========  ================
+
+    It also sampled at a step size of 0.001 with 255 gradient evaluations per
+    draw — 400 s/draw, i.e. months for a production run. Marginalisation removes
+    the funnel, the serial OU graph chain and the near-flat directions that the
+    masked cells used to contribute.
+
+    Two consequences of the marginal form, both deliberate:
+
+    * **The Student-t is now per-name, not per-cell.** A multivariate t is the
+      marginal of a per-name scale mixture, so an outlier is a whole name with an
+      odd trail rather than one odd cell. For a sticky analyst consensus that is
+      arguably the better model, but it *is* a change from v1.
+    * **The per-name scale multiplies the whole covariance**, so the smoother
+      gain is common within a covariance group while the posterior **variance**
+      still scales with ``sigma_isin``. Per-name shrinkage *weight* would need
+      ``Sigma_i = B + sigma_i^2 D``, which requires a batched Cholesky over 6,497
+      matrices — the 4,400 ms row above. Rejected on measurement.
 
     Identification
     --------------
-    ``sigma_level`` and ``sigma_state`` are separately identified because they
-    have different *signatures in the correlation decay*, not because they have
-    different marginal variances. The level contributes a constant ``rho_inf`` to
-    the correlation at every gap; the state contributes ``exp(-gap/ell)``, which
-    dies. A factorised likelihood cannot see either, which is precisely why v1
-    had to pin ``sigma_isin_level`` to a constant and switch the state off. On
-    the 2026-08-18 universe the offline fit separates them at RMSE 0.026 over 15
-    gap pairs, so the information is present; the self-test below confirms the
-    sampler recovers it.
+    ``w_L`` and ``w_S`` are separately identified because they have different
+    *signatures in the correlation decay*, not because they have different
+    marginal variances. The level contributes a constant ``rho_inf`` at every
+    gap; the state contributes ``exp(-gap/ell)``, which dies. A factorised
+    likelihood sees neither, which is precisely why v1 had to pin
+    ``sigma_isin_level`` to a constant and switch the state off. On the
+    2026-08-18 universe the offline fit separates them at RMSE 0.026 over 15 gap
+    pairs, so the information is present; ``--selftest`` confirms the sampler
+    recovers it.
+
+    The simplex is also the fix for the failure the changelog calls gate 3. In v1
+    the level was added on top of the noise, so every attempt to grow it grew the
+    total predictive scale instead of redistributing it (``sigma_base`` rose from
+    0.1676 to 0.1777 when ``isin_level_scale`` went to 0.40). Here the components
+    are legs of one simplex: mass given to the level is mass taken from the
+    noise, by construction.
 
     Parameters
     ----------
@@ -843,6 +1005,7 @@ def build_kalman_pt_model_v2(
     coords: dict[str, Any] = {
         "isin": panel.isins,
         "time": [f"t{j}" for j in range(T)],
+        "time_b": [f"t{j}" for j in range(T)],
         "drift_feature": panel.drift_names,
     }
     if T > 1:
@@ -855,11 +1018,34 @@ def build_kalman_pt_model_v2(
     mask = panel.observed_mask
     Y_filled = np.where(mask, panel.Y, 0.0)
 
+    # The snapshot column anchors the OU grid and is the only cell every
+    # downstream decision reads, so a name missing it is not a panel member.
+    if not mask[:, T - 1].all():
+        n_bad = int((~mask[:, T - 1]).sum())
+        raise ValueError(
+            f"{n_bad} name(s) have no snapshot observation (column {T - 1}). "
+            "Filter them out in prepare_panel; the smoother has no anchor for them."
+        )
+    if np.any(panel.precision_weight <= 0):
+        raise ValueError(
+            "precision_weight must be strictly positive — it enters the scale "
+            "model through log(). Clip it at panel-prep time."
+        )
+
+    groups = partition_covariance_groups(mask, panel.coverage_profile, cfg.coverage_profile_buckets)
+    if not groups:
+        raise ValueError("No name has an observed trail cell; nothing to fit.")
+
     with pm.Model(coords=coords) as model:
         # ---- data containers ------------------------------------------------
         X_drift = pm.Data("X_drift", panel.X_drift, dims=("isin", "drift_feature"))
-        Y_obs = pm.Data("Y_obs", Y_filled, dims=("isin", "time"))
-        obs_mask = pm.Data("obs_mask", mask.astype("float64"), dims=("isin", "time"))
+        # Provenance containers. The likelihood reads the observed sub-blocks
+        # directly per covariance group (rectangular slices of ``panel.Y``), so
+        # these are not on the logp path — they are here so the fitted idata
+        # carries the response grid and its missingness pattern, which the §8
+        # posterior-predictive reassembly and the T_eff audit both need.
+        pm.Data("Y_obs", Y_filled, dims=("isin", "time"))
+        pm.Data("obs_mask", mask.astype("float64"), dims=("isin", "time"))
         cv_data = pm.Data("dispersion_cv", panel.dispersion_cv, dims="isin")
         prec_data = pm.Data("precision_weight", panel.precision_weight, dims="isin")
         vol_data = pm.Data("vol_level", panel.vol_level, dims="isin")
@@ -897,64 +1083,81 @@ def build_kalman_pt_model_v2(
         mu_reg = pm.Deterministic("mu_reg", eta, dims="isin")
 
         # ---- the variance simplex -------------------------------------------
-        sigma_total = pm.HalfNormal("sigma_total", sigma=cfg.sigma_total_prior)
-        w = pm.Dirichlet(
+        # ``sigma_total`` is sampled on the LOG scale. The observation-scale
+        # model below needs ``log(sigma_total)``, and a HalfNormal can reach 0
+        # exactly, where that log is -inf — one of the boundary failures the
+        # first v2 build carried.
+        log_sigma_total = pm.Normal(
+            "log_sigma_total",
+            mu=cfg.log_sigma_total_mu,
+            sigma=cfg.log_sigma_total_sigma,
+        )
+        sigma_total = pm.Deterministic("sigma_total", pt.exp(log_sigma_total))
+
+        # Two Betas rather than a 3-simplex, and the choice is not cosmetic.
+        #
+        # A Dirichlet is transformed to unconstrained space by stick-breaking,
+        # whose coordinates mix "level vs (state+obs)" — a direction the data
+        # does not identify cleanly. What the data DOES identify, and what the
+        # offline kernel fit measures directly, is:
+        #
+        #   rho_inf   = level / (level + state)   from the SHAPE of the decay
+        #   obs_share = observation / total       from decorrelation at short gaps
+        #
+        # Sampling those two directly makes each a primitive with its own ESS and
+        # its own prior, instead of a ratio of two simplex legs. On a 6.5k panel
+        # the first parameterisation stalled at R-hat 1.21 with ESS 7 on
+        # ``rho_inf_implied``; these are the coordinates the likelihood is
+        # actually curved in.
+        a_lvl, a_st, a_obs = cfg.variance_split_alpha
+        structured = a_lvl + a_st
+        if cfg.enable_isin_level and cfg.enable_ou_state and T > 1:
+            rho_inf = pm.Beta("rho_inf", alpha=a_lvl, beta=a_st)
+        elif cfg.enable_isin_level:
+            rho_inf = pt.ones(())
+        else:
+            rho_inf = pt.zeros(())
+        obs_share = pm.Beta("obs_share", alpha=a_obs, beta=structured)
+
+        f = cfg.variance_weight_floor
+        w_level = (1.0 - obs_share) * rho_inf
+        w_state = (1.0 - obs_share) * (1.0 - rho_inf)
+        w_obs = obs_share
+        # Floor the legs off the boundary: sqrt(w) has unbounded derivative at 0
+        # and the level/state legs sit inside a Cholesky, so a leg collapsing to
+        # exactly 0 is both a geometry problem and a near-singular matrix.
+        w_level = w_level + f
+        w_state = w_state + f
+        w_obs = w_obs + f
+        total_w = w_level + w_state + w_obs
+        w_level, w_state, w_obs = w_level / total_w, w_state / total_w, w_obs / total_w
+
+        pm.Deterministic(
             "variance_weights",
-            a=np.asarray(cfg.variance_split_alpha, dtype="float64"),
+            pt.stack([w_level, w_state, w_obs]),
             dims="variance_component",
         )
-        sigma_level = pm.Deterministic("sigma_level", sigma_total * pt.sqrt(w[0]))
-        sigma_state = pm.Deterministic("sigma_state", sigma_total * pt.sqrt(w[1]))
-        sigma_obs_base = pm.Deterministic(
-            "sigma_obs_base", sigma_total * pt.sqrt(w[2])
-        )
+        pm.Deterministic("sigma_level", sigma_total * pt.sqrt(w_level))
+        pm.Deterministic("sigma_state", sigma_total * pt.sqrt(w_state))
+        pm.Deterministic("sigma_obs_base", sigma_total * pt.sqrt(w_obs))
+        # Reported under the same name as before so consumers are unchanged, and
+        # directly comparable to the ``rho_inf`` that
+        # :func:`fit_trail_correlation_kernel` computes on the raw panel. Having
+        # both is what makes the level/state split falsifiable rather than merely
+        # fitted — the §4b audit prints the empirical value before the fit runs.
+        pm.Deterministic("rho_inf_implied", w_level / (w_level + w_state))
 
-        # ---- permanent per-name level ---------------------------------------
-        # ZeroSumNormal over ``isin`` so it carries only cross-sectional
-        # deviation and cannot alias with ``alpha_time``. Non-centred.
-        if cfg.enable_isin_level and n_isin > 1:
-            z_level = pm.ZeroSumNormal("z_isin_level", sigma=1.0, dims="isin")
-            level = pm.Deterministic("isin_level", sigma_level * z_level, dims="isin")
-        else:
-            level = pt.zeros(n_isin)
-            pm.Deterministic("isin_level", level, dims="isin")
-
-        # ---- OU state over the real calendar grid ----------------------------
+        # ---- the OU correlation, as a matrix rather than a sampled path -------
         if cfg.enable_ou_state and T > 1:
             ell = pm.LogNormal(
                 "ou_length_scale_days",
                 mu=math.log(cfg.ou_length_scale_days_mu),
                 sigma=cfg.ou_length_scale_days_sigma,
             )
-            phi = pm.Deterministic("ou_phi", _ou_transition(panel.time_days, ell),
-                                   dims="time_step")
-
-            z_state = pm.Normal("z_state", mu=0.0, sigma=1.0, dims=("isin", "time"))
-            # Stationary start, then the exact OU update at each irregular gap.
-            cols = [z_state[:, 0]]
-            for j in range(1, T):
-                prev = cols[-1]
-                cols.append(
-                    phi[j - 1] * prev
-                    + pt.sqrt(1.0 - phi[j - 1] ** 2) * z_state[:, j]
-                )
-            s_unit = pt.stack(cols, axis=1)  # (isin, time), unit marginal variance
-            state = pm.Deterministic(
-                "ou_state", sigma_state * s_unit, dims=("isin", "time")
-            )
-            # The correlation this implies at an infinite gap — directly
-            # comparable to the ``rho_inf`` of ``fit_trail_correlation_kernel``,
-            # which is what makes the fit falsifiable against the data.
-            pm.Deterministic(
-                "rho_inf_implied",
-                sigma_level**2 / (sigma_level**2 + sigma_state**2 + _EPS),
-            )
+            K = _ou_correlation(panel.time_days, ell)
         else:
-            state = pt.zeros((n_isin, T))
-            pm.Deterministic("ou_state", state, dims=("isin", "time"))
-            pm.Deterministic(
-                "rho_inf_implied", pt.as_tensor_variable(1.0)
-            )
+            ell = None
+            K = pt.eye(T)
 
         # ---- per-lookback level offset ---------------------------------------
         # Anchored at the snapshot (last column = 0) so ``mu_reg`` keeps its
@@ -971,21 +1174,137 @@ def build_kalman_pt_model_v2(
         else:
             alpha_time = pt.zeros(T)
 
-        mu = (
-            mu_reg[:, None]
-            + level[:, None]
-            + state
-            + alpha_time[None, :]
+        # ---- observation scale (log-linear; carried over from 0.9.9.16) -------
+        delta_vol = pm.Normal("sigma_delta_vol_level", mu=0.0, sigma=0.5)
+        delta_mcap = pm.Normal("sigma_delta_log_mcap", mu=0.0, sigma=0.5)
+        delta_range = pm.Normal("sigma_delta_range", mu=0.0, sigma=0.5)
+        n_exponent = pm.HalfNormal(
+            "sigma_n_exponent", sigma=cfg.sigma_n_exponent_prior
         )
 
-        # ---- decision latents -------------------------------------------------
-        # ``state_now`` is the snapshot column of the latent mean: the single
-        # quantity every downstream consumer reads. Keeping it a named
-        # Deterministic is the v1 KALMAN_SCREEN_LATENT contract.
-        state_now = pm.Deterministic("state_now", mu[:, -1], dims="isin")
-        expected_return = pm.Deterministic(
-            "expected_return", mu_reg + level, dims="isin"
+        log_sigma = (
+            log_sigma_total
+            + pt.log1p(cv_data)
+            + delta_vol * vol_data
+            + delta_mcap * mcap_data
+            + delta_range * range_data
+            - n_exponent * pt.log(prec_data)
         )
+        if cfg.enable_sector_scale_offset and "sector" in idx_data:
+            sector_offset = pm.ZeroSumNormal(
+                "sigma_sector_offset", sigma=GROUP_EFFECT_SCALE, dims="sector"
+            )
+            log_sigma = log_sigma + sector_offset[idx_data["sector"]]
+        # Six additive terms, several with unbounded coefficients: clip before
+        # exponentiating or the product can overflow to inf mid-trajectory.
+        log_sigma = pt.clip(log_sigma, *cfg.log_sigma_clip)
+        sigma_isin = pm.Deterministic("sigma_isin", pt.exp(log_sigma), dims="isin")
+
+        if cfg.enable_time_scale and T > 1:
+            tau_free = pm.LogNormal(
+                "sigma_time_free", mu=0.0, sigma=0.25, dims="time_step"
+            )
+            tau_time = pm.Deterministic(
+                "sigma_time",
+                pt.concatenate([tau_free, pt.ones(1)]),
+                dims="time",
+            )
+        else:
+            tau_time = pt.ones(T)
+            pm.Deterministic("sigma_time", tau_time, dims="time")
+
+        # ---- the marginal within-name covariance shape ------------------------
+        # A = w_L*J + w_S*K + w_O*diag(tau^2), shared across names; the per-name
+        # scale enters as the multiplier sigma_i^2. Integrating the level and the
+        # state out of the mean and into this matrix is the whole v2 change:
+        # 32,503 sampled parameters become ~60, the Neal funnel between the
+        # scales and their latent fields disappears, and the gradient goes from
+        # ~1.6 s to ~2.3 ms on the production panel.
+        A_full = (
+            w_level * pt.ones((T, T))
+            + w_state * K
+            + w_obs * pt.diag(tau_time**2)
+        )
+        pm.Deterministic("within_name_cov", A_full, dims=("time", "time_b"))
+
+        if cfg.likelihood == "student_t":
+            nu = pm.Deterministic(
+                "nu", cfg.nu_floor + pm.Gamma("nu_tail", alpha=2.0, beta=0.1)
+            )
+        else:
+            nu = None
+
+        mean_full = mu_reg[:, None] + alpha_time[None, :]
+
+        # ---- likelihood, one observed variable per covariance group ------------
+        # Names sharing a missingness pattern (and optionally a coverage bucket)
+        # share one Cholesky. Passing ``chol`` pre-formed as sigma_i * L is what
+        # keeps this fast: PyMC then does a triangular solve rather than
+        # factorising 6,497 matrices, which measured 1.35 s/gradient at n=2000.
+        gain_full = pt.zeros(n_isin)
+        var_full = pt.zeros(n_isin)
+        for gi, (rows, cols) in enumerate(groups):
+            Tg = len(cols)
+            col_idx = pt.as_tensor_variable(cols.astype("int64"))
+            row_idx = pt.as_tensor_variable(rows.astype("int64"))
+
+            A_g = A_full[col_idx][:, col_idx]
+            L_g = pt.linalg.cholesky(A_g + cfg.cholesky_jitter * pt.eye(Tg))
+
+            sigma_g = sigma_isin[row_idx]
+            mean_g = mean_full[row_idx][:, col_idx]
+            chol_g = sigma_g[:, None, None] * L_g[None, :, :]
+
+            obs_g = panel.Y[np.ix_(rows, cols)]
+            name = f"target_pct_obs_g{gi}" if len(groups) > 1 else "target_pct_obs"
+            if cfg.likelihood == "student_t":
+                pm.MvStudentT(name, nu=nu, mu=mean_g, chol=chol_g, observed=obs_g)
+            else:
+                pm.MvNormal(name, mu=mean_g, chol=chol_g, observed=obs_g)
+
+            # ---- Kalman smoother: recover the decision latent in closed form ---
+            # With Cov(latent, y) = sigma_i^2 * c and Cov(y) = sigma_i^2 * A:
+            #
+            #   E[latent | y] = c' A^-1 (y - mean)          <- sigma_i^2 cancels
+            #   Var[latent | y] = sigma_i^2 (w_L + w_S - c' A^-1 c)
+            #
+            # This IS the smoother step, and it is exact. It is strictly better
+            # than sampling the state path was: Rao-Blackwellised over the latent
+            # we removed, so it carries no Monte-Carlo error at all. Note the
+            # asymmetry that matters downstream — the GAIN is common to the
+            # group, but the posterior VARIANCE still scales with sigma_i, so the
+            # per-name uncertainty the coverage-gradient gate checks is preserved.
+            now_pos = int(np.flatnonzero(cols == (T - 1))[0])
+            c_g = w_level * pt.ones(Tg) + w_state * K[col_idx][:, col_idx][:, now_pos]
+            Ainv_c = pt.linalg.solve_triangular(
+                L_g.T,
+                pt.linalg.solve_triangular(L_g, c_g, lower=True),
+                lower=False,
+            )
+            gain_full = pt.set_subtensor(
+                gain_full[row_idx],
+                pt.dot(panel.Y[np.ix_(rows, cols)] - mean_g, Ainv_c),
+            )
+            # Gaussian conditional variance. Under the Student-t the exact
+            # conditional carries an extra (nu + q_i) / (nu + Tg - 2) inflation
+            # that depends on the name's own Mahalanobis distance; it is omitted
+            # deliberately, because at the fitted nu it is a few per cent and
+            # including it would make the reported per-name sd a function of how
+            # surprising the name is, which reads as confidence where it is not.
+            var_unit = pt.maximum(
+                w_level + w_state - pt.dot(c_g, Ainv_c), cfg.cholesky_jitter
+            )
+            var_full = pt.set_subtensor(var_full[row_idx], var_unit * sigma_g**2)
+
+        # ---- decision latents -------------------------------------------------
+        # ``state_now_mean`` / ``state_now_sd`` describe the posterior of the
+        # per-name latent at the snapshot. The workflow draws ``state_now`` from
+        # them; keeping mean and sd separate is what makes the draw exact rather
+        # than a by-product of having sampled the state.
+        state_now = pm.Deterministic("state_now_mean", mu_reg + gain_full, dims="isin")
+        pm.Deterministic("state_now_sd", pt.sqrt(var_full), dims="isin")
+        pm.Deterministic("isin_level", gain_full, dims="isin")
+        pm.Deterministic("expected_return", state_now, dims="isin")
 
         risk_loading = pm.HalfNormal("risk_loading", sigma=max(cfg.risk_penalty, _EPS))
         size_loading = pm.HalfNormal("size_loading", sigma=max(cfg.size_penalty, _EPS))
@@ -1002,71 +1321,6 @@ def build_kalman_pt_model_v2(
         )
         pm.Deterministic("achieve_prob", pm.math.sigmoid(risk_adj_return), dims="isin")
 
-        # ---- observation scale (log-linear; carried over from 0.9.9.16) -------
-        delta_vol = pm.Normal("sigma_delta_vol_level", mu=0.0, sigma=0.5)
-        delta_mcap = pm.Normal("sigma_delta_log_mcap", mu=0.0, sigma=0.5)
-        delta_range = pm.Normal("sigma_delta_range", mu=0.0, sigma=0.5)
-        n_exponent = pm.HalfNormal(
-            "sigma_n_exponent", sigma=cfg.sigma_n_exponent_prior
-        )
-
-        log_sigma = (
-            pt.log(sigma_obs_base)
-            + pt.log1p(cv_data)
-            + delta_vol * vol_data
-            + delta_mcap * mcap_data
-            + delta_range * range_data
-            - n_exponent * pt.log(pt.maximum(prec_data, _EPS))
-        )
-        if cfg.enable_sector_scale_offset and "sector" in idx_data:
-            sector_offset = pm.ZeroSumNormal(
-                "sigma_sector_offset", sigma=GROUP_EFFECT_SCALE, dims="sector"
-            )
-            log_sigma = log_sigma + sector_offset[idx_data["sector"]]
-        sigma_isin = pm.Deterministic("sigma_isin", pt.exp(log_sigma), dims="isin")
-
-        if cfg.enable_time_scale and T > 1:
-            tau_free = pm.LogNormal(
-                "sigma_time_free", mu=0.0, sigma=0.25, dims="time_step"
-            )
-            tau_time = pm.Deterministic(
-                "sigma_time",
-                pt.concatenate([tau_free, pt.ones(1)]),
-                dims="time",
-            )
-        else:
-            tau_time = pt.ones(T)
-            pm.Deterministic("sigma_time", tau_time, dims="time")
-
-        sigma_full = sigma_isin[:, None] * tau_time[None, :]
-
-        # Masked cells contribute nothing: inflate their sigma so the density is
-        # flat there. Cheaper and more numerically stable than index gymnastics,
-        # and it keeps the observed tensor rectangular for ``sample_posterior_predictive``.
-        sigma_full = pt.switch(pt.gt(obs_mask, 0.5), sigma_full, 1e6)
-
-        # ---- likelihood -------------------------------------------------------
-        if cfg.likelihood == "student_t":
-            nu = pm.Deterministic(
-                "nu", cfg.nu_floor + pm.Gamma("nu_tail", alpha=2.0, beta=0.1)
-            )
-            pm.StudentT(
-                "target_pct_obs",
-                nu=nu,
-                mu=mu,
-                sigma=sigma_full,
-                observed=Y_obs,
-                dims=("isin", "time"),
-            )
-        else:
-            pm.Normal(
-                "target_pct_obs",
-                mu=mu,
-                sigma=sigma_full,
-                observed=Y_obs,
-                dims=("isin", "time"),
-            )
-
     logger.info(
         "Built Kalman v2 model: %d ISIN x T=%d, %d drift features, %s",
         n_isin,
@@ -1077,36 +1331,66 @@ def build_kalman_pt_model_v2(
     return model
 
 
-def resolve_screen_latent_v2(idata, *, latent: str = KALMAN_V2_SCREEN_LATENT):
+def resolve_screen_latent_v2(
+    idata,
+    *,
+    latent: str = KALMAN_V2_SCREEN_LATENT,
+    latent_sd: str = KALMAN_V2_SCREEN_LATENT_SD,
+    include_latent_noise: bool = True,
+    random_seed: int = 42,
+):
     """Resolve the per-ISIN decision latent from a fitted idata.
 
-    Every consumer goes through this rather than reading ``risk_adj_return`` or
-    ``state_now`` directly, so the decision quantity has exactly one name and a
-    rename is a one-line change. Mirrors v1's ``resolve_screen_latent``.
+    Every consumer goes through this rather than reading ``risk_adj_return`` or a
+    raw variable, so the decision quantity has exactly one name and a rename is a
+    one-line change. Mirrors v1's ``resolve_screen_latent``.
+
+    Because v2 marginalises the level and state, the posterior stores the
+    smoother's conditional **mean** and **sd** rather than a sampled path. With
+    ``include_latent_noise=True`` this draws one latent value per posterior
+    sample, so the returned array carries *both* parameter uncertainty and the
+    residual uncertainty about where the name's latent actually sits. Setting it
+    to ``False`` returns the conditional mean alone, which understates per-name
+    spread and should only be used for point-estimate diagnostics.
 
     Parameters
     ----------
     idata
         Fitted inference object (``arviz.InferenceData`` or ``xarray.DataTree``).
-    latent
-        Variable name; defaults to :data:`KALMAN_V2_SCREEN_LATENT`.
+    latent, latent_sd
+        Variable names; default to the module constants.
+    include_latent_noise
+        Add the smoother's residual uncertainty. Default ``True``.
+    random_seed
+        Seed for the latent draw.
 
     Returns
     -------
     xarray.DataArray
-        The posterior of the latent, dims ``(chain, draw, isin)``.
+        Dims ``(chain, draw, isin)``.
 
     Raises
     ------
     KeyError
-        If the variable is absent, with the available names in the message.
+        If the mean variable is absent, with the available names in the message.
     """
     post = idata.posterior if hasattr(idata, "posterior") else idata["posterior"]
     if latent not in post:
         raise KeyError(
             f"{latent!r} not in posterior. Available: {sorted(map(str, post.data_vars))}"
         )
-    return post[latent]
+    mean = post[latent]
+    if not include_latent_noise or latent_sd not in post:
+        if include_latent_noise:
+            logger.warning(
+                "%s absent from the posterior; returning the conditional mean "
+                "only, which understates per-name spread.",
+                latent_sd,
+            )
+        return mean
+    sd = post[latent_sd]
+    rng = np.random.default_rng(random_seed)
+    return mean + sd * rng.standard_normal(size=mean.shape)
 
 
 # --------------------------------------------------------------------------- #
