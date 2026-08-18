@@ -10,6 +10,23 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
     "KalmanFilterPriceTarget": (".KalmanFilterModel", "KalmanFilterPriceTarget"),
     "KalmanPanelInputs": (".KalmanFilterModel", "KalmanPanelInputs"),
     "build_fused_kalman_pt_model": (".KalmanFilterModel", "build_fused_kalman_pt_model"),
+    # ---- v2 correlated-trail model (KalmanFilterModel_v2) -------------------
+    # Registered alongside v1 rather than replacing it: the two share a database
+    # and are meant to be run against each other, so both must be importable.
+    "KalmanModelConfig": (".KalmanFilterModel_v2", "KalmanModelConfig"),
+    "KalmanPanelV2": (".KalmanFilterModel_v2", "KalmanPanelV2"),
+    "build_kalman_pt_model_v2": (".KalmanFilterModel_v2", "build_kalman_pt_model_v2"),
+    "orthogonalise_family": (".KalmanFilterModel_v2", "orthogonalise_family"),
+    "effective_sample_size_of_panel": (
+        ".KalmanFilterModel_v2",
+        "effective_sample_size_of_panel",
+    ),
+    "fit_trail_correlation_kernel": (
+        ".KalmanFilterModel_v2",
+        "fit_trail_correlation_kernel",
+    ),
+    "resolve_screen_latent_v2": (".KalmanFilterModel_v2", "resolve_screen_latent_v2"),
+    "KALMAN_V2_SCREEN_LATENT": (".KalmanFilterModel_v2", "KALMAN_V2_SCREEN_LATENT"),
     "KALMAN_DRIFT_EXCLUDED_FEATURES": (
         ".KalmanFilterModel",
         "KALMAN_DRIFT_EXCLUDED_FEATURES",
