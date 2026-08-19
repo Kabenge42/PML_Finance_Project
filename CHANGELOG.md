@@ -13,6 +13,252 @@ because it reverses a published diagnosis.
 
 ### Fixed
 
+- **`ppc_decay` was an over-shrunk regression mean, not a covariance failure.**
+  Run `fa532b925732` cleared every convergence and calibration gate and still
+  blocked the analytics write on `rho_inf` 0.406 observed against a replicated
+  `[0.319, 0.389]`. Reconstructing the posterior against the exported panel
+  frame localises it precisely:
+
+  | quantity | value |
+  |---|---|
+  | slope of `y_now` on `mu_reg` | **1.2301** (1.0 if calibrated) |
+  | `Var(mu_reg)` | 0.2916, against 0.4706 for unweighted OLS on the identical design |
+  | `2·Cov(mu_reg, resid_now)` | **0.1342 — 15.1% of `Var(y_now)`** |
+
+  `mu_reg` is constant in `t`, so that 15.1% is *permanent* variance; and it is
+  exactly **zero** under the generative model, which redraws the residual
+  independently of the mean. Replicates therefore cannot carry it and land low on
+  `rho_inf`. Propagating `Var(mu)` through `r(t,s) = [V_mu + E·A_ts] / sqrt(...)`
+  with the exported `within_name_cov` reproduces the failing run (0.337 predicted
+  against the actual `[0.319, 0.389]`) and predicts the fix (0.406 at
+  `Var(mu) = 0.40`).
+
+  **The covariance was exonerated and left alone.** Its fitted within-name
+  correlation already tracked the empirical residual — 0.9235 / 0.3632 / 0.0220
+  against 0.9405 / 0.3696 / 0.0203 at gaps of 7 / 91 / 365 days — so
+  `rho_inf = 0.0044` was the right answer for that residual, as
+  `KalmanModelConfig.rho_scale_buckets` already recorded. Rejected on
+  measurement, not taste: re-enabling `rho_scale_buckets`, widening the
+  `rho_inf` prior, and a second OU component (a two-exponential kernel moves the
+  residual fit only from RMSE 0.0442 to 0.0386 and still misses the 274-day pair).
+
+  **Cause.** The likelihood weights each name by `1/sigma_i^2` while `sigma_i`
+  spans 0.26-0.92, so `beta` is fitted to the low-scale names — and the *signal*
+  scales with `sigma_i` too, which the weighting cannot see. Unweighted OLS gives
+  slope 1.000 / `Var` 0.4706; WLS at `1/sigma_i` gives 1.160 / 0.3383; the
+  posterior gives 1.230 / 0.2916. Widening priors alone therefore closes only
+  ~40% of the gap.
+
+  **Fix.** A `signal_exponent` (`lambda`) on the mean, plus freeing the two fixed
+  constants that held the rest:
+
+  ```
+  mean[i, t] = (sigma_i / geomean(sigma)) ** lambda * mu_reg[i] + alpha_time[t]
+  ```
+
+  `sigma_isin` is normalised by its geometric mean first, or `lambda` and
+  `log_sigma_total` share a direction and both mix badly. `beta_prior_scale`
+  also goes 0.5 -> 1.0.
+
+  A learned crossed-group scale was re-tested at the same time and **rejected
+  again** — v1's finding held. `trading_region_effect_scale` came back at ESS 8 /
+  R-hat 1.21, the worst-mixing parameter in the model, and took the arm from 0
+  divergences to 2. It was also unnecessary: the learned scales landed *below*
+  the pinned 0.25 (0.199 / 0.072 / 0.032 / 0.055), so freeing them shrinks the
+  group effects rather than releasing them, and the crossed effects carry only
+  `Var` 0.010 of the mean's 0.292. `signal_exponent` alone gets the calibration
+  slope to 1.075 with `ppc_decay` passing. Kept as
+  `learn_group_effect_scale`, default `False`.
+
+  Calibrated by `scripts/profile_signal_exponent.py` (new) — an alternating GLS
+  that refits `beta`, `sigma` and `A` at each `lambda` on the production panel
+  and scores it with the *same* `fit_trail_correlation_kernel` the gate uses.
+  Four independent criteria land in one band:
+
+  | criterion | optimal `lambda` |
+  |---|---|
+  | profile log-likelihood | 0.30 (+173 over `lambda = 0`) |
+  | calibration slope = 1 | 0.45 (0.9993) |
+  | `2·Cov(mu, resid)` = 0 | 0.45 (-0.0007) |
+  | predicted `rho_inf` = 0.4058 | 0.50 (0.4032) |
+
+  Hence `signal_exponent_prior = Beta(4.5, 5.5)` — mean 0.45, sd 0.15, 90%
+  interval ~`[0.21, 0.70]`. `enable_signal_scaling = False` restores the additive
+  mean as the comparison arm.
+
+  `state_now_mean` now reads `mu_scaled + gain_full`, not `mu_reg + gain_full`:
+  the decision latent is the level on the response scale, and reading the
+  unscaled predictor would have dropped the scaling from the screen, the risk
+  book and the analytics export while every gate still passed. The `mean_spread`
+  and `ppc_decay_residual` consumers follow the same variable.
+
+- **`mean_spread` could not have caught it, so `mean_calibration` was added.**
+  `mean_spread` is one-sided (`<= 1.0`) and read a healthy-looking 0.33 while the
+  mean was shrunk by 19%. The new gate regresses the response on the fitted mean,
+  requires slope in `[0.9, 1.1]`, and reports `2·Cov(mu, resid)/Var(y)` beside
+  it. `ppc_decay`'s detail now carries the mean/covariance split
+  (`f = Var(mu)/(Var(mu)+Var(resid))`, a floor on the replicated `rho_inf`), so
+  the next occurrence is legible from the gate report rather than from a
+  posterior reconstruction.
+
+- **`coverage_gradient` (1.57x against a 2x target): the per-lookback analyst
+  counts were loaded and then discarded.** `prepare_panel` already built a
+  per-`(name, time)` `coverage_profile` from the MV's `n_analysts_{1w..1y}`, then
+  fed only the scalar `precision_weight` and an off-by-default bucketing — so a
+  4-analyst consensus from a year ago was charged the same measurement precision
+  as today's 30-analyst one, the exact defect the v2 module docstring claims to
+  have fixed. `coverage_scale_per_cell` now applies the same `sigma_n_exponent`
+  along time. It costs nothing: a per-cell scale is `diag(d) L`, so the group's
+  shared Cholesky is reused and only its rows are rescaled, and no parameter is
+  added. The smoother follows —
+  `E[latent|y] = sigma_now · c' A^-1 D^-1 (y - mean)` — and reduces identically
+  to the previous scale-free expression when the cell scale is constant in `t`.
+
+  **It did not move the gate**, and that is reported rather than papered over:
+  `coverage_gradient` is still 1.57x, and `sigma_n_exponent` refit to 0.267
+  against 0.263. The reason is that the gate measures `er_sd`, whose gradient
+  runs through the *snapshot* scale `sigma_isin` — and `coverage_profile` is
+  anchored at 1.0 on the snapshot by construction, so the per-cell term is
+  identically zero there. The change is a correctness improvement to the
+  likelihood (older, thinner-coverage observations are now weighted as such);
+  closing `coverage_gradient` needs the snapshot-scale coverage law itself, which
+  the data currently puts at `n^-0.13` against the `n^-0.5` a 2x spread would
+  require. The gate stays a WARN.
+
+- **Three `arviz_stats` "invalid value encountered in scalar divide" warnings and
+  one numpy All-NaN slice.** `alpha_time[t3]` and `sigma_time[t3]` are the pinned
+  anchors of `pt.concatenate([free, zeros(1)])`; R-hat and ESS divide by a
+  within-chain variance of exactly zero. The rows stay in the exported table
+  (they are real parameters, just pinned) and the convergence gates now read the
+  free ones only — no value changes today, but a genuinely stuck parameter can no
+  longer read as converged. The All-NaN slice came from reducing over
+  `(isin, time)` cells with no replicate at all; those are excluded and counted
+  instead, with the count in the gate detail. The pytensor "Loop fusion failed"
+  notice is benign (the `log_sigma` graph has six additive terms plus a sector
+  gather) and is now recorded as expected.
+
+- **`prob_pos_degenerate` (87.5% pinned at 1.0): the guidance and the artifact
+  disagreed.** The gate already named `p_upside_pos_cond` as the column that can
+  actually rank, but `p_upside_pos_cond` was in neither `_RANKING_COLS` nor
+  `_RANKING_RANGE_COLS` — so a clip-pinned row kept a ranking probability while
+  its other ranking metrics were NULLed. It is now a first-class ranking column
+  in both, and `prob_pos` carries a `COMMENT ON COLUMN` saying it is reported,
+  not ranked, and why.
+
+- **The self-test could not run.** `_selftest` asked `az.summary` for
+  `rho_scale_slope` unconditionally, which stopped existing the moment
+  `rho_scale_buckets` was defaulted to 1 — so the acceptance test for this
+  module's central claim raised `KeyError` instead of executing. Optional
+  variables are now resolved against the posterior actually produced.
+  `_simulate_panel` additionally accepts `vol_delta_true` /
+  `signal_exponent_true` to generate a heteroscedastic panel with a scaled mean,
+  because `lambda` is unidentified without one (`signal_scale = exp(lambda·0) = 1`
+  for every `lambda`). Verified: at truth 0.450 on 400 names the posterior returns
+  0.546 `[0.337, 0.757]` with the level/state split still recovered.
+
+### Changed
+
+- **`trail_days_*` retired from `mv_pymc_kalman_pt_v2` to `pml.vw_pymc_trail_days`.**
+  The MV emitted six SQL literals (0/7/30/91/182/365) identical on every one of
+  ~6,500 rows — zero information, stored 6,500 times — while the model built the
+  same grid from `DEFAULT_LOOKBACK_DAYS` in Python and never read the columns.
+  Two sources of truth for the OU kernel's x-axis, and the one the model used was
+  the one the database could not see.
+
+  The new view is a standalone `VALUES` lookup, deliberately not a `SELECT` over
+  the MV: it has to survive the `DROP MATERIALIZED VIEW` that changing that MV
+  requires (it is `CREATE ... IF NOT EXISTS`), and the offsets are metadata about
+  the grid rather than data about any name. Each row maps
+  `lookback_key -> response_column -> trail_days`, and because a view cannot
+  declare a foreign key, `pml.assert_pymc_trail_days_map()` enforces the
+  equivalent in both directions — every mapped `response_column` exists on the MV
+  and every `feat_log_uplift_*` the MV emits is mapped. It is called from
+  `pml.assert_pymc_catalogue_coverage()`, so it runs wherever every other
+  MV↔catalogue contract already does. Materialized-view columns are resolved
+  through `pg_attribute`; `information_schema.columns` does not list them.
+
+  Python reads it through `load_trail_days_map()` (`@lru_cache`, the
+  `_resolve_feature_aliases` idiom), which `KalmanModelConfig.lookback_days` now
+  takes as its `default_factory`. `DEFAULT_LOOKBACK_DAYS` remains as the offline
+  fallback so `--selftest` and the unit tests run without a database, with
+  `PML_STRICT_TRAIL_DAYS=1` turning the fallback into a hard failure for CI
+  (mirroring `PML_STRICT_STREAK_MERGE`).
+
+  A *tightening*, deliberately: the view lists only the six lookbacks the MV
+  actually trails, where the literal carried thirteen including `3y` / `5y` that
+  have no `feat_log_uplift` column. `KalmanModelConfig.__post_init__` now rejects
+  such a lookback up front instead of failing in `prepare_panel` several stages
+  later.
+
+  Three coordinated edits, the 0.9.9.15 §7j shape: the MV definition, an
+  idempotent `array_remove` in `pml_df_metadata_populate.sql` §7l, and the view
+  plus assertion in `pml_feature_catalogue.sql`. The de-registration is not
+  optional — `vw_pymc_feature_catalogue` is
+  `metadata CROSS JOIN LATERAL UNNEST(model_targets)`, so a still-tagged column
+  the MV no longer emits raises `PHANTOM_CATALOGUE_ALIAS`. Applied and verified:
+  198 columns (was 204), both indexes rebuilt, `kalman_pt_v2` coverage violations
+  0, and the one remaining DB-wide violation
+  (`price_target.feat_pt_achievement_1y`) is the pre-existing one.
+
+- **Reference notebooks: nothing adopted, and the reason is recorded.**
+  `Forecasting_with_structural_timeseries.ipynb` is the pre-`pymc_extras` AR
+  example — no `statespace` / `LevelTrendComponent` API, one scalar `sigma`
+  shared between innovation and observation, no variance split, no decay
+  statistic. `MvGaussianRandomWalk_demo.ipynb` puts a single `LKJCholeskyCov`
+  over three *cross-sectional* series with sampled latents, strictly less
+  advanced than the shared-Cholesky-per-missingness-group `MvStudentT` here.
+  `multinomial_ppcs.ipynb` is PyMC3-era with entirely visual calibration and no
+  pass/fail rule. The one transferable idiom is its cell-4 pattern — draw from
+  `.dist()` and push through the link with no `pm.sample` — which is the shape a
+  prior-predictive check on the decay statistic should take.
+
+- **`drift_contrast_leakage` fired on sampling noise.** The gate blocked run
+  `6a0f957972b1` on `feat_eps_signal_beat`: correlation **-0.101** with the
+  response level against **-0.115** with the (now, 3m) contrast. The rule was
+  `|corr_contrast| > max(|corr_level|, CONTRAST_CORR_FLOOR)` — a bare
+  inequality between two correlations, so a feature whose two correlations are
+  equal up to noise fails it about half the time. On 6,499 names a correlation
+  carries `se ~ 1/sqrt(n) = 0.013`, and the excess here is **0.014**: one
+  standard error. `CONTRAST_CORR_FLOOR` guards the absolute size of the two
+  correlations and does nothing about their ratio, which is what the rule
+  actually tests.
+
+  The verdict was also wrong on the merits. `feat_eps_signal_beat` is the
+  consolidated EPS beat-rate block; it contains no price and no price-target
+  term, so it cannot be a leg of `Δ log PT − Δ log P` by construction, and
+  excluding it would have cost the drift matrix a fundamental signal to satisfy
+  a coin flip.
+
+  Fixed by requiring the contrast correlation to *dominate* the level
+  correlation by `CONTRAST_DOMINANCE_MARGIN = 1.5`, and by carrying the
+  measured `dominance` as a column on the screen frame so the artifact shows
+  the margin rather than only the verdict. Calibrated by re-admitting the six
+  known identity legs to the design matrix un-rotated and measuring both
+  correlations on the same universe the gate runs on:
+
+  | feature | dominance | identity |
+  |---|---|---|
+  | `feat_pt_drift` | 7.17 | yes |
+  | `feat_pt_noise_drift` | 5.09 | yes |
+  | `feat_pt_accuracy_1y` | 3.26 | yes |
+  | `feat_price_drift` | 1.97 | yes |
+  | `feat_one_day_return` | 1.88 | yes |
+  | `feat_price_chg_pct_3m` | 1.65 | yes |
+  | — margin — | 1.50 | |
+  | `feat_eps_signal_beat` | 1.14 | no |
+  | `feat_median_piotroski_f_score` | 0.62 | no |
+  | `feat_coverage_drift` | 0.46 | no |
+
+  The two populations are separated by a factor of 1.45 with nothing between
+  them, so the margin is not fitted to the boundary case — it can sit anywhere
+  in `(1.15, 1.65)` without changing a verdict on this universe. Verified: all
+  six known legs are still flagged, no false positives, and the T=4 panel audit
+  now clears all three gates (`--dry-run`, exit 0, max dominance 1.14).
+
+  Not changed: `DRIFT_EXCLUSIONS` keeps all six legs. The screen measures; the
+  exclusions are the SSOT, so a run's design matrix stays reproducible from the
+  source rather than from whichever universe it loaded.
+
 - **The three failing posterior-predictive gates were one runaway regression
   mean, not the Student-t.** Run `4f713551bb7a` failed `ppc_t_spread` (IQR 1.017
   observed vs 1.134-1.168 replicated), `ppc_coverage` (0.958 / 0.960 at the two
@@ -77,6 +323,116 @@ because it reverses a published diagnosis.
   With sane betas and this covariance the implied **raw** panel correlations are
   0.965 / 0.674 / 0.449 against observed 0.966 / 0.678 / 0.427, which is what
   `ppc_decay` reads.
+
+### Added
+
+- **`kalman_pt_v2` is now an ordinary model target, folded into the four SQL
+  SSOT scripts.** `sql_scripts/pml/mv_pymc_kalman_pt_v2.sql` and its companion
+  `..._metadata.sql` were working DDL sitting in a directory CLAUDE.md defines as
+  a pg_dump extract — 48 of its 64 files are `-- missing source code` stubs,
+  including every other `mv_pymc_*.sql`. Both files said so in their own headers
+  and asked to be folded. Until now the MV definition, the `model_targets`
+  allow-list and the coverage-check `mv_map` each existed in two places, and the
+  four-step ordering the metadata file documents (widen CHECK → register columns
+  → teach the coverage check → verify) was enforced only by remembering to run
+  two files together.
+
+  What moved where:
+
+  | Landed in | Content |
+  |---|---|
+  | `pml_feature_catalogue.sql` | the `mv_pymc_kalman_pt_v2` DDL (placed after its parent, since it `SELECT`s from it), `pml.kalman_pt_v2_asof()`, `pml.refresh_kalman_pt_v2()`, the `mv_map` row, the `mvs` array entry |
+  | `pml_df_metadata.sql` | `'kalman_pt_v2'` in both CHECK constraints; a v2 role-notes block |
+  | `pml_df_metadata_populate.sql` | STEP 0 idempotent CHECK widening; new §7k (inheritance, new columns, role overrides, retirement of the superseded rows) |
+  | `sql_scripts/pml/{pml_df_metadata,pml_df_feature_alias}.sql` | the widened CHECK arrays, so the extracts stay faithful |
+
+  Three things the fold had to get right that the standalone files did not:
+
+  - **`pml_df_metadata.sql` cannot widen a live vocabulary.** It opens with
+    `DROP TABLE ... CASCADE`, so it only ever runs against a disposable
+    database. The idempotent `ALTER TABLE ... DROP CONSTRAINT / ADD CONSTRAINT`
+    pair now at the top of `pml_df_metadata_populate.sql` is the only path to a
+    live one. Without it every `kalman_pt_v2` INSERT fails the CHECK, and it
+    surfaces as a constraint violation on an unrelated-looking statement
+    hundreds of lines later.
+  - **Refresh order is now structural, not documentary.** `mv_pymc_kalman_pt_v2`
+    is `SELECT b.*` over `mv_pymc_kalman_pt`, so it sits immediately after its
+    parent in the `refresh_pymc_materialized_views` array (`FOREACH` walks it in
+    sequence), and `refresh_kalman_pt_v2` defaults `refresh_parent => TRUE`.
+  - **`built_at` is `derived_input`, not `constant_data`.** `constant_data`
+    places it in `vw_pymc_feature_aliases.constant_data_aliases`, and
+    `coerce_by_data_type()` casts every alias handed to it to `float64` — a
+    `timestamptz` there is a failure waiting on the first consumer.
+    `derived_input` keeps the column documented in the catalogue and out of all
+    four alias arrays.
+
+  The `data_type` values were also corrected from PostgreSQL type names
+  (`'double precision'`, `'integer'`) to the semantic vocabulary `_DTYPE_RULES`
+  in `_feature_alignment.py` actually keys on (`ratio`, `count`, `level`,
+  `pct`). The old values matched no rule and fell through to the untyped
+  default — inert, but they read as if they were configuring something.
+
+  Verified against the live database in a rolled-back transaction:
+  `vw_pymc_catalogue_coverage_check` returns **zero** `kalman_pt_v2` rows, and
+  the DB-wide count is unchanged at the known 1 (`price_target`,
+  `MISSING_FROM_CATALOGUE`). `kalman_pt_v2` alias arrays resolve to 58
+  predictors / 86 observed / 21 constant_data / 19 coords against `kalman_pt`'s
+  55 / 80 / 9 / 19, and `built_at` is absent from the constant_data array.
+
+### Changed
+
+- **The consolidated EPS block is split by quantity — this changes fitted
+  values.** `feat_eps_signal` averaged five legs sitting on three incompatible
+  scales: `feat_last_{q,y}_surprise` are `eps_neg0f{q,y}surprise_pct`, i.e.
+  PERCENT (`5.2` means +5.2%); `feat_eps_beat_rate{,_annual}` are `n_beats /
+  n_total`, shares in [0,1]; `feat_net_eps_drift` is a `pml.target_drift` ratio,
+  a raw decimal. The percent legs are ~100× the others, so the "consolidated
+  signal" was the surprise legs wearing a different name — and it violated the
+  0.9.9.7 raw-decimal convention the MV header itself claims.
+
+  `mv_pymc_kalman_pt_v2` now emits one column per quantity:
+
+  | column | legs | scale |
+  |---|---|---|
+  | `feat_eps_signal_surprise` | the two `_pct` legs, each `/100` | signed raw decimal |
+  | `feat_eps_signal_beat` | the two beat rates | share in [0, 1] |
+  | `feat_eps_signal_coverage` | count of all five non-NULL `/5` | share in [0, 1] |
+
+  The trend leg needs no new column: `feat_net_eps_drift` is already a raw
+  decimal ratio, so it is re-admitted to the drift matrix in
+  `pymc_kalman_filter_pt_v2.py` rather than folded into an average. Measured on
+  the rebuilt MV (n = 6,529): `feat_eps_signal_surprise` mean 0.0012 / sd 0.0264
+  — hundredths, as a decimal surprise should be — `feat_eps_signal_beat` mean
+  0.5627 within [0, 1], `feat_eps_signal_coverage` mean 0.7275.
+
+  Net effect on the v2 drift design: `feat_eps_signal` and `feat_eps_coverage`
+  out, the three `feat_eps_signal_*` columns and `feat_net_eps_drift` in — **+2
+  columns**. **Any recorded `feat_eps_signal` beta is stale; the v2 fit must be
+  re-run.**
+
+- **`pml_df_metadata.sql` de-duplicated.** It defined both tables twice, each as
+  `CREATE TABLE IF NOT EXISTS` with the constraints repeated verbatim so
+  "whichever runs first wins". The `DROP TABLE` at the top guarantees the first
+  always wins, so the second copy was unreachable — and it meant a vocabulary
+  change had to be made at four constraint sites instead of two. One definition
+  per table now, with an explicit note at the foot listing the three files a new
+  model target has to touch.
+
+### Notes
+
+- **Editing `mv_pymc_kalman_pt_v2` requires an explicit `DROP MATERIALIZED VIEW`
+  first.** It uses `CREATE MATERIALIZED VIEW IF NOT EXISTS` to match its seven
+  siblings in `pml_feature_catalogue.sql`, so re-running the script does not
+  pick up a definition change. This bit during verification: the deployed MV
+  still had the old EPS columns and the `CREATE` silently no-opped. True of
+  every MV in that file; now stated once, on the newest one.
+- `pml.kalman_pt_v2_asof(DATE)` covers six of the parent's seven `days_*`
+  horizons. `days_to_next_fiscal_quarter` is omitted deliberately: the parent
+  computes it as `(next_fiscal_quarter - CURRENT_DATE)` where
+  `next_fiscal_quarter` is a 1–4 quarter ordinal, not a date. Its other sign
+  conventions — including `days_since_fy_end = fy_end_date - p_asof`, negative
+  for a past fiscal-year end — deliberately reproduce the parent's, so the
+  function and the column it shadows cannot disagree.
 
 ### Added
 

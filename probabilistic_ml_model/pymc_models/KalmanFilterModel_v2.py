@@ -85,6 +85,17 @@ component grew the total and ``sigma_base`` rose with it. Here
 simplex times one total scale, so mass moved to the level is necessarily mass
 taken from the noise.
 
+**The mean has to scale with the name too (2026-08-19).** A correlated likelihood
+weights each name by ``1 / sigma_i^2``, and on this panel ``sigma_i`` spans
+0.26-0.92, so ``beta`` is fitted to the low-scale names. The *signal* scales with
+``sigma_i`` as well — which the weighting cannot see — and the result was a mean
+shrunk by 19 % (calibration slope 1.230) leaving 15.1 % of ``Var(y_now)`` in
+``Cov(mu_reg, resid)``. Because ``mu_reg`` is constant in ``t`` that is permanent
+variance, and the generative model sets it to exactly zero: replicates cannot
+carry it, and ``ppc_decay`` failed. ``signal_exponent`` is the one parameter that
+fixes it; see :attr:`KalmanModelConfig.signal_exponent_prior` for the
+calibration.
+
 What v2 deliberately keeps
 --------------------------
 The parts of v1 that the diagnostics say are working, kept so the change is
@@ -117,7 +128,10 @@ from __future__ import annotations
 
 import logging
 import math
+import os
+import warnings
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import numpy as np
@@ -144,6 +158,7 @@ __all__ = [
     "KALMAN_V2_SCREEN_LATENT",
     "KALMAN_V2_SCREEN_LATENT_SD",
     "DEFAULT_LOOKBACK_DAYS",
+    "load_trail_days_map",
     "PT_HISTORY_FAMILY",
     "build_kalman_pt_model_v2",
     "orthogonalise_family",
@@ -180,6 +195,14 @@ KALMAN_V2_SCREEN_LATENT_SD: str = "state_now_sd"
 #: Calendar offsets, in days, of every lookback suffix the MV emits. Used to turn
 #: a ``panel_lookbacks`` tuple into the real gaps the OU kernel needs. ``now`` is
 #: the snapshot and is always the final (anchor) column.
+#:
+#: **Offline fallback only.** The SSOT is ``pml.vw_pymc_trail_days``, read by
+#: :func:`load_trail_days_map`; this literal exists so the ``--selftest`` and the
+#: unit tests run without a database. It is deliberately WIDER than the view: the
+#: view lists only the six lookbacks ``mv_pymc_kalman_pt_v2`` actually trails, so
+#: resolving from the database also rejects a configured lookback the MV cannot
+#: supply — a ``KalmanModelConfig`` validation error instead of a missing-column
+#: failure several stages later.
 DEFAULT_LOOKBACK_DAYS: dict[str, int] = {
     "now": 0,
     "1d": 1,
@@ -195,6 +218,76 @@ DEFAULT_LOOKBACK_DAYS: dict[str, int] = {
     "3y": 1095,
     "5y": 1825,
 }
+
+#: Set to ``1`` to make a failed :func:`load_trail_days_map` raise instead of
+#: falling back to :data:`DEFAULT_LOOKBACK_DAYS`. Mirrors the existing
+#: ``PML_STRICT_STREAK_MERGE`` fail-fast convention; intended for CI, where a
+#: silent fallback to a literal would defeat the point of having an SSOT.
+STRICT_TRAIL_DAYS_ENV_VAR: str = "PML_STRICT_TRAIL_DAYS"
+
+
+@lru_cache(maxsize=4)
+def load_trail_days_map(connection_string: Optional[str] = None) -> dict[str, int]:
+    """Lookback key -> nominal calendar offset, from ``pml.vw_pymc_trail_days``.
+
+    That view is the single source of truth for the OU kernel's x-axis. Before
+    2026-08-19 the same grid lived in two places — six literal columns on
+    ``mv_pymc_kalman_pt_v2`` (identical on every row, and never read) and
+    :data:`DEFAULT_LOOKBACK_DAYS` here, which is what the model actually used.
+    The columns are gone; this is the replacement.
+
+    Cached: the map is six rows of metadata that change only when a lookback is
+    added, and it is consulted once per :class:`KalmanModelConfig`.
+
+    Parameters
+    ----------
+    connection_string
+        SQLAlchemy URL. Defaults to ``DB_URL``.
+
+    Returns
+    -------
+    dict[str, int]
+        ``{lookback_key: trail_days}``. Falls back to
+        :data:`DEFAULT_LOOKBACK_DAYS` with a warning when the database is
+        unreachable, unless :data:`STRICT_TRAIL_DAYS_ENV_VAR` is set.
+
+    Raises
+    ------
+    RuntimeError
+        If the lookup fails and strict mode is on.
+    """
+    url = connection_string or os.environ.get("DB_URL")
+    try:
+        if not url:
+            raise RuntimeError("DB_URL is not set")
+        from sqlalchemy import create_engine, text
+
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT lookback_key, trail_days FROM pml.vw_pymc_trail_days "
+                    "ORDER BY trail_rank"
+                )
+            ).fetchall()
+        if not rows:
+            raise RuntimeError("pml.vw_pymc_trail_days returned no rows")
+        resolved = {str(k): int(v) for k, v in rows}
+        logger.debug("trail-days map from pml.vw_pymc_trail_days: %s", resolved)
+        return resolved
+    except Exception as exc:
+        if os.environ.get(STRICT_TRAIL_DAYS_ENV_VAR, "") == "1":
+            raise RuntimeError(
+                f"could not read pml.vw_pymc_trail_days ({exc}); "
+                f"{STRICT_TRAIL_DAYS_ENV_VAR}=1 forbids the literal fallback"
+            ) from exc
+        logger.warning(
+            "could not read pml.vw_pymc_trail_days (%s); falling back to the "
+            "DEFAULT_LOOKBACK_DAYS literal. Set %s=1 to make this fatal.",
+            exc,
+            STRICT_TRAIL_DAYS_ENV_VAR,
+        )
+        return dict(DEFAULT_LOOKBACK_DAYS)
 
 #: The price-target-history family. These three have carried |beta| of 1.1-1.9
 #: while every other drift feature sits below 0.09, and they hold the three worst
@@ -394,9 +487,7 @@ class KalmanModelConfig:
 
     # ---- panel geometry ----------------------------------------------------
     lookbacks: tuple[str, ...] = ("1y", "3m", "1w")
-    lookback_days: dict[str, int] = field(
-        default_factory=lambda: dict(DEFAULT_LOOKBACK_DAYS)
-    )
+    lookback_days: dict[str, int] = field(default_factory=load_trail_days_map)
 
     # ---- the v2 latent -----------------------------------------------------
     ou_length_scale_days_mu: float = 104.7
@@ -434,15 +525,101 @@ class KalmanModelConfig:
     #: measured, and every group is an extra observed variable to reassemble in
     #: the posterior-predictive stage.
     coverage_profile_buckets: int = 1
+    #: Let the per-lookback analyst count drive the scale of each *cell*, not
+    #: just the name. ``prepare_panel`` already builds ``coverage_profile``
+    #: (each name's per-lookback count normalised to its own snapshot) and then
+    #: threw the time axis away, feeding only the scalar ``precision_weight`` --
+    #: so a 4-analyst consensus from a year ago was charged the same measurement
+    #: precision as today's 30-analyst one, which is the defect this module's
+    #: docstring claims to have fixed.
+    #:
+    #: It costs nothing: a per-cell scale is ``diag(d) L``, so the group's shared
+    #: Cholesky is reused and only its rows are rescaled. It reuses
+    #: ``sigma_n_exponent`` rather than adding a parameter, and because the
+    #: profile is anchored at 1.0 on the snapshot, ``sigma_isin`` keeps its exact
+    #: meaning as the snapshot-column scale. Measured motivation: run
+    #: ``fa532b925732`` produced a ``coverage_gradient`` spread of 1.57x against
+    #: a 2x target, monotone but flat.
+    coverage_scale_per_cell: bool = True
 
     # ---- mean structure ----------------------------------------------------
-    beta_prior_scale: float = 0.5
+    #: Ridge on the drift slopes. Raised 0.5 -> 1.0 on 2026-08-19: with 10
+    #: standardised columns on a 6.5k panel this prior is nearly inert either
+    #: way, but it was one of the two constants holding ``Var(mu_reg)`` at 62 %
+    #: of what unweighted OLS reaches on the identical design, and an
+    #: under-dispersed mean is what failed ``ppc_decay``. See
+    #: :attr:`signal_exponent_prior` for the term that does the real work.
+    beta_prior_scale: float = 1.0
     group_effects: tuple[str, ...] = (
         "trading_region",
         "sector",
         "style_class",
         "size_class",
     )
+    #: Learn the crossed group-effect scale instead of pinning it at
+    #: :data:`GROUP_EFFECT_SCALE`.
+    #:
+    #: **Re-tested 2026-08-19 and left OFF — v1's rejection stands.** v1 recorded
+    #: a learned shared group scale as non-identified against ``sigma_base`` at
+    #: low ``T_eff``, sticking at R-hat 1.5-4.5 / ESS 4-7. That finding predates
+    #: both the correlated likelihood and the marginalised level, so it was worth
+    #: re-running; it reproduced. On the production panel
+    #: ``trading_region_effect_scale`` came back at **ESS 8, R-hat 1.21** — the
+    #: worst-mixing parameter in the model, and the one dragging
+    #: ``trading_region_effect_raw`` down with it.
+    #:
+    #: It was also unnecessary. The learned scales came out *below* the pinned
+    #: 0.25 (0.199 / 0.072 / 0.032 / 0.055), so freeing them shrinks the group
+    #: effects rather than releasing them, and the crossed effects carry only
+    #: ``Var`` 0.010 of the mean's 0.292 in the first place.
+    #: :attr:`signal_exponent_prior` is what actually fixed the mean: with it
+    #: alone the calibration slope is 1.078 and ``ppc_decay`` passes.
+    #:
+    #: Kept as a switch, not deleted, because the machinery is correct and a
+    #: longer panel could identify it.
+    learn_group_effect_scale: bool = False
+
+    #: Beta prior on ``signal_exponent`` (``lambda``), the exponent in
+    #: ``mean[i, t] = (sigma_i / geomean(sigma)) ** lambda * mu_reg[i] +
+    #: alpha_time[t]``.
+    #:
+    #: **Why the mean needs its own scaling.** The likelihood weights each name
+    #: by ``1 / sigma_i^2`` while ``sigma_i`` spans 0.26-0.92, so ``beta`` is
+    #: fitted to the low-scale names. The *signal* scales with ``sigma_i`` as
+    #: well, and the weighting is blind to that: run ``fa532b925732`` came back
+    #: with a calibration slope of 1.230 (1.0 if calibrated) and
+    #: ``2 Cov(mu_reg, resid) = 15.1 %`` of ``Var(y_now)`` — permanent variance
+    #: that the generative model sets to exactly zero, because replicates redraw
+    #: the residual independently of the mean. That is the whole of the
+    #: ``ppc_decay`` failure; the covariance was fitting the residual correctly
+    #: (0.9235 / 0.3632 / 0.0220 against an empirical 0.9405 / 0.3696 / 0.0203 at
+    #: gaps of 7 / 91 / 365 days).
+    #:
+    #: **Calibrated 2026-08-19** by ``scripts/profile_signal_exponent.py``, an
+    #: alternating GLS that refits ``beta``, ``sigma`` and ``A`` at each
+    #: ``lambda`` on the production panel. Four independent criteria land in one
+    #: band:
+    #:
+    #: ==========================  ==========
+    #: criterion                   optimal
+    #: ==========================  ==========
+    #: profile log-likelihood      0.30  (+173 over lambda = 0)
+    #: calibration slope = 1       0.45  (0.9993)
+    #: ``2 Cov(mu, resid)`` = 0    0.45  (-0.0007)
+    #: predicted ``rho_inf``       0.50  (0.4032 vs 0.4058 observed)
+    #: ==========================  ==========
+    #:
+    #: ``Beta(4.5, 5.5)`` has mean 0.45, sd 0.15 and a 90 % interval of roughly
+    #: ``[0.21, 0.70]`` — mass across the whole consistent band, loose enough for
+    #: the data to move inside it. It assigns zero density to ``lambda = 0``,
+    #: which is deliberate: the nested null is rejected by 173 log-likelihood
+    #: units and by three further criteria that agree without being asked to.
+    #: Set both entries to ``1.0`` for a flat prior, or use
+    #: :attr:`enable_signal_scaling` to pin the null.
+    signal_exponent_prior: tuple[float, float] = (4.5, 5.5)
+    #: ``False`` pins ``lambda = 0`` and restores the pre-2026-08-19 additive
+    #: mean. Kept as the comparison arm, not as a fallback.
+    enable_signal_scaling: bool = True
     orthogonalise_pt_history: bool = True
 
     # ---- observation scale -------------------------------------------------
@@ -1249,8 +1426,32 @@ def build_kalman_pt_model_v2(
       replicate decay are both accounted for by ``Var(mu_reg) = 2.50`` against a
       response variance of 0.87. It would have restored ~26k latents for no gate
       movement.
-    * **Tried and rejected** — learning a shared group scale. Carried over
-      unchanged from v1: non-identified against ``sigma_base`` at low ``T_eff``.
+    * **Re-tested and rejected again 2026-08-19** — learning the crossed group
+      scale. v1 rejected it as non-identified against ``sigma_base`` at low
+      ``T_eff``; that finding predates both the correlated likelihood and the
+      marginalised level, so it was re-run rather than inherited. It reproduced:
+      ``trading_region_effect_scale`` came back at ESS 8 / R-hat 1.21 and took the
+      arm from 0 divergences to 2. The machinery is kept behind
+      ``learn_group_effect_scale`` (default ``False``) for a longer panel.
+    * **Tried and rejected 2026-08-19** — treating the ``ppc_decay`` failure as a
+      covariance problem. The fitted within-name correlation already matched the
+      empirical residual (0.9235 / 0.3632 / 0.0220 against 0.9405 / 0.3696 /
+      0.0203 at 7 / 91 / 365 days), so ``rho_inf ~ 0.004`` was correct for that
+      residual. Re-enabling ``rho_scale_buckets`` moved the gate by 0.014;
+      widening the ``rho_inf`` prior cannot move a parameter the data pins; and a
+      second, slower OU component improves the residual kernel fit only from
+      RMSE 0.0442 to 0.0386 and still misses the 274-day pair by 0.07. The
+      failure was in the MEAN — see ``signal_exponent_prior``.
+    * **Tried and rejected 2026-08-19** — a scalar multiplier on ``eta`` to
+      un-shrink the mean. Exactly non-identified: it and ``beta`` trade off one
+      for one, so the likelihood cannot separate them. The scaling has to be
+      *differential across names* to be visible, which is what the
+      ``sigma_i ** lambda`` form provides.
+    * **Expected, not a defect** — pytensor's ``Loop fusion failed because the
+      resulting node would exceed the kernel argument limit`` warning. The
+      ``log_sigma`` graph is six additive terms plus a sector gather, which is
+      simply wider than the fusion limit; the un-fused graph is correct and the
+      measured gradient cost is unaffected. Do not re-investigate.
     * **Deferred** — the multi-response ICM. Removed from the likelihood here
       because it has never been activated in production; re-add as a ``D`` axis
       on ``Y`` rather than reviving the dormant rank-1 coregionalisation.
@@ -1343,9 +1544,21 @@ def build_kalman_pt_model_v2(
 
         # ---- mean structure: crossed group effects --------------------------
         for col, idx in idx_data.items():
-            group_effect = pm.ZeroSumNormal(
-                f"{col}_effect", sigma=GROUP_EFFECT_SCALE, dims=col
-            )
+            if cfg.learn_group_effect_scale:
+                # Non-centred: the scale multiplies a unit-scale ZeroSumNormal
+                # rather than parameterising it, which is what kept v1's centred
+                # attempt at R-hat 1.5-4.5. The half-normal is centred on the old
+                # fixed value, so `learn_group_effect_scale = False` is the same
+                # model with the scale pinned at the prior's mode.
+                scale = pm.HalfNormal(f"{col}_effect_scale", sigma=GROUP_EFFECT_SCALE)
+                raw = pm.ZeroSumNormal(f"{col}_effect_raw", sigma=1.0, dims=col)
+                group_effect = pm.Deterministic(
+                    f"{col}_effect", scale * raw, dims=col
+                )
+            else:
+                group_effect = pm.ZeroSumNormal(
+                    f"{col}_effect", sigma=GROUP_EFFECT_SCALE, dims=col
+                )
             pm.Deterministic(f"sigma_{col}", group_effect.std())
             eta = eta + group_effect[idx]
 
@@ -1515,6 +1728,43 @@ def build_kalman_pt_model_v2(
         log_sigma = pt.clip(log_sigma, *cfg.log_sigma_clip)
         sigma_isin = pm.Deterministic("sigma_isin", pt.exp(log_sigma), dims="isin")
 
+        # ---- per-CELL measurement scale from per-lookback coverage -----------
+        # coverage_profile is each name's analyst count per lookback divided by
+        # its own snapshot count, so it is 1.0 on the snapshot column by
+        # construction and `sigma_isin` above keeps its meaning untouched. The
+        # precision weight is sqrt(n), hence the factor of one half on the log.
+        # Same `sigma_n_exponent` as the per-name term -- this is the same
+        # 1/sqrt(n) law applied along time instead of across names, not a new
+        # degree of freedom.
+        use_cell_scale = (
+            cfg.coverage_scale_per_cell
+            and T > 1
+            and panel.coverage_profile.size == n_isin * T
+        )
+        if use_cell_scale:
+            prof = pm.Data(
+                "coverage_profile",
+                np.clip(panel.coverage_profile, 1e-3, None),
+                dims=("isin", "time"),
+            )
+            log_sigma_cell = pt.clip(
+                log_sigma[:, None] - 0.5 * n_exponent * pt.log(prof),
+                *cfg.log_sigma_clip,
+            )
+        else:
+            if cfg.coverage_scale_per_cell and T > 1:
+                logger.warning(
+                    "coverage_scale_per_cell requested but the panel carries no "
+                    "coverage profile; falling back to a per-name scale"
+                )
+            log_sigma_cell = pt.tile(log_sigma[:, None], (1, T))
+        # Deliberately NOT a pm.Deterministic: nothing downstream reads it, and
+        # an (isin, time) variable is T times the storage of a per-isin one --
+        # 6,499 x 4 x 8,000 draws for a quantity that is exp() of `sigma_isin`
+        # (already stored) times a constant. Recompute it from `sigma_isin` and
+        # `coverage_profile` if it is ever wanted.
+        sigma_cell = pt.exp(log_sigma_cell)
+
         if cfg.enable_time_scale and T > 1:
             tau_free = pm.LogNormal(
                 "sigma_time_free",
@@ -1567,7 +1817,34 @@ def build_kalman_pt_model_v2(
         else:
             nu = None
 
-        mean_full = mu_reg[:, None] + alpha_time[None, :]
+        # ---- how far the SIGNAL rides the name's own scale ---------------------
+        # The likelihood weights each name by 1 / sigma_i^2. If the predictable
+        # component scales with sigma_i too -- and on this panel it does -- then
+        # an additive mean is fitted to the low-scale names and comes out
+        # under-dispersed: run fa532b925732 had a calibration slope of 1.230 and
+        # left 15.1 % of Var(y_now) sitting in 2 Cov(mu_reg, resid), which is
+        # PERMANENT variance (mu_reg is constant in t) that no replicate can
+        # carry, because replicates draw the residual independently of the mean.
+        # That, and not the covariance, is what failed ppc_decay.
+        #
+        # sigma_isin is divided by its geometric mean first. Without it lambda
+        # and log_sigma_total share a direction -- scaling every name's mean by a
+        # constant is exactly a shift in beta -- and both mix badly. Normalised,
+        # lambda only changes the RELATIVE weight of names, which is the thing
+        # the log-likelihood can actually see.
+        if cfg.enable_signal_scaling:
+            a_sig, b_sig = cfg.signal_exponent_prior
+            signal_exponent = pm.Beta("signal_exponent", alpha=a_sig, beta=b_sig)
+            log_sigma_centred = log_sigma - pt.mean(log_sigma)
+            signal_scale = pm.Deterministic(
+                "signal_scale", pt.exp(signal_exponent * log_sigma_centred), dims="isin"
+            )
+        else:
+            signal_scale = pt.ones(n_isin)
+            pm.Deterministic("signal_scale", signal_scale, dims="isin")
+
+        mu_scaled = pm.Deterministic("mu_scaled", signal_scale * mu_reg, dims="isin")
+        mean_full = mu_scaled[:, None] + alpha_time[None, :]
 
         # ---- likelihood, one observed variable per covariance group ------------
         # Names sharing a missingness pattern (and optionally a coverage bucket)
@@ -1584,9 +1861,16 @@ def build_kalman_pt_model_v2(
             A_g = A_by_bucket[bkt][col_idx][:, col_idx]
             L_g = pt.linalg.cholesky(A_g + cfg.cholesky_jitter * pt.eye(Tg))
 
-            sigma_g = sigma_isin[row_idx]
+            # Per-CELL scale: diag(d_i) L has covariance diag(d_i) A diag(d_i),
+            # so scaling the ROWS of the group's shared Cholesky is exactly a
+            # per-column scale and costs no extra factorisation. With
+            # `coverage_scale_per_cell` off, every column of `sigma_cell` equals
+            # `sigma_isin` and this reduces to the previous `sigma_g[:, None, None]`
+            # form identically.
+            sigma_now = sigma_isin[row_idx]
+            sigma_cell_g = sigma_cell[row_idx][:, col_idx]
             mean_g = mean_full[row_idx][:, col_idx]
-            chol_g = sigma_g[:, None, None] * L_g[None, :, :]
+            chol_g = sigma_cell_g[:, :, None] * L_g[None, :, :]
 
             obs_g = panel.Y[np.ix_(rows, cols)]
             name = f"target_pct_obs_g{gi}" if len(groups) > 1 else "target_pct_obs"
@@ -1625,9 +1909,16 @@ def build_kalman_pt_model_v2(
                 pt.linalg.solve_triangular(L_g, c_g, lower=True),
                 lower=False,
             )
+            # Cov(y_i) = D A D and Cov(latent, y_t) = sigma_now * c_t * d_t, so
+            #   E[latent | y] = sigma_now * c' A^-1 D^-1 (y - mean)
+            # -- standardise the residual by its own cell scale first, then apply
+            # the group's shared A^-1 c, then restore the snapshot scale. When the
+            # cell scale is constant in t the two factors cancel and this is the
+            # previous scale-free expression exactly.
+            resid_g = (panel.Y[np.ix_(rows, cols)] - mean_g) / sigma_cell_g
             gain_full = pt.set_subtensor(
                 gain_full[row_idx],
-                pt.dot(panel.Y[np.ix_(rows, cols)] - mean_g, Ainv_c),
+                sigma_now * pt.dot(resid_g, Ainv_c),
             )
             # Gaussian conditional variance. Under the Student-t the exact
             # conditional carries an extra (nu + q_i) / (nu + Tg - 2) inflation
@@ -1638,14 +1929,21 @@ def build_kalman_pt_model_v2(
             var_unit = pt.maximum(
                 wl_vec[bkt] + ws_vec[bkt] - pt.dot(c_g, Ainv_c), cfg.cholesky_jitter
             )
-            var_full = pt.set_subtensor(var_full[row_idx], var_unit * sigma_g**2)
+            # The latent lives at the snapshot, so its conditional variance
+            # carries the snapshot scale regardless of the older columns'.
+            var_full = pt.set_subtensor(var_full[row_idx], var_unit * sigma_now**2)
 
         # ---- decision latents -------------------------------------------------
         # ``state_now_mean`` / ``state_now_sd`` describe the posterior of the
         # per-name latent at the snapshot. The workflow draws ``state_now`` from
         # them; keeping mean and sd separate is what makes the draw exact rather
         # than a by-product of having sampled the state.
-        state_now = pm.Deterministic("state_now_mean", mu_reg + gain_full, dims="isin")
+        # ``mu_scaled``, NOT ``mu_reg``: the latent is the name's level on the
+        # response scale, and under signal scaling that level is
+        # ``signal_scale * mu_reg``. Reading ``mu_reg`` here would silently drop
+        # the scaling from the screen, the risk book and the analytics export
+        # while every gate still passed.
+        state_now = pm.Deterministic("state_now_mean", mu_scaled + gain_full, dims="isin")
         pm.Deterministic("state_now_sd", pt.sqrt(var_full), dims="isin")
         pm.Deterministic("isin_level", gain_full, dims="isin")
         pm.Deterministic("expected_return", state_now, dims="isin")
@@ -1752,6 +2050,8 @@ def _simulate_panel(
     ell_true: float = 105.0,
     tau_true: tuple[float, ...] = (1.45, 1.20, 1.05),
     rho_slope_true: float = 0.8,
+    vol_delta_true: float = 0.0,
+    signal_exponent_true: float = 0.0,
     seed: int = 42,
 ) -> tuple[KalmanPanelV2, dict[str, float]]:
     """Simulate a panel with a known level / state / noise split and time scale.
@@ -1771,6 +2071,15 @@ def _simulate_panel(
     ``sigma_state_true`` then describe the **baseline** name, at index 0; a name
     a standard deviation noisier carries proportionally more permanent level.
     Set it to ``0.0`` to simulate the single global split.
+
+    ``vol_delta_true`` makes the panel **heteroscedastic**: each name's whole
+    residual is scaled by ``exp(vol_delta_true * vol_level_i)``, normalised to
+    geometric mean 1. ``signal_exponent_true`` then scales each name's *mean* by
+    that same factor raised to ``lambda``. Together they simulate the structure
+    :attr:`KalmanModelConfig.signal_exponent_prior` fits, and ``lambda`` is
+    unidentified without them — with a homogeneous scale
+    ``signal_scale = exp(lambda * 0) = 1`` for every ``lambda``. Both default to
+    0.0, which reproduces the homoscedastic panel earlier revisions simulated.
     """
     rng = np.random.default_rng(seed)
     cfg = KalmanModelConfig(lookbacks=lookbacks)
@@ -1816,7 +2125,17 @@ def _simulate_panel(
         + s
         + rng.normal(scale=sigma_obs_true, size=(n_isin, T))
     )
-    Y = mu_reg[:, None] + tau[None, :] * resid
+
+    # Heteroscedastic per-name scale, and the mean that rides it. Normalised to
+    # geometric mean 1 so `sigma_level_true` and friends keep describing the
+    # average name rather than drifting with `vol_delta_true`.
+    vol_level = rng.normal(size=n_isin)
+    log_scale = vol_delta_true * vol_level
+    log_scale -= log_scale.mean()
+    name_scale = np.exp(log_scale)
+    signal_scale = np.exp(signal_exponent_true * log_scale)
+
+    Y = signal_scale[:, None] * mu_reg[:, None] + tau[None, :] * name_scale[:, None] * resid
 
     panel = KalmanPanelV2(
         frame=pd.DataFrame({"isin": [f"SIM{i:05d}" for i in range(n_isin)]}),
@@ -1827,7 +2146,7 @@ def _simulate_panel(
         drift_names=[f"x{i}" for i in range(n_drift)],
         dispersion_cv=np.zeros(n_isin),
         precision_weight=np.ones(n_isin),
-        vol_level=np.zeros(n_isin),
+        vol_level=vol_level,
         log_mcap=np.zeros(n_isin),
         range_norm=np.zeros(n_isin),
         avg_beta=np.zeros(n_isin),
@@ -1845,15 +2164,31 @@ def _simulate_panel(
     }
     truth.update({f"sigma_time[t{j}]": float(tau[j]) for j in range(T)})
     truth["rho_scale_slope"] = float(rho_slope_true)
+    truth["sigma_delta_vol_level"] = float(vol_delta_true)
+    if vol_delta_true:
+        # Only meaningful against a heteroscedastic panel -- see the docstring.
+        truth["signal_exponent"] = float(signal_exponent_true)
     return panel, truth
 
 
-def _selftest(draws: int = 500, tune: int = 500, chains: int = 2) -> int:
+def _selftest(
+    draws: int = 500,
+    tune: int = 500,
+    chains: int = 2,
+    *,
+    vol_delta: float = 0.0,
+    signal_exponent: float = 0.0,
+) -> int:
     """Fit a simulated panel and check the latent decomposition is recovered.
 
     Covers the level / state / noise split, the OU length-scale and the
     per-lookback time scale — every quantity the production posterior reports and
     the decision layer reads through.
+
+    Pass ``vol_delta > 0`` to simulate a heteroscedastic panel and
+    ``signal_exponent`` to give its mean the matching scaling; the check then
+    also covers ``signal_exponent``, which is unidentified on a homoscedastic
+    panel and so is skipped by default.
 
     Returns a process exit code: 0 on success, 1 if any truth falls outside the
     posterior 94 % HDI.
@@ -1861,7 +2196,9 @@ def _selftest(draws: int = 500, tune: int = 500, chains: int = 2) -> int:
     import arviz as az
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    panel, truth = _simulate_panel()
+    panel, truth = _simulate_panel(
+        vol_delta_true=vol_delta, signal_exponent_true=signal_exponent
+    )
 
     print(f"Simulated panel: {panel.n_isin} names x T={panel.n_time}")
     print(f"  T_eff (design-time)     : {panel.effective_t():.3f}")
@@ -1889,6 +2226,10 @@ def _selftest(draws: int = 500, tune: int = 500, chains: int = 2) -> int:
     # per element. The snapshot entry is pinned at 1.0 by construction and is
     # included only so a mis-anchored grid shows up as a failure rather than as a
     # silently shifted scale.
+    # ``rho_scale_slope`` exists only when ``rho_scale_buckets > 1``; asking for
+    # it unconditionally made ``az.summary`` raise once that knob was defaulted
+    # off, so the self-test could not run at all. ``signal_exponent`` is likewise
+    # conditional. Resolve both against the posterior actually produced.
     var_names = [
         "sigma_level",
         "sigma_state",
@@ -1896,15 +2237,24 @@ def _selftest(draws: int = 500, tune: int = 500, chains: int = 2) -> int:
         "ou_length_scale_days",
         "rho_inf_implied",
         "sigma_time",
-        "rho_scale_slope",
     ]
+    for optional in ("rho_scale_slope", "signal_exponent"):
+        if optional in idata.posterior.data_vars and optional in truth:
+            var_names.append(optional)
     names = [n for n in var_names if n != "sigma_time"]
     names += [f"sigma_time[t{j}]" for j in range(panel.n_time)]
     # ArviZ 1.x: ``ci_prob`` replaces ``hdi_prob``, and the interval columns are
     # named ``eti<pct>_lb`` / ``eti<pct>_ub`` rather than ``hdi_3%`` / ``hdi_97%``.
     # Resolve them by suffix so a future default change does not silently break
     # the check into a KeyError.
-    summary = az.summary(idata, var_names=var_names, ci_prob=0.94)
+    # ``sigma_time[t{T-1}]`` is pinned, so its between-chain statistics divide by
+    # a within-chain variance of exactly zero. The row is wanted; the warning is
+    # not. Same treatment as ``run_diagnostics`` in the workflow script.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="invalid value encountered", category=RuntimeWarning
+        )
+        summary = az.summary(idata, var_names=var_names, ci_prob=0.94)
     lb_col = next(c for c in summary.columns if str(c).endswith("_lb"))
     ub_col = next(c for c in summary.columns if str(c).endswith("_ub"))
     print("\nRecovery check (truth must lie inside the 94% interval):")
@@ -1944,7 +2294,29 @@ if __name__ == "__main__":  # pragma: no cover
     parser.add_argument("--draws", type=int, default=500)
     parser.add_argument("--tune", type=int, default=500)
     parser.add_argument("--chains", type=int, default=2)
+    parser.add_argument(
+        "--vol-delta",
+        type=float,
+        default=0.0,
+        dest="vol_delta",
+        help="simulate a heteroscedastic panel with this log-scale slope",
+    )
+    parser.add_argument(
+        "--signal-exponent",
+        type=float,
+        default=0.0,
+        dest="signal_exponent",
+        help="true lambda for the simulated mean; needs --vol-delta to be identified",
+    )
     args = parser.parse_args()
     if args.selftest:
-        sys.exit(_selftest(draws=args.draws, tune=args.tune, chains=args.chains))
+        sys.exit(
+            _selftest(
+                draws=args.draws,
+                tune=args.tune,
+                chains=args.chains,
+                vol_delta=args.vol_delta,
+                signal_exponent=args.signal_exponent,
+            )
+        )
     parser.print_help()
