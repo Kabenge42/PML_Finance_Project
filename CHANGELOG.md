@@ -5,6 +5,216 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Kalman v2 (branch `worktree-kalman-v2-design`)
+
+Branch work, not a release. The three preceding v2 commits document themselves in
+their commit messages; this entry records the correction to the last of them,
+because it reverses a published diagnosis.
+
+### Fixed
+
+- **The three failing posterior-predictive gates were one runaway regression
+  mean, not the Student-t.** Run `4f713551bb7a` failed `ppc_t_spread` (IQR 1.017
+  observed vs 1.134-1.168 replicated), `ppc_coverage` (0.958 / 0.960 at the two
+  oldest steps against a 0.92 target) and `ppc_decay` (rho_inf 0.429 observed vs
+  0.678-0.740 replicated), and `fb8f86d` attributed all three to the marginal
+  Student-t being a per-NAME rather than per-cell scale mixture, proposing `n x T`
+  conjugate scale variables as the fix.
+
+  Reconstructing `mu_reg` from the exported posterior against the exported panel
+  frame (validated: the reconstructed `expected_upside` matches the exported
+  column at r = 0.9999) gives **Var(mu_reg) = 2.503 against Var(y_now) = 0.872** —
+  a mean with 2.9x the variance of the response it predicts, with
+  `beta[pt_hist_pc3] = -1.414` against a next-largest coefficient of 0.077.
+  Propagating that forward reproduces the gates: predicted replicate sd ratio
+  **1.76** against the 1.75 measured, and replicate correlations of
+  0.985 / 0.861 / 0.793 at 7 / 91 / 365 days fitting rho_inf ~ 0.78 against the
+  0.68-0.74 measured. A multivariate t's correlation matrix is its scale
+  matrix's, so the likelihood family contributes nothing to any of it. The
+  per-cell augmentation would have restored ~26k latents for no gate movement,
+  and is now recorded as rejected in the builder docstring.
+
+  The mean is not a sampler artifact: at the posterior betas the log-likelihood
+  is -11,212 against -17,951 at pooled OLS. Two structural defects let it be the
+  optimum, and both are fixed.
+
+- **The design matrix contained the response's own increments.**
+  `feat_log_uplift = log PT - log P`, so the trail's differences are
+  `Δ log PT - Δ log P`, and six drift features were the two legs of that
+  identity: `feat_one_day_return` (corr 0.03 with the level, -0.46 with the
+  now-1w contrast), `feat_price_chg_pct_3m` (0.40 / -0.67), `feat_price_drift`
+  (-0.20 / -0.33), `feat_pt_drift` (-0.00 / +0.35), `feat_pt_accuracy_1y`
+  (0.02 / -0.23) and `feat_pt_noise_drift` (0.02 / +0.24).
+
+  They were harmless in v1 (|beta| <= 0.09) because a factorised likelihood never
+  weights a contrast. The v2 correlated likelihood weights the (1w, now) contrast
+  — sd 0.248 against a level sd of 0.934 — by `1/(1-rho) ~ 12x`, while `mu_reg`
+  is constant in `t` and so cannot express contrast content at all. **The v2
+  likelihood change is what made v1's inherited feature set unusable.** Removing
+  them takes Var(mu_reg) from 1.006 to 0.321 under weighted GLS and max |beta|
+  from 0.90 to 0.45; the design matrix goes from 14 columns to 8.
+
+  Rejected instead of dropping them: a per-lookback slope block, which legalises
+  the leverage rather than removing it, spends `p x (T-1)` parameters on a panel
+  worth `T_eff = 1.42` observations per name, and fits an accounting identity.
+
+- **`sigma_time` scaled only the observation leg, and that covariance family
+  cannot represent this panel.** With `A = w_L*J + w_S*K + w_O*diag(tau^2)`,
+  raising a far column's variance divides every one of its correlations by
+  `sqrt(A_ss * A_tt)`. Solved against the measured residual structure — variance
+  ratios [2.13, 1.49, 1.11, 1.0], correlations 0.921 / 0.315 / -0.065 at
+  7 / 91 / 365 days — the family needs `w_S > 1`, **infeasible by 74%**. The run
+  took the only escape available and drove `tau` to [12.26, 9.24, 2.54, 1.0], ten
+  prior sd out, buying the variance ratio by destroying the correlation.
+
+  `tau` now scales the whole matrix, `A = diag(tau) C diag(tau)`, so correlations
+  are `tau`-free and variance ratios are `tau^2`. The same measurement then
+  solves at `tau ~ [1.46, 1.22, 1.05, 1.0]`, `ell ~ 82d`, `w_L ~ 0.02`,
+  `w_O ~ 0` — feasible to within 1.4%, with `tau` inside its prior. The prior
+  widens 0.25 -> 0.40 on the log scale to match. `time_scale_applies_to`
+  keeps the old form available as a comparison arm.
+
+  With sane betas and this covariance the implied **raw** panel correlations are
+  0.965 / 0.674 / 0.449 against observed 0.966 / 0.678 / 0.427, which is what
+  `ppc_decay` reads.
+
+### Added
+
+- **`drift_contrast_leakage`** (blocking, §4b) — no drift feature may correlate
+  more strongly with a trail contrast than with the response level. Measured by
+  `screen_contrast_identities` on the design matrix **before** the PT-history
+  rotation, because an orthonormal rotation mixes an identity column into its
+  neighbours: on the rotated basis the flag lands on `pt_hist_pc1` and clears
+  `feat_pt_drift`, which is the wrong answer to act on. Costs milliseconds and
+  runs before the fit, so `--dry-run` sees it.
+- **`mean_spread`** (blocking, §9) — `Var(mu_reg) / Var(y_snapshot) <= 1`. An
+  additive mean with more variance than its response implies a negative residual
+  variance, so the threshold is arithmetic rather than a tuning choice. This one
+  line would have caught the whole failure before the posterior predictive ran.
+- **`ppc_decay_residual`** (reported, not gated, §8) — `ppc_decay` with the
+  posterior-mean mean removed from both sides. A mean that is constant in time
+  contributes the same constant at every gap and so reads as a permanent level;
+  the pair separates a mean failure from a covariance one in one read. Both are
+  computed through one shared helper so they cannot drift apart in method.
+- The self-test now simulates and recovers the per-lookback time scale. Measured
+  at 400 draws / 400 tune, n=400: every truth inside its 94% interval —
+  `sigma_time` [1.412, 1.245, 1.067] against [1.45, 1.20, 1.05] — at 0
+  divergences, min bulk ESS 492, max R-hat 1.0029.
+
+### Fixed (found by the verification run)
+
+- **`ppc_coverage` graded a 94 % interval against a 92 % target.** The statistic
+  has always built its interval from `np.nanpercentile(rep, [3, 97])` — 94 %
+  nominal — while `gate_coverage_target` was a hard-coded 0.92 carried over from
+  a v1 statistic that used a different interval, so the gate asked a *correctly
+  calibrated* model to under-cover its own interval by two points. The target is
+  now derived from `gate_coverage_percentiles`, which makes the two
+  unrepresentable as different values. Measured on the full panel after the
+  fixes above: per-step coverage [0.9407, 0.9484, 0.9384, 0.9364] against a 0.94
+  nominal — a worst deviation of 0.008, and flat across steps where the
+  2026-08-18 run was [0.958, 0.960, 0.924, 0.928].
+
+- **`apply_out_of_support` tested one distribution and protected metrics built
+  from two.** `er_*` comes from the forward-return Monte Carlo; `cvar05` and
+  `exp_vol` — hence `reward_to_cvar` and `expected_sharpe_ratio` — come from the
+  Kalman upside posterior. One name reached the export with
+  `expected_return_kalman` 5.0, `cvar_5pct_kalman` 5.0 and
+  `expected_vol_kalman` 0.0 — a degenerate distribution sitting on the +500 %
+  cap, `tail_risk` on its floor and a STARR of exactly **500** — while its
+  `er_p05` of 0.64 cleared the test. The Kalman distribution is now tested on its
+  own tails: `cvar_5pct_kalman` plays the role `er_p05` plays for the Monte
+  Carlo. Re-applied to both exports, it suppresses that one row and no others.
+
+### Notes
+
+- `w_obs` heading to ~0 is a finding, not a defect: at a 7-day gap a consensus
+  price target is sticky, so the panel identifies no measurement noise and the
+  smoother leaves `state_now ~ y_now`. The two WARN gates — `coverage_gradient`
+  and `prob_pos_degenerate` — are consequences of that and are expected to
+  persist. Moving them needs a decision about what `state_now` *is*, not a
+  tuning change.
+- **`ppc_decay` is the one gate still failing, and it is now fully
+  characterised.** Raw: observed rho_inf 0.429 against a replicated
+  [0.320, 0.393]. Residual: observed 0.070 against [0.000, 0.052]. The model fits
+  one global `w_level` at 0.0066 where the unweighted residual panel carries
+  ~0.070.
+
+  **Tried and rejected — the `('1y','6m','3m','1w')` grid.** The hypothesis was
+  that only one column (1y) informs the permanent component, so a second
+  long-gap column would identify it. Measured on the full panel at 2000/4000:
+  T_eff 1.50 vs 1.42, min bulk ESS 1442 vs 1305, gradient 3.52 vs 2.48 ms — and
+  `w_level` went **0.0067 -> 0.0058**, i.e. slightly *down*. `ppc_decay` reads
+  0.432 vs [0.328, 0.399], the same gap. Identification was never the problem;
+  the default T=4 grid stands.
+
+  What it is instead: **the variance split is global while the observation scale
+  is per-name, and the panel says the split depends on the scale.** Residual
+  kernel by `sigma_isin` quintile —
+
+  | quintile | mean sigma | residual rho_inf | corr(1y, now) |
+  |---|---|---|---|
+  | Q1 | 0.258 | 0.0000 | -0.037 |
+  | Q2 | 0.353 | 0.0000 | -0.058 |
+  | Q3 | 0.440 | 0.0000 | -0.088 |
+  | Q4 | 0.568 | 0.0000 | -0.106 |
+  | Q5 | 0.910 | **0.1163** | +0.060 |
+
+  The permanent level exists only in the noisiest fifth of the universe; the
+  other four fifths are purely mean-reverting. `rho_inf` is one number for every
+  name, fitted in a metric that weights by `1/sigma_i^2` — under which Q5 holds
+  ~1.5 % of the weight. The same residual kernel reads rho_inf **0.0000**
+  weighted by `1/sigma_i^2`, **0.0130** by `1/sigma_i` and **0.0703** unweighted,
+  against a fitted 0.0067: the model is estimating the panel correctly *in its
+  own metric*, and the gate measures it in the unweighted one, which the same Q5
+  names dominate because they carry the largest residuals.
+
+  **Built and rejected on measurement (2026-08-19).** `rho_scale_buckets` /
+  `rho_scale_slope` implement exactly that expansion — one logit-scale tilt of
+  `rho_inf` across quantile buckets of a per-name scale index, evaluated per
+  bucket so the Cholesky count tracks groups rather than names. The mechanism
+  works: on simulated data where the structured variance is held fixed and only
+  its split varies, the tilt is recovered (truth 0.800, posterior 0.553
+  `[0.237, 0.925]`). On the production panel it is **not identified** —
+  `rho_scale_slope` 0.578 +/- 0.828, an 89 % interval of `[-0.836, 1.761]`
+  spanning zero at ESS 1986, so the width is posterior uncertainty rather than
+  anything a longer run would sharpen. Buckets came out monotone as predicted,
+  `[0.0041, 0.0043, 0.0052, 0.0076, 0.0196]`, and `ppc_decay` did not move:
+  0.429 observed against [0.334, 0.399] replicated versus [0.320, 0.393] with
+  one global split. Cost is +23 % per gradient and 6 -> 21 covariance groups.
+  **Defaulted to `rho_scale_buckets = 1`**; the machinery, the scale index and
+  the self-test all remain, and `replace(cfg, rho_scale_buckets=5)` re-enables
+  it.
+
+  **And the motivating measurement was half artifact.** A per-name scale
+  multiplies a name's whole trail together, which in a correlation estimate is a
+  rank-1 common component indistinguishable from a permanent level. Standardising
+  the residual by the model's own `sigma_i * tau_t` before re-measuring:
+
+  | quintile | mean sigma | raw rho_inf | standardised rho_inf |
+  |---|---|---|---|
+  | Q1-Q4 | 0.258-0.568 | 0.0000 | 0.0000 |
+  | Q5 | 0.910 | 0.1170 | **0.0723** |
+  | pooled | 0.506 | 0.0706 | **0.0000** |
+
+  The pooled row is the result: there is no pooled permanent level at all, and
+  `rho_inf ~ 0.006` was right rather than under-powered. Q5 keeps a genuine level
+  after standardisation, but at 0.072 rather than 0.117, carried by a fifth of
+  the universe — real, and about one gate-width of the decay statistic.
+
+  What that leaves: `ppc_decay` compares an estimator that cannot separate
+  per-name scale heterogeneity from a permanent level, applied to a model whose
+  scale heterogeneity is fitted rather than exact. Closing it means either
+  measuring the decay on standardised residuals — which the model *does*
+  reproduce, pooled — or accepting that the raw statistic carries a component the
+  model is not trying to match. That is a decision about the gate, and it should
+  be made deliberately rather than by tuning the model into it.
+- After the screen the largest surviving predictor is `feat_pt_achievement_1y`
+  at corr -0.542 with the response — mechanically anti-correlated through the
+  shared `last_price` leg, the same identity (v1 measured -0.545) for which
+  `DRIFT_EXCLUDED_PREFIXES` already bans the whole `feat_total_return_*` /
+  `feat_tr_cagr_*` family. Not blocking under the new gates, but inherited rather
+  than chosen.
+
 ## [0.9.9.17] - 2026-08-17
 
 ### Fixed

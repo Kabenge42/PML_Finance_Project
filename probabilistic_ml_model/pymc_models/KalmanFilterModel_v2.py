@@ -149,6 +149,8 @@ __all__ = [
     "orthogonalise_family",
     "effective_sample_size_of_panel",
     "partition_covariance_groups",
+    "bucket_scale_index",
+    "covariance_groups_for",
     "fit_trail_correlation_kernel",
     "resolve_screen_latent_v2",
 ]
@@ -200,6 +202,14 @@ DEFAULT_LOOKBACK_DAYS: dict[str, int] = {
 #: measurements of one construct ("has this name's consensus target been
 #: reliable?"), so v2 rotates them to an orthogonal basis before they enter the
 #: design matrix — see :func:`orthogonalise_family`.
+#:
+#: Two of the three left the design matrix on 2026-08-18: ``feat_pt_drift`` and
+#: ``feat_pt_accuracy_1y`` are increments of the response trail rather than
+#: measurements of its level (see ``DRIFT_EXCLUSIONS`` in
+#: ``pymc_kalman_filter_pt_v2.py``), so the family is now a single column and
+#: :func:`orthogonalise_family` correctly no-ops on it. The constant and the
+#: rotation stay: the collinearity they fix is a property of the family, not of
+#: the run that first hit it, and a catalogue change can repopulate it.
 PT_HISTORY_FAMILY: tuple[str, ...] = (
     "feat_pt_drift",
     "feat_pt_accuracy_1y",
@@ -287,6 +297,88 @@ class KalmanModelConfig:
         ``'student_t'`` (default) or ``'normal'``. The Student-t ``nu`` is
         floored at ``nu_floor``; see the v1 docstring for why relaxing that floor
         reintroduces an improper density corner.
+    time_scale_applies_to
+        What the per-lookback scale ``sigma_time`` multiplies — ``'covariance'``
+        (default) or ``'observation'`` (the pre-2026-08-18 behaviour, retained
+        only as a comparison arm).
+
+        Under ``'observation'`` the within-name covariance is
+        ``w_L*J + w_S*K + w_O*diag(tau^2)``, so inflating a far column's variance
+        necessarily divides every one of its correlations by
+        ``sqrt(A_ss * A_tt)``. That family **cannot represent this panel**: solved
+        against the measured residual structure (variance ratios
+        ``[2.13, 1.49, 1.11, 1.0]``; correlations 0.921 / 0.315 / -0.065 at gaps of
+        7 / 91 / 365 days) it requires ``w_S > 1``, infeasible by 74 %. The
+        2026-08-18 run took the only escape available to it and drove ``tau`` to
+        ``[12.3, 9.2, 2.5, 1.0]`` — ten prior sd out — buying the variance ratio by
+        destroying the correlation, which is what failed ``ppc_decay`` and
+        over-covered steps 0 and 1.
+
+        Under ``'covariance'`` the same scale multiplies the whole matrix,
+        ``A = diag(tau) (w_L*J + w_S*K + w_O*I) diag(tau)``, so correlations are
+        ``tau``-free and variance ratios are ``tau^2``. The same measurement then
+        solves at ``tau ~ [1.46, 1.22, 1.05, 1.0]``, ``ell ~ 82 d``, ``w_L ~ 0.02``,
+        ``w_O ~ 0`` — feasible to within 1.4 %, with ``tau`` inside its prior
+        instead of far outside it.
+    time_scale_prior_sigma
+        Log-scale sd of the ``sigma_time`` prior. Widened 0.25 -> 0.40 with the
+        restructure: the measured optimum of 1.05-1.46 sat at the edge of the old
+        90 % interval of ``[0.66, 1.51]``.
+    rho_scale_buckets
+        Number of quantile buckets of :attr:`KalmanPanelV2.scale_index` that get
+        their own ``rho_inf``. ``1`` (the default) is the single global split.
+
+        **Built, measured, and defaulted OFF on 2026-08-19.** The motivation was
+        sound and the mechanism works — on simulated data the tilt is recovered
+        (truth 0.800, posterior 0.553 ``[0.237, 0.925]``) — but on the production
+        panel ``rho_scale_slope`` came back **0.578 +/- 0.828, an 89 % interval of
+        [-0.836, 1.761] that spans zero**, at ESS 1986, so the width is posterior
+        uncertainty and not something a longer run will sharpen. The buckets came
+        out monotone as predicted, ``[0.0041, 0.0043, 0.0052, 0.0076, 0.0196]``,
+        and ``ppc_decay`` did not move: 0.429 observed against [0.334, 0.399]
+        replicated, versus [0.320, 0.393] with one global split. It costs +23 %
+        per gradient and takes the covariance-group count from 6 to 21. Set it to
+        ``5`` to re-enable; the machinery, the self-test and the scale index all
+        remain.
+
+        **Why the motivating measurement overstated the effect.** Residual
+        correlation decay by fitted-``sigma_isin`` quintile, 2026-08-18 universe,
+        measured on the raw residual and again after standardising it by the
+        model's own ``sigma_i * tau_t``:
+
+        ==========  ==========  ==============  =====================
+        quintile    mean sigma  raw rho_inf     standardised rho_inf
+        ==========  ==========  ==============  =====================
+        Q1          0.258       0.0000          0.0000
+        Q2          0.353       0.0000          0.0000
+        Q3          0.440       0.0000          0.0000
+        Q4          0.568       0.0000          0.0000
+        Q5          0.910       0.1170          **0.0723**
+        pooled      0.506       0.0706          **0.0000**
+        ==========  ==========  ==============  =====================
+
+        The pooled column is the finding. A per-name scale multiplies a name's
+        whole trail together, which in any correlation estimate is a rank-1
+        common component — indistinguishable from a permanent level. Standardise
+        it away and the pooled permanent correlation goes to **exactly zero**:
+        there is no pooled level, and the model fitting ``rho_inf ~ 0.006`` was
+        right, not under-powered. Only Q5 keeps a genuine level after
+        standardisation, and at 0.072 rather than the 0.117 the raw statistic
+        showed — real, but half the apparent size, carried by 20 % of the
+        universe, and worth about one gate-width of the decay statistic.
+
+        Bucketing rather than a per-name ``rho_i`` was a performance constraint,
+        not a modelling preference: a per-name composition means a per-name
+        covariance and a batched Cholesky over 6,497 matrices, measured at
+        4,400 ms/gradient against 2.5 ms for the shared form. Names in one bucket
+        share one Cholesky, exactly as names in one missingness pattern already
+        do.
+    rho_scale_slope_prior
+        Prior sd of ``rho_scale_slope``, the logit-scale tilt of ``rho_inf`` per
+        unit of the standardised scale index. Centred at **zero**, so the null
+        hypothesis is the single global split and a tilt has to be earned — which
+        on this panel it did not. At ``rho_scale_buckets = 1`` the parameter is
+        not created at all.
     orthogonalise_pt_history
         Rotate :data:`PT_HISTORY_FAMILY` to an orthonormal basis before it enters
         the design matrix. On by default. The rotation is recorded in
@@ -359,6 +451,10 @@ class KalmanModelConfig:
     sigma_n_exponent_prior: float = 0.5
     enable_sector_scale_offset: bool = True
     enable_time_scale: bool = True
+    time_scale_applies_to: str = "covariance"
+    time_scale_prior_sigma: float = 0.40
+    rho_scale_buckets: int = 1
+    rho_scale_slope_prior: float = 1.0
 
     # ---- decision tilts ----------------------------------------------------
     risk_penalty: float = 0.15
@@ -370,6 +466,17 @@ class KalmanModelConfig:
             raise ValueError(
                 f"likelihood must be 'student_t' or 'normal', got {self.likelihood!r}"
             )
+        if self.time_scale_applies_to not in ("covariance", "observation"):
+            raise ValueError(
+                "time_scale_applies_to must be 'covariance' or 'observation', got "
+                f"{self.time_scale_applies_to!r}"
+            )
+        if self.time_scale_prior_sigma <= 0:
+            raise ValueError("time_scale_prior_sigma must be positive")
+        if self.rho_scale_buckets < 1:
+            raise ValueError("rho_scale_buckets must be >= 1")
+        if self.rho_scale_slope_prior <= 0:
+            raise ValueError("rho_scale_slope_prior must be positive")
         if len(self.variance_split_alpha) != 3:
             raise ValueError("variance_split_alpha must have exactly 3 entries")
         if any(a <= 0 for a in self.variance_split_alpha):
@@ -419,6 +526,8 @@ class KalmanModelConfig:
             f"KalmanModelConfig(T={self.n_time} [{grid}], "
             f"ou={'on' if self.enable_ou_state else 'off'}, "
             f"level={'free' if self.enable_isin_level else 'off'}, "
+            f"tau={self.time_scale_applies_to if self.enable_time_scale else 'off'}, "
+            f"rho={'global' if self.rho_scale_buckets < 2 else f'{self.rho_scale_buckets}x scale'}, "
             f"lik={self.likelihood})"
         )
 
@@ -497,9 +606,30 @@ class KalmanPanelV2:
         default_factory=lambda: np.empty((0, 0), dtype="float64")
     )
 
+    # ---- variance-composition driver ---------------------------------------
+    #: Per-name standardised scale index, shape ``(n_isin,)``. A data-only
+    #: stand-in for ``log sigma_isin``, which cannot be used directly because the
+    #: covariance-group partition has to be fixed before any coefficient is
+    #: sampled. Built in ``prepare_panel`` from the three strongest terms of the
+    #: scale model itself and measured at Pearson **0.966** / Spearman 0.967
+    #: against the fitted ``log sigma_isin`` on the 2026-08-18 universe; its
+    #: quintiles reproduce the residual-decay pattern that motivates the split
+    #: (``[0, 0, 0, 0, 0.109]`` against ``[0, 0, 0, 0, 0.116]`` for the fitted
+    #: scale's own quintiles). Empty leaves every name in one bucket.
+    scale_index: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype="float64")
+    )
+
     # ---- provenance --------------------------------------------------------
     orthogonal_rotation: Optional[np.ndarray] = None
     orthogonal_source_names: tuple[str, ...] = ()
+    #: Per-feature level-vs-contrast correlation table, measured on the design
+    #: matrix **before** any orthogonalisation — see
+    #: ``pymc_kalman_filter_pt_v2.screen_contrast_identities``. Carried on the
+    #: panel rather than recomputed downstream so the audit and the fit cannot
+    #: disagree about which matrix was screened. Empty when the workflow built
+    #: the panel without running the screen.
+    contrast_screen: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def __post_init__(self) -> None:
         n = len(self.isins)
@@ -602,7 +732,18 @@ def fit_trail_correlation_kernel(
 
     This is the empirical counterpart of the model's latent decomposition: a
     permanent per-name level of relative size ``rho_inf`` plus a component that
-    decays with length-scale ``ell``. Running it on the panel *before* fitting
+    decays with length-scale ``ell``.
+
+    **Mind which matrix you hand it.** On a *raw* response panel the constant
+    term absorbs everything common to a name across time — including the spread
+    of the regression mean, which is by far the largest such component. The
+    2026-08-18 universe reads ``rho_inf = 0.429`` raw and **below 0.1** on the
+    residual once the model's own mean structure is removed: next to no permanent
+    per-name level is left over, because the level *is* ``mu_reg``. Both readings
+    are useful and they answer different questions, so §8 of the workflow fits
+    the kernel on both and reports them side by side.
+
+    Running it on the panel *before* fitting
     gives a prior-predictive-style sanity check on
     :attr:`KalmanModelConfig.ou_length_scale_days_mu`, and running it on
     posterior-predictive replicates is a calibration statistic in its own right —
@@ -806,11 +947,100 @@ def _ou_correlation(time_days: np.ndarray, ell) -> Any:
     return pt.exp(-pt.as_tensor_variable(gaps) / ell)
 
 
+def bucket_scale_index(
+    scale_index: np.ndarray,
+    n_buckets: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Discretise a per-name scale index into quantile buckets.
+
+    The variance composition varies with a name's scale (see
+    :attr:`KalmanModelConfig.rho_scale_buckets`), but a per-name composition
+    means a per-name covariance and a batched Cholesky over every name — 4,400
+    ms/gradient against 2.5 ms for the shared form. Bucketing keeps one Cholesky
+    per (missingness pattern, coverage bucket, scale bucket) group while letting
+    the composition move across the universe.
+
+    The buckets discretise where ``rho_inf`` is *evaluated*, not how it is
+    parameterised: the builder fits one logit-linear tilt and reads it at each
+    bucket's mean index, so the number of free parameters does not grow with
+    ``n_buckets`` and the relationship stays monotone.
+
+    Parameters
+    ----------
+    scale_index
+        Per-name standardised index, shape ``(n_isin,)``. NaN is filled with the
+        median.
+    n_buckets
+        Requested bucket count. ``< 2`` returns a single bucket.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        ``(bucket_of_name, bucket_mean_index)``. Empty buckets are dropped and
+        the remaining ones renumbered, so ``bucket_of_name.max() + 1 ==
+        len(bucket_mean_index)`` always holds — the builder relies on it to size
+        the ``rho_bucket`` coordinate.
+    """
+    x = np.asarray(scale_index, dtype="float64").ravel()
+    n = x.shape[0]
+    if n_buckets < 2 or n == 0 or not np.isfinite(x).any():
+        return np.zeros(max(n, 0), dtype="int64"), np.zeros(1, dtype="float64")
+    x = np.nan_to_num(x, nan=float(np.nanmedian(x)))
+    if float(x.std()) < _EPS:
+        return np.zeros(n, dtype="int64"), np.array([float(x.mean())])
+
+    edges = np.quantile(x, np.linspace(0.0, 1.0, n_buckets + 1)[1:-1])
+    raw = np.searchsorted(edges, x, side="right").astype("int64")
+    uniq = np.unique(raw)
+    remap = np.full(int(uniq.max()) + 1, -1, dtype="int64")
+    remap[uniq] = np.arange(uniq.size, dtype="int64")
+    bucket = remap[raw]
+    means = np.array([float(x[bucket == k].mean()) for k in range(uniq.size)])
+    logger.info(
+        "Scale buckets: %d (sizes %s, mean index %s)",
+        uniq.size,
+        [int((bucket == k).sum()) for k in range(uniq.size)],
+        np.round(means, 3).tolist(),
+    )
+    return bucket, means
+
+
+def covariance_groups_for(
+    panel: "KalmanPanelV2",
+    config: "KalmanModelConfig",
+) -> tuple[list[tuple[np.ndarray, np.ndarray, int]], np.ndarray]:
+    """Resolve the covariance-group partition and the scale-bucket means.
+
+    The **single** definition of how names are grouped. The builder names one
+    observed variable per group and the posterior-predictive stage reassembles
+    replicates by that name, so a second implementation that disagreed by one
+    group would stitch the wrong rows back onto the panel silently.
+
+    Returns
+    -------
+    tuple
+        ``(groups, bucket_mean_index)`` where ``groups`` is a list of
+        ``(row_index, observed_column_index, scale_bucket)``.
+    """
+    bucket, means = bucket_scale_index(panel.scale_index, config.rho_scale_buckets)
+    if bucket.shape[0] != panel.n_isin:
+        bucket = np.zeros(panel.n_isin, dtype="int64")
+        means = np.zeros(1, dtype="float64")
+    groups = partition_covariance_groups(
+        panel.observed_mask,
+        panel.coverage_profile,
+        config.coverage_profile_buckets,
+        scale_bucket=bucket,
+    )
+    return groups, means
+
+
 def partition_covariance_groups(
     mask: np.ndarray,
     coverage_profile: np.ndarray,
     n_buckets: int,
-) -> list[tuple[np.ndarray, np.ndarray]]:
+    scale_bucket: Optional[np.ndarray] = None,
+) -> list[tuple[np.ndarray, np.ndarray, int]]:
     """Partition names into groups that share one covariance sub-block.
 
     Two names can share a Cholesky factorisation when they observe the same set
@@ -829,13 +1059,17 @@ def partition_covariance_groups(
         ``(n_isin, T)`` relative analyst coverage, or an empty array.
     n_buckets
         Number of coverage buckets; ``1`` groups by missingness pattern only.
+    scale_bucket
+        Optional per-name scale bucket from :func:`bucket_scale_index`. Names in
+        different scale buckets get different variance *compositions*, hence
+        different covariance matrices, so they cannot share a Cholesky.
 
     Returns
     -------
-    list[tuple[numpy.ndarray, numpy.ndarray]]
-        ``(row_index, observed_column_index)`` per group. Groups are ordered
-        largest first, so the dominant pattern is the first observed variable in
-        the model and reads first in any summary.
+    list[tuple[numpy.ndarray, numpy.ndarray, int]]
+        ``(row_index, observed_column_index, scale_bucket)`` per group. Groups
+        are ordered largest first, so the dominant pattern is the first observed
+        variable in the model and reads first in any summary.
     """
     n, T = mask.shape
     keys = mask.astype(np.uint8) @ (1 << np.arange(T, dtype=np.uint64))
@@ -852,20 +1086,29 @@ def partition_covariance_groups(
         bucket = np.searchsorted(edges, avg, side="right").astype(np.uint64)
         keys = keys * np.uint64(n_buckets) + bucket
 
-    groups: list[tuple[np.ndarray, np.ndarray]] = []
+    if scale_bucket is not None:
+        sb = np.asarray(scale_bucket, dtype="int64")
+        n_scale = int(sb.max()) + 1 if sb.size else 1
+        if n_scale > 1:
+            keys = keys * np.uint64(n_scale) + sb.astype(np.uint64)
+    else:
+        sb = np.zeros(n, dtype="int64")
+
+    groups: list[tuple[np.ndarray, np.ndarray, int]] = []
     for key in np.unique(keys):
         rows = np.flatnonzero(keys == key)
         cols = np.flatnonzero(mask[rows[0]])
         if cols.size == 0:
             logger.warning("Dropping %d name(s) with no observed trail cell", rows.size)
             continue
-        groups.append((rows, cols))
+        groups.append((rows, cols, int(sb[rows[0]])))
     groups.sort(key=lambda g: -len(g[0]))
     logger.info(
-        "Covariance groups: %d (sizes %s, widths %s)",
+        "Covariance groups: %d (sizes %s, widths %s, scale buckets %s)",
         len(groups),
-        [len(r) for r, _ in groups][:8],
-        [len(c) for _, c in groups][:8],
+        [len(r) for r, _, _ in groups][:8],
+        [len(c) for _, c, _ in groups][:8],
+        [b for _, _, b in groups][:8],
     )
     return groups
 
@@ -880,21 +1123,29 @@ def build_kalman_pt_model_v2(
     ---------
     The generative story for name ``i`` at lookback ``t`` is::
 
-        y[i, t] = mu_reg[i]             # drift betas + crossed group effects
-                + alpha_time[t]         # per-lookback level offset
-                + level[i]              # permanent per-name deviation
-                + s[i, t]               # OU state, corr = exp(-gap/ell)
-                + eps[i, t]             # measurement noise
+        y[i, t] = mu_reg[i]                     # drift betas + crossed group effects
+                + alpha_time[t]                 # per-lookback level offset
+                + tau[t] * ( level[i]           # permanent per-name deviation
+                           + s[i, t]            # OU state, corr = exp(-gap/ell)
+                           + eps[i, t] )        # measurement noise
 
     but ``level`` and ``s`` are **never sampled**. Both are Gaussian and both
     enter the mean linearly, so they integrate out in closed form, leaving a
     multivariate Student-t over each name's whole trail::
 
-        A       = w_L*J + w_S*K(ell) + w_O*diag(tau^2)     # T x T, shared
+        C       = w_L*J + w_S*K(ell) + w_O*I               # correlation shape
+        A       = diag(tau) C diag(tau)                    # T x T, shared
         y[i, :] ~ MvStudentT(nu, mu_reg[i] + alpha_time, sigma_isin[i]^2 * A)
 
-    with ``(w_L, w_S, w_O) ~ Dirichlet(config.variance_split_alpha)`` read as
-    **shares of within-name variance** — which is exactly what the empirical
+    ``tau`` scales a whole lookback column — every component of it — rather than
+    its white-noise leg alone. That is a statement about the trail's data
+    quality: the further back a vintage is, the noisier all of it is. It is also
+    the only form that can reach this panel; see
+    :attr:`KalmanModelConfig.time_scale_applies_to`.
+
+    with ``(w_L, w_S, w_O)`` read as **shares of within-name variance** — and
+    sampled as two Betas rather than one Dirichlet, in the coordinates the data
+    identifies (see the builder body) — which is exactly what the empirical
     kernel measures, since ``rho_inf`` is a share and not a level.
 
     Why marginalise, in numbers
@@ -982,6 +1233,22 @@ def build_kalman_pt_model_v2(
       costs ``T(T-1)/2`` parameters instead of 1, and on T=4 was
       indistinguishable from the OU form in-sample while being unusable for
       forecasting to a horizon the panel does not contain.
+    * **Tried and rejected** — ``tau`` on the observation leg alone
+      (``time_scale_applies_to='observation'``, the form shipped until
+      2026-08-18). Retained as a comparison arm and nothing else: solved against
+      the panel's measured residual structure the family needs ``w_S > 1``, so it
+      can only trade correlation for variance, and the production run duly drove
+      ``tau`` to ``[12.3, 9.2, 2.5, 1.0]`` — ten prior sd out — failing
+      ``ppc_decay`` and over-covering the two oldest steps at 0.958 / 0.960.
+    * **Tried and rejected** — per-cell data augmentation for the Student-t
+      (``n x T`` conjugate scale variables), proposed when the replicate spread
+      and decay failures were attributed to the marginal t being a per-NAME
+      scale mixture. The attribution was wrong: a multivariate t's correlation
+      matrix is its scale matrix's, and reconstructing the 2026-08-18 posterior
+      shows the replicate sd ratio (1.76 predicted vs 1.75 measured) and the flat
+      replicate decay are both accounted for by ``Var(mu_reg) = 2.50`` against a
+      response variance of 0.87. It would have restored ~26k latents for no gate
+      movement.
     * **Tried and rejected** — learning a shared group scale. Carried over
       unchanged from v1: non-identified against ``sigma_base`` at low ``T_eff``.
     * **Deferred** — the multi-response ICM. Removed from the likelihood here
@@ -1032,9 +1299,11 @@ def build_kalman_pt_model_v2(
             "model through log(). Clip it at panel-prep time."
         )
 
-    groups = partition_covariance_groups(mask, panel.coverage_profile, cfg.coverage_profile_buckets)
+    groups, bucket_mean = covariance_groups_for(panel, cfg)
     if not groups:
         raise ValueError("No name has an observed trail cell; nothing to fit.")
+    n_rho = int(bucket_mean.shape[0])
+    coords["rho_bucket"] = [f"q{k + 1}" for k in range(n_rho)]
 
     with pm.Model(coords=coords) as model:
         # ---- data containers ------------------------------------------------
@@ -1119,18 +1388,64 @@ def build_kalman_pt_model_v2(
             rho_inf = pt.zeros(())
         obs_share = pm.Beta("obs_share", alpha=a_obs, beta=structured)
 
+        # ---- the split varies with a name's SCALE ----------------------------
+        # ``rho_inf`` above is the baseline: the composition of a name sitting at
+        # index 0, i.e. of average scale. ``rho_scale_slope`` tilts it on the
+        # logit scale across the scale buckets, so a slope of exactly 0 restores
+        # the single global split *and its prior* — which is what makes the two
+        # arms comparable. The tilt is one parameter regardless of the bucket
+        # count: the buckets discretise where it is evaluated, not how it is
+        # parameterised, and the relationship stays monotone by construction.
+        #
+        # Why it is needed at all: the panel's permanent per-name level lives
+        # almost entirely in the noisiest fifth of the universe (residual
+        # rho_inf 0.116 in Q5 against 0.000 in Q1-Q4), while a single rho_inf
+        # fitted in a metric weighting by 1/sigma_i^2 lands at 0.0067 -- right
+        # for 80 % of names and wrong for the fifth that dominates every
+        # unweighted statistic. See KalmanModelConfig.rho_scale_buckets.
+        tilted = (
+            n_rho > 1 and cfg.enable_isin_level and cfg.enable_ou_state and T > 1
+        )
+        if tilted:
+            rho_slope = pm.Normal(
+                "rho_scale_slope", mu=0.0, sigma=cfg.rho_scale_slope_prior
+            )
+            rho_c = pt.clip(rho_inf, 1e-6, 1.0 - 1e-6)
+            rho_vec = pm.math.sigmoid(
+                pt.log(rho_c)
+                - pt.log1p(-rho_c)
+                + rho_slope * pt.as_tensor_variable(bucket_mean)
+            )
+        else:
+            rho_vec = pt.repeat(pt.as_tensor_variable(rho_inf).reshape((1,)), n_rho)
+        pm.Deterministic("rho_inf_by_bucket", rho_vec, dims="rho_bucket")
+
         f = cfg.variance_weight_floor
-        w_level = (1.0 - obs_share) * rho_inf
-        w_state = (1.0 - obs_share) * (1.0 - rho_inf)
-        w_obs = obs_share
-        # Floor the legs off the boundary: sqrt(w) has unbounded derivative at 0
-        # and the level/state legs sit inside a Cholesky, so a leg collapsing to
-        # exactly 0 is both a geometry problem and a near-singular matrix.
-        w_level = w_level + f
-        w_state = w_state + f
-        w_obs = w_obs + f
-        total_w = w_level + w_state + w_obs
-        w_level, w_state, w_obs = w_level / total_w, w_state / total_w, w_obs / total_w
+
+        def _split(rho: Any) -> tuple[Any, Any, Any]:
+            """Normalised (level, state, observation) weights for a given rho.
+
+            Elementwise, so it serves both the scalar baseline and the per-bucket
+            vector. The diagonal of the resulting correlation shape is 1 for any
+            rho, which is what keeps this a *composition*: mass given to the
+            level is mass taken from the state, never added to the total. That
+            property is the one v1 lacked, and it survives the tilt unchanged.
+            """
+            # Floor the legs off the boundary: sqrt(w) has unbounded derivative
+            # at 0 and the level/state legs sit inside a Cholesky, so a leg
+            # collapsing to exactly 0 is both a geometry problem and a
+            # near-singular matrix.
+            wl = (1.0 - obs_share) * rho + f
+            ws = (1.0 - obs_share) * (1.0 - rho) + f
+            wo = obs_share + f
+            tot = wl + ws + wo
+            return wl / tot, ws / tot, wo / tot
+
+        # Baseline weights — reported, and used for the summary Deterministics so
+        # they stay scalars comparable with every earlier run. They describe the
+        # average-scale name, not any particular bucket.
+        w_level, w_state, w_obs = _split(rho_inf)
+        wl_vec, ws_vec, wo_vec = _split(rho_vec)
 
         pm.Deterministic(
             "variance_weights",
@@ -1202,7 +1517,10 @@ def build_kalman_pt_model_v2(
 
         if cfg.enable_time_scale and T > 1:
             tau_free = pm.LogNormal(
-                "sigma_time_free", mu=0.0, sigma=0.25, dims="time_step"
+                "sigma_time_free",
+                mu=0.0,
+                sigma=cfg.time_scale_prior_sigma,
+                dims="time_step",
             )
             tau_time = pm.Deterministic(
                 "sigma_time",
@@ -1214,17 +1532,32 @@ def build_kalman_pt_model_v2(
             pm.Deterministic("sigma_time", tau_time, dims="time")
 
         # ---- the marginal within-name covariance shape ------------------------
-        # A = w_L*J + w_S*K + w_O*diag(tau^2), shared across names; the per-name
-        # scale enters as the multiplier sigma_i^2. Integrating the level and the
-        # state out of the mean and into this matrix is the whole v2 change:
-        # 32,503 sampled parameters become ~60, the Neal funnel between the
-        # scales and their latent fields disappears, and the gradient goes from
-        # ~1.6 s to ~2.3 ms on the production panel.
-        A_full = (
-            w_level * pt.ones((T, T))
-            + w_state * K
-            + w_obs * pt.diag(tau_time**2)
-        )
+        # C is the correlation SHAPE -- level + OU state + white noise, summing to
+        # 1 on the diagonal -- and ``tau`` rescales each lookback column. The
+        # per-name scale enters as the multiplier sigma_i^2. Integrating the level
+        # and the state out of the mean and into this matrix is the whole v2
+        # change: 32,503 sampled parameters become ~60, the Neal funnel between
+        # the scales and their latent fields disappears, and the gradient goes
+        # from ~1.6 s to ~2.3 ms on the production panel.
+        #
+        # WHERE tau goes is load-bearing, and the 2026-08-18 run is what proved
+        # it -- see ``KalmanModelConfig.time_scale_applies_to``. On the
+        # covariance (the default) correlations are tau-free and only the
+        # variances move; on the observation leg alone, raising a far column's
+        # variance divides all of its correlations by sqrt(A_ss * A_tt), and that
+        # family cannot reach this panel's measured structure at any parameter
+        # value.
+        def _cov(wl: Any, ws: Any, wo: Any) -> Any:
+            """Within-name covariance shape for one variance composition."""
+            if cfg.time_scale_applies_to == "covariance":
+                shape = wl * pt.ones((T, T)) + ws * K + wo * pt.eye(T)
+                return shape * tau_time[:, None] * tau_time[None, :]
+            return wl * pt.ones((T, T)) + ws * K + wo * pt.diag(tau_time**2)
+
+        # One matrix per scale bucket, each shared by every name in it — so the
+        # Cholesky count tracks the number of GROUPS, not the number of names.
+        A_by_bucket = [_cov(wl_vec[k], ws_vec[k], wo_vec[k]) for k in range(n_rho)]
+        A_full = A_by_bucket[0] if n_rho == 1 else _cov(w_level, w_state, w_obs)
         pm.Deterministic("within_name_cov", A_full, dims=("time", "time_b"))
 
         if cfg.likelihood == "student_t":
@@ -1243,12 +1576,12 @@ def build_kalman_pt_model_v2(
         # factorising 6,497 matrices, which measured 1.35 s/gradient at n=2000.
         gain_full = pt.zeros(n_isin)
         var_full = pt.zeros(n_isin)
-        for gi, (rows, cols) in enumerate(groups):
+        for gi, (rows, cols, bkt) in enumerate(groups):
             Tg = len(cols)
             col_idx = pt.as_tensor_variable(cols.astype("int64"))
             row_idx = pt.as_tensor_variable(rows.astype("int64"))
 
-            A_g = A_full[col_idx][:, col_idx]
+            A_g = A_by_bucket[bkt][col_idx][:, col_idx]
             L_g = pt.linalg.cholesky(A_g + cfg.cholesky_jitter * pt.eye(Tg))
 
             sigma_g = sigma_isin[row_idx]
@@ -1275,7 +1608,18 @@ def build_kalman_pt_model_v2(
             # group, but the posterior VARIANCE still scales with sigma_i, so the
             # per-name uncertainty the coverage-gradient gate checks is preserved.
             now_pos = int(np.flatnonzero(cols == (T - 1))[0])
-            c_g = w_level * pt.ones(Tg) + w_state * K[col_idx][:, col_idx][:, now_pos]
+            # Cov(latent_now, y_t) in units of sigma_i^2. The latent is the state
+            # at *now*, on the now scale (tau is anchored at 1 there), so under
+            # the covariance scaling each column's covariance with it carries that
+            # column's tau -- the same factor its own variance carries. sigma_i^2
+            # cancels out of the gain and tau cancels out of ``var_unit``
+            # entirely, which is the assertion the self-test checks.
+            c_g = (
+                wl_vec[bkt] * pt.ones(Tg)
+                + ws_vec[bkt] * K[col_idx][:, col_idx][:, now_pos]
+            )
+            if cfg.time_scale_applies_to == "covariance":
+                c_g = c_g * tau_time[col_idx]
             Ainv_c = pt.linalg.solve_triangular(
                 L_g.T,
                 pt.linalg.solve_triangular(L_g, c_g, lower=True),
@@ -1292,7 +1636,7 @@ def build_kalman_pt_model_v2(
             # including it would make the reported per-name sd a function of how
             # surprising the name is, which reads as confidence where it is not.
             var_unit = pt.maximum(
-                w_level + w_state - pt.dot(c_g, Ainv_c), cfg.cholesky_jitter
+                wl_vec[bkt] + ws_vec[bkt] - pt.dot(c_g, Ainv_c), cfg.cholesky_jitter
             )
             var_full = pt.set_subtensor(var_full[row_idx], var_unit * sigma_g**2)
 
@@ -1406,12 +1750,27 @@ def _simulate_panel(
     sigma_state_true: float = 0.75,
     sigma_obs_true: float = 0.35,
     ell_true: float = 105.0,
+    tau_true: tuple[float, ...] = (1.45, 1.20, 1.05),
+    rho_slope_true: float = 0.8,
     seed: int = 42,
 ) -> tuple[KalmanPanelV2, dict[str, float]]:
-    """Simulate a panel with a known level / state / noise split.
+    """Simulate a panel with a known level / state / noise split and time scale.
 
     Returns the panel and the truth dict, so the self-test can check recovery of
-    the quantity this redesign exists to estimate.
+    the quantities this redesign exists to estimate.
+
+    ``tau_true`` gives the per-lookback scale of the *whole* residual, oldest
+    first and implicitly anchored at 1.0 for the snapshot — the structure
+    :attr:`KalmanModelConfig.time_scale_applies_to` = ``'covariance'`` fits. It is
+    simulated because the production path fits it: a self-test that generates a
+    flat trail certifies a model nobody runs.
+
+    ``rho_slope_true`` tilts each name's level/state *composition* by its scale
+    index on the logit scale, which is the structure
+    :attr:`KalmanModelConfig.rho_scale_buckets` fits. ``sigma_level_true`` and
+    ``sigma_state_true`` then describe the **baseline** name, at index 0; a name
+    a standard deviation noisier carries proportionally more permanent level.
+    Set it to ``0.0`` to simulate the single global split.
     """
     rng = np.random.default_rng(seed)
     cfg = KalmanModelConfig(lookbacks=lookbacks)
@@ -1423,7 +1782,17 @@ def _simulate_panel(
     beta_true = np.array([0.30, -0.20, 0.10, 0.05])[:n_drift]
     mu_reg = X @ beta_true
 
-    level = rng.normal(scale=sigma_level_true, size=n_isin)
+    # Per-name variance composition, tilted by the scale index. The structured
+    # variance is held FIXED across names — only its split moves — so the tilt
+    # cannot be recovered from marginal spread and has to come from the shape of
+    # the decay, which is the whole claim being tested.
+    scale_index = rng.normal(size=n_isin)
+    struct_var = sigma_level_true**2 + sigma_state_true**2
+    rho_base = sigma_level_true**2 / struct_var
+    base_logit = math.log(rho_base / (1.0 - rho_base))
+    rho_i = 1.0 / (1.0 + np.exp(-(base_logit + rho_slope_true * scale_index)))
+
+    level = rng.normal(size=n_isin) * np.sqrt(struct_var * rho_i)
     level -= level.mean()
 
     gaps = np.abs(np.diff(days))
@@ -1434,10 +1803,20 @@ def _simulate_panel(
         s[:, j] = phi[j - 1] * s[:, j - 1] + np.sqrt(1 - phi[j - 1] ** 2) * rng.normal(
             size=n_isin
         )
-    s *= sigma_state_true
+    s *= np.sqrt(struct_var * (1.0 - rho_i))[:, None]
 
-    mu = mu_reg[:, None] + level[:, None] + s
-    Y = mu + rng.normal(scale=sigma_obs_true, size=(n_isin, T))
+    tau = np.asarray([*tau_true, 1.0], dtype="float64")
+    if tau.shape[0] != T:
+        raise ValueError(
+            f"tau_true has {len(tau_true)} entries; {T - 1} are needed for "
+            f"lookbacks={lookbacks!r} (the snapshot is anchored at 1.0)."
+        )
+    resid = (
+        level[:, None]
+        + s
+        + rng.normal(scale=sigma_obs_true, size=(n_isin, T))
+    )
+    Y = mu_reg[:, None] + tau[None, :] * resid
 
     panel = KalmanPanelV2(
         frame=pd.DataFrame({"isin": [f"SIM{i:05d}" for i in range(n_isin)]}),
@@ -1454,6 +1833,7 @@ def _simulate_panel(
         avg_beta=np.zeros(n_isin),
         size_ratio=np.zeros(n_isin),
         volume_ratio=np.zeros(n_isin),
+        scale_index=scale_index,
     )
     truth = {
         "sigma_level": sigma_level_true,
@@ -1463,11 +1843,17 @@ def _simulate_panel(
         "rho_inf_implied": sigma_level_true**2
         / (sigma_level_true**2 + sigma_state_true**2),
     }
+    truth.update({f"sigma_time[t{j}]": float(tau[j]) for j in range(T)})
+    truth["rho_scale_slope"] = float(rho_slope_true)
     return panel, truth
 
 
 def _selftest(draws: int = 500, tune: int = 500, chains: int = 2) -> int:
-    """Fit a simulated panel and check the level / state split is recovered.
+    """Fit a simulated panel and check the latent decomposition is recovered.
+
+    Covers the level / state / noise split, the OU length-scale and the
+    per-lookback time scale — every quantity the production posterior reports and
+    the decision layer reads through.
 
     Returns a process exit code: 0 on success, 1 if any truth falls outside the
     posterior 94 % HDI.
@@ -1499,18 +1885,26 @@ def _selftest(draws: int = 500, tune: int = 500, chains: int = 2) -> int:
             compute_convergence_checks=False,
         )
 
-    names = [
+    # ``sigma_time`` is a vector, so it is summarised as one variable and checked
+    # per element. The snapshot entry is pinned at 1.0 by construction and is
+    # included only so a mis-anchored grid shows up as a failure rather than as a
+    # silently shifted scale.
+    var_names = [
         "sigma_level",
         "sigma_state",
         "sigma_obs_base",
         "ou_length_scale_days",
         "rho_inf_implied",
+        "sigma_time",
+        "rho_scale_slope",
     ]
+    names = [n for n in var_names if n != "sigma_time"]
+    names += [f"sigma_time[t{j}]" for j in range(panel.n_time)]
     # ArviZ 1.x: ``ci_prob`` replaces ``hdi_prob``, and the interval columns are
     # named ``eti<pct>_lb`` / ``eti<pct>_ub`` rather than ``hdi_3%`` / ``hdi_97%``.
     # Resolve them by suffix so a future default change does not silently break
     # the check into a KeyError.
-    summary = az.summary(idata, var_names=names, ci_prob=0.94)
+    summary = az.summary(idata, var_names=var_names, ci_prob=0.94)
     lb_col = next(c for c in summary.columns if str(c).endswith("_lb"))
     ub_col = next(c for c in summary.columns if str(c).endswith("_ub"))
     print("\nRecovery check (truth must lie inside the 94% interval):")
@@ -1527,13 +1921,17 @@ def _selftest(draws: int = 500, tune: int = 500, chains: int = 2) -> int:
         )
 
     div = int(idata.sample_stats["diverging"].sum())
-    min_ess = float(summary["ess_bulk"].min())
-    max_rhat = float(summary["r_hat"].max())
+    # ``sigma_time[t{T-1}]`` is a pinned constant: sd 0, ESS == total draws and
+    # R-hat NaN by construction. Reporting it as the model's mixing would be
+    # reporting an assumption.
+    moving = summary.drop(index=f"sigma_time[t{panel.n_time - 1}]", errors="ignore")
+    min_ess = float(moving["ess_bulk"].min())
+    max_rhat = float(moving["r_hat"].max())
     print(f"\n  divergences {div}   min bulk ESS {min_ess:.0f}   max R-hat {max_rhat:.4f}")
     if failures:
         print(f"\nSELFTEST FAILED: {failures} parameter(s) outside the HDI")
         return 1
-    print("\nSELFTEST PASSED: level / state split recovered")
+    print("\nSELFTEST PASSED: split, time scale and scale-dependent composition recovered")
     return 0
 
 
