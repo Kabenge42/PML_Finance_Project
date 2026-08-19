@@ -73,6 +73,7 @@ import math
 import os
 import sys
 import uuid
+import warnings
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -140,6 +141,11 @@ _RANKING_COLS: tuple[str, ...] = (
     "expected_sharpe_ratio",
     "reward_to_cvar",
     "cvar_book_weight",
+    # The probability column that actually orders names, so it is a ranking
+    # metric and must be suppressed on a clip-pinned row like the others.
+    # ``prob_pos`` is deliberately NOT here: it is pinned at 1.0 for most of the
+    # universe, carries no ordering, and is retained as a reported diagnostic.
+    "p_upside_pos_cond",
 )
 
 #: Columns the ``export_ranking_range`` gate bounds. Both the exported names and
@@ -149,6 +155,7 @@ _RANKING_RANGE_COLS: tuple[str, ...] = (
     "expected_sharpe_ratio",
     "reward_to_cvar",
     "expected_sharpe",
+    "p_upside_pos_cond",
 )
 
 #: The canonical v2 analytics table. **v2-suffixed on purpose**: v1 and the live
@@ -234,13 +241,24 @@ GATE_CATALOGUE: dict[str, str] = {
         "getting its time structure completely wrong -- v1 did."
     ),
     "drift_contrast_leakage": (
-        "NEW: no drift feature may correlate more strongly with a trail CONTRAST "
-        "than with the response level. mu_reg is constant in t, so such content "
-        "cannot enter the mean -- and under a correlated likelihood the contrast "
-        "directions carry ~12x the weight of the level, so it is absorbed by "
-        "distorting the covariance instead. That is the whole of the 2026-08-18 "
-        "ppc_t_spread / ppc_coverage / ppc_decay failure, and it costs "
-        "milliseconds to check before the fit."
+        "NEW: no drift feature may correlate materially more strongly with a "
+        "trail CONTRAST than with the response level -- 'materially' being "
+        "CONTRAST_DOMINANCE_MARGIN, since the bare comparison fires on sampling "
+        "noise. mu_reg is constant in t, so such content cannot enter the mean "
+        "-- and under a correlated likelihood the contrast directions carry ~12x "
+        "the weight of the level, so it is absorbed by distorting the covariance "
+        "instead. That is the whole of the 2026-08-18 ppc_t_spread / "
+        "ppc_coverage / ppc_decay failure, and it costs milliseconds to check "
+        "before the fit."
+    ),
+    "mean_calibration": (
+        "NEW: the slope of the response on the fitted mean must be ~1. An "
+        "over-shrunk mean does not lose its missing variance, it parks it in "
+        "Cov(mu, resid) -- and because mu is constant in t that is PERMANENT "
+        "variance no replicate carries, which is exactly how run fa532b925732 "
+        "failed ppc_decay (slope 1.230, 15.1% of Var(y_now)) while mean_spread "
+        "read a healthy 0.33. mean_spread is one-sided and structurally cannot "
+        "see this; that is why both exist."
     ),
     "mean_spread": (
         "NEW: the fitted mean may not have more variance than the response it "
@@ -443,6 +461,12 @@ class KalmanRunConfigV2:
     #: an additive mean with more variance than its response implies a negative
     #: residual variance, so anything above it is arithmetic, not fit.
     gate_mean_spread_max: float = 1.0
+    #: Accepted range for the slope of ``y_now`` on the fitted mean. A
+    #: calibrated mean gives exactly 1; +/-0.1 is about twice the spread the
+    #: 2026-08-19 profile showed across the plausible ``signal_exponent``
+    #: band, so it admits a fitted lambda anywhere in that band and still
+    #: rejects the 1.230 that failed ppc_decay.
+    gate_mean_calibration: tuple[float, float] = (0.90, 1.10)
 
     # ---- decision layer ----------------------------------------------------
     mc_horizon: int = 4
@@ -629,11 +653,21 @@ DRIFT_EXCLUSIONS: dict[str, str] = {
     "feat_pt_accuracy_1y": "trail-contrast identity: corr 0.02 level, -0.23 (now-1w)",
     "feat_pt_noise_drift": "trail-contrast identity: corr 0.02 level, +0.24 (now-3m)",
     # -- v2 additions ---------------------------------------------------------
-    "feat_net_eps_drift": "superseded by feat_eps_signal + feat_eps_coverage",
-    "feat_last_q_surprise": "52.1% NULL, |beta| 0.0003; superseded by feat_eps_signal",
-    "feat_last_y_surprise": "23.2% NULL, |beta| 0.0054; superseded by feat_eps_signal",
-    "feat_eps_beat_rate": "45.4% NULL, |beta| 0.0115; superseded by feat_eps_signal",
-    "feat_eps_beat_rate_annual": "14.6% NULL, |beta| 0.0013; superseded by feat_eps_signal",
+    # The four raw EPS legs below are superseded by the consolidated block
+    # mv_pymc_kalman_pt_v2 now emits: feat_eps_signal_surprise (the two _pct
+    # legs, rescaled /100), feat_eps_signal_beat (the two beat rates) and
+    # feat_eps_signal_coverage. They are three columns rather than one because
+    # the legs sit on three scales -- percent, share, ratio -- and averaging
+    # across them just reproduces whichever leg carries the largest units.
+    #
+    # feat_net_eps_drift is NOT excluded: it is the trend leg of that same
+    # block, already a raw decimal ratio, so it enters the drift matrix on its
+    # own rather than being folded into an average. Its support counter
+    # feat_net_eps_drift_n stays excluded above.
+    "feat_last_q_surprise": "52.1% NULL, |beta| 0.0003; -> feat_eps_signal_surprise",
+    "feat_last_y_surprise": "23.2% NULL, |beta| 0.0054; -> feat_eps_signal_surprise",
+    "feat_eps_beat_rate": "45.4% NULL, |beta| 0.0115; -> feat_eps_signal_beat",
+    "feat_eps_beat_rate_annual": "14.6% NULL, |beta| 0.0013; -> feat_eps_signal_beat",
     "feat_mcap_country_sec_r": "near-duplicate of feat_mcap_country_r",
     "feat_mcap_region_r": "near-duplicate of feat_mcap_country_r",
     "feat_mcap_region_sec_r": "near-duplicate of feat_mcap_country_r",
@@ -715,6 +749,43 @@ def select_drift_features_v2(frame: pd.DataFrame) -> list[str]:
 #: flagged on noise, since the rule is a ratio of two small numbers.
 CONTRAST_CORR_FLOOR: float = 0.05
 
+#: How far the contrast correlation must *exceed* the level correlation before
+#: the screen calls a feature an identity leg.
+#:
+#: :data:`CONTRAST_CORR_FLOOR` guards the absolute size of the two correlations;
+#: it does nothing about their *ratio*, and the rule is a ratio. Without a
+#: margin the test is ``|corr_contrast| > |corr_level|``, which any feature
+#: whose two correlations are equal up to sampling noise passes half the time.
+#: At n ~ 6.5k names a correlation carries se ~ 1/sqrt(n) = 0.013, so a 0.014
+#: excess -- one standard error -- is not evidence of anything.
+#:
+#: Calibrated 2026-08-19 by re-admitting the six known identity legs to the
+#: design matrix and measuring both correlations un-rotated against the same
+#: universe the gate runs on (6499 names, T = 4). ``dominance`` is
+#: ``|corr_contrast| / max(|corr_level|, CONTRAST_CORR_FLOOR)``:
+#:
+#: ===============================  =========  ==========
+#: feature                          dominance  identity?
+#: ===============================  =========  ==========
+#: ``feat_pt_drift``                     7.17  yes
+#: ``feat_pt_noise_drift``               5.09  yes
+#: ``feat_pt_accuracy_1y``               3.26  yes
+#: ``feat_price_drift``                  1.97  yes
+#: ``feat_one_day_return``               1.88  yes
+#: ``feat_price_chg_pct_3m``             1.65  yes
+#: -- margin sits here --                1.50
+#: ``feat_eps_signal_beat``              1.14  no
+#: ``feat_median_piotroski_f_score``     0.62  no
+#: ``feat_coverage_drift``               0.46  no
+#: ===============================  =========  ==========
+#:
+#: The two populations are separated by a factor of 1.45 with nothing in
+#: between, so the margin is not fitted to the boundary case: it can move
+#: anywhere in ``(1.15, 1.65)`` without changing a single verdict on this
+#: universe. Raise it only with a measurement like the one above, never to
+#: clear a failing run.
+CONTRAST_DOMINANCE_MARGIN: float = 1.5
+
 
 def screen_contrast_identities(
     Y: np.ndarray,
@@ -772,13 +843,28 @@ def screen_contrast_identities(
     pandas.DataFrame
         One row per drift feature, sorted worst first:
         ``feature``, ``corr_level``, ``corr_contrast``, ``contrast_gap_days``,
-        ``is_identity``.
+        ``dominance``, ``is_identity``.
 
     Notes
     -----
-    A feature is an identity when
-    ``abs(corr_contrast) > max(abs(corr_level), CONTRAST_CORR_FLOOR)``. Both
-    correlations are computed pairwise-complete, and the contrast is taken
+    A feature is an identity when its **dominance**
+
+    .. code-block:: text
+
+        dominance = abs(corr_contrast) / max(abs(corr_level), CONTRAST_CORR_FLOOR)
+
+    exceeds :data:`CONTRAST_DOMINANCE_MARGIN`. The margin is the whole of the
+    test's tolerance for sampling noise: the un-margined form
+    ``abs(corr_contrast) > max(abs(corr_level), CONTRAST_CORR_FLOOR)`` fires on a
+    one-standard-error excess, which on 2026-08-19 flagged
+    ``feat_eps_signal_beat`` at -0.101 level against -0.115 contrast -- a
+    difference of 0.014 where a correlation on 6.5k names carries se 0.013. That
+    feature is an EPS beat rate; it contains no price and no price-target term,
+    so it cannot be a leg of ``Delta log PT - Delta log P`` by construction, and
+    the six features that are sit at dominance 1.65 and above. See the constant
+    for the calibration table.
+
+    Both correlations are computed pairwise-complete, and the contrast is taken
     against the snapshot column because that is the one every name has and every
     decision reads.
     """
@@ -807,21 +893,21 @@ def screen_contrast_identities(
             r = _corr(x, contrast)
             if math.isfinite(r) and abs(r) > abs(best_corr):
                 best_gap, best_corr = gap, r
+        reference = max(abs(level) if math.isfinite(level) else 0.0, CONTRAST_CORR_FLOOR)
+        dominance = abs(best_corr) / reference
         rows.append(
             {
                 "feature": name,
                 "corr_level": level,
                 "corr_contrast": best_corr,
                 "contrast_gap_days": best_gap,
-                "is_identity": abs(best_corr)
-                > max(abs(level) if math.isfinite(level) else 0.0, CONTRAST_CORR_FLOOR),
+                "dominance": dominance,
+                "is_identity": dominance > CONTRAST_DOMINANCE_MARGIN,
             }
         )
     out = pd.DataFrame(rows)
     return out.sort_values(
-        ["is_identity", "corr_contrast"],
-        key=lambda c: c.abs() if c.name == "corr_contrast" else c,
-        ascending=False,
+        ["is_identity", "dominance"], ascending=False
     ).reset_index(drop=True)
 
 
@@ -1122,30 +1208,38 @@ def run_panel_diagnostics(
     if screen is not None and not screen.empty:
         out["contrast_screen"] = screen
         offenders = screen.loc[screen["is_identity"]]
-        detail = (
-            "; ".join(
-                f"{r.feature} {r.corr_level:+.2f} level vs {r.corr_contrast:+.2f} "
-                f"at a {r.contrast_gap_days:.0f}d gap"
-                for r in offenders.itertuples()
+        if offenders.empty:
+            worst = screen.iloc[0]
+            detail = (
+                "every feature is measured on the level, as the mean requires. "
+                f"Closest to the margin: {worst.feature} at dominance "
+                f"{worst.dominance:.2f} ({worst.corr_level:+.2f} level vs "
+                f"{worst.corr_contrast:+.2f} at a {worst.contrast_gap_days:.0f}d gap)."
             )
-            or "every feature is measured on the level, as the mean requires."
-        )
+        else:
+            detail = (
+                "; ".join(
+                    f"{r.feature} {r.corr_level:+.2f} level vs {r.corr_contrast:+.2f} "
+                    f"at a {r.contrast_gap_days:.0f}d gap (dominance {r.dominance:.2f})"
+                    for r in offenders.itertuples()
+                )
+                + " -- add the offenders to DRIFT_EXCLUSIONS; they cannot be "
+                "fitted by a mean that is constant in time."
+            )
         report.add(
             GateResult(
                 name="drift_contrast_leakage",
                 passed=offenders.empty,
                 value=(
                     f"{len(offenders)} of {len(screen)} feature(s) measure the "
-                    "trail's increments"
+                    f"trail's increments (max dominance "
+                    f"{screen['dominance'].max():.2f})"
                 ),
                 threshold=(
-                    f"|corr(contrast)| <= max(|corr(level)|, {CONTRAST_CORR_FLOOR})"
+                    f"|corr(contrast)| <= {CONTRAST_DOMINANCE_MARGIN} x "
+                    f"max(|corr(level)|, {CONTRAST_CORR_FLOOR})"
                 ),
-                detail=(
-                    detail
-                    + " -- add the offenders to DRIFT_EXCLUSIONS; they cannot be "
-                    "fitted by a mean that is constant in time."
-                ),
+                detail=detail,
             )
         )
 
@@ -1617,12 +1711,22 @@ def run_posterior_predictive(
     )
 
     # ---- per-time coverage -------------------------------------------------
+    # `rep` is NaN wherever a cell has no replicate at all -- an unobserved
+    # (isin, time) is never drawn -- and reducing over an all-NaN slice makes
+    # numpy warn once per cell rather than telling you how many there are.
+    # Exclude those cells from the reduction and report the count instead.
+    has_rep = np.isfinite(rep).any(axis=0)  # (isin, time)
+    n_no_rep = int((mask & ~has_rep).sum())
     ql, qh = np.nanpercentile(
-        rep, list(run_cfg.gate_coverage_percentiles), axis=0
+        np.where(has_rep[None, :, :], rep, 0.0),
+        list(run_cfg.gate_coverage_percentiles),
+        axis=0,
     )  # (isin, time)
-    inside = (obs >= ql) & (obs <= qh) & mask
-    cov = inside.sum(axis=0) / np.maximum(mask.sum(axis=0), 1)
+    scored = mask & has_rep
+    inside = (obs >= ql) & (obs <= qh) & scored
+    cov = inside.sum(axis=0) / np.maximum(scored.sum(axis=0), 1)
     out["coverage"] = cov
+    out["n_cells_without_replicates"] = n_no_rep
     worst = float(np.max(np.abs(cov - run_cfg.gate_coverage_target)))
     report.add(
         GateResult(
@@ -1630,14 +1734,34 @@ def run_posterior_predictive(
             passed=worst <= run_cfg.gate_coverage_tol,
             value=f"{cov.min():.3f} - {cov.max():.3f} (target {run_cfg.gate_coverage_target:.2f})",
             threshold=f"within +/-{run_cfg.gate_coverage_tol}",
-            detail=f"per-step: {np.round(cov, 4).tolist()}",
+            detail=(
+                f"per-step: {np.round(cov, 4).tolist()}; scored cells per step "
+                f"{scored.sum(axis=0).tolist()}"
+                + (
+                    f"; {n_no_rep} observed cell(s) had no replicate and were excluded"
+                    if n_no_rep
+                    else ""
+                )
+            ),
         )
     )
 
     # ---- correlation decay (new) -------------------------------------------
+    # A mean that is constant in t contributes the same constant at every gap, so
+    # it reads as a permanent level and the raw statistic mixes the mean's share
+    # with the covariance's. Report the split alongside the verdict: f is the
+    # mean's variance share, and f alone is the floor the replicated rho_inf
+    # cannot go below. On run fa532b925732 that floor WAS the failure -- f was
+    # 0.33 against an observed permanent share near 0.48.
+    mu_dec = _fitted_mean(idata, panel)
+    var_mu_dec = float(np.nanvar(mu_dec))
+    var_resid_dec = float(np.nanvar(np.where(mask, obs - mu_dec[:, None], np.nan)))
+    f_share = var_mu_dec / max(var_mu_dec + var_resid_dec, _EPS)
+
     decay = _decay_interval(obs, rep, mask, panel.time_days)
     if decay is not None:
         out["decay"] = decay
+        out["decay_mean_share"] = f_share
         report.add(
             GateResult(
                 name="ppc_decay",
@@ -1652,10 +1776,13 @@ def run_posterior_predictive(
                 ),
                 threshold="observed inside the replicated 94% interval",
                 detail=(
-                    "The model reproduces the panel's time structure, not only "
-                    "its marginal spread. Read it next to ppc_decay_residual: the "
-                    "raw statistic carries the regression mean, the residual one "
-                    "does not."
+                    f"Mean carries Var(mu)/(Var(mu)+Var(resid)) = {f_share:.3f} of "
+                    "the response; the covariance carries the rest. The mean's "
+                    "share is a FLOOR on the replicated rho_inf, so a replicated "
+                    "value below the observed one with a healthy residual decay "
+                    "means the mean is too small -- check mean_calibration before "
+                    "touching rho_inf or the OU length scale. Read alongside "
+                    "ppc_decay_residual, which removes the mean from both sides."
                 ),
             )
         )
@@ -1670,7 +1797,10 @@ def run_posterior_predictive(
     # wearing a covariance failure's clothes, which took hours to unpick by hand.
     # Subtracting the same posterior-mean mean from both sides separates them.
     try:
-        centre = _posterior_mean(idata, "mu_reg", panel)[:, None]
+        # The mean the likelihood actually centres on -- ``mu_scaled`` after the
+        # signal-scaling exponent. Centring on the unscaled ``mu_reg`` would
+        # leave the scaling in the residual.
+        centre = _fitted_mean(idata, panel)[:, None]
         try:
             centre = centre + _posterior_draws(idata, "alpha_time").mean(axis=1)[None, :]
         except KeyError:  # T == 1 registers no alpha_time
@@ -1741,7 +1871,29 @@ def run_diagnostics(
         for v in post.data_vars
         if "isin" not in post[v].dims and post[v].size <= post.sizes["chain"] * post.sizes["draw"] * 32
     ]
-    summary = az.summary(idata, var_names=globals_, ci_prob=0.89)
+    # `alpha_time[t3]` and `sigma_time[t3]` are the anchors of
+    # `pt.concatenate([free, zeros(1)])`, so they are pinned at 0 and 1 by
+    # construction. R-hat and ESS are between-chain statistics and divide by a
+    # within-chain variance of exactly zero: that is where the three
+    # arviz_stats "invalid value encountered in scalar divide" RuntimeWarnings
+    # come from. Suppress them at the source rather than at the console, keep
+    # the rows in the exported table (they are real parameters, just pinned),
+    # and gate on the free ones only -- `.max()`/`.min()` skip the NaN anyway,
+    # so this changes no value today but stops a future pinned parameter from
+    # reading as converged.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="invalid value encountered", category=RuntimeWarning
+        )
+        summary = az.summary(idata, var_names=globals_, ci_prob=0.89)
+    free = summary.loc[summary["sd"] > _EPS]
+    n_pinned = len(summary) - len(free)
+    if n_pinned:
+        logger.debug(
+            "%d pinned parameter(s) excluded from the convergence gates: %s",
+            n_pinned,
+            summary.index[summary["sd"] <= _EPS].tolist(),
+        )
 
     div = int(idata.sample_stats["diverging"].sum()) if "diverging" in idata.sample_stats else 0
     report.add(
@@ -1754,8 +1906,8 @@ def run_diagnostics(
         )
     )
 
-    max_rhat = float(summary["r_hat"].max())
-    worst_rhat = str(summary["r_hat"].idxmax())
+    max_rhat = float(free["r_hat"].max())
+    worst_rhat = str(free["r_hat"].idxmax())
     report.add(
         GateResult(
             name="r_hat",
@@ -1765,8 +1917,8 @@ def run_diagnostics(
         )
     )
 
-    min_ess = float(summary["ess_bulk"].min())
-    worst_ess = str(summary["ess_bulk"].idxmin())
+    min_ess = float(free["ess_bulk"].min())
+    worst_ess = str(free["ess_bulk"].idxmin())
     report.add(
         GateResult(
             name="ess_bulk",
@@ -1779,26 +1931,69 @@ def run_diagnostics(
     # ---- mean spread --------------------------------------------------------
     # The regression mean is what every replicate is centred on, so its spread
     # sets a floor under the replicated variance no likelihood can undo.
-    mu_reg = _posterior_mean(idata, "mu_reg", panel)
-    var_mu = float(np.nanvar(mu_reg))
-    var_y = float(np.nanvar(panel.Y[:, panel.n_time - 1]))
+    mu_mean = _fitted_mean(idata, panel)
+    var_mu = float(np.nanvar(mu_mean))
+    y_now = panel.Y[:, panel.n_time - 1]
+    var_y = float(np.nanvar(y_now))
     ratio = var_mu / max(var_y, _EPS)
     beta_max = float(np.abs(_posterior_draws(idata, "beta").mean(axis=1)).max())
     report.add(
         GateResult(
             name="mean_spread",
             passed=math.isfinite(ratio) and ratio <= run_cfg.gate_mean_spread_max,
-            value=f"Var(mu_reg)/Var(y_now) = {ratio:.2f}",
+            value=f"Var(mu)/Var(y_now) = {ratio:.2f}",
             threshold=f"<= {run_cfg.gate_mean_spread_max:.2f}",
             detail=(
-                f"Var(mu_reg) {var_mu:.3f}, Var(y_now) {var_y:.3f}, "
+                f"Var(mu) {var_mu:.3f}, Var(y_now) {var_y:.3f}, "
                 f"max |beta| {beta_max:.3f}. Above 1 the mean is not explaining "
                 "the response, it is adding variance to it -- look for a design "
                 "column the mean cannot legally use (drift_contrast_leakage) "
-                "before touching the likelihood."
+                "before touching the likelihood. This gate is ONE-SIDED and "
+                "cannot see an under-dispersed mean; mean_calibration can."
             ),
         )
     )
+
+    # ---- mean calibration ---------------------------------------------------
+    # The gate mean_spread could not have caught the 2026-08-19 failure: it
+    # reported a healthy-looking 0.33 while the mean was shrunk by 19 %. Regress
+    # the response on the fitted mean instead. A calibrated mean gives slope 1;
+    # above 1 the mean is too small, and the shortfall does not vanish -- it sits
+    # in Cov(mu, resid), which is PERMANENT variance (mu is constant in t) that
+    # the generative model sets to exactly zero. That is what depresses the
+    # replicated rho_inf and fails ppc_decay, so this gate runs first and names
+    # the cause.
+    ok = np.isfinite(y_now) & np.isfinite(mu_mean)
+    if ok.sum() > 2 and np.nanstd(mu_mean[ok]) > _EPS:
+        slope = float(np.polyfit(mu_mean[ok], y_now[ok], 1)[0])
+        resid = y_now[ok] - mu_mean[ok]
+        cov_share = 2.0 * float(np.cov(mu_mean[ok], resid)[0, 1]) / max(var_y, _EPS)
+        lo, hi = run_cfg.gate_mean_calibration
+        report.add(
+            GateResult(
+                name="mean_calibration",
+                passed=bool(math.isfinite(slope) and lo <= slope <= hi),
+                value=f"slope {slope:.3f}, 2Cov(mu,resid)/Var(y) = {cov_share:+.3f}",
+                threshold=f"slope in [{lo:.2f}, {hi:.2f}]",
+                # NON-BLOCKING on purpose, and not because the check is weak.
+                # Every way this gate fails also fails ppc_decay, which IS
+                # blocking -- the mis-calibration and the decay shortfall are the
+                # same number seen twice. So the run is still refused; this gate's
+                # job is to say WHY in one line instead of requiring a posterior
+                # reconstruction. Promote it to blocking once a production run has
+                # established what slope is actually achievable (the 2026-08-19
+                # smoke fit landed at 1.078 with lambda free).
+                blocking=False,
+                detail=(
+                    "Slope > 1 means the mean is over-shrunk and the missing "
+                    "permanent variance is parked in Cov(mu, resid), which no "
+                    "replicate reproduces -- read ppc_decay next. Slope < 1 means "
+                    "the mean is over-fitted; read mean_spread and ppc_t_spread. "
+                    "Measured 1.230 / +0.151 on run fa532b925732, which is the "
+                    "whole of that run's ppc_decay failure."
+                ),
+            )
+        )
     return summary
 
 
@@ -1827,6 +2022,20 @@ def _posterior_mean(idata: Any, name: str, panel: KalmanPanelV2) -> np.ndarray:
     except KeyError:
         logger.warning("%s absent from the posterior; filling with NaN", name)
         return np.full(panel.n_isin, np.nan)
+
+
+def _fitted_mean(idata: Any, panel: KalmanPanelV2) -> np.ndarray:
+    """Posterior mean of the linear predictor the likelihood actually centres on.
+
+    ``mu_scaled`` since 2026-08-19 — ``signal_scale * mu_reg`` — falling back to
+    ``mu_reg`` for an idata fitted before the signal-scaling exponent existed.
+    Resolved by membership rather than by catching ``KeyError``: `_posterior_mean`
+    swallows that and returns an all-NaN vector, which would have surfaced as a
+    spurious ``mean_spread`` failure instead of a fallback.
+    """
+    post = idata.posterior if hasattr(idata, "posterior") else idata["posterior"]
+    name = "mu_scaled" if "mu_scaled" in post else "mu_reg"
+    return _posterior_mean(idata, name, panel)
 
 
 def run_screen(
@@ -2000,7 +2209,9 @@ def run_screen(
             blocking=False,
             detail=(
                 "prob_pos cannot order a ranking in this state. Downstream views "
-                "should read p_upside_pos_cond, which the risk book computes."
+                "read p_upside_pos_cond, which the risk book computes and which "
+                "the export ranks on and suppresses out-of-support alongside the "
+                "other ranking metrics. prob_pos stays as a reported diagnostic."
             ),
         )
     )
@@ -2363,6 +2574,14 @@ _ANALYTICS_COLUMN_COMMENTS_V2: dict[str, str] = {
         "mc_prob_pos * kalman_gain. The probability column that actually orders "
         "names -- prefer it to prob_pos, which is pinned at 1.0 for most of the "
         "universe and cannot rank."
+    ),
+    "prob_pos": (
+        "Share of the per-name posterior above zero. REPORTED, NOT RANKED: the "
+        "smoother is Rao-Blackwellised over the latent, so this saturates at 1.0 "
+        "for most of the universe (87.5% on run fa532b925732) and cannot order "
+        "anything. Rank on p_upside_pos_cond instead. Retained because the share "
+        "itself is a legitimate per-name statement; the prob_pos_degenerate gate "
+        "warns when it stops discriminating."
     ),
     "kalman_gain": "Posterior mean achieve_prob = sigmoid(risk_adj_return).",
     "reward_to_cvar": "expected_return_kalman / tail_risk (STARR). NULL when out_of_support.",

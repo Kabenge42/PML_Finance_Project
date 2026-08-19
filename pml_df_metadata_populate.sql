@@ -40,7 +40,41 @@
 --                        growth, cash_flow, technical, etc.).
 -- =============================================================================
 
+
 BEGIN;
+
+-- =============================================================================
+-- STEP 0. MODEL-TARGET VOCABULARY RECONCILIATION (idempotent)
+-- =============================================================================
+-- pml_df_metadata.sql declares the model_targets / model_target allow-lists, but
+-- it opens with DROP TABLE ... CASCADE, so it is only ever run against an empty
+-- or disposable database -- never against a live one, where it would take the
+-- whole catalogue and every dependent view with it. This file IS run against a
+-- live database, so this is the only place a widened vocabulary can reach one.
+--
+-- Without it, every INSERT below that carries a new target fails the CHECK. That
+-- is the step that is easy to miss, because nothing else in the pipeline
+-- references the constraint by name: the failure surfaces as a constraint
+-- violation on an unrelated-looking INSERT hundreds of lines later.
+--
+-- Keep the eight values here identical to the two CHECKs in pml_df_metadata.sql
+-- and to the two pg_dump extracts under sql_scripts/pml/. A no-op on a
+-- from-scratch run; load-bearing on every other kind.
+ALTER TABLE pml.pml_df_metadata
+	DROP CONSTRAINT IF EXISTS ck_pml_df_metadata_model_targets;
+ALTER TABLE pml.pml_df_metadata
+	ADD CONSTRAINT ck_pml_df_metadata_model_targets
+		CHECK (model_targets <@ ARRAY ['earnings_beat', 'price_target', 'kalman_pt',
+			'kalman_pt_v2', 'dcf_pt', 'dividend_safety', 'credit_risk',
+			'accounting_anomaly']::TEXT[]);
+
+ALTER TABLE pml.pml_df_feature_alias
+	DROP CONSTRAINT IF EXISTS ck_pml_df_feature_alias_model_target;
+ALTER TABLE pml.pml_df_feature_alias
+	ADD CONSTRAINT ck_pml_df_feature_alias_model_target
+		CHECK (model_target IN ('earnings_beat', 'price_target', 'kalman_pt',
+		                        'kalman_pt_v2', 'dcf_pt', 'dividend_safety',
+		                        'credit_risk', 'accounting_anomaly'));
 
 -- Backfill ordinal_position and data_type from information_schema so any
 -- subsequent UPDATEs only have to touch (category, feature_role, description).
@@ -1736,7 +1770,7 @@ WHERE column_name IN ('beta_1y', 'beta_2y', 'beta_5y');
 UPDATE pml.pml_df_metadata
 SET model_targets = (SELECT ARRAY(SELECT DISTINCT
                                          unnest(model_targets ||
-                                                ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']))
+                                                ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'kalman_pt_v2', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']))
                     )
 WHERE column_name IN ('region', 'country', 'trading_region', 'trading_country', 'exchange',
                       'unit', 'style_class', 'size_class', 'sector', 'industry');
@@ -2320,7 +2354,7 @@ ON CONFLICT (column_name, model_target) DO UPDATE SET feature_alias = excluded.f
 INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias)
 SELECT col, m, col
 FROM unnest(ARRAY ['isin', 'ticker', 'region', 'country', 'trading_region','trading_country', 'exchange', 'unit', 'style_class', 'size_class', 'sector', 'industry']) col
-	     CROSS JOIN unnest(ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])                    m
+	     CROSS JOIN unnest(ARRAY ['earnings_beat', 'price_target', 'kalman_pt', 'kalman_pt_v2', 'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly'])          m
 ON CONFLICT (column_name, model_target) DO NOTHING;
 
 -- =============================================================================
@@ -2628,6 +2662,303 @@ DELETE
 FROM pml.pml_df_metadata
 WHERE column_name = 'feat_mv_ev_drift';
 
+-- =========================================================================
+-- 7k. kalman_pt_v2 -- CATALOGUE REGISTRATION FOR THE CORRELATED-TRAIL MV
+-- =========================================================================
+-- Registers pml.mv_pymc_kalman_pt_v2 (defined in pml_feature_catalogue.sql).
+--
+-- The resolution chain Python depends on is:
+--
+--     pml_df_metadata            (global pymc_role, model_targets[])
+--       -> pml_df_feature_alias  (per-model feature_alias AND pymc_role override)
+--       -> vw_pymc_feature_catalogue     COALESCE(fa.pymc_role, md.pymc_role)
+--       -> vw_pymc_feature_aliases       the arrays the resolvers consume
+--
+-- and every link fails SILENTLY. An MV column with no catalogue row does not
+-- raise; it simply vanishes from the model feature list and is later zero-filled
+-- by the alignment layer. That is why pml.assert_pymc_catalogue_coverage()
+-- exists and why this section is mandatory rather than tidy-up.
+--
+-- PLACEMENT IS LOAD-BEARING: this runs AFTER 7j. 7j SHRINKS model_targets --
+-- it array_removes 'kalman_pt' from the retired market-cap / EV columns and
+-- deletes feat_mv_ev_drift outright. Step 1 below copies whatever 'kalman_pt'
+-- tags survive onto 'kalman_pt_v2'. Run in the other order and 7k resurrects
+-- exactly the columns 7j just retired, as kalman_pt_v2 phantoms.
+--
+-- WHY A SEPARATE MODEL TARGET rather than extending 'kalman_pt': the two models
+-- want different feature LISTS from overlapping columns. v2 drops the raw EPS
+-- legs from its drift matrix in favour of the feat_eps_signal_* block, and adds
+-- the response trail as 'observed'. Sharing one target would force one model to
+-- carry the other exclusions in Python, which is exactly the coupling the
+-- catalogue exists to avoid. It also lets v1 keep running untouched while v2 is
+-- evaluated, on the same database.
+-- =========================================================================
+
+-- 7k.1 v2 INHERITS EVERY kalman_pt COLUMN
+--   mv_pymc_kalman_pt_v2 is `SELECT b.*` over mv_pymc_kalman_pt plus the new
+--   columns in 7k.2, so it re-emits every parent column under the child MV.
+--   Rather than re-listing ~140 rows, tag the existing kalman_pt registrations
+--   with the v2 target as well.
+--
+--   The columns v2 does NOT want in its drift matrix are excluded in Python
+--   (DRIFT_EXCLUSIONS in pymc_kalman_filter_pt_v2.py), NOT by withholding a
+--   catalogue row -- withholding the row makes the column invisible to the
+--   catalogue while the MV still emits it, which is MISSING_FROM_CATALOGUE, the
+--   dangerous status. Membership of a design matrix is a Python-side concern;
+--   existence of the column is a catalogue concern.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_append(model_targets, 'kalman_pt_v2'),
+    updated_at    = CURRENT_TIMESTAMP
+WHERE 'kalman_pt' = ANY (model_targets)
+  AND NOT ('kalman_pt_v2' = ANY (model_targets));
+
+--   Same for the per-model alias rows: v2 must resolve every alias v1 resolves,
+--   including the pymc_role overrides (price_target_*_ago -> observed,
+--   price_target_num_*_ago -> constant_data, and the feat_* carrier overrides).
+INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
+SELECT fa.column_name, 'kalman_pt_v2', fa.feature_alias, fa.pymc_role
+FROM pml.pml_df_feature_alias fa
+WHERE fa.model_target = 'kalman_pt'
+ON CONFLICT (column_name, model_target) DO NOTHING;
+
+
+-- 7k.2 THE GENUINELY NEW v2 COLUMNS
+--   Registered as engineered self-rows (column_name = feature_alias), the 7h
+--   convention for MV-computed features.
+--
+--   data_type IS BEHAVIOURAL, NOT DOCUMENTATION. It keys _DTYPE_RULES in
+--   probabilistic_ml_model/pymc_models/_feature_alignment.py, which recognises
+--   pct | ratio | zscore | score | flag | boolean | count | numeric | level |
+--   growth and drives per-column clipping and NaN fill. A PostgreSQL type name
+--   ('double precision', 'integer', 'timestamp with time zone') matches nothing
+--   and falls through to the untyped default -- inert, but it reads as if it
+--   were configuring something. Use the semantic vocabulary here.
+INSERT INTO pml.pml_df_metadata
+	(column_name, category, feature_role, feature_alias, description,
+	 data_type, pymc_role, model_targets, updated_at)
+VALUES
+	-- ---- the response trail (pymc_role = observed) -------------------------
+	('feat_log_uplift_now', 'analyst_targets', 'target', 'feat_log_uplift_now',
+	 'ln(price_target / last_price). Snapshot response and OU grid anchor.',
+	 'ratio', 'observed', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('feat_log_uplift_1w', 'analyst_targets', 'historical', 'feat_log_uplift_1w',
+	 'ln(price_target_1w_ago / price_1w_ago). Trail response at 7 days.',
+	 'ratio', 'observed', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('feat_log_uplift_1m', 'analyst_targets', 'historical', 'feat_log_uplift_1m',
+	 'ln(price_target_1m_ago / price_1m_ago). Trail response at 30 days.',
+	 'ratio', 'observed', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('feat_log_uplift_3m', 'analyst_targets', 'historical', 'feat_log_uplift_3m',
+	 'ln(price_target_3m_ago / price_3m_ago). Trail response at 91 days.',
+	 'ratio', 'observed', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('feat_log_uplift_6m', 'analyst_targets', 'historical', 'feat_log_uplift_6m',
+	 'ln(price_target_6m_ago / price_6m_ago). Trail response at 182 days.',
+	 'ratio', 'observed', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('feat_log_uplift_1y', 'analyst_targets', 'historical', 'feat_log_uplift_1y',
+	 'ln(price_target_1y_ago / price_1y_ago). Trail response at 365 days.',
+	 'ratio', 'observed', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+
+	-- ---- trail support ------------------------------------------------------
+	('n_trail_obs', 'analyst_targets', 'count', 'n_trail_obs',
+	 'Count of non-NULL trail cells (1..6). Per-name T contributing to the likelihood.',
+	 'count', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+
+	-- ---- calendar offsets (the OU kernel x-axis) ---------------------------
+	('trail_days_now', 'fiscal_calendar', 'metadata', 'trail_days_now',
+	 'Nominal calendar offset in days of the snapshot column (0).',
+	 'level', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('trail_days_1w', 'fiscal_calendar', 'metadata', 'trail_days_1w',
+	 'Nominal calendar offset in days of the 1w trail column (7).',
+	 'level', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('trail_days_1m', 'fiscal_calendar', 'metadata', 'trail_days_1m',
+	 'Nominal calendar offset in days of the 1m trail column (30).',
+	 'level', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('trail_days_3m', 'fiscal_calendar', 'metadata', 'trail_days_3m',
+	 'Nominal calendar offset in days of the 3m trail column (91).',
+	 'level', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('trail_days_6m', 'fiscal_calendar', 'metadata', 'trail_days_6m',
+	 'Nominal calendar offset in days of the 6m trail column (182).',
+	 'level', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('trail_days_1y', 'fiscal_calendar', 'metadata', 'trail_days_1y',
+	 'Nominal calendar offset in days of the 1y trail column (365).',
+	 'level', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+
+	-- ---- per-lookback analyst coverage --------------------------------------
+	--   'count' clips at 0 and fills 0, which is what an absent analyst count
+	--   means. Note the asymmetry with the v1 n_analysts, which is an ALIAS of
+	--   the real pml_df column price_target_num and therefore carries the
+	--   information_schema type; these are engineered self-rows and can say what
+	--   they actually are.
+	('n_analysts_1w', 'analyst_targets', 'count', 'n_analysts_1w',
+	 'Analyst count behind the 1w consensus. Per-cell measurement precision.',
+	 'count', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('n_analysts_1m', 'analyst_targets', 'count', 'n_analysts_1m',
+	 'Analyst count behind the 1m consensus.',
+	 'count', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('n_analysts_3m', 'analyst_targets', 'count', 'n_analysts_3m',
+	 'Analyst count behind the 3m consensus.',
+	 'count', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('n_analysts_6m', 'analyst_targets', 'count', 'n_analysts_6m',
+	 'Analyst count behind the 6m consensus.',
+	 'count', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('n_analysts_1y', 'analyst_targets', 'count', 'n_analysts_1y',
+	 'Analyst count behind the 1y consensus.',
+	 'count', 'constant_data', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+
+	-- ---- consolidated EPS block ---------------------------------------------
+	--   Three columns, one quantity each. An earlier draft averaged all five raw
+	--   EPS legs into one column, but they sit on three scales (percent, share,
+	--   ratio), so the average was the percent legs wearing a different name.
+	--   The TREND leg is the parent feat_net_eps_drift, already registered.
+	('feat_eps_signal_surprise', 'eps', 'predictor', 'feat_eps_signal_surprise',
+	 'Mean of the non-NULL EPS surprise legs, rescaled /100 to a signed raw '
+		 'decimal. NULL when neither leg exists.',
+	 'ratio', 'mutable_predictor', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('feat_eps_signal_beat', 'eps', 'predictor', 'feat_eps_signal_beat',
+	 'Mean of the non-NULL EPS beat-rate legs. A frequency in [0,1] -- a '
+		 'different quantity from the surprise magnitude, hence a separate column.',
+	 'pct', 'mutable_predictor', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+	('feat_eps_signal_coverage', 'eps', 'predictor', 'feat_eps_signal_coverage',
+	 'Share of the five EPS legs that were non-NULL, in [0,1]. Distinguishes an '
+		 'informative zero from an absent measurement.',
+	 'pct', 'mutable_predictor', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
+
+	-- ---- provenance -----------------------------------------------------------
+	--   derived_input, NOT constant_data. constant_data would place a timestamptz
+	--   into vw_pymc_feature_aliases.constant_data_aliases, and
+	--   coerce_by_data_type() casts every alias handed to it to float64.
+	--   derived_input keeps the column visible in vw_pymc_feature_catalogue (so it
+	--   is documented and greppable) while keeping it out of all four alias arrays
+	--   and out of vw_pml_df_pymc_features. 'excluded' would drop the row entirely.
+	('built_at', 'identifier', 'metadata', 'built_at',
+	 'MV refresh timestamp. The parent computes days_* against CURRENT_DATE, so '
+		 'this is what tells two refreshes apart.',
+	 'timestamp with time zone', 'derived_input', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP)
+
+--   ON CONFLICT unions model_targets and refreshes the prose unconditionally,
+--   but touches pymc_role / data_type ONLY when the pre-existing row belongs to
+--   no model other than kalman_pt_v2.
+--
+--   Both halves of that are load-bearing:
+--     * Unconditional would let a v2 registration block silently rewrite
+--       another model global role, if one of these 20 names ever collides with
+--       a pml_df column. None does today; the guard is for the day one does.
+--     * Never would strand an EARLIER v2 registration at its old values. That
+--       is not hypothetical -- built_at shipped as 'constant_data' before the
+--       fold, and on a live database a pure model_targets union leaves it
+--       there, which puts a timestamptz into constant_data_aliases.
+--   Inside ON CONFLICT, `pml.pml_df_metadata.<col>` reads the PRE-update row,
+--   so the CASE tests what the row was before this statement touched it.
+ON CONFLICT (column_name) DO UPDATE
+	SET model_targets = (SELECT ARRAY(SELECT DISTINCT unnest(
+			                                  pml.pml_df_metadata.model_targets ||
+			                                  EXCLUDED.model_targets))),
+	    description   = EXCLUDED.description,
+	    pymc_role     = CASE
+		                    WHEN pml.pml_df_metadata.model_targets <@ ARRAY ['kalman_pt_v2']::TEXT[]
+			                    THEN EXCLUDED.pymc_role
+		                    ELSE pml.pml_df_metadata.pymc_role END,
+	    data_type     = CASE
+		                    WHEN pml.pml_df_metadata.model_targets <@ ARRAY ['kalman_pt_v2']::TEXT[]
+			                    THEN EXCLUDED.data_type
+		                    ELSE pml.pml_df_metadata.data_type END,
+	    updated_at    = CURRENT_TIMESTAMP;
+
+
+-- 7k.3 PER-MODEL ROLE OVERRIDES FOR THE RESPONSE TRAIL
+--   The trail columns are 'observed' for v2 and must never be offered as drift
+--   predictors -- feeding the response back in as a feature is the leakage that
+--   makes every diagnostic look excellent and every forecast worthless. The
+--   global role in 7k.2 already says 'observed'; these rows make it explicit at
+--   the model level so a future global change cannot quietly re-admit them.
+INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
+VALUES ('feat_log_uplift_now', 'kalman_pt_v2', 'feat_log_uplift_now', 'observed'),
+       ('feat_log_uplift_1w', 'kalman_pt_v2', 'feat_log_uplift_1w', 'observed'),
+       ('feat_log_uplift_1m', 'kalman_pt_v2', 'feat_log_uplift_1m', 'observed'),
+       ('feat_log_uplift_3m', 'kalman_pt_v2', 'feat_log_uplift_3m', 'observed'),
+       ('feat_log_uplift_6m', 'kalman_pt_v2', 'feat_log_uplift_6m', 'observed'),
+       ('feat_log_uplift_1y', 'kalman_pt_v2', 'feat_log_uplift_1y', 'observed')
+ON CONFLICT (column_name, model_target) DO UPDATE
+	SET feature_alias = EXCLUDED.feature_alias,
+	    pymc_role     = EXCLUDED.pymc_role;
+
+-- 7k.4 RETIRE THE SUPERSEDED SINGLE-COLUMN EPS BLOCK (live-DB reconciliation)
+--   An earlier v2 draft registered feat_eps_signal + feat_eps_coverage: ONE
+--   average over all five raw EPS legs, plus its coverage. The MV no longer
+--   emits either -- the legs sit on three scales (percent, share, ratio), so
+--   the average was the percent legs wearing a different name. 7k.2 replaces
+--   them with feat_eps_signal_surprise / feat_eps_signal_beat /
+--   feat_eps_signal_coverage, one quantity each.
+--
+--   7k.2 ON CONFLICT only ever UNIONS model_targets, so on a database that ran
+--   the earlier draft the stale rows survive and become PHANTOM_CATALOGUE_ALIAS
+--   -- registered aliases no MV emits. Shrinking needs an explicit
+--   array_remove / DELETE. Same idiom, same reason, as 7j.
+--
+--   Written as remove-tag-then-delete-if-orphaned rather than a bare DELETE, so
+--   it stays correct if either column is ever adopted by another model. Both
+--   statements are no-ops on a from-scratch run.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_remove(model_targets, 'kalman_pt_v2'),
+    updated_at    = CURRENT_TIMESTAMP
+WHERE column_name IN ('feat_eps_signal', 'feat_eps_coverage')
+  AND 'kalman_pt_v2' = ANY (model_targets);
+
+DELETE
+FROM pml.pml_df_metadata
+WHERE column_name IN ('feat_eps_signal', 'feat_eps_coverage')
+  AND cardinality(model_targets) = 0;
+
+
+-- ---- 7l. trail_days_* retired to pml.vw_pymc_trail_days (2026-08-19) --------
+--   mv_pymc_kalman_pt_v2 used to emit trail_days_{now,1w,1m,3m,6m,1y} as SQL
+--   LITERALS -- 0/7/30/91/182/365, identical on all ~6,500 rows, so zero
+--   information stored 6,500 times over -- while the model built the same grid
+--   from DEFAULT_LOOKBACK_DAYS in Python and never read the columns. Two sources
+--   of truth for the OU kernel's x-axis, and the one the model used was the one
+--   the database could not see.
+--
+--   They now live as six metadata rows in pml.vw_pymc_trail_days
+--   (pml_feature_catalogue.sql), which KalmanFilterModel_v2.load_trail_days_map()
+--   reads, and pml.assert_pymc_trail_days_map() ties each row to the
+--   feat_log_uplift_* column it describes -- the foreign key a view cannot
+--   declare.
+--
+--   Dropping the columns from the MV without this de-registration raises
+--   PHANTOM_CATALOGUE_ALIAS: vw_pymc_feature_catalogue is metadata CROSS JOIN
+--   LATERAL UNNEST(model_targets), so a still-tagged column the MV no longer
+--   emits is a registered alias with nothing behind it. Same idiom, same reason,
+--   as 7j and 7k.2; no-ops on a from-scratch run.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_remove(model_targets, 'kalman_pt_v2'),
+    updated_at    = CURRENT_TIMESTAMP
+WHERE column_name IN ('trail_days_now', 'trail_days_1w', 'trail_days_1m',
+                      'trail_days_3m', 'trail_days_6m', 'trail_days_1y')
+  AND 'kalman_pt_v2' = ANY (model_targets);
+
+DELETE
+FROM pml.pml_df_metadata
+WHERE column_name IN ('trail_days_now', 'trail_days_1w', 'trail_days_1m',
+                      'trail_days_3m', 'trail_days_6m', 'trail_days_1y')
+  AND cardinality(model_targets) = 0;
+
+DELETE
+FROM pml.pml_df_feature_alias
+WHERE column_name IN ('trail_days_now', 'trail_days_1w', 'trail_days_1m',
+                      'trail_days_3m', 'trail_days_6m', 'trail_days_1y')
+  AND model_target = 'kalman_pt_v2';
+
+
+-- Verify (should return no rows) -- step 4 of the four-step v2 registration:
+--   SELECT model_target, status, count(*),
+--          string_agg(feat_name, ', ' ORDER BY feat_name)
+--   FROM pml.vw_pymc_catalogue_coverage_check
+--   WHERE status <> 'OK' AND model_target = 'kalman_pt_v2'
+--   GROUP BY 1, 2 ORDER BY 1, 2;
+-- A non-empty result means a v2 column is silently zero-filled
+-- (MISSING_FROM_CATALOGUE), registered but not emitted (PHANTOM_CATALOGUE_ALIAS),
+-- or claimed twice so alias resolution is order-dependent
+-- (DUPLICATE_CATALOGUE_ALIAS).
+
 -- Verify (should return no rows, i.e. the assertion below passes):
 --   SELECT * FROM pml.vw_pymc_catalogue_coverage_check WHERE status <> 'OK';
 --   SELECT pml.assert_pymc_catalogue_coverage();
@@ -2652,7 +2983,7 @@ SELECT column_name, category, data_type, ordinal_position, description
 FROM pml.pml_df_metadata
 WHERE pymc_role = 'derived_input';
 
-COMMENT ON TABLE pml.pml_df_metadata IS 'Metadata for pml.pml_df. (category, feature_role) drive domain/data-centric SQL filters; (pymc_role, model_targets) drive PyMC pm.Data container assignment and per-model feature selection. pymc_role vocabulary: coord | index | observed | mutable_predictor | constant_data | derived_input | excluded. model_targets is a TEXT[] keyed by MODEL_FEATURE_CONTAINERS (earnings_beat, price_target, kalman_pt, dcf_pt, dividend_safety, credit_risk, accounting_anomaly).';
+COMMENT ON TABLE pml.pml_df_metadata IS 'Metadata for pml.pml_df. (category, feature_role) drive domain/data-centric SQL filters; (pymc_role, model_targets) drive PyMC pm.Data container assignment and per-model feature selection. pymc_role vocabulary: coord | index | observed | mutable_predictor | constant_data | derived_input | excluded. model_targets is a TEXT[] keyed by MODEL_FEATURE_CONTAINERS (earnings_beat, price_target, kalman_pt, kalman_pt_v2, dcf_pt, dividend_safety, credit_risk, accounting_anomaly).';
 
 COMMENT ON COLUMN pml.pml_df_metadata.pymc_role IS 'PyMC pm.Data container kind for this column. Aligns with arviz.InferenceData groups: coord/index -> idata.constant_data + posterior.coords; observed -> idata.observed_data; mutable_predictor/constant_data -> idata.constant_data (mutable_predictor supports pm.set_data for OOS); derived_input -> must be transformed before pm.Data; excluded -> never wrapped.';
 

@@ -1234,6 +1234,368 @@ FROM pml.pml_df
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_kalman_pt_isin ON pml.mv_pymc_kalman_pt (isin);
 
+-- ---- 3b. KalmanFilterPriceTarget v2 (correlated trail) -----------------------
+-- =============================================================================
+-- pml.mv_pymc_kalman_pt_v2 -- feature matrix for the v2 correlated-trail model
+-- =============================================================================
+--
+-- WHY A v2 MV EXISTS
+-- ------------------
+-- The v2 model (probabilistic_ml_model/pymc_models/KalmanFilterModel_v2.py)
+-- treats a name lookback trail as ONE correlated observation vector rather than
+-- T independent reads. That changes what the feature layer has to supply:
+--
+--   1. The RESPONSE ITSELF, not its ingredients. v1 rebuilt log(pt/px) per
+--      lookback in Python from eight raw columns, so the definition of the
+--      modelled quantity lived in a Python helper rather than in SQL. It is a
+--      derived feature and belongs here, next to every other feat_ column.
+--   2. CALENDAR OFFSETS. The OU kernel is exp(-gap_days / ell); it needs real
+--      day gaps, not a time index. v1 standardised the time axis and threw the
+--      gaps away, which is why one length-scale could not reproduce a
+--      correlation of 0.97 at 7 days and 0.43 at 365 days.
+--   3. PER-LOOKBACK COVERAGE. price_target_num_{lb}_ago already exists but was
+--      never surfaced, so v1 used one precision weight for all T -- charging
+--      a 30-analyst consensus today and a 4-analyst consensus last year the
+--      same measurement precision.
+--
+-- The empirical basis, measured on this MV (2026-08-18, n ~ 6.5k). Correlation
+-- between the log-uplift at two lookbacks against the calendar gap between them
+-- is fit by a two-parameter kernel over all 15 available pairs:
+--
+--     r(delta) = rho_inf + (1 - rho_inf) * exp(-delta / ell)
+--     rho_inf = 0.423, ell =  95.2 d   RMSE 0.033   (raw)
+--     rho_inf = 0.334, ell = 104.7 d   RMSE 0.026   (after removing the crossed
+--                                                    group means the model fits)
+--
+-- so ~33% of within-name response variance is a permanent per-name level and
+-- ~67% decays with a 73-day half-life. Those are the two latent blocks v2
+-- estimates; this MV exists to make them estimable.
+--
+-- DESIGN: A DERIVED MV, NOT A FORK
+-- --------------------------------
+-- This is built ON TOP OF pml.mv_pymc_kalman_pt rather than forking its ~420
+-- lines. Consequences, all deliberate:
+--   * the raw feature definitions keep exactly one home (this file);
+--   * the v2 diff is reviewable -- everything below is genuinely new;
+--   * refresh ORDER MATTERS: v1 must be refreshed before v2. Both
+--     pml.refresh_pymc_materialized_views (array order) and
+--     pml.refresh_kalman_pt_v2 (explicit parent leg) enforce it;
+--   * every kalman_pt catalogue row must ALSO carry the kalman_pt_v2 tag,
+--     because `SELECT b.*` re-emits every parent column under the child MV.
+--     Section 7k of pml_df_metadata_populate.sql does that sweep.
+-- The cost is one extra materialisation of ~6.5k rows, negligible next to the
+-- 400-line duplication it avoids.
+--
+-- IF NOT EXISTS, like its seven siblings in this file -- which means re-running
+-- this script does NOT pick up a definition change. Editing the body below
+-- requires an explicit `DROP MATERIALIZED VIEW pml.mv_pymc_kalman_pt_v2;`
+-- first. (True of every MV here; stated once, on the newest one.)
+--
+-- REPRODUCIBILITY
+-- ---------------
+-- v1 computes seven days_* horizons against CURRENT_DATE, so it is not
+-- reproducible across refresh dates. v2 cannot fix that from here, but it stops
+-- the problem being SILENT: built_at stamps every row with the refresh moment,
+-- so a run artifacts record the as-of date they were built against and two runs
+-- can be told apart. A genuine point-in-time backtest needs an as-of parameter,
+-- which an MV cannot take -- see pml.kalman_pt_v2_asof() below for the function
+-- form that can.
+--
+-- UNITS: all feat_* are raw decimals (0.25 = +25%), matching the 0.9.9.7
+-- convention. Day offsets are integers. No percent scaling anywhere -- which is
+-- exactly why the EPS block below divides the two *_surprise legs by 100 before
+-- averaging; see CONSOLIDATED EPS BLOCK.
+-- =============================================================================
+CREATE MATERIALIZED VIEW IF NOT EXISTS pml.mv_pymc_kalman_pt_v2 AS
+WITH base AS (SELECT * FROM pml.mv_pymc_kalman_pt),
+
+     -- ---------------------------------------------------------------------
+     -- The response trail, in log space.
+     --
+     -- log_uplift(lb) = ln(price_target_at_lb / price_at_lb). Both legs are
+     -- taken AT THE SAME LOOKBACK -- that is the whole point of the trail. A
+     -- stale target over TODAY spot price is not a historical observation of
+     -- the state, it is today price with extra noise, and mixing the two is
+     -- how a momentum identity leaks into a price-target model.
+     --
+     -- pml.safe_divide guards the zero denominator; the ratio > 0 test guards
+     -- ln() of a non-positive number (negative prices do not occur but a NULL
+     -- masquerading as 0 has).
+     -- ---------------------------------------------------------------------
+     uplift AS (SELECT b.isin,
+                       CASE
+	                       WHEN pml.safe_divide(b.observed_pt, b.last_price) > 0
+		                       THEN ln(pml.safe_divide(b.observed_pt, b.last_price))
+	                       END AS lu_now,
+                       CASE
+	                       WHEN pml.safe_divide(b.price_target_1w_ago, b.price_1w_ago) > 0
+		                       THEN ln(pml.safe_divide(b.price_target_1w_ago, b.price_1w_ago))
+	                       END AS lu_1w,
+                       CASE
+	                       WHEN pml.safe_divide(b.price_target_1m_ago, b.price_1m_ago) > 0
+		                       THEN ln(pml.safe_divide(b.price_target_1m_ago, b.price_1m_ago))
+	                       END AS lu_1m,
+                       CASE
+	                       WHEN pml.safe_divide(b.price_target_3m_ago, b.price_3m_ago) > 0
+		                       THEN ln(pml.safe_divide(b.price_target_3m_ago, b.price_3m_ago))
+	                       END AS lu_3m,
+                       CASE
+	                       WHEN pml.safe_divide(b.price_target_6m_ago, b.price_6m_ago) > 0
+		                       THEN ln(pml.safe_divide(b.price_target_6m_ago, b.price_6m_ago))
+	                       END AS lu_6m,
+                       CASE
+	                       WHEN pml.safe_divide(b.price_target_1y_ago, b.price_1y_ago) > 0
+		                       THEN ln(pml.safe_divide(b.price_target_1y_ago, b.price_1y_ago))
+	                       END AS lu_1y
+                FROM base b),
+
+     -- ---------------------------------------------------------------------
+     -- Consolidated EPS block, SPLIT BY QUANTITY, each leg with its coverage.
+     --
+     -- v1 carried five raw EPS columns into the drift matrix. Measured on the
+     -- 2026-08-18 fit every one of them has |beta| <= 0.0115 and three straddle
+     -- zero -- while feat_last_q_surprise is 52.1% NULL and feat_eps_beat_rate
+     -- 45.4% NULL. Because the Python alignment layer zero-fills a missing
+     -- column, the model was reading "no data" as "no surprise" for half the
+     -- universe, which is not a small distinction: it is the difference between
+     -- an informative zero and an absent measurement.
+     --
+     -- The first fix collapsed all five into ONE average. That was wrong for a
+     -- different reason: the five legs are on three incompatible scales.
+     --   feat_last_{q,y}_surprise are eps_neg0f{q,y}surprise_pct -- PERCENT,
+     --       where 5.2 means +5.2%;
+     --   feat_eps_beat_rate{,_annual} are n_beats / n_total -- shares in [0,1];
+     --   feat_net_eps_drift is a pml.target_drift ratio -- a raw decimal.
+     -- Averaging them makes the percent legs ~100x everything else, so the
+     -- "consolidated signal" was the surprise legs wearing a different name,
+     -- and it violated the raw-decimal convention this header claims two
+     -- paragraphs up.
+     --
+     -- So: one column per quantity, each on one scale.
+     --   feat_eps_signal_surprise -- mean of whichever surprise legs EXIST,
+     --                               rescaled /100 to a signed raw decimal
+     --   feat_eps_signal_beat     -- mean of whichever beat-rate legs EXIST,
+     --                               already a share in [0,1]
+     --   feat_eps_signal_coverage -- share of all five legs that existed, so
+     --                               the model can learn the interaction rather
+     --                               than being handed a counterfeit zero
+     -- The TREND leg needs no new column: the parent feat_net_eps_drift is
+     -- already a raw decimal ratio and is re-emitted by `SELECT b.*` above. It
+     -- is re-admitted to the drift matrix in pymc_kalman_filter_pt_v2.py.
+     --
+     -- The `avg(v) ... WHERE v IS NOT NULL` idiom is what makes "mean of
+     -- whichever legs exist, NULL when none does" correct: avg() over an empty
+     -- set already yields NULL, no special case needed.
+     -- ---------------------------------------------------------------------
+     eps AS (SELECT b.isin,
+                    (SELECT avg(v)
+                     FROM unnest(ARRAY [b.feat_last_q_surprise / 100.0,
+	                     b.feat_last_y_surprise / 100.0]) AS v
+                     WHERE v IS NOT NULL)                          AS eps_surprise,
+                    (SELECT avg(v)
+                     FROM unnest(ARRAY [b.feat_eps_beat_rate,
+	                     b.feat_eps_beat_rate_annual]) AS v
+                     WHERE v IS NOT NULL)                          AS eps_beat,
+                    (SELECT count(v)::DOUBLE PRECISION / 5.0
+                     FROM unnest(ARRAY [b.feat_net_eps_drift, b.feat_last_q_surprise,
+	                     b.feat_last_y_surprise, b.feat_eps_beat_rate,
+	                     b.feat_eps_beat_rate_annual]) AS v
+                     WHERE v IS NOT NULL)                          AS eps_coverage
+             FROM base b)
+
+SELECT b.*,
+
+       -- ===================================================================
+       -- v2 RESPONSE TRAIL (pymc_role = 'observed')
+       -- ===================================================================
+       u.lu_now                                                       AS feat_log_uplift_now,
+       u.lu_1w                                                        AS feat_log_uplift_1w,
+       u.lu_1m                                                        AS feat_log_uplift_1m,
+       u.lu_3m                                                        AS feat_log_uplift_3m,
+       u.lu_6m                                                        AS feat_log_uplift_6m,
+       u.lu_1y                                                        AS feat_log_uplift_1y,
+
+       -- Non-NULL cells in the trail. The v2 likelihood masks the rest, so this
+       -- is the per-name T actually contributing -- and a name with 1 is a pure
+       -- cross-section rider, not a panel member. Surface it so the workflow can
+       -- report the distribution instead of discovering it in a coverage plot.
+       (CASE WHEN u.lu_now IS NOT NULL THEN 1 ELSE 0 END +
+        CASE WHEN u.lu_1w IS NOT NULL THEN 1 ELSE 0 END +
+        CASE WHEN u.lu_1m IS NOT NULL THEN 1 ELSE 0 END +
+        CASE WHEN u.lu_3m IS NOT NULL THEN 1 ELSE 0 END +
+        CASE WHEN u.lu_6m IS NOT NULL THEN 1 ELSE 0 END +
+        CASE WHEN u.lu_1y IS NOT NULL THEN 1 ELSE 0 END)::INT         AS n_trail_obs,
+
+       -- ===================================================================
+       -- CALENDAR OFFSETS (pymc_role = 'constant_data')
+       -- ===================================================================
+       -- Nominal day offsets of each trail column. Emitted as columns rather
+       -- than hard-coded in Python so the OU kernel x-axis has an SSOT: if a
+       -- lookback meaning ever changes, the model gaps change with it instead
+       -- of silently disagreeing.
+       --
+       -- These are NOMINAL, not the exact as-of dates of each vendor snapshot,
+       -- which the source does not carry. The approximation is second-order:
+       -- the fitted kernel has RMSE 0.026 against nominal offsets, so any
+       -- date-alignment error is already inside the residual.
+       0::INT                                                         AS trail_days_now,
+       7::INT                                                         AS trail_days_1w,
+       30::INT                                                        AS trail_days_1m,
+       91::INT                                                        AS trail_days_3m,
+       182::INT                                                       AS trail_days_6m,
+       365::INT                                                       AS trail_days_1y,
+
+       -- ===================================================================
+       -- PER-LOOKBACK ANALYST COVERAGE (pymc_role = 'constant_data')
+       -- ===================================================================
+       -- v1 applied ONE precision weight to every time step. A consensus built
+       -- from 4 analysts a year ago and one built from 30 today are not equally
+       -- precise measurements of the same latent, and the model had no way to
+       -- say so. These feed the per-cell measurement scale in v2.
+       --
+       -- Registered as engineered self-rows rather than as aliases of
+       -- price_target_num_{lb}_ago: `SELECT b.*` already emits those columns
+       -- under their own names, and an alias row can only claim one name per
+       -- (column_name, model_target), so aliasing would leave whichever name it
+       -- did not claim MISSING_FROM_CATALOGUE.
+       b.price_target_num_1w_ago                                      AS n_analysts_1w,
+       b.price_target_num_1m_ago                                      AS n_analysts_1m,
+       b.price_target_num_3m_ago                                      AS n_analysts_3m,
+       b.price_target_num_6m_ago                                      AS n_analysts_6m,
+       b.price_target_num_1y_ago                                      AS n_analysts_1y,
+
+       -- ===================================================================
+       -- CONSOLIDATED EPS BLOCK (pymc_role = 'mutable_predictor')
+       -- ===================================================================
+       e.eps_surprise                                                 AS feat_eps_signal_surprise,
+       e.eps_beat                                                     AS feat_eps_signal_beat,
+       COALESCE(e.eps_coverage, 0.0)                                  AS feat_eps_signal_coverage,
+
+       -- ===================================================================
+       -- PROVENANCE (pymc_role = 'derived_input')
+       -- ===================================================================
+       -- Stamps the refresh moment on every row. The parent days_* horizons are
+       -- CURRENT_DATE-relative, so two refreshes of "the same" MV are different
+       -- datasets; this makes that visible in the exported panel frame instead
+       -- of being something you have to remember.
+       --
+       -- derived_input, NOT constant_data: constant_data would land a
+       -- timestamptz in vw_pymc_feature_aliases.constant_data_aliases, and
+       -- coerce_by_data_type() casts every alias handed to it to float64.
+       now()                                                          AS built_at
+
+FROM base b
+	     JOIN uplift u ON u.isin = b.isin
+	     JOIN eps    e ON e.isin = b.isin
+-- The snapshot leg must exist: it is the anchor of the OU grid and the column
+-- every downstream decision reads. A name without it is not a panel member.
+WHERE u.lu_now IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pymc_kalman_pt_v2_isin
+	ON pml.mv_pymc_kalman_pt_v2 (isin);
+
+-- Supports the trail-coverage filter the workflow applies when choosing a grid.
+CREATE INDEX IF NOT EXISTS idx_mv_pymc_kalman_pt_v2_trail
+	ON pml.mv_pymc_kalman_pt_v2 (n_trail_obs);
+
+ALTER MATERIALIZED VIEW pml.mv_pymc_kalman_pt_v2 OWNER TO postgres;
+
+COMMENT ON MATERIALIZED VIEW pml.mv_pymc_kalman_pt_v2 IS
+	'v2 Kalman price-target feature matrix. Derived from mv_pymc_kalman_pt; adds '
+		'the log-uplift response trail, its calendar offsets, per-lookback analyst '
+		'coverage and a consolidated EPS block. Refresh AFTER mv_pymc_kalman_pt.';
+
+COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.feat_log_uplift_now IS
+	'ln(price_target / last_price). Raw decimal log ratio. The snapshot response '
+		'and the anchor (offset 0) of the OU time grid.';
+COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.n_trail_obs IS
+	'Count of non-NULL trail cells, 1..6. The per-name T actually contributing to '
+		'the likelihood; cells outside it are masked, not imputed.';
+COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.trail_days_1y IS
+	'Nominal calendar offset in days of the 1y trail column. Feeds the OU kernel '
+		'exp(-gap/ell); emitted so the gaps have one source of truth.';
+COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.n_analysts_1y IS
+	'Analyst count behind the 1y consensus (price_target_num_1y_ago). Per-cell '
+		'measurement precision; v1 had one weight for all T.';
+COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.feat_eps_signal_surprise IS
+	'Mean of whichever of feat_last_{q,y}_surprise is non-NULL, divided by 100 so '
+		'it is a signed RAW DECIMAL like every other feat_ column. NULL when neither '
+		'leg exists.';
+COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.feat_eps_signal_beat IS
+	'Mean of whichever of feat_eps_beat_rate{,_annual} is non-NULL. A frequency in '
+		'[0, 1] -- a different quantity from feat_eps_signal_surprise, which is a '
+		'magnitude, which is why they are separate columns.';
+COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.feat_eps_signal_coverage IS
+	'Share of all five EPS legs (net_eps_drift, last_{q,y}_surprise, '
+		'eps_beat_rate{,_annual}) that were non-NULL, in [0, 1]. Lets the model '
+		'distinguish an informative zero from an absent measurement.';
+COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.built_at IS
+	'Refresh timestamp. The parent MV computes its days_* horizons against '
+		'CURRENT_DATE, so this is what tells two refreshes apart.';
+
+
+-- =============================================================================
+-- pml.kalman_pt_v2_asof(p_asof) -- the point-in-time form
+-- =============================================================================
+-- An MV cannot take a parameter, which is why mv_pymc_kalman_pt days_* horizons
+-- are pinned to CURRENT_DATE and why the whole feature matrix is unusable for a
+-- backtest. This function is the escape hatch: it recomputes the date-relative
+-- horizons against an arbitrary as-of date, leaving every price/target-derived
+-- feature untouched (those are already point-in-time by construction).
+--
+-- STABLE, not IMMUTABLE: it reads the MV.
+--
+-- SIGN CONVENTIONS ARE THE PARENT CONVENTIONS, DELIBERATELY. In particular
+-- days_since_fy_end is (fy_end_date - p_asof), which is NEGATIVE for a past
+-- fiscal-year end -- the same expression mv_pymc_kalman_pt uses. It reads like
+-- a sign bug and is not one: a function that silently disagreed with the column
+-- it shadows would be far worse. Fix both together or neither.
+--
+-- COVERAGE: six of the parent SEVEN days_* horizons.
+-- days_to_next_fiscal_quarter is omitted because the parent computes it as
+-- (next_fiscal_quarter - CURRENT_DATE) where next_fiscal_quarter is a 1-4
+-- quarter ORDINAL, not a date; reproducing that here would propagate the
+-- defect rather than the convention. Left out knowingly, not overlooked.
+--
+-- SCOPE, stated plainly: this fixes the HORIZON columns only. The underlying
+-- price and target trails are still whatever the last vendor load contained, so
+-- this supports "what would the model have said about the calendar on date X",
+-- not a full historical replay. A real replay needs versioned vendor snapshots,
+-- which pml.staging does not retain.
+CREATE OR REPLACE FUNCTION pml.kalman_pt_v2_asof(p_asof DATE DEFAULT CURRENT_DATE)
+	RETURNS TABLE
+	        (
+		        isin                    TEXT,
+		        days_to_next_earnings   INT,
+		        days_since_last_report  INT,
+		        days_to_next_fy_end     INT,
+		        days_to_next_report     INT,
+		        days_to_expected_report INT,
+		        days_since_fy_end       INT,
+		        asof_date               DATE
+	        )
+	LANGUAGE sql
+	STABLE
+	PARALLEL SAFE
+AS
+$$
+SELECT v.isin,
+       (v.next_earnings - p_asof)::INT,
+       (p_asof - v.income_statement_report_date)::INT,
+       (v.next_fy_end_date - p_asof)::INT,
+       (v.next_income_statement_report_date - p_asof)::INT,
+       (v.expected_report_date - p_asof)::INT,
+       (v.fy_end_date - p_asof)::INT,
+       p_asof
+FROM pml.mv_pymc_kalman_pt_v2 v;
+$$;
+
+COMMENT ON FUNCTION pml.kalman_pt_v2_asof(DATE) IS
+	'Recompute the date-relative horizon columns against an arbitrary as-of date. '
+		'Horizons only -- the price/target trails are not versioned, so this is not '
+		'a full historical replay. Sign conventions match mv_pymc_kalman_pt.';
+
+
 -- ---- 4. DCFPriceTarget -------------------------------------------------------
 CREATE MATERIALIZED VIEW IF NOT EXISTS pml.mv_pymc_dcf_pt AS
 SELECT isin,
@@ -1449,6 +1811,95 @@ GROUP BY model_target, pymc_role
 ORDER BY model_target, pymc_role;
 
 -- =============================================================================
+-- TRAIL-DAYS MAP  (SSOT for the Kalman v2 OU kernel's x-axis)
+-- =============================================================================
+-- The calendar offset of each response column used to live in TWO places: as
+-- six literal columns on mv_pymc_kalman_pt_v2 (0/7/30/91/182/365, identical on
+-- every one of ~6,500 rows, so zero information and 6,500x the storage) and
+-- again as DEFAULT_LOOKBACK_DAYS in KalmanFilterModel_v2.py, which is what the
+-- model actually read. The MV columns were never consumed.
+--
+-- This view is the single source. It is deliberately a standalone VALUES list
+-- rather than a SELECT over the MV: it has to survive
+-- `DROP MATERIALIZED VIEW pml.mv_pymc_kalman_pt_v2` (the only way to change that
+-- MV, since it is CREATE ... IF NOT EXISTS), and the offsets are metadata about
+-- the grid rather than data about any name.
+--
+-- `response_column` is the mapping to the trail the offset describes. A view
+-- cannot carry a real foreign key, so the equivalent guarantee is enforced by
+-- pml.assert_pymc_trail_days_map() below, which is called from
+-- pml.assert_pymc_catalogue_coverage() -- the same place every other
+-- MV<->catalogue contract is checked.
+--
+-- Adding a lookback is a three-line change: a row here, the feat_log_uplift_*
+-- column on the MV, and its catalogue row in pml_df_metadata_populate.sql.
+CREATE OR REPLACE VIEW pml.vw_pymc_trail_days AS
+SELECT v.lookback_key,
+       v.response_column,
+       v.trail_days,
+       v.trail_rank
+FROM (VALUES ('now', 'feat_log_uplift_now', 0, 0),
+             ('1w', 'feat_log_uplift_1w', 7, 1),
+             ('1m', 'feat_log_uplift_1m', 30, 2),
+             ('3m', 'feat_log_uplift_3m', 91, 3),
+             ('6m', 'feat_log_uplift_6m', 182, 4),
+             ('1y', 'feat_log_uplift_1y', 365, 5)) AS v(lookback_key, response_column, trail_days,
+                                                        trail_rank);
+
+COMMENT ON VIEW pml.vw_pymc_trail_days IS
+	'SSOT for the Kalman v2 OU kernel x-axis: lookback key -> response column -> nominal calendar offset in days. Read by KalmanFilterModel_v2.load_trail_days_map(); replaces the per-row trail_days_* columns dropped from mv_pymc_kalman_pt_v2 in favour of one metadata row per lookback.';
+
+-- The foreign-key stand-in: every response_column must exist on the MV, and
+-- every feat_log_uplift_* the MV emits must appear here. Materialized-view
+-- columns are NOT listed in information_schema.columns, so resolve them through
+-- pg_attribute.
+CREATE OR REPLACE FUNCTION pml.assert_pymc_trail_days_map() RETURNS VOID
+	LANGUAGE plpgsql AS
+$$
+DECLARE
+	v_missing TEXT;
+	v_extra   TEXT;
+BEGIN
+	WITH mv_cols AS (SELECT a.attname::TEXT AS col
+	                 FROM pg_attribute a
+		                      JOIN pg_class c ON c.oid = a.attrelid
+		                      JOIN pg_namespace n ON n.oid = c.relnamespace
+	                 WHERE n.nspname = 'pml'
+		               AND c.relname = 'mv_pymc_kalman_pt_v2'
+		               AND a.attnum > 0
+		               AND NOT a.attisdropped)
+	SELECT string_agg(m.response_column, ', ' ORDER BY m.trail_rank)
+	INTO v_missing
+	FROM pml.vw_pymc_trail_days m
+	WHERE NOT EXISTS (SELECT 1 FROM mv_cols WHERE col = m.response_column);
+
+	WITH mv_cols AS (SELECT a.attname::TEXT AS col
+	                 FROM pg_attribute a
+		                      JOIN pg_class c ON c.oid = a.attrelid
+		                      JOIN pg_namespace n ON n.oid = c.relnamespace
+	                 WHERE n.nspname = 'pml'
+		               AND c.relname = 'mv_pymc_kalman_pt_v2'
+		               AND a.attnum > 0
+		               AND NOT a.attisdropped
+		               AND a.attname::TEXT LIKE 'feat\_log\_uplift\_%')
+	SELECT string_agg(col, ', ' ORDER BY col)
+	INTO v_extra
+	FROM mv_cols
+	WHERE NOT EXISTS (SELECT 1 FROM pml.vw_pymc_trail_days m WHERE m.response_column = col);
+
+	IF v_missing IS NOT NULL THEN
+		RAISE EXCEPTION 'vw_pymc_trail_days maps response column(s) mv_pymc_kalman_pt_v2 does not emit: %', v_missing USING HINT =
+				'Add the feat_log_uplift_* column to the MV, or drop the row from the trail-days map. The model builds its OU kernel x-axis from this view.';
+	END IF;
+
+	IF v_extra IS NOT NULL THEN
+		RAISE EXCEPTION 'mv_pymc_kalman_pt_v2 emits response column(s) absent from vw_pymc_trail_days: %', v_extra USING HINT =
+				'Every feat_log_uplift_* trail needs a calendar offset in pml.vw_pymc_trail_days or the model cannot place it on the OU grid.';
+	END IF;
+END;
+$$;
+
+-- =============================================================================
 -- COVERAGE REGRESSION CHECK  (Findings 1/3/4 fail loudly on refresh)
 -- =============================================================================
 -- Contract: every feat_* / observed_* / n_* column emitted by each mv_pymc_*
@@ -1468,6 +1919,11 @@ CREATE OR REPLACE VIEW pml.vw_pymc_catalogue_coverage_check AS
 WITH mv_map(mv_name, model_target) AS (VALUES ('mv_pymc_earnings_beat', 'earnings_beat'),
                                               ('mv_pymc_price_target', 'price_target'),
                                               ('mv_pymc_kalman_pt', 'kalman_pt'),
+                                              -- v2 is DERIVED from kalman_pt, so it re-emits every
+                                              -- parent feat_/observed_/n_ column. Omitting it here
+                                              -- would leave all of them unverified -- which reads as
+                                              -- passing, not as failing.
+                                              ('mv_pymc_kalman_pt_v2', 'kalman_pt_v2'),
                                               ('mv_pymc_dcf_pt', 'dcf_pt'),
                                               ('mv_pymc_dividend_safety', 'dividend_safety'),
                                               ('mv_pymc_credit_risk', 'credit_risk'),
@@ -1531,6 +1987,11 @@ BEGIN
 		RAISE EXCEPTION 'PyMC catalogue coverage check failed for % column(s): %', v_count, v_violations USING HINT =
 				'Every feat_/observed_/n_ column emitted by each mv_pymc_* must have exactly one pml.vw_pymc_feature_catalogue row with a matching feature_alias for its model_target (see pml.vw_pymc_catalogue_coverage_check).';
 	END IF;
+
+	-- The trail-days map is the same class of contract -- a Python-visible
+	-- surface that must agree with what the MV emits -- so it is asserted from
+	-- the same entry point rather than needing its own call site.
+	PERFORM pml.assert_pymc_trail_days_map();
 END;
 $$;
 
@@ -1552,7 +2013,12 @@ DECLARE
 	mv          TEXT;
 	schema_part TEXT;
 	table_part  TEXT;
-	mvs         TEXT[] := ARRAY [ 'pml.mv_pymc_earnings_beat', 'pml.mv_pymc_price_target', 'pml.mv_pymc_kalman_pt', 'pml.mv_pymc_dcf_pt', 'pml.mv_pymc_dividend_safety', 'pml.mv_pymc_credit_risk', 'pml.mv_pymc_accounting_anomaly' ];
+	-- ORDER IS LOAD-BEARING, not alphabetical or historical: FOREACH walks the
+	-- array in sequence, and mv_pymc_kalman_pt_v2 SELECTs from
+	-- mv_pymc_kalman_pt. Refreshing the child first rebuilds it against a stale
+	-- parent -- the mixed-vintage failure the analytics export already learned
+	-- the hard way. Keep v2 immediately after v1.
+	mvs         TEXT[] := ARRAY [ 'pml.mv_pymc_earnings_beat', 'pml.mv_pymc_price_target', 'pml.mv_pymc_kalman_pt', 'pml.mv_pymc_kalman_pt_v2', 'pml.mv_pymc_dcf_pt', 'pml.mv_pymc_dividend_safety', 'pml.mv_pymc_credit_risk', 'pml.mv_pymc_accounting_anomaly' ];
 BEGIN
 	FOREACH mv IN ARRAY mvs
 		LOOP
@@ -1571,6 +2037,44 @@ BEGIN
 	IF assert_coverage THEN PERFORM pml.assert_pymc_catalogue_coverage(); END IF;
 END;
 $$;
+
+-- ---- Targeted two-MV refresh: pml.refresh_kalman_pt_v2 -----------------------
+-- The full refresher above rebuilds all eight MVs. This is the narrow path for
+-- iterating on the Kalman pair alone, and it exists mainly to make the
+-- parent-then-child order impossible to get wrong: mv_pymc_kalman_pt_v2 SELECTs
+-- from mv_pymc_kalman_pt, so a child-only refresh silently rebuilds v2 against
+-- a stale v1. refresh_parent therefore defaults to TRUE -- pass FALSE only when
+-- you have just refreshed the parent yourself.
+--
+-- pymc_kalman_filter_pt_v2.py names this procedure in its "MV returned no rows"
+-- error, so keep the name stable.
+CREATE OR REPLACE PROCEDURE pml.refresh_kalman_pt_v2(use_concurrently BOOLEAN DEFAULT TRUE,
+                                                     refresh_parent   BOOLEAN DEFAULT TRUE)
+	LANGUAGE plpgsql AS
+$$
+BEGIN
+	IF refresh_parent THEN
+		IF use_concurrently THEN
+			REFRESH MATERIALIZED VIEW CONCURRENTLY pml.mv_pymc_kalman_pt;
+			ELSE
+				REFRESH MATERIALIZED VIEW pml.mv_pymc_kalman_pt;
+		END IF;
+		RAISE NOTICE 'refreshed pml.mv_pymc_kalman_pt';
+	END IF;
+
+	IF use_concurrently THEN
+		REFRESH MATERIALIZED VIEW CONCURRENTLY pml.mv_pymc_kalman_pt_v2;
+		ELSE
+			REFRESH MATERIALIZED VIEW pml.mv_pymc_kalman_pt_v2;
+	END IF;
+	RAISE NOTICE 'refreshed pml.mv_pymc_kalman_pt_v2';
+END;
+$$;
+
+COMMENT ON PROCEDURE pml.refresh_kalman_pt_v2(BOOLEAN, BOOLEAN) IS
+	'Refresh the Kalman MV pair in dependency order (parent mv_pymc_kalman_pt, '
+		'then child mv_pymc_kalman_pt_v2). Narrow alternative to '
+		'refresh_pymc_materialized_views when iterating on the v2 model.';
 
 -- =============================================================================
 -- USAGE
@@ -1596,6 +2100,21 @@ $$;
 --    DUPLICATE_CATALOGUE_ALIAS in pml_df_metadata_populate.sql, then flip this
 --    default to TRUE so refreshes stay honest.
 --
+-- 1b. Refresh only the Kalman pair, in dependency order:
+--      CALL pml.refresh_kalman_pt_v2();                       -- v1 then v2
+--      CALL pml.refresh_kalman_pt_v2(refresh_parent => FALSE); -- v2 only
+--
+--    mv_pymc_kalman_pt_v2 SELECTs from mv_pymc_kalman_pt, so refresh_parent
+--    defaults to TRUE. Pass FALSE only when you have just refreshed the parent
+--    yourself -- otherwise v2 is rebuilt against a stale v1 and nothing says so.
+--
+-- 1c. Point-in-time calendar horizons (the only part of the Kalman feature
+--     surface that is not already point-in-time by construction):
+--      SELECT * FROM pml.kalman_pt_v2_asof(DATE '2026-06-30');
+--
+--    Horizons only. The price / target trails are not versioned, so this is not
+--    a historical replay -- see the function header.
+--
 -- 2. Drive the notebook's MODEL_FEATURE_CONTAINERS from SQL:
 --      SELECT * FROM pml.vw_pymc_feature_aliases WHERE model_target = 'earnings_beat';
 --
@@ -1605,4 +2124,16 @@ $$;
 -- 4. Filter columns by pymc role for a specific model:
 --      SELECT column_name FROM pml.vw_pymc_feature_catalogue
 --      WHERE model_target = 'dcf_pt' AND pymc_role = 'mutable_predictor';
+--
+-- 5. The eight model targets, and which MV backs each:
+--      earnings_beat      -> mv_pymc_earnings_beat
+--      price_target       -> mv_pymc_price_target
+--      kalman_pt          -> mv_pymc_kalman_pt
+--      kalman_pt_v2       -> mv_pymc_kalman_pt_v2   (derived from kalman_pt)
+--      dcf_pt             -> mv_pymc_dcf_pt
+--      dividend_safety    -> mv_pymc_dividend_safety
+--      credit_risk        -> mv_pymc_credit_risk
+--      accounting_anomaly -> mv_pymc_accounting_anomaly
+--    The allow-list is CHECK-enforced in pml_df_metadata.sql (from-scratch) and
+--    re-applied idempotently at the top of pml_df_metadata_populate.sql (live).
 -- =============================================================================

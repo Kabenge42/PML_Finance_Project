@@ -61,6 +61,7 @@ Key environment variables (full list in `environment_variables.txt`):
 | `MODEL_VERSION` / `RANDOM_SEED`                         | Model run identifier / RNG seed                                  |
 | `N_JOBS`                                                | Parallel job count (`-1` = all cores)                            |
 | `PML_STRICT_STREAK_MERGE`                               | Fail-fast on missing EPS streak-merge columns (CI/regression)    |
+| `PML_STRICT_TRAIL_DAYS`                                 | `1` makes a failed `pml.vw_pymc_trail_days` lookup raise instead of falling back to the `DEFAULT_LOOKBACK_DAYS` literal |
 | `PML_ENABLE_PYTENSOR_C`                                 | `1` opts back into the PyTensor C backend (default: numba/py VM) |
 | `PML_FIG_WIDTH_PX`                                      | Target Plotly/mpl figure width (px) for the Kalman notebook panels |
 | `KALMAN_PT_RESULTS_DIR` / `KALMAN_PT_EXPORT_DRAWS`      | Kalman artifact-export root (per-section subdirectories; PNG/CSV/SQL/JSON/NetCDF) / `1` also exports raw eu/ept draws |
@@ -115,7 +116,7 @@ PML_Finance_Project/
 ├── reference material/          # MyST / notebook reference material
 ├── archive/                     # Archived scripts/notebooks (expected_returns_v4.py, pml_workflow_v4.ipynb, …)
 ├── *.ipynb                      # PyMC model + analytics notebooks (see Key Notebooks)
-├── pml_feature_catalogue.sql    # SSOT: pml.* functions, all 7 mv_pymc_* MVs, catalogue views, coverage check
+├── pml_feature_catalogue.sql    # SSOT: pml.* functions, all 8 mv_pymc_* MVs, catalogue views, coverage check
 ├── pml_df_metadata.sql          # SSOT: metadata/alias table DDL + CHECK-enforced vocabularies
 ├── pml_df_metadata_populate.sql # SSOT: pymc_role / model_targets assignment (+ §7i coverage reconciliation)
 ├── *.sql                        # Other root-level schema/import SQL (import_pml_data.sql, …)
@@ -619,12 +620,12 @@ Python that references dataframe columns, derive the names from SQL — not from
 outputs.
 
 **Which file, though — this matters.** `sql_scripts/pml/` is a pg_dump-style *extract*, not a source: 48 of its 64
-files carry a `-- missing source code` body, including **all 7 `mv_pymc_*.sql`, all 4 `vw_pymc_*.sql` and all 37
+files carry a `-- missing source code` body, including **all 8 `mv_pymc_*.sql`, all 4 `vw_pymc_*.sql` and all 37
 function files**. They cannot recreate anything. The real SSOT files live at the repo root:
 
 | File                            | Authoritative for                                                                                     |
 |---------------------------------|--------------------------------------------------------------------------------------------------------|
-| `pml_feature_catalogue.sql`     | `pml.*` helper functions · **all 7 `mv_pymc_*` MV definitions** · catalogue views · coverage check · refresh procedure |
+| `pml_feature_catalogue.sql`     | `pml.*` helper functions · **all 8 `mv_pymc_*` MV definitions** · catalogue views · coverage check · refresh procedures |
 | `pml_df_metadata.sql`           | `pml_df_metadata` / `pml_df_feature_alias` DDL + the CHECK-enforced vocabularies                        |
 | `pml_df_metadata_populate.sql`  | `pymc_role` / `model_targets` / alias assignment (incl. §7i coverage reconciliation)                   |
 | `sql_scripts/pml/pml_df.sql`, `staging.sql`, `vw_pml_df_*.sql` | The base tables and the five `vw_pml_df_*` views — the extract's valid part |
@@ -757,6 +758,12 @@ Drives all Python feature selection — do not invent new values:
 | `derived_input`     | Computed from raw columns before model entry         |
 | `excluded`          | Omitted from all PyMC models                         |
 
+**The eight model targets** (CHECK-enforced in `pml_df_metadata.sql`, re-applied idempotently at the top of
+`pml_df_metadata_populate.sql` for live databases): `earnings_beat`, `price_target`, `kalman_pt`, `kalman_pt_v2`,
+`dcf_pt`, `dividend_safety`, `credit_risk`, `accounting_anomaly`. Adding one is a **three-file** change — both CHECKs,
+the idempotent `ALTER` in the populate script, and the `mv_map` VALUES list in `vw_pymc_catalogue_coverage_check`. Miss
+the last and the new MV columns are never checked, which reads as passing rather than failing.
+
 Query features for a model:
 
 ```sql
@@ -781,7 +788,15 @@ CALL pml.refresh_pymc_materialized_views(
 Both arguments are easy to miss. `assert_coverage => TRUE` fails the refresh loudly if any MV `feat_`/`observed_`/`n_`
 column is unregistered, duplicated or phantom in the catalogue — see *Refreshing MVs* under Common Development Tasks.
 
-Six of the seven MVs carry a shared market-cap/EV size-&-trend trio:
+The `mvs` array inside that procedure is ordered, not alphabetical: `mv_pymc_kalman_pt_v2` is `SELECT b.*` over
+`mv_pymc_kalman_pt`, so it sits immediately after its parent and `FOREACH` walks them in sequence. For the Kalman pair
+alone use `CALL pml.refresh_kalman_pt_v2();` (`refresh_parent` defaults to `TRUE` for the same reason).
+
+> **Every MV here is `CREATE MATERIALIZED VIEW IF NOT EXISTS`.** Re-running `pml_feature_catalogue.sql` does **not**
+> pick up a changed definition — you must `DROP MATERIALIZED VIEW pml.mv_pymc_<name>;` first. The `CREATE` silently
+> no-ops otherwise, and the first symptom is a `COMMENT ON COLUMN` failing on a column that "does not exist".
+
+Six of the eight MVs carry a shared market-cap/EV size-&-trend trio:
 `feat_mcap_trend_1y`, `feat_mcap_vs_3yavg`, `feat_ev_vs_3yavg` (derived from the
 `market_cap_neg{1..4}f{q,y}` lags and `market_cap`/`enterprise_value` `_{3,5}yavg`
 columns added to `pml_df`).
@@ -794,7 +809,7 @@ columns added to `pml_df`).
 > `vw_pymc_feature_catalogue` is `metadata CROSS JOIN LATERAL UNNEST(model_targets)
 > LEFT JOIN feature_alias`: an MV that stops emitting a still-tagged column raises
 > `PHANTOM_CATALOGUE_ALIAS`. `feat_mcap_country_r` stays — it is the size-tilt
-> `pm.Data` container, not a drift predictor.
+> `pm.Data` container, not a drift predictor. `mv_pymc_kalman_pt_v2` inherits all of this, being derived from it.
 
 > **`mv_pymc_kalman_pt` is not reproducible across refresh dates.** Its seven `days_*` horizons
 > (`days_to_next_earnings`, `days_since_last_report`, …) are computed against `CURRENT_DATE`, so refreshing on a
@@ -827,6 +842,7 @@ components, and `days_*` time covariates all stay out of the drift matrix — ED
 | `mv_pymc_earnings_beat`      | `n_total`, `n_beats`, `n_total_annual`, `n_beats_annual`                       | `feat_logit_beat_rate`, `feat_eps_fy1e`, `feat_rev_{1w,1m,3m,6m,1y}`, `feat_rev_accel_1m_6m`, `feat_last_q_surprise`                                      |
 | `mv_pymc_price_target`       | `observed_target_pct`, `observed_target_pct_med`, `price_target`, `n_analysts` | `feat_net_buy_sentiment`, `feat_implied_upside`, `feat_target_range_width`, `feat_pt_momentum_3m`, `feat_target_dispersion_cv`, `feat_52w_range_position` |
 | `mv_pymc_kalman_pt`          | `observed_pt`, `last_price`, `n_analysts`                                      | `feat_log_uplift` (the panel response), `feat_pt_drift(_n)`, `feat_price_drift(_n)`, `feat_pt_{high,low,median,noise}_drift`, `feat_coverage_drift`, `feat_pt_noise_sigma`, `feat_pt_range_norm`, `feat_vol_drift(_n)`, `feat_analyst_{bullish,bearish,neutral}_pct`, `feat_analyst_conviction`, `feat_analyst_rating`, `feat_{holds,buys,sells,no_opinion}`, `feat_pt_achievement_1y`, `feat_pt_accuracy_1y`, `feat_pt_range_hit_rate`, `feat_rel_volume`, `feat_avg_beta`, `feat_mcap_country_r`, `feat_vol_level`, `feat_log_mcap`, `feat_net_eps_drift(_n)`, `feat_last_{q,y}_surprise`, `feat_eps_beat_rate(_annual)`, `feat_one_day_return`, `feat_price_chg_pct_3m`, `feat_total_return_*` (14 windows), `feat_tr_cagr_{1y,3y,5y,10y}`, `feat_piotroski_f_score_{fy,neg1fy,neg2fy,neg3fy}`, `feat_median_piotroski_f_score`, plus raw `days_*` horizons |
+| `mv_pymc_kalman_pt_v2`       | `feat_log_uplift_{now,1w,1m,3m,6m,1y}` (the correlated response trail)          | everything `mv_pymc_kalman_pt` emits (`SELECT b.*`), plus `n_trail_obs`, `n_analysts_{1w,1m,3m,6m,1y}` (per-lookback precision — these drive the per-CELL measurement scale since 2026-08-19, not just a trail average), the split EPS block `feat_eps_signal_{surprise,beat,coverage}`, and `built_at` |
 | `mv_pymc_dcf_pt`             | `observed_pt`                                                                  | `feat_fcf_growth_{1y,2y}`, `feat_fcf_terminal_growth`, `feat_reinvest_rate`, `feat_capex_to_fcf`, `feat_tr_cagr_{3y,10y}`                                 |
 | `mv_pymc_dividend_safety`    | `observed_div_yield`                                                           | `feat_fcf_coverage`, `feat_cfo_coverage`, `feat_eps_payout_ratio`, `feat_dps_growth_{1y,3y,5y}`, `feat_yield_spread_vs_5y`                                |
 | `mv_pymc_credit_risk`        | `observed_altman_z`                                                            | `feat_distress_zone`, `feat_z_trend_{1y,3y}`, `feat_cfo_capex_cov`, `feat_fcf_yield`, `feat_beta_2y`                                                      |
@@ -848,6 +864,7 @@ to invert by mistake; it drives `KalmanRunConfig.mcap_country_r_max` (0.02 keeps
 | `vw_pymc_feature_aliases`   | Aggregated alias arrays per model                                                   |
 | `vw_pymc_feature_coverage`  | Diagnostic: count of columns per `(model_target, pymc_role)`                        |
 | `vw_pymc_catalogue_coverage_check` | Diagnostic: per `(model_target, feat_name)` catalogue-row status (backs `assert_pymc_catalogue_coverage()`) |
+| `vw_pymc_trail_days`        | **SSOT for the Kalman v2 OU-kernel x-axis**: `lookback_key` → `response_column` → `trail_days`. Replaced the per-row `trail_days_*` literals on `mv_pymc_kalman_pt_v2` (2026-08-19); read by `KalmanFilterModel_v2.load_trail_days_map()` |
 
 ### SQL Helper Functions (pml schema)
 
@@ -917,8 +934,24 @@ pml.country_name(code_text) / pml.currency_name(code) / pml.exchange_name(code) 
 
 -- Catalogue integrity
 pml.assert_pymc_catalogue_coverage() → VOID   -- RAISES on any MV <-> catalogue divergence
+pml.assert_pymc_trail_days_map()     → VOID   -- RAISES if vw_pymc_trail_days and the MV's
+                                              -- feat_log_uplift_* columns disagree in EITHER
+                                              -- direction. The foreign key a view cannot declare;
+                                              -- called from assert_pymc_catalogue_coverage().
 CALL pml.refresh_pymc_materialized_views(use_concurrently DEFAULT TRUE,
                                          assert_coverage  DEFAULT FALSE);
+CALL pml.refresh_kalman_pt_v2(use_concurrently DEFAULT TRUE,  -- Kalman pair only,
+                              refresh_parent   DEFAULT TRUE); -- parent then child
+
+-- Point-in-time (kalman_pt_v2)
+pml.kalman_pt_v2_asof(p_asof DATE DEFAULT CURRENT_DATE)
+        → TABLE(isin, days_to_next_earnings, days_since_last_report,
+                days_to_next_fy_end, days_to_next_report,
+                days_to_expected_report, days_since_fy_end, asof_date)
+        -- STABLE (reads the MV). Recomputes the CURRENT_DATE-relative HORIZONS
+        -- against an arbitrary date; six of the parent seven (the fiscal-quarter
+        -- one is an ordinal, not a date). The price/target trails are NOT
+        -- versioned, so this is not a historical replay.
 ```
 
 ### Analytics Schema (pipeline outputs)
