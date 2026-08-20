@@ -5,6 +5,243 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Kalman v2 decision layer (2026-08-20)
+
+Run `49e84d7e9d59` cleared 19 of 21 gates — 0 divergences, max R-hat 1.0025, min
+bulk ESS 1590, PPC coverage 0.937–0.944 — and shipped a screen that was the
+analyst consensus: Spearman **0.999995** against `implied_upside`, median
+revision **0.03pp**, 99 of the top 100 names identical to a raw
+`price_target / last_price` sort. The two warnings (`coverage_gradient` 1.53x,
+`prob_pos_degenerate` 87.4%) were symptoms of the same cause.
+
+Nothing here changes the likelihood. Every calibration gate that passed still
+passes, because the fix is in the decision layer, not the model.
+
+### Fixed
+
+- **The filter stopped filtering, and one variance weight explains it.**
+  `variance_weights[observation] = 0.0016`, i.e. `sigma_obs_base` at 1/25 of
+  `sigma_state`, so the Kalman gain on the anchor observation went to 1 and
+  `state_now_mean` returned the observation.
+
+  That estimate is not wrong. `obs_share` is identified by how much the
+  log-uplift trail decorrelates across the **shortest gap in the panel** — 7
+  days on the shipped `('1y','3m','1w')` grid — and against
+  `ou_length_scale_days` ≈ 85 the OU state already explains `exp(-7/85) = 0.92`
+  of it. The panel delivers 0.91. Nothing is left over to call measurement
+  noise, and the quantity being measured is how noisily a target is
+  *republished over a week*, not how far consensus sits from fair value.
+
+  The decision layer needs the second, which the trail cannot identify in any
+  parameterisation. So it is now **supplied, not fitted**:
+  `apply_forecast_error_shrinkage` performs a closed-form normal-normal update
+  on quantities the posterior already carries, anchored on the standard error of
+  the consensus mean (`feat_pt_noise_sigma / |observed_pt| / sqrt(n_analysts)`)
+  — a measurement the trail's autocorrelation genuinely cannot see:
+
+      g          = struct_var / (struct_var + fe_var)
+      theta_mean = mu_scaled + g * (state_now_mean - mu_scaled)
+      theta_sd   = sqrt(g^2 * state_now_sd^2 + g * fe_var)
+
+  The drift betas and the crossed group effects reach the exported number for
+  the first time. `KalmanRunConfigV2.forecast_error_multiplier` is a **prior,
+  not an identified parameter**, and is documented as such;
+  `scripts/profile_forecast_error.py` grids it without sampling so the choice is
+  auditable, and `enable_forecast_error_shrinkage=False` restores the old latent
+  bit for bit (a unit test asserts the exactness, not mere closeness).
+
+  **Default 1.0, set on measurement.** The first build shipped 2.0, picked to
+  hit a target shrinkage; the production fit rejected it as over-shrunk (slope
+  0.723 against a `[0.80, 0.98]` band). Because the shrinkage is post-posterior
+  the multiplier was then swept offline against that run's own output, with no
+  refit:
+
+  | kappa | median g | slope | rho | revision pp |
+  |---|---|---|---|---|
+  | 0.50 | 0.966 | 0.944 | 0.999 | 0.28 |
+  | **1.00** | **0.876** | **0.858** | **0.992** | **1.00** |
+  | 1.25 | 0.818 | 0.819 | 0.986 | 1.45 |
+  | 1.50 | 0.758 | 0.783 | 0.978 | 1.91 |
+  | 2.00 | 0.638 | 0.723 | 0.960 | 2.83 |
+
+  The feasible band is roughly `[0.85, 1.35]`: below it `rho` stays above its
+  ceiling (still a consensus sort), above it the slope leaves the band. 1.0 is
+  mid-band *and* the interpretable value — the plain standard error of the
+  consensus mean, no inflation — so the two criteria agree.
+
+  Rejected on measurement, not taste: re-prioring `obs_share` (the posterior sat
+  at 0.00058 under a Beta(2,4) whose prior mean is 0.33 — the data pins it), and
+  moving the observation leg per-name inside the likelihood (destroys the
+  shared-Cholesky group reuse and puts every passing PPC gate back in play for a
+  term the panel still cannot identify).
+
+- **`shrinkage_slope` passed a pass-through.** The gate's band `[0.80, 1.20]`
+  contains identity, and an exact copy of the input scores a perfect slope 1.0 /
+  intercept 0.0. It reported "slope 0.979, intercept +0.0051" and passed.
+  Slope grades *calibration*; the gate now also grades *disagreement* — Spearman
+  rho against consensus (ceiling 0.995) and median absolute revision in pp
+  (floor 0.25) — and the upper slope bound drops 1.20 → 0.98. Verified to fail
+  on run `49e84d7e9d59`'s own numbers before the fix landed; a regression test
+  pins all three thresholds.
+
+- **The `|intercept| <= 0.02` leg was the slope test in disguise, and made the
+  gate unsatisfiable.** Caught by the first production fit under the new
+  thresholds, not by review. Shrinking a cloud toward a centre `c` gives
+  `eu = c + slope*(iu - c)`, hence `intercept = (1 - slope) * c` identically —
+  measured across a nine-point multiplier sweep, `intercept / (1 - slope)` came
+  out 0.2018 / 0.2016 / 0.2010 / 0.2006 / 0.2006 / 0.2007, i.e. the response
+  centre every time. So the intercept ceiling required slope >= 0.90 while the
+  new rho ceiling required slope <= ~0.88: **the feasible set was empty for
+  every value of the multiplier.**
+
+  Replaced by `gate_shrinkage_center_shift_max`, bounding
+  `|mean(expected_upside) - mean(implied_upside)|` — the universe-wide lift the
+  old threshold was actually reaching for (the run where names above consensus
+  went 62% to 81%). Pure shrinkage moves no centre: "above consensus" measured
+  51.4% at *every* multiplier on the sweep. The intercept is still reported as a
+  diagnostic and is no longer graded, and a unit test asserts the algebraic
+  identity so the trap is not reinstated.
+
+- **`cvar05`, `exp_vol`, `ret_vol_ratio` and `starr` measured estimation
+  uncertainty, not risk.** All four came from `eu`, the posterior draws of the
+  expected upside. Consequences on `49e84d7e9d59`: `cvar05` was **positive for
+  88.4%** of names and correlated 0.9998 with `expected_upside`; the 25-name
+  book reported a weighted 5% expected shortfall of **+42.7%** and a portfolio
+  volatility of **0.56%**; `exp_vol` had a median of 0.47pp against a
+  Monte-Carlo return sd of 19.03pp, a factor of 40.
+
+  `compute_cvar_aware_book` now takes `return_draws` and computes both from the
+  forward-return distribution. `run_screen` hands them over via a new
+  `ScreenDraws` carrier rather than `run_risk_book` re-resolving the latent
+  itself — which would otherwise have sized the book on the *unshrunk* latent
+  while the screen reported the shrunk one, with every gate still green. The
+  estimation-uncertainty view is not lost: `expected_upside_sd` is exactly the
+  old `exp_vol`, under a name that says what it is.
+
+- **`tail_risk`'s 1pp absolute floor was selecting the book.** It bound for
+  13.4% of the universe and **14 of the 25 book names**, turning `starr` into
+  `100 x expected_upside` for exactly the names whose simulated 5% quantile
+  happened to be positive (29.6% of the universe; 24 of 25 book names). Only 16
+  of the top-100 STARR names were top-100 by upside. A relative floor at
+  `tail_risk_vol_floor_k = 0.25` of the name's own `er_sd` now charges a name
+  for the dispersion it has. **Measured caveat recorded in the source:** with
+  `return_draws` supplied, `expected_upside - cvar05` is already ~`2 * er_sd`, so
+  the floor is inert on the primary path — it is defence for the fallback path
+  and for degenerate MC distributions, not the primary fix.
+
+- **`achieve_prob` was a sigmoid of a location parameter.** `risk_adj_return` is
+  a standardised log-uplift net of three penalties, so `sigmoid()` of it is the
+  probability of nothing: no calibration target, pinned at 0.5 wherever the
+  latent is near zero, and a prior that piles mass at both ends. Exported as
+  `kalman_gain`, it correlated **-0.004** with analyst count and +0.06 with the
+  shrinkage actually applied, and it multiplied `mc_prob_pos` to form
+  `p_upside_pos_cond` — the column the risk book and the dashboard rank on.
+
+  Removed from the model graph. `p_upside_pos_cond` is now
+  **P(risk-adjusted forward return > 0)** computed directly from the MC draws
+  with the model's own penalties applied — one event, one probability, no
+  product — and is documented as the primary ranking column. `kalman_gain`
+  keeps its name for one release but is now `P(risk_adj_return > 0)`;
+  `shrink_gain` is the new column carrying the meaning `kalman_gain` was
+  mistakenly believed to have. `prob_pos` stays a reported diagnostic and is
+  never ranked. The `prob_pos_degenerate` gate additionally asserts the
+  *promoted* column spans a usable range, so its collapse cannot be inherited
+  silently.
+
+- **`apply_out_of_support` lost a check to the `cvar05` change.** Its
+  `cvar_5pct_kalman >= UPLIFT_CLIP_HI` leg tested the upside posterior's lower
+  tail; with the column now bounded above by `er_p05`, it only re-detected what
+  the `er_p05` test already caught. Replaced with a symmetric test on the upside
+  posterior's mean at both bounds, which is what catches the 2026-08-18-style
+  row (expected upside 5.0, posterior degenerate, `er_p05` 0.64).
+
+### Added
+
+- `scripts/profile_forecast_error.py` — grids the multiplier against an exported
+  panel with no sampling.
+- `analytics.panel_vintage_v2` (`sql_scripts/analytics/kalman_panel_vintage.sql`),
+  `scripts/capture_panel_vintage.py`, `scripts/score_panel_vintages.py` — the
+  point-in-time harness. **Every gate in this workflow scores the model against
+  the analyst trail it was fitted to, which is why a pass-through could clear
+  19 of 21.** The price/target trails are unversioned and the seven pipeline
+  tables are DROP-and-RECREATE, so the state the model saw is unrecoverable
+  after the next run. Captures are append-only and refuse to overwrite a
+  vintage without `--replace`. Scoring needs two captures separated in time;
+  its `ols_slope` is what eventually replaces the `forecast_error_multiplier`
+  prior with an estimate.
+
+### Changed
+
+- GEIB moves in the same commit, per the standing export/deploy pair contract.
+  Three chart modules carried explicit workarounds for the old semantics —
+  `var_cvar.py` deliberately avoided `expected_vol_kalman` and computed its own
+  normal-approximation shortfall, `kelly.py` reimplemented the binding-downside
+  term, `monte_carlo_forecast.py` labelled a CVaR "Upside p5" so nobody read
+  +0.48 as a drawdown. R4 makes all three wrong; they now read the corrected
+  columns, with a `cvar_5pct_kalman > er_p05` check that detects a stale table
+  and falls back rather than mis-reporting. `kelly.py` also mirrors the new
+  relative tail floor, and `er_sd` was added to its projection — without it the
+  floor would have been silently zero in the card while the book applied it.
+
+### Verified
+
+Production budget (2000 draws / 4000 tune / 4 chains), run `512a53fd43eb`,
+**all 20 gates pass**. Nothing was written to the database.
+
+Every gate that graded the likelihood is unmoved, which is the point — the fix
+is entirely downstream of it: 0 divergences, max R-hat 1.0023, min bulk ESS 1558,
+`ppc_coverage` 0.938–0.946 against 0.94, `ppc_decay` 0.406 inside [0.392, 0.456],
+`ppc_decay_residual` and `ppc_t_spread` inside their intervals,
+`mean_calibration` 1.049.
+
+| quantity | `49e84d7e9d59` | `512a53fd43eb` |
+|---|---|---|
+| median revision vs consensus | 0.03pp | **1.00pp** |
+| Spearman vs consensus | 0.999995 | **0.9921** |
+| model-on-consensus slope | 0.9788 | **0.8545** |
+| median `expected_upside_sd` | 0.47pp | **4.22pp** |
+| `prob_pos` pinned at 1.0 | 87.4% | **59.7%** |
+| median `shrink_gain` | — | 0.876 |
+| share `cvar05 < 0` | 11.6% | **86.1%** |
+| median `cvar05` | **+17.3%** | **−14.9%** |
+| median `exp_vol` | 0.47pp | **19.6pp** |
+| `starr` p75/median | 10.87 | **1.40** |
+| names on the 1pp tail floor | 13.4% | **0%** |
+| book weighted `cvar05` | **+42.7%** | **+4.3%** |
+| book weighted `er_p05` | +12.9% | **−0.8%** |
+| book names with `er_p05 > 0` | 24/25 | **10/25** |
+
+**Two things are not fixed and should not be read as fixed.**
+
+`coverage_gradient` stays a WARN at 1.56x against a 2x target (it was 1.53x).
+`coverage_scale_per_cell` was already on and already reuses `sigma_n_exponent`
+along time; precision weighting cannot do more from inside a variance leg
+carrying 0.16% of the total, and the shrinkage gain's own coverage gradient is
+not steep enough to close it at this multiplier.
+`forecast_error_n_exponent` is the lever and was deliberately left at 0.5 rather
+than tuned to chase the gate.
+
+`prob_pos` pinning at **59.7% sits just inside its 60% threshold**. The two gates
+bracket the multiplier from opposite sides — `shrinkage_slope` wants it below
+~1.35, `prob_pos_degenerate` wants it above ~1.0 — so the feasible window is
+roughly `[1.0, 1.35]` and 1.0 is at its lower edge. Interpolating the two
+measured points (7.0pp added sd / 35.9% pinned at 2.0; 4.2pp / 59.7% at 1.0)
+puts 1.2 at roughly 53% pinned, which would be more robust. **That is an
+interpolation, not a measurement**, and 1.0 is the value actually verified
+end to end, so it ships. Settling it costs one refit — or none, once the idata
+is persisted: `az.to_netcdf` was removed in ArviZ 1.x, so the attempt to save it
+here failed (caught, non-fatal), and the post-posterior design means a saved
+posterior would make every future multiplier decision free.
+
+### Performance
+
+- The Monte-Carlo array is ~1.7 GB at the production budget. `run_screen` now
+  clips and exponentiates it **in place** and computes the risk-adjusted
+  probability from the log buffer between those two steps, holding one copy
+  instead of three; `_tail_stats` is row-chunked for the same reason. Found
+  while restructuring, not in production — the naive version would have tripled
+  peak memory at the exact point the new columns were added.
+
 ## [Unreleased] - Kalman v2 (branch `worktree-kalman-v2-design`)
 
 Branch work, not a release. The three preceding v2 commits document themselves in

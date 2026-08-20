@@ -36,7 +36,7 @@ country_default = "US"
 sort_by_id = f"{component_id}_sort_by"
 sort_by_options = [
     {"label": "Expected Return (Kalman)", "value": "expected_return_kalman"},
-    {"label": "Probability of Positive Return", "value": "p_upside_pos_cond"},
+    {"label": "P(risk-adj. return > 0)", "value": "p_upside_pos_cond"},
     {"label": "Signal Strength", "value": "signal_strength"},
     {"label": "Reward / Tail Risk (STARR)", "value": "reward_to_cvar"},
     {"label": "Price Target (Kalman)", "value": "price_target_kalman"},
@@ -76,7 +76,7 @@ _COLUMNS = [
     ("price_target_kalman", "Price Target Kalman", 2),
     ("price_target_median", "Price Target Median", 2),
     ("expected_return_kalman", "Expected Return Kalman", 2),
-    ("p_upside_pos_cond", "Cond Prob Pos", 2),
+    ("p_upside_pos_cond", "P(risk-adj > 0)", 2),
     ("beta", "Beta", 2),
     ("expected_sharpe_ratio", "Uplift t-stat", 2),
     ("signal_strength", "Signal Strength", 2),

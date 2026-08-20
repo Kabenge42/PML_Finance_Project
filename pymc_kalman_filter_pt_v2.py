@@ -89,6 +89,7 @@ from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
     KALMAN_V2_SCREEN_LATENT,
     KalmanModelConfig,
     KalmanPanelV2,
+    apply_forecast_error_shrinkage,
     covariance_groups_for,
     build_kalman_pt_model_v2,
     effective_sample_size_of_panel,
@@ -454,8 +455,47 @@ class KalmanRunConfigV2:
     gate_coverage_percentiles: tuple[float, float] = (3.0, 97.0)
     gate_coverage_tol: float = 0.02
     gate_shrinkage_slope_lo: float = 0.80
-    gate_shrinkage_slope_hi: float = 1.20
-    gate_shrinkage_intercept_max: float = 0.02
+    #: Ceiling on the model-on-consensus regression slope. **Lowered 1.20 ->
+    #: 0.98 on 2026-08-20**, because the old band contained identity and so
+    #: could not distinguish a working shrinkage estimator from a pass-through.
+    #: Run ``49e84d7e9d59`` passed this gate at slope 0.979 / intercept +0.0051
+    #: while reproducing the analyst consensus at Spearman 0.999995 and a median
+    #: revision of 0.03pp — the exact failure the gate was written to catch,
+    #: scored as a pass. A slope at or above 1 was never a legitimate outcome
+    #: for a shrinkage estimator; only the *lower* bound was ever doing work.
+    gate_shrinkage_slope_hi: float = 0.98
+    #: Ceiling on ``|mean(expected_upside) - mean(implied_upside)|`` — the
+    #: universe-wide shift the screen applies.
+    #:
+    #: **Replaced the raw y-intercept test on 2026-08-20, because that test was
+    #: the slope in disguise.** Shrinking a cloud toward a centre ``c`` gives
+    #: ``eu = c + slope*(iu - c)``, hence ``intercept = (1 - slope) * c`` as an
+    #: algebraic identity. Measured across a nine-point multiplier sweep on the
+    #: fitted run, ``intercept / (1 - slope)`` came out 0.2018, 0.2016, 0.2010,
+    #: 0.2006, 0.2006, 0.2007 — i.e. exactly the response centre, every time.
+    #: Any genuine shrinkage of a response centred at +20% therefore MUST show a
+    #: positive intercept, and pairing ``|intercept| <= 0.02`` with the new
+    #: ``rho <= 0.995`` left an EMPTY feasible set: the first needs slope >= 0.90,
+    #: the second needs slope <= ~0.88.
+    #:
+    #: The failure the old threshold was written for — a run where names above
+    #: consensus went 62% to 81% — is a shift of the centre, not a non-zero
+    #: intercept, and that is what this measures. The gate still reports the
+    #: intercept, as a diagnostic rather than as a pass condition.
+    gate_shrinkage_center_shift_max: float = 0.02
+    #: Ceiling on Spearman rho between model expected upside and analyst implied
+    #: upside. Slope and intercept are both blind to a pass-through — an exact
+    #: copy scores 1.0 and 0.0, which the band admits — so the gate needs a
+    #: statistic that measures *disagreement* rather than calibration. The
+    #: shipped model reorders the universe; a ranking identical to its own input
+    #: is a fault regardless of how well-calibrated the regression looks.
+    gate_shrinkage_rho_max: float = 0.995
+    #: Floor on the median absolute revision from consensus, in percentage
+    #: points. The scale-free companion to :attr:`gate_shrinkage_rho_max`: rho
+    #: catches a rank-preserving copy, this catches a uniform rescale that
+    #: reorders nothing of consequence. 0.25pp is two orders of magnitude above
+    #: the 0.03pp of run ``49e84d7e9d59`` and an order below v1's 14%.
+    gate_shrinkage_revision_min_pp: float = 0.25
     gate_decay_rmse_max: float = 0.10
     #: Ceiling on ``Var(mu_reg) / Var(y_snapshot)``. 1.0 is not a tuning choice:
     #: an additive mean with more variance than its response implies a negative
@@ -469,6 +509,56 @@ class KalmanRunConfigV2:
     gate_mean_calibration: tuple[float, float] = (0.90, 1.10)
 
     # ---- decision layer ----------------------------------------------------
+    #: Shrink the decision latent toward the fitted mean by an explicit
+    #: forecast-error term. See
+    #: :func:`~probabilistic_ml_model.pymc_models.KalmanFilterModel_v2.apply_forecast_error_shrinkage`
+    #: for why it is here and not in the likelihood. ``False`` restores the
+    #: pre-2026-08-20 pass-through exactly, and is the comparison arm.
+    enable_forecast_error_shrinkage: bool = True
+    #: Scalar on the standard error of the analyst consensus mean. **This is a
+    #: PRIOR, not an identified parameter** — the panel's own autocorrelation
+    #: cannot separate forecast error from reporting noise, which is the whole
+    #: reason the term is supplied rather than fitted. Only realised returns can
+    #: estimate it, which is what ``scripts/score_panel_vintages.py`` is being
+    #: built to do; until then, ``scripts/profile_forecast_error.py`` shows what
+    #: each value does to the gates so the choice is auditable.
+    #: **1.0, chosen on measurement, not on taste.** 1.0 means the forecast error
+    #: is exactly the standard error of the consensus mean, with no inflation --
+    #: the only value on the grid that needs no justification of its own.
+    #:
+    #: The first build defaulted to 2.0, picked to hit a target shrinkage. The
+    #: production fit ``760751604647`` rejected it: slope 0.723 against a
+    #: ``[0.80, 0.98]`` band, i.e. over-shrunk. Sweeping the multiplier offline
+    #: against that run's own output (the shrinkage is post-posterior, so no
+    #: refit is needed -- see ``scripts/profile_forecast_error.py``):
+    #:
+    #: ======  ========  ======  =====  ============
+    #: kappa   median g  slope   rho    revision pp
+    #: ======  ========  ======  =====  ============
+    #: 0.50    0.966     0.944   0.999  0.28
+    #: **1.00**  **0.876**  **0.858**  **0.992**  **1.00**
+    #: 1.25    0.818     0.819   0.986  1.45
+    #: 1.50    0.758     0.783   0.978  1.91
+    #: 2.00    0.638     0.723   0.960  2.83
+    #: ======  ========  ======  =====  ============
+    #:
+    #: The feasible band is roughly ``[0.85, 1.35]``: below it ``rho`` stays above
+    #: its 0.995 ceiling (the screen is still a consensus sort), above it the
+    #: slope falls out of the band. 1.0 sits mid-band and is the interpretable
+    #: choice, so the two criteria agree.
+    forecast_error_multiplier: float = 1.0
+    #: Exponent on the analyst count in that standard error. 0.5 is the textbook
+    #: standard error of the mean; raise it to steepen ``coverage_gradient``.
+    #: **Do not pre-tune** — measure the gate first, since the shrinkage gain
+    #: already inherits a coverage gradient at 0.5.
+    forecast_error_n_exponent: float = 0.5
+    #: Floor on ``tail_risk`` as a fraction of the name's own Monte-Carlo return
+    #: sd. The absolute 1pp floor in :mod:`RiskBookModel` binds for 13.4 % of the
+    #: universe and 14 of 25 book names on run ``49e84d7e9d59``, turning STARR
+    #: into ``100 x expected_upside`` for exactly the names whose simulated 5 %
+    #: quantile happens to be positive. A relative floor charges a name for the
+    #: dispersion it has instead of rewarding it for having no simulated loss.
+    tail_risk_vol_floor_k: float = 0.25
     mc_horizon: int = 4
     mc_rho: float = 0.85
     cvar_alpha: float = 0.05
@@ -482,8 +572,42 @@ class KalmanRunConfigV2:
 
     # ---- output ------------------------------------------------------------
     results_dir: Optional[str] = None
-    write_analytics: bool = False
+    write_analytics: bool = True
     log_level: str = "INFO"
+
+    def __post_init__(self) -> None:
+        """Reject the decision-layer knobs that would fail silently downstream.
+
+        A negative multiplier gives a negative variance and a gain above 1, i.e.
+        anti-shrinkage; a slope band that does not contain a shrinkage estimator
+        makes the gate unsatisfiable. Both produce plausible-looking numbers
+        several stages later rather than an error here.
+        """
+        if self.forecast_error_multiplier < 0:
+            raise ValueError(
+                "forecast_error_multiplier must be non-negative, got "
+                f"{self.forecast_error_multiplier!r}"
+            )
+        if self.forecast_error_n_exponent < 0:
+            raise ValueError(
+                "forecast_error_n_exponent must be non-negative, got "
+                f"{self.forecast_error_n_exponent!r}"
+            )
+        if self.tail_risk_vol_floor_k < 0:
+            raise ValueError(
+                f"tail_risk_vol_floor_k must be non-negative, got "
+                f"{self.tail_risk_vol_floor_k!r}"
+            )
+        if not self.gate_shrinkage_slope_lo < self.gate_shrinkage_slope_hi:
+            raise ValueError(
+                "gate_shrinkage_slope band must be increasing, got "
+                f"[{self.gate_shrinkage_slope_lo}, {self.gate_shrinkage_slope_hi}]"
+            )
+        if not 0.0 < self.gate_shrinkage_rho_max <= 1.0:
+            raise ValueError(
+                "gate_shrinkage_rho_max must be in (0, 1], got "
+                f"{self.gate_shrinkage_rho_max!r}"
+            )
 
     @property
     def gate_coverage_target(self) -> float:
@@ -2002,6 +2126,45 @@ def run_diagnostics(
 # =========================================================================== #
 
 
+@dataclass(frozen=True)
+class ScreenDraws:
+    """The draw arrays §10 builds and §10b needs, carried explicitly.
+
+    ``run_risk_book`` used to re-resolve the decision latent from the idata
+    itself. That was harmless while the screen was a thin summary of that same
+    latent, but it stopped being true once §10 gained forecast-error shrinkage:
+    a re-resolve would have sized the book on the UNSHRUNK latent while the
+    screen reported the shrunk one, and every gate would still have passed.
+
+    The Monte-Carlo array is carried for the same reason in reverse — it existed
+    only inside ``run_screen``, so ``compute_cvar_aware_book`` had no return
+    distribution to compute a CVaR from and fell back to the posterior upside
+    draws, which is why the exported ``cvar05`` was positive for 88 % of names.
+
+    Attributes
+    ----------
+    eu
+        Expected-upside draws in RETURN space, dims ``(chain, draw, isin)``.
+    mc_returns
+        Monte-Carlo forward returns, shape ``(n_isin, n_samples, horizon)``.
+    isins
+        Identifiers, aligned to the ``isin`` axis of both.
+    """
+
+    eu: Any
+    mc_returns: np.ndarray
+    isins: np.ndarray
+
+    @property
+    def pooled_returns(self) -> np.ndarray:
+        """``mc_returns`` flattened to ``(n_isin, n_samples * horizon)``.
+
+        The pooling ``summarize_mc_returns`` uses, so a CVaR taken from this and
+        the exported ``er_p05`` describe the same distribution.
+        """
+        return np.asarray(self.mc_returns).reshape(len(self.isins), -1)
+
+
 def _posterior_draws(idata: Any, name: str, *, per_isin: bool = True) -> np.ndarray:
     """Flatten a posterior variable to ``(isin, sample)`` or ``(sample,)``."""
     post = idata.posterior if hasattr(idata, "posterior") else idata["posterior"]
@@ -2038,13 +2201,87 @@ def _fitted_mean(idata: Any, panel: KalmanPanelV2) -> np.ndarray:
     return _posterior_mean(idata, name, panel)
 
 
+def _risk_adjusted_prob_positive(
+    idata: Any,
+    panel: KalmanPanelV2,
+    mc_log: np.ndarray,
+    *,
+    chunk: int = 512,
+) -> Optional[np.ndarray]:
+    """P(risk-adjusted forward return > 0) per name, from log-space MC draws.
+
+    Replaces ``mc_prob_pos * kalman_gain``, which multiplied a probability by a
+    sigmoid of a location parameter: usable as an ordering, meaningless as a
+    level. This is one probability of one stated event — that the forward return,
+    net of the same risk / size / volume penalties the model applies to
+    ``risk_adj_return``, is positive.
+
+    Two implementation notes that are not incidental:
+
+    * The penalty is recovered as ``state_now_mean - risk_adj_return`` rather
+      than rebuilt from the three loadings and their data columns. That is the
+      penalty the model actually applied, so it cannot drift out of step with the
+      builder the way a reimplementation would.
+    * The test is on the LOG draws. ``expm1`` is monotone and the clip bounds
+      straddle zero, so ``expm1(x) > 0`` exactly when ``x > 0`` — converting
+      first would allocate a second multi-gigabyte array to learn nothing.
+
+    Parameters
+    ----------
+    mc_log
+        Simulated log-uplift, shape ``(n_isin, n_samples, horizon)``, already
+        clipped. Not modified.
+    chunk
+        Names per block. The comparison materialises
+        ``chunk * n_samples * horizon`` floats, so this bounds peak memory at a
+        few hundred MB against a ~1.7 GB source array.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Shape ``(n_isin,)``, or ``None`` when the posterior lacks the variables,
+        which signals the caller to fall back to the legacy product.
+    """
+    try:
+        state = _posterior_draws(idata, KALMAN_V2_SCREEN_LATENT)  # (isin, sample)
+        rar = _posterior_draws(idata, "risk_adj_return")
+    except KeyError as exc:
+        logger.warning(
+            "risk-adjusted MC probability unavailable (%s); p_upside_pos_cond "
+            "falls back to the mc_prob_pos * kalman_gain product, whose LEVEL is "
+            "not interpretable.", exc,
+        )
+        return None
+
+    penalty = (state - rar) * panel.response_std  # (isin, sample), log-uplift
+    n_isin = mc_log.shape[0]
+    if penalty.shape[0] != n_isin or penalty.shape[1] != mc_log.shape[1]:
+        logger.warning(
+            "penalty draws %s do not align with the MC array %s; "
+            "p_upside_pos_cond falls back to the legacy product.",
+            penalty.shape, mc_log.shape,
+        )
+        return None
+
+    out = np.empty(n_isin, dtype="float64")
+    for i0 in range(0, n_isin, chunk):
+        sl = slice(i0, min(i0 + chunk, n_isin))
+        adj = mc_log[sl] - penalty[sl, :, None]
+        out[sl] = (adj > 0.0).mean(axis=(1, 2))
+    return out
+
+
 def run_screen(
     idata: Any,
     panel: KalmanPanelV2,
     run_cfg: KalmanRunConfigV2,
     report: GateReport,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, "ScreenDraws"]:
     """Build the per-ISIN screen and gate the decision layer.
+
+    Returns the screen frame **and** a :class:`ScreenDraws` carrying the draw
+    arrays §10b needs — see that class for why they are handed over rather than
+    re-derived.
 
     Two gates here that v1 had nowhere to put, both aimed at failure modes that
     a manual review caught only after they had shipped:
@@ -2067,9 +2304,20 @@ def run_screen(
         summarize_mc_returns,
     )
 
-    latent = resolve_screen_latent_v2(
-        idata, latent=KALMAN_V2_SCREEN_LATENT, random_seed=run_cfg.random_seed
-    )
+    if run_cfg.enable_forecast_error_shrinkage:
+        latent, shrink_gain = apply_forecast_error_shrinkage(
+            idata,
+            panel,
+            multiplier=run_cfg.forecast_error_multiplier,
+            n_exponent=run_cfg.forecast_error_n_exponent,
+            latent=KALMAN_V2_SCREEN_LATENT,
+            random_seed=run_cfg.random_seed,
+        )
+    else:
+        latent = resolve_screen_latent_v2(
+            idata, latent=KALMAN_V2_SCREEN_LATENT, random_seed=run_cfg.random_seed
+        )
+        shrink_gain = np.ones(panel.n_isin)
     draws = np.asarray(latent).reshape(-1, latent.shape[-1])  # (sample, isin)
 
     # De-standardise back to log-uplift, then to a return. The clip is applied in
@@ -2081,6 +2329,20 @@ def run_screen(
         LOG_UPLIFT_CLIP_HI,
     )
     upside = np.expm1(log_uplift)
+    # The same quantity with its (chain, draw) axes intact, for the risk book.
+    # Built from ``latent`` rather than reshaped back out of ``upside`` so the
+    # dims and coords come from the posterior rather than being reconstructed.
+    eu_draws = xr.DataArray(
+        np.expm1(
+            np.clip(
+                np.asarray(latent) * panel.response_std + panel.response_mean,
+                LOG_UPLIFT_CLIP_LO,
+                LOG_UPLIFT_CLIP_HI,
+            )
+        ),
+        dims=latent.dims,
+        coords=latent.coords,
+    )
 
     frame = panel.frame
     screen = pd.DataFrame(
@@ -2117,8 +2379,28 @@ def run_screen(
     screen["expected_pt_hdi_hi"] = screen["last_price"] * (
         1.0 + np.percentile(upside, 97, axis=0)
     )
+    screen["shrink_gain"] = shrink_gain
     screen["risk_adj_return"] = _posterior_mean(idata, "risk_adj_return", panel)
-    screen["kalman_gain"] = _posterior_mean(idata, "achieve_prob", panel)
+    # ``kalman_gain`` was ``sigmoid(risk_adj_return)`` — a sigmoid of a
+    # STANDARDISED LOG-UPLIFT, which is not the probability of any defined
+    # event. It has no calibration target, it pins at 0.5 wherever the
+    # risk-adjusted latent is near zero, and its prior (sigmoid of a wide
+    # unconstrained latent) piles mass at both ends. On run 49e84d7e9d59 the
+    # exported column correlated -0.004 with analyst count and +0.06 with the
+    # shrinkage actually applied. It is now the posterior probability that the
+    # risk-adjusted latent is positive: a real tail probability of a stated
+    # event, and a reduction over draws rather than a per-draw Deterministic,
+    # which is why it lives here and not in the model graph.
+    try:
+        _rar = _posterior_draws(idata, "risk_adj_return")  # (isin, sample)
+        screen["kalman_gain"] = (_rar > 0.0).mean(axis=1)
+    except KeyError:  # pragma: no cover - defensive
+        logger.warning(
+            "risk_adj_return absent from the posterior; kalman_gain falls back "
+            "to 1.0 and p_upside_pos_cond degrades to the unconditional MC "
+            "probability."
+        )
+        screen["kalman_gain"] = 1.0
 
     # ---- Monte-Carlo forward returns (v1 §10 wiring) ------------------------
     # mu and sigma must be de-standardised onto the response scale BEFORE the
@@ -2144,11 +2426,31 @@ def run_screen(
         rho=run_cfg.mc_rho,
         random_seed=run_cfg.random_seed,
     )
-    mc = np.expm1(np.clip(mc, LOG_UPLIFT_CLIP_LO, LOG_UPLIFT_CLIP_HI))
+    # In place, and in this order, because the array is large: at the production
+    # budget it is (6500, chains*draws, horizon) = ~1.7 GB. Clip -> read the log
+    # array -> expm1 over the SAME buffer keeps exactly one copy alive. Binding
+    # the clipped log array to its own name and then allocating the return-space
+    # array from it holds two, and adding a risk-adjusted copy holds three, which
+    # does not fit.
+    np.clip(mc, LOG_UPLIFT_CLIP_LO, LOG_UPLIFT_CLIP_HI, out=mc)
+    p_cond = _risk_adjusted_prob_positive(idata, panel, mc)
+    np.expm1(mc, out=mc)
     mc_summary = summarize_mc_returns(mc, panel.isins)
     screen = screen.merge(
         mc_summary.rename(columns={"prob_pos": "mc_prob_pos"}), on="isin", how="left"
     )
+
+    if p_cond is not None:
+        screen["p_upside_pos_cond"] = p_cond
+    else:
+        # Documented fallback, matching compute_cvar_aware_book's degrade-with-a-
+        # warning pattern: the product form still orders names, it just cannot be
+        # read as a probability of anything.
+        screen["p_upside_pos_cond"] = (
+            screen["mc_prob_pos"].fillna(screen["prob_pos"])
+            * screen["kalman_gain"].fillna(1.0)
+        )
+
     screen = screen.sort_values("expected_upside", ascending=False).reset_index(drop=True)
 
     # ---- shrinkage slope gate ---------------------------------------------
@@ -2158,21 +2460,45 @@ def run_screen(
     if len(valid) >= 100:
         slope, intercept = np.polyfit(valid["implied_upside"], valid["expected_upside"], 1)
         above = float((screen["expected_upside"] > screen["implied_upside"]).mean())
+        # Slope and intercept grade CALIBRATION; rho and the median revision
+        # grade DISAGREEMENT. Both halves are needed: an exact copy of the input
+        # scores a perfect 1.0 / 0.0 on the first pair, which is how run
+        # 49e84d7e9d59 passed while reproducing consensus at rho 0.999995.
+        rho = float(valid["expected_upside"].corr(valid["implied_upside"], method="spearman"))
+        revision_pp = float((valid["expected_upside"] - valid["implied_upside"]).abs().median() * 100.0)
+        # The universe-wide shift, which is what the old |intercept| threshold
+        # was reaching for. The intercept itself is (1 - slope) * centre by
+        # construction and so cannot separate an offset from shrinkage; see
+        # gate_shrinkage_center_shift_max.
+        center_shift = float(valid["expected_upside"].mean() - valid["implied_upside"].mean())
         slope_ok = run_cfg.gate_shrinkage_slope_lo <= slope <= run_cfg.gate_shrinkage_slope_hi
-        icpt_ok = abs(intercept) <= run_cfg.gate_shrinkage_intercept_max
+        shift_ok = abs(center_shift) <= run_cfg.gate_shrinkage_center_shift_max
+        rho_ok = not (np.isfinite(rho) and rho > run_cfg.gate_shrinkage_rho_max)
+        rev_ok = revision_pp >= run_cfg.gate_shrinkage_revision_min_pp
         report.add(
             GateResult(
                 name="shrinkage_slope",
-                passed=bool(slope_ok and icpt_ok),
-                value=f"slope {slope:.3f}, intercept {intercept:+.4f}, above {above:.1%}",
+                passed=bool(slope_ok and shift_ok and rho_ok and rev_ok),
+                value=(
+                    f"slope {slope:.3f}, shift {center_shift:+.4f}, above {above:.1%}, "
+                    f"rho {rho:.5f}, median revision {revision_pp:.2f}pp "
+                    f"(intercept {intercept:+.4f})"
+                ),
                 threshold=(
                     f"slope in [{run_cfg.gate_shrinkage_slope_lo}, "
-                    f"{run_cfg.gate_shrinkage_slope_hi}], |intercept| <= "
-                    f"{run_cfg.gate_shrinkage_intercept_max}"
+                    f"{run_cfg.gate_shrinkage_slope_hi}], |shift| <= "
+                    f"{run_cfg.gate_shrinkage_center_shift_max}, rho <= "
+                    f"{run_cfg.gate_shrinkage_rho_max}, revision >= "
+                    f"{run_cfg.gate_shrinkage_revision_min_pp}pp"
                 ),
                 detail=(
-                    "A non-zero intercept is a universe-wide offset, not a signal. "
-                    "Expect ~50% of names above consensus, not 80%."
+                    "A shift of the centre is a universe-wide offset, not a "
+                    "signal. Expect ~50% of names above consensus, not 80%. A rho "
+                    "at the ceiling or a revision at the floor means the opposite "
+                    "failure: the screen is a consensus sort, and the drift betas "
+                    "and the hierarchy are being estimated but are not reaching "
+                    "the exported number. The intercept is reported for continuity "
+                    "but is not graded -- it equals (1 - slope) * centre."
                 ),
             )
         )
@@ -2200,22 +2526,38 @@ def run_screen(
 
     # ---- prob_pos degeneracy (item 8) --------------------------------------
     pinned = float((screen["prob_pos"] >= 0.99995).mean())
+    # The span check is the half that was missing. Grading only prob_pos meant
+    # its collapse was reported while the column that INHERITED the ranking went
+    # unmeasured; a future collapse of the promoted column would then have been
+    # silent. p95 - p05 is the range the ranking actually has to work in.
+    _cond = pd.to_numeric(screen.get("p_upside_pos_cond"), errors="coerce")
+    span = (
+        float(_cond.quantile(0.95) - _cond.quantile(0.05))
+        if _cond is not None and _cond.notna().any()
+        else float("nan")
+    )
+    span_ok = bool(np.isfinite(span) and span >= 0.30)
     report.add(
         GateResult(
             name="prob_pos_degenerate",
-            passed=pinned <= 0.60,
-            value=f"{pinned:.1%} pinned at 1.0",
-            threshold="<= 60%",
+            passed=(pinned <= 0.60) and span_ok,
+            value=(
+                f"{pinned:.1%} pinned at 1.0, p_upside_pos_cond span "
+                f"{span:.3f}"
+            ),
+            threshold="pinned <= 60%, p_upside_pos_cond p95-p05 >= 0.30",
             blocking=False,
             detail=(
-                "prob_pos cannot order a ranking in this state. Downstream views "
-                "read p_upside_pos_cond, which the risk book computes and which "
-                "the export ranks on and suppresses out-of-support alongside the "
-                "other ranking metrics. prob_pos stays as a reported diagnostic."
+                "prob_pos is a REPORTED diagnostic and is never ranked on. "
+                "p_upside_pos_cond is the primary probability column -- since "
+                "2026-08-20 it is P(risk-adjusted forward return > 0) computed "
+                "directly from the MC draws, not the old mc_prob_pos * sigmoid "
+                "product. The export ranks on it and suppresses it alongside the "
+                "other out-of-support metrics."
             ),
         )
     )
-    return screen
+    return screen, ScreenDraws(eu=eu_draws, mc_returns=mc, isins=panel.isins)
 
 
 # =========================================================================== #
@@ -2228,6 +2570,7 @@ def run_risk_book(
     panel: KalmanPanelV2,
     screen: pd.DataFrame,
     run_cfg: KalmanRunConfigV2,
+    draws: Optional["ScreenDraws"] = None,
 ) -> Any:
     """Size a CVaR-aware long book, reusing :mod:`RiskBookModel` unchanged.
 
@@ -2237,6 +2580,16 @@ def run_risk_book(
     loss leg, and ``p_upside_pos_cond`` degrades to ``p_upside_pos * kalman_gain``
     — three quiet degradations rather than one loud failure, which is why
     :func:`run_screen` builds those columns first.
+
+    Parameters
+    ----------
+    draws
+        The :class:`ScreenDraws` §10 returned. Supplies the **shrunk** upside
+        draws and the Monte-Carlo return distribution. Re-resolving the latent
+        here instead — which is what this function used to do — would size the
+        book on the unshrunk latent while the screen reported the shrunk one,
+        and leave ``cvar05`` computed from estimation uncertainty. Both are
+        silent failures, so the fallback path warns loudly.
 
     Returns
     -------
@@ -2249,20 +2602,30 @@ def run_risk_book(
     from probabilistic_ml_model.pymc_models.RiskBookModel import compute_cvar_aware_book
 
     try:
-        latent = resolve_screen_latent_v2(
-            idata, latent=KALMAN_V2_SCREEN_LATENT, random_seed=run_cfg.random_seed
-        )
-        eu = xr.DataArray(
-            np.expm1(
-                np.clip(
-                    np.asarray(latent) * panel.response_std + panel.response_mean,
-                    LOG_UPLIFT_CLIP_LO,
-                    LOG_UPLIFT_CLIP_HI,
-                )
-            ),
-            dims=("chain", "draw", "isin"),
-            coords={"isin": panel.isins},
-        )
+        if draws is not None:
+            eu = draws.eu
+            return_draws = draws.pooled_returns
+        else:
+            logger.warning(
+                "run_risk_book called without ScreenDraws: re-resolving the "
+                "latent (UNSHRUNK -- it will disagree with the screen) and "
+                "computing cvar05 from posterior rather than return draws."
+            )
+            latent = resolve_screen_latent_v2(
+                idata, latent=KALMAN_V2_SCREEN_LATENT, random_seed=run_cfg.random_seed
+            )
+            eu = xr.DataArray(
+                np.expm1(
+                    np.clip(
+                        np.asarray(latent) * panel.response_std + panel.response_mean,
+                        LOG_UPLIFT_CLIP_LO,
+                        LOG_UPLIFT_CLIP_HI,
+                    )
+                ),
+                dims=("chain", "draw", "isin"),
+                coords={"isin": panel.isins},
+            )
+            return_draws = None
         book = compute_cvar_aware_book(
             idata,
             eu,
@@ -2272,6 +2635,8 @@ def run_risk_book(
             k_book=run_cfg.k_book,
             p_long=run_cfg.p_long,
             mcap_r_max=run_cfg.mcap_country_r_max,
+            return_draws=return_draws,
+            tail_risk_vol_floor_k=run_cfg.tail_risk_vol_floor_k,
         )
         logger.info(
             "Risk book: %d names, port_up %.3f, STARR %.3f, div %.3f",
@@ -2330,17 +2695,26 @@ def apply_out_of_support(results: pd.DataFrame) -> pd.DataFrame:
     pinned_lo = (_num(lo_key) <= UPLIFT_CLIP_LO + 1e-6).fillna(False)
 
     # The Kalman upside posterior, tested the same way on its own tails.
-    if "cvar_5pct_kalman" in out.columns:
-        pinned_hi = pinned_hi | (
-            _num("cvar_5pct_kalman") >= UPLIFT_CLIP_HI - 1e-6
-        ).fillna(False)
+    #
+    # This leg USED to be ``cvar_5pct_kalman >= UPLIFT_CLIP_HI``, because that
+    # column was the upside posterior's lower-tail statistic and so reached the
+    # cap exactly when every posterior draw had. Since 2026-08-20 the column
+    # holds the Monte-Carlo return CVaR instead, which is bounded above by
+    # ``er_p05`` and therefore only ever re-detects what the ``er_p05`` test
+    # above already caught. Testing the upside posterior's MEAN at the cap
+    # restores the protection on the correct distribution: the clip is one-sided
+    # at each end, so the mean can only sit on a bound when every draw does.
+    # Both ends are now tested on the same column, which is what makes it
+    # symmetric — the 2026-08-18 row that slipped through (expected upside 5.0,
+    # posterior fully degenerate, er_p05 at 0.64) is caught by the upper test.
     kalman_mean = next(
         (c for c in ("expected_return_kalman", "expected_upside") if c in out.columns),
         None,
     )
     if kalman_mean is not None:
-        # The clip is one-sided at each end, so a mean sitting on the floor is
-        # only reachable when every draw does.
+        pinned_hi = pinned_hi | (
+            _num(kalman_mean) >= UPLIFT_CLIP_HI - 1e-6
+        ).fillna(False)
         pinned_lo = pinned_lo | (
             _num(kalman_mean) <= UPLIFT_CLIP_LO + 1e-6
         ).fillna(False)
@@ -2547,20 +2921,39 @@ def export_analytics(
 #: had to re-explain because the name says something the column does not do.
 _ANALYTICS_COLUMN_COMMENTS_V2: dict[str, str] = {
     "cvar_5pct_kalman": (
-        "Conditional mean of the worst 5% of the expected-upside posterior. "
-        "This is a RETURN LEVEL, not a loss: it is positive for most names "
-        "because most names have an entirely positive upside posterior. Raw "
-        "decimal. For a dispersion measure use reward_to_cvar's denominator."
+        "5% expected shortfall of the Monte-Carlo FORWARD-RETURN distribution: "
+        "the mean of the worst 5% of simulated returns. Raw decimal, and "
+        "genuinely negative for a name with downside. Changed 2026-08-20 -- it "
+        "was previously the tail mean of the posterior EXPECTED-UPSIDE draws, "
+        "i.e. estimation uncertainty about a point, which made it positive for "
+        "88.4% of names and correlated 0.9998 with expected_return_kalman. For "
+        "the estimation-uncertainty view use expected_upside_sd."
     ),
     "expected_sharpe_ratio": (
         "er_mean / er_sd over Monte-Carlo draws of log price-target uplift. A "
         "t-statistic on the distance from price to the smoothed target, NOT an "
-        "investment Sharpe ratio -- the denominator is parameter uncertainty, "
-        "not realised return volatility. NULL when out_of_support."
+        "investment Sharpe ratio -- the numerator is an uplift, not a realised "
+        "excess return. Median ~1.05, which is exactly the range a reader "
+        "mistakes for a Sharpe. NULL when out_of_support."
     ),
     "expected_vol_kalman": (
-        "Posterior dispersion of expected upside (~2-3%), NOT equity return "
-        "volatility. Raw decimal."
+        "Standard deviation of the Monte-Carlo forward-return draws -- the same "
+        "quantity as er_sd. Raw decimal. Changed 2026-08-20: it was previously "
+        "the posterior dispersion of expected upside (median 0.47pp against a "
+        "return sd of 19.03pp, a factor of 40), which is why the dashboard "
+        "derived its own volatility rather than using this column."
+    ),
+    "expected_upside_sd": (
+        "Posterior sd of the per-name expected upside -- ESTIMATION uncertainty, "
+        "not return risk. This is what expected_vol_kalman used to hold. Since "
+        "2026-08-20 it also carries the forecast-error term, so it is roughly an "
+        "order of magnitude wider than the 0.47pp of run 49e84d7e9d59. Raw decimal."
+    ),
+    "shrink_gain": (
+        "Weight on the name's own smoothed observation in the forecast-error "
+        "update; 1 - shrink_gain is the weight on the pooled drift + hierarchy "
+        "prediction. Low for thinly covered or widely dispersed consensus. This "
+        "is the column kalman_gain was mistakenly believed to be."
     ),
     "expected_return_kalman": "Posterior mean expected upside. Raw decimal (0.25 = +25%).",
     "price_target_kalman": "Smoothed price target, in the security's own currency.",
@@ -2571,19 +2964,30 @@ _ANALYTICS_COLUMN_COMMENTS_V2: dict[str, str] = {
     "er_p95": "95th percentile forward return. Drives the lower out_of_support test.",
     "mc_prob_pos": "Share of Monte-Carlo forward-return draws above zero.",
     "p_upside_pos_cond": (
-        "mc_prob_pos * kalman_gain. The probability column that actually orders "
-        "names -- prefer it to prob_pos, which is pinned at 1.0 for most of the "
-        "universe and cannot rank."
+        "THE PRIMARY PROBABILITY COLUMN -- rank on this one. P(risk-adjusted "
+        "forward return > 0): the share of Monte-Carlo forward-return draws that "
+        "are positive after the same risk / size / volume penalties the model "
+        "applies to risk_adj_return. Changed 2026-08-20 from mc_prob_pos * "
+        "kalman_gain, a probability times a sigmoid, whose ordering was usable "
+        "but whose level was the probability of nothing. NULL when "
+        "out_of_support."
     ),
     "prob_pos": (
-        "Share of the per-name posterior above zero. REPORTED, NOT RANKED: the "
-        "smoother is Rao-Blackwellised over the latent, so this saturates at 1.0 "
-        "for most of the universe (87.5% on run fa532b925732) and cannot order "
-        "anything. Rank on p_upside_pos_cond instead. Retained because the share "
-        "itself is a legitimate per-name statement; the prob_pos_degenerate gate "
-        "warns when it stops discriminating."
+        "Share of the per-name posterior above zero. REPORTED, NOT RANKED -- "
+        "rank on p_upside_pos_cond. Historically this saturated at 1.0 for most "
+        "of the universe (87.4% on run 49e84d7e9d59) because the smoother is "
+        "Rao-Blackwellised over the latent and the posterior sd collapsed to "
+        "0.47pp; the forecast-error term added 2026-08-20 widens it, and the "
+        "prob_pos_degenerate gate warns if it re-pins."
     ),
-    "kalman_gain": "Posterior mean achieve_prob = sigmoid(risk_adj_return).",
+    "kalman_gain": (
+        "DEPRECATED NAME, changed meaning 2026-08-20. Now P(risk_adj_return > 0) "
+        "over posterior draws -- a real tail probability. It was "
+        "sigmoid(risk_adj_return), a sigmoid of a standardised log-uplift, which "
+        "is not the probability of any event and correlated -0.004 with analyst "
+        "count. It is NOT a Kalman gain and never was: for the shrinkage weight "
+        "see shrink_gain."
+    ),
     "reward_to_cvar": "expected_return_kalman / tail_risk (STARR). NULL when out_of_support.",
     "cvar_book_weight": "Weight in the CVaR-sized book, 0 outside it and 0 when out_of_support.",
     "out_of_support": (
@@ -2820,10 +3224,11 @@ def main(
     result["ppc"] = run_posterior_predictive(
         model, idata, panel, run_cfg, model_cfg, report
     )
-    screen = run_screen(idata, panel, run_cfg, report)
+    screen, screen_draws = run_screen(idata, panel, run_cfg, report)
     result["screen"] = screen
+    result["screen_draws"] = screen_draws
 
-    risk_book = run_risk_book(idata, panel, screen, run_cfg)
+    risk_book = run_risk_book(idata, panel, screen, run_cfg, draws=screen_draws)
     result["risk_book"] = risk_book
 
     # The canonical frame: the risk book's analytics if we have it (it is the

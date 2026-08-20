@@ -31,6 +31,16 @@ from ..components.probability_filter import (
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..theme import GRAPH_STYLE, control
+
+# Mirrors of ``RiskBookModel.MIN_TAIL_RISK`` / ``DEFAULT_TAIL_RISK_VOL_FLOOR_K``
+# and ``KalmanRunConfigV2.tail_risk_vol_floor_k``. Duplicated rather than
+# imported because the dashboard deliberately depends on probabilistic_ml_model
+# only for the DB engine (see data.py), and importing RiskBookModel would drag
+# the PyMC workflow stack into a Dash process. If the book's floor changes,
+# change it here in the same commit — the card's Kelly ``b`` and the book's
+# STARR must not disagree about a name's downside.
+_MIN_TAIL_RISK = 0.01
+_TAIL_RISK_VOL_FLOOR_K = 0.25
 from ..theme import card as theme_card
 
 component_id = "kelly_criterion_position_sizing"
@@ -165,19 +175,23 @@ def _calculate_kelly_fraction(row) -> float:
     expected_return = row["expected_return_kalman"]
     if expected_return <= 0:
         return 0.0
-    # Kelly's ``b`` is the odds ratio: win size / LOSS size. The loss size is
-    # NOT ``abs(cvar_5pct_kalman)`` — that column is the conditional MEAN of the
-    # worst 5% of the posterior upside draws, a positive return level for ~84% of
-    # rows, not a loss. Dividing by it made b track expected_return itself: on the
-    # 2026-08-15 table it had a median of 1.28 with an sd of 23.7, exploding
-    # wherever cvar approached zero. Use the same binding-downside definition the
-    # risk book sizes on (RiskBookModel ``tail_risk``) so the card and the book
-    # cannot disagree: the larger of the simulated 5% loss and the posterior
-    # mean->tail dispersion, floored at 1pp. Same inputs, median b 4.27, sd 2.77.
+    # Kelly's ``b`` is the odds ratio: win size / LOSS size. This mirrors
+    # RiskBookModel ``tail_risk`` term for term, so the card and the book cannot
+    # disagree about what a name's downside is — including the relative floor
+    # added 2026-08-20, without which every name whose simulated 5% quantile is
+    # positive falls to the 1pp absolute floor and its ``b`` becomes
+    # ``100 * expected_return``.
+    #
+    # Historical note: dividing by ``abs(cvar_5pct_kalman)`` instead was tried
+    # and is wrong even now that the column is a real return CVaR — it is a
+    # LEVEL, not a dispersion, so ``b`` tracked expected_return itself (median
+    # 1.28, sd 23.7 on the 2026-08-15 table, exploding as cvar approached zero).
+    # The mean-to-tail DISTANCE below is the dispersion.
     loss = max(
         -finite_cell(row, "er_p05", 0.0),
         expected_return - finite_cell(row, "cvar_5pct_kalman", 0.0),
-        0.01,
+        _TAIL_RISK_VOL_FLOOR_K * finite_cell(row, "er_sd", 0.0),
+        _MIN_TAIL_RISK,
     )
     b = expected_return / loss
     if b <= 0:
@@ -188,11 +202,13 @@ def _calculate_kelly_fraction(row) -> float:
 def _create_table(df: pd.DataFrame) -> html.Div:
     cols = ["ticker", "name", "allocation_pct", "expected_return_kalman",
             "cvar_5pct_kalman", "p_upside_pos_cond"]
-    # "Upside p5" not "CVaR 5%": the column is the conditional MEAN of the worst
-    # 5% of posterior upside draws — a return level, positive for most names, not
-    # a loss. Labelling it CVaR invites reading +0.48 as a 48% drawdown.
+    # "CVaR 5%" since the 2026-08-20 export: the column is now the expected
+    # shortfall of the forward-return draws, so a negative value is a real
+    # drawdown. It previously held the tail mean of the posterior upside draws —
+    # a positive return level for most names — and was labelled "Upside p5" to
+    # stop readers seeing +0.48 as a 48% loss.
     headers = ["Ticker", "Name", "Allocation (%)", "Expected Return (%)",
-               "Upside p5 (%)", "Win Probability"]
+               "CVaR 5% (%)", "P(risk-adj. return > 0)"]
     view = df[cols].copy()
     view["expected_return_kalman"] = (view["expected_return_kalman"] * 100).round(2)
     view["cvar_5pct_kalman"] = (view["cvar_5pct_kalman"] * 100).round(2)
@@ -221,9 +237,12 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     # three of the four selectable metrics are not in that column list.
     df = apply_probability_filter(df, component_id, kwargs)
 
-    # ``er_p05`` feeds the Kelly loss term (see _calculate_kelly_fraction).
+    # ``er_p05`` and ``er_sd`` both feed the Kelly loss term (see
+    # _calculate_kelly_fraction) — er_sd carries the relative tail-risk floor,
+    # and dropping it here would leave that floor silently at zero while the
+    # risk book applied it, so the card and the book would size differently.
     df = df[["ticker", "name", "sector", "market_cap", "p_upside_pos_cond",
-             "expected_return_kalman", "cvar_5pct_kalman", "er_p05",
+             "expected_return_kalman", "cvar_5pct_kalman", "er_p05", "er_sd",
              "cvar_book_weight", "reward_to_cvar"]].copy()
     logger.debug(schema(df))
 

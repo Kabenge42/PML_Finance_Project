@@ -264,20 +264,21 @@ def _build_table(row, terminal, num_simulations, horizon_days, initial_price) ->
          "Worst 5% of outcomes"),
         ("95th Percentile", _fmt_pct(finite_cell(row, "er_p95")),
          "Best 5% of outcomes"),
-        ("Probability of Positive Return", _fmt_pct(finite_cell(row, "p_upside_pos_cond")),
-         "Posterior likelihood of a gain"),
+        ("P(risk-adjusted return > 0)", _fmt_pct(finite_cell(row, "p_upside_pos_cond")),
+         "Share of simulated returns above zero after the risk, size and "
+         "volume penalties"),
         ("Simulated Std Dev", _fmt_pct(float(terminal.std())),
          "Dispersion of the simulated terminal returns"),
-        # cvar_5pct_kalman is stored as a decimal return like er_p* /
-        # expected_return_kalman — format with the same percent renderer. It is
-        # NOT a loss: it is the conditional mean of the worst 5% of the posterior
-        # upside draws, and is positive for ~84% of names. er_p05 above is the
-        # actual downside quantile of the forward-return distribution.
-        ("Upside p5 (cond. mean)", _fmt_pct(finite_cell(row, "cvar_5pct_kalman")),
-         "Mean upside across the weakest 5% of posterior draws — a return "
-         "level, not a loss"),
+        # cvar_5pct_kalman is a decimal return like er_p* /
+        # expected_return_kalman — same percent renderer. Since the 2026-08-20
+        # export it is the expected shortfall of the FORWARD-RETURN draws, so a
+        # negative value is a genuine loss and it sits at or below er_p05. It
+        # previously held the tail mean of the posterior upside draws and was
+        # positive for ~88% of names.
+        ("CVaR 5% (return)", _fmt_pct(finite_cell(row, "cvar_5pct_kalman")),
+         "Mean return across the worst 5% of simulated outcomes"),
         ("Reward / tail risk", _fmt_num(finite_cell(row, "reward_to_cvar")),
-         "Expected upside per unit of posterior tail dispersion (STARR)"),
+         "Expected upside per unit of binding downside (STARR)"),
         ("Simulations Run", f"{num_simulations:,}", "Number of price paths simulated"),
         ("Forecast Horizon (days)", f"{horizon_days}", "Time horizon for the forecast"),
     ]

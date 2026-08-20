@@ -8,10 +8,10 @@ forward-return distribution and scaled to percent only at the figure / table
 boundary (project unit contract, CHANGELOG 0.9.9.7):
 
 * **Parametric** — ``VaR_c = -z_c * sigma`` with ``sigma`` implied by the
-  ``er_p05`` / ``er_p95`` posterior return spread (see
-  ``quantile_return_volatility``; ``expected_vol_kalman`` is deliberately NOT
-  used — it is the std of the posterior *expected-upside* draws, i.e.
-  parameter/estimation uncertainty, not forward asset volatility).
+  ``er_p05`` / ``er_p95`` return spread (see ``quantile_return_volatility``).
+  Since the 2026-08-20 export ``expected_vol_kalman`` IS the forward-return sd
+  and would serve equally well; the quantile-implied sigma is kept because it is
+  robust to the Student-t tail the draws carry, where a raw sd is not.
 * **Historical / Monte Carlo** — anchored on the exported MC 5% quantile:
   ``VaR_95 = min(er_p05, 0)``; the 90% / 99% levels are scaled by the normal
   z-ratios (1.28 / 1.645 and 2.33 / 1.645) because only the 5% quantile is
@@ -20,11 +20,14 @@ boundary (project unit contract, CHANGELOG 0.9.9.7):
 All levels are clipped at zero so a name whose entire return distribution sits
 positive shows zero loss rather than a "negative loss".
 
-NOTE: the table's CVaR column is the normal-approximation expected shortfall
-``er_mean - 2.0627 * sigma`` — NOT ``cvar_5pct_kalman``, which is the tail mean
-of the posterior *upside* draws (estimation uncertainty of the mean, the STARR
-denominator input; stored in decimal return units), so it is frequently
-positive and cannot be reported as a return-space CVaR.
+The table's CVaR column is ``cvar_5pct_kalman`` — the 5% expected shortfall of
+the Monte-Carlo forward-return draws. Before the 2026-08-20 export that column
+held the tail mean of the posterior *upside* draws (estimation uncertainty of the
+mean), which was positive for 88% of names and could not be reported as a
+return-space CVaR, so this card computed its own normal approximation
+``er_mean - 2.0627 * sigma`` instead. That workaround is gone; the approximation
+survives only as the fallback for a pre-2026-08-20 table, detected by the column
+being positive where ``er_p05`` is negative.
 """
 
 from __future__ import annotations
@@ -230,9 +233,24 @@ def _compute_var_frame(df: pd.DataFrame, var_method: str) -> pd.DataFrame:
         ).clip(lower=-1.0)
     # Unclamped sort key so severity ordering survives the -100% saturation.
     df["var_95_raw"] = var_95_raw
-    # Table CVaR: normal-approx 5% expected shortfall of the return
-    # distribution (see module docstring for why not ``cvar_5pct_kalman``).
-    df["cvar"] = (df["er_mean"] - _ES_FACTOR_5PCT * sigma).clip(lower=-1.0)
+    # Table CVaR: the exported 5% expected shortfall of the forward-return
+    # draws. Falls back to the normal approximation when the table predates the
+    # 2026-08-20 semantics — recognised by a CVaR sitting ABOVE the 5%
+    # quantile, which is impossible for a tail mean of the same distribution and
+    # is the signature of the old estimation-uncertainty column.
+    approx = (df["er_mean"] - _ES_FACTOR_5PCT * sigma).clip(lower=-1.0)
+    if "cvar_5pct_kalman" in df.columns:
+        exported = pd.to_numeric(df["cvar_5pct_kalman"], errors="coerce")
+        stale = (exported > df["er_p05"] + 1e-9).fillna(True)
+        if stale.any():
+            logger.warning(
+                "cvar_5pct_kalman exceeds er_p05 for %d/%d rows — pre-2026-08-20 "
+                "export semantics; falling back to the normal approximation for "
+                "those rows. Re-run the export.", int(stale.sum()), len(df),
+            )
+        df["cvar"] = exported.where(~stale, approx).clip(lower=-1.0)
+    else:
+        df["cvar"] = approx
     return df
 
 
@@ -245,8 +263,11 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, list[dict]]:
     # three of the four selectable metrics are not in that column list.
     df = apply_probability_filter(df, component_id, kwargs)
 
-    df = df[["name", "sector", "original_price", "er_mean", "er_p05", "er_p95",
-             "mc_prob_pos", "n_analysts", "market_cap"]].copy()
+    _cols = ["name", "sector", "original_price", "er_mean", "er_p05", "er_p95",
+             "mc_prob_pos", "n_analysts", "market_cap"]
+    if "cvar_5pct_kalman" in df.columns:
+        _cols.append("cvar_5pct_kalman")
+    df = df[_cols].copy()
     logger.debug(schema(df))
 
     confidence_level = str(kwargs.get(confidence_level_id) or confidence_level_default)

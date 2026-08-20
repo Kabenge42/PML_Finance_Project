@@ -168,6 +168,8 @@ __all__ = [
     "covariance_groups_for",
     "fit_trail_correlation_kernel",
     "resolve_screen_latent_v2",
+    "forecast_error_variance",
+    "apply_forecast_error_shrinkage",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -1953,7 +1955,7 @@ def build_kalman_pt_model_v2(
         volume_loading = pm.HalfNormal(
             "volume_loading", sigma=max(cfg.volume_penalty, _EPS)
         )
-        risk_adj_return = pm.Deterministic(
+        pm.Deterministic(
             "risk_adj_return",
             state_now
             - risk_loading * beta_data
@@ -1961,7 +1963,24 @@ def build_kalman_pt_model_v2(
             - volume_loading * vol_ratio_data,
             dims="isin",
         )
-        pm.Deterministic("achieve_prob", pm.math.sigmoid(risk_adj_return), dims="isin")
+        # ``achieve_prob = sigmoid(risk_adj_return)`` was REMOVED 2026-08-20.
+        #
+        # ``risk_adj_return`` is a standardised log-uplift net of three penalty
+        # terms — a location, not a log-odds. Squashing it through a sigmoid
+        # produced a number in (0, 1) that was the probability of nothing: it
+        # had no calibration target, it centred on 0.5 wherever the latent was
+        # near zero, and its prior (a sigmoid of a wide unconstrained latent)
+        # piled mass at both ends. Exported as ``kalman_gain``, it correlated
+        # -0.004 with analyst count and +0.06 with the shrinkage the model
+        # applied on run 49e84d7e9d59, and it multiplied ``mc_prob_pos`` to form
+        # ``p_upside_pos_cond`` — the column the risk book and the dashboard
+        # rank on — so an uninterpretable factor set that column's level.
+        #
+        # The replacement is P(risk_adj_return > 0): a genuine posterior tail
+        # probability of a stated event. It is a REDUCTION over draws, not a
+        # per-draw transform, so it cannot be a Deterministic here; the workflow
+        # computes it in §10 where the other per-name summaries are built.
+        # ``risk_adj_return`` itself is unchanged and still exported.
 
     logger.info(
         "Built Kalman v2 model: %d ISIN x T=%d, %d drift features, %s",
@@ -2033,6 +2052,280 @@ def resolve_screen_latent_v2(
     sd = post[latent_sd]
     rng = np.random.default_rng(random_seed)
     return mean + sd * rng.standard_normal(size=mean.shape)
+
+
+# --------------------------------------------------------------------------- #
+# Forecast-error shrinkage — the decision layer's own uncertainty              #
+# --------------------------------------------------------------------------- #
+#
+# WHY THIS EXISTS, and why it is not inside the likelihood.
+#
+# ``obs_share`` is identified by how much the log-uplift trail decorrelates
+# across the SHORTEST gap in the panel. On the shipped ``('1y','3m','1w')`` grid
+# that gap is 7 days, and against ``ou_length_scale_days ~ 85`` the OU state
+# already explains ``exp(-7/85) = 0.92`` of it. The panel delivers 0.91, so
+# almost nothing is left over to call measurement noise: run ``49e84d7e9d59``
+# fitted ``variance_weights[observation] = 0.0016``, the Kalman gain on the
+# anchor observation went to 1, and ``state_now_mean`` became the anchor
+# observation. The screen's Spearman correlation with raw analyst consensus was
+# 0.999995 and its median revision 0.03pp.
+#
+# That number is not wrong. It is an accurate estimate of how noisily a price
+# target is *republished over a week*. What the decision layer needs is how far
+# consensus sits from a fair-value latent — FORECAST ERROR, not reporting noise.
+# Those are different quantities and the trail cannot separate them: no
+# rearrangement of the panel's own autocorrelation identifies the second, which
+# is why widening the ``obs_share`` prior does not move it (see the
+# ``variance_split_alpha`` docstring, and the 2026-08-18 note at the top of this
+# module recording the same failure for ``rho_inf``).
+#
+# So the forecast-error term is supplied, not fitted. It is anchored on a
+# quantity the trail genuinely cannot see — the CROSS-ANALYST dispersion of the
+# consensus, ``feat_pt_noise_sigma / |observed_pt|``, divided by sqrt(n) to give
+# the standard error of the consensus mean — times a scalar multiplier that is
+# an explicit prior. Rejected alternatives, both measured:
+#
+#   * Re-prioring ``obs_share``. The data pins it; the posterior sat at 0.00058
+#     under a Beta(2, 4) whose prior mean is 0.33.
+#   * Making the observation leg per-name inside the likelihood. Structurally
+#     purer, but it makes the within-name covariance per-name, which destroys
+#     the shared-Cholesky group reuse ``partition_covariance_groups`` exists for,
+#     and it puts every currently-passing PPC gate back in play for a term the
+#     panel still cannot identify.
+#
+# Keeping it here means the likelihood — and ``ppc_coverage``, ``ppc_decay``,
+# ``ppc_decay_residual``, ``ppc_t_spread``, ``mean_calibration`` — are untouched.
+
+
+def forecast_error_variance(
+    panel: "KalmanPanelV2",
+    *,
+    multiplier: float = 1.0,
+    n_exponent: float = 0.5,
+) -> np.ndarray:
+    """Per-name forecast-error variance on the **standardised** response scale.
+
+    The standard error of the analyst consensus mean, scaled by an explicit
+    multiplier::
+
+        sem_i     = dispersion_cv_i / n_analysts_i ** n_exponent      # log-uplift units
+        fe_var_i  = (multiplier * sem_i / response_std) ** 2          # standardised
+
+    ``dispersion_cv`` is built in ``prepare_panel`` as
+    ``feat_pt_noise_sigma / |observed_pt|`` — a relative dispersion, so it is
+    already on the log-uplift scale to first order.
+
+    Parameters
+    ----------
+    panel
+        Prepared panel. Uses :attr:`~KalmanPanelV2.dispersion_cv`,
+        :attr:`~KalmanPanelV2.response_std` and the frame's ``n_analysts``.
+    multiplier
+        The prior. ``0.0`` disables shrinkage exactly (``fe_var = 0`` gives a
+        gain of 1 and returns the unshrunk latent bit for bit).
+    n_exponent
+        Exponent on the analyst count. ``0.5`` is the standard error of the
+        mean; raising it steepens the coverage gradient.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(n_isin,)``, non-negative, aligned to ``panel.isins``.
+
+    Raises
+    ------
+    ValueError
+        If ``multiplier`` or ``n_exponent`` is negative.
+
+    Notes
+    -----
+    Calibration on the 2026-08-19 universe (``response_std`` 0.2207, structured
+    sd ~0.1227 in log units) — median shrinkage gain ``g``:
+
+    ==========  ==========  ==================  ==========
+    multiplier  median g    g at 2-3 analysts   g at 21+
+    ==========  ==========  ==================  ==========
+    1.0         0.913       0.871               0.963
+    2.0         0.725       0.629               0.866
+    3.0         0.539       0.429               0.742
+    ==========  ==========  ==================  ==========
+
+    The shipped default is ``1.0`` — the plain standard error of the consensus
+    mean, with no inflation. ``2.0`` was tried first and rejected on the
+    production fit: it over-shrinks, giving a model-on-consensus slope of 0.723
+    against a ``[0.80, 0.98]`` band. See
+    :attr:`KalmanRunConfigV2.forecast_error_multiplier` for the full sweep.
+    """
+    if multiplier < 0:
+        raise ValueError(f"multiplier must be non-negative, got {multiplier!r}")
+    if n_exponent < 0:
+        raise ValueError(f"n_exponent must be non-negative, got {n_exponent!r}")
+
+    cv = np.nan_to_num(np.asarray(panel.dispersion_cv, dtype="float64"), nan=0.0)
+    cv = np.clip(cv, 0.0, None)
+
+    frame = panel.frame
+    if "n_analysts" in frame.columns:
+        n = pd.to_numeric(frame["n_analysts"], errors="coerce").to_numpy(dtype="float64")
+    else:  # pragma: no cover - the MV always emits it
+        logger.warning(
+            "n_analysts absent from the panel frame; forecast-error variance "
+            "falls back to a flat count of 1, which removes the coverage gradient"
+        )
+        n = np.ones(len(cv))
+    n = np.clip(np.nan_to_num(n, nan=1.0), 1.0, None)
+
+    sem = cv / np.power(n, n_exponent)
+    std = float(panel.response_std) or 1.0
+    return np.square(multiplier * sem / std)
+
+
+def apply_forecast_error_shrinkage(
+    idata,
+    panel: "KalmanPanelV2",
+    *,
+    multiplier: float = 1.0,
+    n_exponent: float = 0.5,
+    latent: str = KALMAN_V2_SCREEN_LATENT,
+    latent_sd: str = KALMAN_V2_SCREEN_LATENT_SD,
+    mean_var: str = "mu_scaled",
+    random_seed: int = 42,
+):
+    """Shrink the decision latent toward the fitted mean by its forecast error.
+
+    A closed-form normal-normal update on quantities the posterior already
+    carries — no refit, and nothing upstream of the likelihood is touched::
+
+        struct_var = sigma_isin**2 * (w_level + w_state)
+        g          = struct_var / (struct_var + fe_var)
+
+        theta_mean = mu + g * (state_now_mean - mu)
+        theta_sd   = sqrt(g**2 * state_now_sd**2 + g * fe_var)
+
+    ``g`` is the weight on the name's own observation; ``1 - g`` is the weight on
+    the pooled prediction, so the drift betas and the crossed group effects reach
+    the exported number for the first time. ``theta_sd`` carries **both** the
+    posterior uncertainty in the smoothed latent and the residual forecast-error
+    uncertainty, which is what un-pins ``prob_pos``.
+
+    Parameters
+    ----------
+    idata
+        Fitted inference object.
+    panel
+        The panel the fit was built from; supplies the forecast-error variance.
+    multiplier, n_exponent
+        Passed to :func:`forecast_error_variance`. ``multiplier=0`` returns the
+        unshrunk latent exactly.
+    latent, latent_sd, mean_var
+        Posterior variable names. ``mean_var`` falls back to ``mu_reg`` when
+        ``mu_scaled`` is absent, matching ``_fitted_mean`` in the workflow
+        script — resolved by membership, not by catching ``KeyError``, because
+        the latter silently yields an all-NaN vector.
+    random_seed
+        Seed for the latent draw.
+
+    Returns
+    -------
+    tuple[xarray.DataArray, numpy.ndarray]
+        ``(theta, gain)`` — draws with dims ``(chain, draw, isin)``, and the
+        posterior-mean shrinkage gain per name, shape ``(n_isin,)``.
+
+    Raises
+    ------
+    KeyError
+        If ``latent`` or the resolved mean variable is absent from the posterior.
+
+    Notes
+    -----
+    ``struct_var`` is the *prior* variance of the latent around the fitted mean,
+    which at the snapshot column is ``sigma_isin**2 * (w_level + w_state)``:
+    ``sigma_time`` is pinned to 1.0 there, so the snapshot carries ``sigma_isin``
+    undivided and the observation leg is the only part excluded.
+
+    **On composing two shrinkages.** ``state_now_mean`` is itself a smoothed
+    quantity, so this applies a second update on top of the model's own. That is
+    a genuine approximation, but a harmless one at the fitted values: the model's
+    gain on the anchor is ``1 - w_obs`` ≈ 0.998, so the composition is ``g``
+    times a number indistinguishable from 1. It would matter if a future change
+    gave the observation leg real weight — which is exactly the change this
+    function exists *because the panel cannot make* — and at that point the two
+    should be folded into one update rather than stacked.
+
+    Arithmetic is done on raw numpy rather than on the xarray objects. xarray
+    aligns on coordinate labels, so mixing a panel-ordered vector with a
+    posterior-ordered one would silently intersect or reorder rather than fail;
+    the rest of this workflow aligns the ``isin`` axis positionally and this
+    stays consistent with it.
+    """
+    import xarray as xr
+
+    post = idata.posterior if hasattr(idata, "posterior") else idata["posterior"]
+    if latent not in post:
+        raise KeyError(
+            f"{latent!r} not in posterior. Available: {sorted(map(str, post.data_vars))}"
+        )
+    name_mean = mean_var if mean_var in post else "mu_reg"
+    if name_mean not in post:
+        raise KeyError(
+            f"neither {mean_var!r} nor 'mu_reg' in posterior. Available: "
+            f"{sorted(map(str, post.data_vars))}"
+        )
+
+    s_mean = np.asarray(post[latent], dtype="float64")           # (chain, draw, isin)
+    mu = np.asarray(post[name_mean], dtype="float64")
+    if latent_sd in post:
+        s_sd = np.asarray(post[latent_sd], dtype="float64")
+    else:  # pragma: no cover - defensive
+        logger.warning(
+            "%s absent from the posterior; the shrunk latent carries parameter "
+            "uncertainty only, which understates per-name spread.", latent_sd,
+        )
+        s_sd = np.zeros_like(s_mean)
+
+    fe_var = forecast_error_variance(
+        panel, multiplier=multiplier, n_exponent=n_exponent
+    )
+    if fe_var.shape[0] != s_mean.shape[-1]:
+        raise ValueError(
+            f"forecast-error vector has {fe_var.shape[0]} entries but the "
+            f"posterior carries {s_mean.shape[-1]} names — the panel and the "
+            "idata are not from the same run."
+        )
+
+    # Structured within-name variance at the snapshot: everything the model
+    # attributes to the name itself rather than to measurement.
+    if "sigma_isin" in post and "variance_weights" in post:
+        sigma_isin = np.asarray(post["sigma_isin"], dtype="float64")
+        w = np.asarray(post["variance_weights"], dtype="float64")  # (chain, draw, 3)
+        struct_w = (w[..., 0] + w[..., 1])[..., None]              # level + state
+        struct_var = sigma_isin ** 2 * struct_w
+    else:  # pragma: no cover - defensive, pre-2026-08 idata
+        logger.warning(
+            "sigma_isin / variance_weights absent; falling back to state_now_sd "
+            "as the structured scale, which understates the shrinkage target."
+        )
+        struct_var = np.maximum(s_sd, _EPS) ** 2
+
+    gain = struct_var / (struct_var + fe_var)
+    theta_mean = mu + gain * (s_mean - mu)
+    theta_sd = np.sqrt(np.clip(gain ** 2 * s_sd ** 2 + gain * fe_var, 0.0, None))
+
+    rng = np.random.default_rng(random_seed)
+    theta = theta_mean + theta_sd * rng.standard_normal(size=theta_mean.shape)
+
+    template = post[latent]
+    out = xr.DataArray(theta, dims=template.dims, coords=template.coords)
+    gain_mean = gain.reshape(-1, gain.shape[-1]).mean(axis=0)
+    logger.info(
+        "Forecast-error shrinkage: multiplier %.2f, median gain %.3f "
+        "(p05 %.3f, p95 %.3f)",
+        multiplier,
+        float(np.median(gain_mean)),
+        float(np.quantile(gain_mean, 0.05)),
+        float(np.quantile(gain_mean, 0.95)),
+    )
+    return out, gain_mean
 
 
 # --------------------------------------------------------------------------- #

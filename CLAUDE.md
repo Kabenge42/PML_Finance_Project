@@ -1012,6 +1012,32 @@ The other ~45 files there are hand-written screen/analysis scripts unmanaged by 
   consumer (screen, price-target MC, risk book, analytics export, §13b plots, prior predictive) resolves the
   per-ISIN latent through it, so the decision quantity has exactly one name.
 - Optional second response series: `KALMAN_PANEL_RESPONSE_EXTRA` in `pymc_kalman_filter_pt.py`
+- **Kalman v2 forecast error (2026-08-20):** `forecast_error_variance` /
+  `apply_forecast_error_shrinkage` in `pymc_models/KalmanFilterModel_v2.py`, driven by
+  `KalmanRunConfigV2.forecast_error_multiplier`. **This one is a prior, not an estimate**, and the distinction
+  is load-bearing: `obs_share` is identified by how much the trail decorrelates across its shortest gap, which
+  measures how noisily a price target is *republished*, not how far consensus sits from fair value. The panel
+  cannot separate the two, so re-prioring `obs_share` does not move it (measured: posterior 0.00058 under a
+  Beta(2,4)). Without this term the v2 screen reproduces analyst consensus at Spearman 0.999995 — see run
+  `49e84d7e9d59`. Grid it with `scripts/profile_forecast_error.py`; only realised returns can estimate it, which
+  is what the vintage harness below exists for.
+- **Kalman v2 decision probabilities:** computed in `run_screen`, not in the model graph — they are reductions
+  over draws. `p_upside_pos_cond` = P(risk-adjusted forward return > 0) is the **primary ranking column**;
+  `prob_pos` is reported and never ranked; `kalman_gain` = P(`risk_adj_return` > 0) keeps its name for one
+  release but is no longer a gain, and `shrink_gain` is the column carrying that meaning. The
+  `achieve_prob = sigmoid(risk_adj_return)` Deterministic was removed: a sigmoid of a standardised log-uplift
+  is the probability of no defined event. **v1 still emits it**, which is why `RiskBookModel` keeps the
+  posterior read as a fallback.
+- **Kalman v2 risk units:** `cvar05` / `exp_vol` come from `ScreenDraws.pooled_returns` (the forward-return
+  Monte Carlo), not from the posterior upside draws. Passing `return_draws=None` to `compute_cvar_aware_book`
+  restores the old estimation-uncertainty semantics and warns; `expected_upside_sd` is the estimation view
+  under an accurate name. `MIN_TAIL_RISK` / `DEFAULT_TAIL_RISK_VOL_FLOOR_K` in `RiskBookModel.py` are
+  **duplicated** in `dashboards/geib/charts/kelly.py` (the dashboard must not import the PyMC stack) — change
+  them together or the card and the book disagree about a name's downside.
+- **Point-in-time vintages:** `analytics.panel_vintage_v2` +
+  `scripts/{capture,score}_panel_vintage{,s}.py`. Every gate in the v2 workflow scores the model against the
+  analyst trail it was fitted to, which is why a pass-through cleared 19 of 21 gates. Append-only, because the
+  price/target trails are unversioned and the seven pipeline tables are DROP-and-RECREATE.
 - Reference geometry: `_REF_LINE_KINDS` (`_add_ref_line` / `_add_ref_band`)
 
 ### 2. Lazy Loading

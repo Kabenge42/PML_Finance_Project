@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -49,7 +49,21 @@ DEFAULT_MCAP_R_MAX = 0.01
 #: not a measurement, so it is published as NULL.
 MIN_RATIO_DENOMINATOR = 1e-4
 
+#: Absolute floor on ``tail_risk``, in decimal return units. Last resort only —
+#: it applies to a name with no usable return dispersion at all.
+MIN_TAIL_RISK = 0.01
+
+#: Default floor on ``tail_risk`` as a fraction of the name's own Monte-Carlo
+#: return sd. Without it the absolute :data:`MIN_TAIL_RISK` binds for every name
+#: whose simulated 5% quantile happens to be POSITIVE, and STARR becomes
+#: ``100 x expected_upside`` for exactly those names — a ranking discontinuity
+#: dressed as conviction. 0.25 charges a quarter of the name's own dispersion,
+#: so a name with no simulated loss is still charged for the spread it has.
+DEFAULT_TAIL_RISK_VOL_FLOOR_K = 0.25
+
 __all__ = [
+    "DEFAULT_TAIL_RISK_VOL_FLOOR_K",
+    "MIN_TAIL_RISK",
     "DEFAULT_CVAR_ALPHA",
     "DEFAULT_K_BOOK",
     "DEFAULT_MCAP_R_MAX",
@@ -75,10 +89,11 @@ class RiskBook:
         ``expected_sharpe`` and the normalised ``book_weight`` (0 for names
         outside the sized book). All return/risk columns are raw decimals
         (0.25 = +25%); ratios are dimensionless. ``p_upside_pos_cond`` is the
-        *conditional* probability of a positive upside given the smoother's state
-        confidence: the structural-TS MC ``mc_prob_pos`` multiplied by
-        ``kalman_gain`` (posterior-mean ``achieve_prob``, which is inverse to
-        ``kalman_variance``).
+        PRIMARY probability column and the one rankings use: since 2026-08-20 the
+        v2 workflow passes it in as P(risk-adjusted forward return > 0), computed
+        from the Monte-Carlo draws. When the caller does not supply it this falls
+        back to ``mc_prob_pos * kalman_gain``, which orders names but whose level
+        is not a probability of anything.
     book : pandas.DataFrame
         The sized top-``k_book`` long subset (``starr``-ranked) carrying a
         ``weight`` column that sums to 1 (100% gross) after the per-name cap.
@@ -143,22 +158,53 @@ def compute_cvar_aware_book(
         k_book: int = DEFAULT_K_BOOK,
         p_long: float = DEFAULT_P_LONG,
         mcap_r_max: float = DEFAULT_MCAP_R_MAX,
+        return_draws: Optional[np.ndarray] = None,
+        tail_risk_vol_floor_k: float = DEFAULT_TAIL_RISK_VOL_FLOOR_K,
 ) -> RiskBook:
     """Build the CVaR-aware long book and per-name risk analytics (SSOT).
 
     Re-ranks the screen on risk-adjusted terms — reward per unit *expected
-    volatility* (the per-name dispersion of the posterior upside draws) and
-    reward per unit *expected shortfall* (CVaR of the same draws) — then sizes a
-    long book on the STARR (reward-to-CVaR) ratio with a per-name cap.
+    volatility* and reward per unit *expected shortfall* — then sizes a long book
+    on the STARR (reward-to-CVaR) ratio with a per-name cap.
+
+    .. versionchanged:: 2026-08-20
+       ``cvar05`` and ``exp_vol`` are computed from ``return_draws`` — the
+       Monte-Carlo forward-return distribution — when it is supplied. They were
+       previously derived from ``eu``, the posterior draws of the expected
+       upside, which is *estimation* uncertainty about a point rather than
+       outcome uncertainty. The consequences were not subtle: on run
+       ``49e84d7e9d59`` the exported ``cvar05`` was POSITIVE for 88.4 % of names
+       and correlated 0.9998 with ``expected_upside``, the 25-name book reported
+       a weighted 5 % expected shortfall of +42.7 %, and ``exp_vol`` had a median
+       of 0.47pp against a Monte-Carlo return sd of 19.03pp — a factor of 40.
+       The estimation-uncertainty view is not lost: the screen's
+       ``expected_upside_sd`` column is exactly the old ``exp_vol``, under a name
+       that says what it is.
 
     Parameters
     ----------
     idata
-        Fused-panel inference data; ``posterior['achieve_prob']`` supplies the
-        ``kalman_gain`` state-confidence term when present.
+        Fused-panel inference data. Retained for provenance and for the
+        ``achieve_prob`` fallback; the ``kalman_gain`` term is preferentially
+        read from ``results``.
     eu
         Posterior ``expected_upside`` draws over ``(chain, draw, isin)`` as
-        decimals (``ScreenContext.eu``).
+        decimals (``ScreenContext.eu``). Still the source of ``p_upside_pos`` and
+        the ``expected_upside -> CVaR`` dispersion leg of ``tail_risk``, and the
+        fallback for ``cvar05`` / ``exp_vol`` when ``return_draws`` is absent.
+    return_draws
+        Monte-Carlo forward returns as decimals, shape
+        ``(n_isin, n_samples)``, row-aligned to ``results['isin']``. Supply
+        ``ScreenDraws.pooled_returns``, whose pooling matches the exported
+        ``er_*`` summary so a CVaR taken here and the ``er_p05`` in the same row
+        describe one distribution.
+    tail_risk_vol_floor_k
+        Floor on ``tail_risk`` as a fraction of the name's own return sd. The
+        absolute :data:`MIN_TAIL_RISK` floor binds for names whose simulated 5 %
+        quantile is positive — 13.4 % of the universe and 14 of 25 book names on
+        run ``49e84d7e9d59`` — and turns STARR into ``100 x expected_upside`` for
+        exactly those names, which is what made the ranking bimodal (median 2.35,
+        p75 25.6). ``0.0`` restores the pre-2026-08-20 behaviour.
     results
         Per-ISIN screen table; must carry ``isin``, ``expected_pt``,
         ``expected_pt_hdi_{lo,hi}`` and ``expected_upside``. ``mcap_global_r``,
@@ -199,25 +245,45 @@ def compute_cvar_aware_book(
     _den = nm['expected_pt'].replace(0, np.nan)
     nm['band_width'] = (nm['expected_pt_hdi_hi'] - nm['expected_pt_hdi_lo']) / _den
 
-    # Conditional P(upside>0 | kalman gain). ``achieve_prob`` (exported as
-    # ``kalman_gain``) is the smoother's state-confidence analogue — inverse to
-    # ``kalman_variance`` — so multiplying the structural-TS MC ``mc_prob_pos`` by
-    # it discounts names whose positive-upside odds rest on a low-confidence state
-    # estimate. Falls back to the posterior ``p_upside_pos`` where the MC column is
-    # missing, and to the unconditional probability if ``achieve_prob`` is absent.
-    try:
-        _gain_ser = posterior_dataset(idata)['achieve_prob'].mean(
-            ('chain', 'draw')).to_series()
-        _gain_ser.index = _gain_ser.index.astype(str)
-        nm['kalman_gain'] = nm['isin'].astype(str).map(_gain_ser).astype('float64')
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning('achieve_prob (kalman_gain) unavailable: %s — conditional '
-                       'P(upside>0) falls back to the unconditional probability.', exc)
-        nm['kalman_gain'] = 1.0
-    _p_base = (pd.to_numeric(nm['mc_prob_pos'], errors='coerce')
-               if 'mc_prob_pos' in nm.columns else nm['p_upside_pos'])
-    nm['p_upside_pos_cond'] = (_p_base.fillna(nm['p_upside_pos'])
-                               * nm['kalman_gain'].fillna(1.0)).astype('float64')
+    # ---- the probability columns -------------------------------------------
+    # ``kalman_gain`` is taken from the screen frame when the caller supplies it.
+    # It used to be read straight off the posterior as ``achieve_prob``, i.e.
+    # ``sigmoid(risk_adj_return)`` — a sigmoid of a standardised log-uplift,
+    # which is not the probability of any defined event and centres on 0.5 by
+    # construction. The workflow now computes P(risk_adj_return > 0) as a
+    # reduction over draws and passes it down; the posterior read stays as the
+    # fallback for an idata fitted before that change.
+    if 'kalman_gain' in nm.columns and pd.to_numeric(
+            nm['kalman_gain'], errors='coerce').notna().any():
+        nm['kalman_gain'] = pd.to_numeric(nm['kalman_gain'], errors='coerce')
+    else:
+        try:
+            _gain_ser = posterior_dataset(idata)['achieve_prob'].mean(
+                ('chain', 'draw')).to_series()
+            _gain_ser.index = _gain_ser.index.astype(str)
+            nm['kalman_gain'] = nm['isin'].astype(str).map(_gain_ser).astype('float64')
+            logger.warning(
+                'kalman_gain absent from the screen frame; falling back to the '
+                'legacy achieve_prob sigmoid, whose LEVEL is not interpretable.'
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning('achieve_prob (kalman_gain) unavailable: %s — conditional '
+                           'P(upside>0) falls back to the unconditional probability.', exc)
+            nm['kalman_gain'] = 1.0
+    # Likewise ``p_upside_pos_cond``: the workflow computes it directly as
+    # P(risk-adjusted forward return > 0) from the MC draws. The product below
+    # is the documented fallback — it still ORDERS names, but multiplying a
+    # probability by a state-confidence term does not give the probability of
+    # anything, so its level must not be read as one.
+    if 'p_upside_pos_cond' not in nm.columns or not pd.to_numeric(
+            nm['p_upside_pos_cond'], errors='coerce').notna().any():
+        _p_base = (pd.to_numeric(nm['mc_prob_pos'], errors='coerce')
+                   if 'mc_prob_pos' in nm.columns else nm['p_upside_pos'])
+        nm['p_upside_pos_cond'] = (_p_base.fillna(nm['p_upside_pos'])
+                                   * nm['kalman_gain'].fillna(1.0)).astype('float64')
+    else:
+        nm['p_upside_pos_cond'] = pd.to_numeric(
+            nm['p_upside_pos_cond'], errors='coerce').astype('float64')
     _gain_vals = nm['kalman_gain'].to_numpy(dtype='float64')
     univ_gain = (float(np.nanmean(_gain_vals))
                  if np.isfinite(_gain_vals).any() else 1.0)
@@ -232,44 +298,111 @@ def compute_cvar_aware_book(
     # not a level).
     _row_of: dict[str, int] = {}
     _eu_vals = None
+    _isin_order = None
     try:
         _eu_s = eu.stack(s=('chain', 'draw')).transpose('isin', 's')
         _eu_vals = np.ascontiguousarray(_eu_s.values, dtype='float64')  # (n_isin, n_samples)
-        _var = np.quantile(_eu_vals, alpha, axis=1, keepdims=True)
-        _mask = _eu_vals <= _var
-        _denom = np.maximum(_mask.sum(axis=1), 1)
-        _cvar = np.where(_mask, _eu_vals, 0.0).sum(axis=1) / _denom
         _isin_order = _eu_s.coords['isin'].values.astype(str)
         _row_of = {is_: i for i, is_ in enumerate(_isin_order)}
-        nm['cvar05'] = nm['isin'].astype(str).map(
-            pd.Series(_cvar, index=_isin_order)).astype('float64')
-        nm['exp_vol'] = nm['isin'].astype(str).map(
-            pd.Series(_eu_vals.std(axis=1), index=_isin_order)).astype('float64')
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning('CVaR computation from upside draws failed: %s', exc)
+        logger.warning('posterior upside draws unusable: %s', exc)
+        _eu_vals = None
+
+    def _tail_stats(vals: np.ndarray, chunk: int = 512) -> tuple[np.ndarray, np.ndarray]:
+        """Return ``(cvar_alpha, sd)`` per row of a ``(n_isin, n_samples)`` array.
+
+        Chunked over the name axis. The Monte-Carlo array reaches
+        ``6500 x chains*draws*horizon`` — about 1.7 GB at the production budget —
+        and ``np.quantile`` plus a boolean mask plus a ``np.where`` on the whole
+        thing at once peaks at several times that. Row-blocking is exact, not an
+        approximation: every statistic here is per-row.
+        """
+        n = vals.shape[0]
+        cvar = np.empty(n, dtype='float64')
+        sd = np.empty(n, dtype='float64')
+        for i0 in range(0, n, chunk):
+            sl = slice(i0, min(i0 + chunk, n))
+            block = vals[sl]
+            _var = np.quantile(block, alpha, axis=1, keepdims=True)
+            _mask = block <= _var
+            _denom = np.maximum(_mask.sum(axis=1), 1)
+            cvar[sl] = np.where(_mask, block, 0.0).sum(axis=1) / _denom
+            sd[sl] = block.std(axis=1)
+        return cvar, sd
+
+    # ``cvar05`` / ``exp_vol`` come from the FORWARD-RETURN draws when they are
+    # supplied. Deriving them from ``eu`` measures how precisely the mean is
+    # estimated, not how badly the position can do — see the versionchanged note.
+    _ret = None
+    if return_draws is not None:
+        _ret = np.asarray(return_draws, dtype='float64')
+        if _ret.ndim != 2 or _ret.shape[0] != len(nm):
+            logger.warning(
+                'return_draws has shape %s but the screen carries %d names; '
+                'falling back to the posterior upside draws, which makes cvar05 '
+                'an estimation-uncertainty quantity rather than a loss quantile.',
+                _ret.shape, len(nm),
+            )
+            _ret = None
+    if _ret is not None:
+        _cvar, _sd = _tail_stats(_ret)
+        nm['cvar05'] = _cvar
+        nm['exp_vol'] = _sd
+    elif _eu_vals is not None and _isin_order is not None:
+        logger.warning(
+            'no return_draws supplied: cvar05 and exp_vol fall back to the '
+            'posterior upside draws. They are then ESTIMATION uncertainty, not '
+            'return risk -- cvar05 will be positive for most names.'
+        )
+        _cvar, _sd = _tail_stats(_eu_vals)
+        nm['cvar05'] = pd.Series(_cvar, index=_isin_order).reindex(
+            nm['isin'].astype(str)).to_numpy(dtype='float64')
+        nm['exp_vol'] = pd.Series(_sd, index=_isin_order).reindex(
+            nm['isin'].astype(str)).to_numpy(dtype='float64')
+    else:  # pragma: no cover - defensive
         nm['cvar05'] = np.nan
         nm['exp_vol'] = np.nan
 
     # Reward-to-risk ratios (all dimensionless — decimal / decimal).
-    #   * ret_vol_ratio    - reward per unit posterior dispersion of the upside
-    #     draws (estimation-uncertainty-adjusted reward; internal only, NOT a
-    #     Sharpe ratio — the denominator is parameter uncertainty).
+    #   * ret_vol_ratio    - reward per unit return dispersion when
+    #     ``return_draws`` is supplied; per unit POSTERIOR dispersion (parameter
+    #     uncertainty, not a Sharpe ratio) on the fallback path.
     #   * expected_sharpe  - er_mean / er_sd over Monte-Carlo draws of the LOG
     #     PRICE-TARGET UPLIFT (the distance from price to the smoothed target),
     #     not of a realised equity return. It reads as a t-statistic on the
     #     uplift estimate, so book values of 5-7 are normal and are NOT
     #     investment Sharpe ratios. Exported as ``expected_sharpe_ratio``.
-    #   * tail_risk        - binding downside: the larger of the posterior
-    #     mean->CVaR dispersion and the Student-t MC 5% loss magnitude (floored
-    #     at 1pp = 0.01). Names with a wide posterior OR a fat simulated tail
-    #     both score high here.
+    #   * tail_risk        - binding downside: the largest of the mean->CVaR
+    #     dispersion, the Student-t MC 5% loss magnitude, and a RELATIVE floor at
+    #     ``tail_risk_vol_floor_k`` of the name's own return sd, with the
+    #     absolute ``MIN_TAIL_RISK`` as a last resort.
+    #
+    #     The relative floor was added 2026-08-20, and it is worth being precise
+    #     about what it does and does not fix. The failure it was written for:
+    #     with ``cvar05`` taken from the posterior of the MEAN, the mean-to-CVaR
+    #     dispersion is only ~1pp, so any name whose simulated 5% quantile was
+    #     positive had no binding downside term at all and fell to the 1pp
+    #     absolute floor — making ``starr`` ``100 x expected_upside`` for it.
+    #     That was 29.6% of the universe on run ``49e84d7e9d59`` and it selected
+    #     the book: 14 of 25 names sat on the floor and 24 of 25 had
+    #     ``er_p05 > 0``, while only 16 of the top-100 STARR names were top-100
+    #     by upside.
+    #
+    #     Supplying ``return_draws`` fixes that on its own: ``expected_upside -
+    #     cvar05`` then becomes roughly ``2 * er_sd``, which dominates any
+    #     sensible fraction of ``er_sd``, and the absolute floor is unreachable.
+    #     So on the primary path this term is inert BY CONSTRUCTION — it is
+    #     defence for the ``return_draws=None`` fallback (where the old
+    #     behaviour returns exactly) and for a degenerate MC distribution. Kept
+    #     because both of those are reachable and neither announces itself in
+    #     the output.
     #   * starr            - reward per unit expected-shortfall (STARR ratio).
     #
     # Every denominator is floored at ``MIN_RATIO_DENOMINATOR`` and every result
     # re-checked for finiteness: a clip-pinned name yields a denormal-but-
     # positive dispersion that a bare ``> 0`` guard lets through as ~1e15. See
     # the constant's docstring. ``starr`` needs no floor — ``tail_risk`` already
-    # carries a hard 0.01 one — but is finiteness-checked for symmetry.
+    # carries one — but is finiteness-checked for symmetry.
     def _safe_ratio(num: pd.Series, den: pd.Series) -> pd.Series:
         """Return ``num / den`` with a degenerate denominator mapped to NaN."""
         _num = pd.to_numeric(num, errors='coerce')
@@ -285,8 +418,18 @@ def compute_cvar_aware_book(
     _md_disp = (nm['expected_upside'] - nm['cvar05']).fillna(0.0).clip(lower=0.0)
     _mc_loss = (-nm['er_p05'].astype('float64')
                 if 'er_p05' in nm.columns else pd.Series(0.0, index=nm.index)).fillna(0.0)
+    _vol_floor = (
+        float(tail_risk_vol_floor_k)
+        * pd.to_numeric(nm['er_sd'], errors='coerce').fillna(0.0).clip(lower=0.0)
+        if 'er_sd' in nm.columns
+        else pd.Series(0.0, index=nm.index)
+    )
     nm['tail_risk'] = np.maximum.reduce([
-        _md_disp.to_numpy(), _mc_loss.to_numpy(), np.full(len(nm), 0.01)])
+        _md_disp.to_numpy(),
+        _mc_loss.to_numpy(),
+        np.asarray(_vol_floor, dtype='float64'),
+        np.full(len(nm), MIN_TAIL_RISK),
+    ])
     nm['starr'] = _safe_ratio(nm['expected_upside'], nm['tail_risk'])
 
     # Market-cap pre-selection: only top-of-country names (mcap_global_r <

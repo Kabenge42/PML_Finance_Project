@@ -1285,3 +1285,479 @@ def test_mpl_figure_of_resolves_raw_and_wrapped_figures():
         assert kf._mpl_figure_of(object()) is None
     finally:
         plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Forecast-error shrinkage (2026-08-20). Pure NumPy/xarray — no sampler.
+#
+# These guard the change that stopped the v2 screen reproducing analyst
+# consensus. Run 49e84d7e9d59 shipped a median revision of 0.03pp and a Spearman
+# of 0.999995 against its own input, so the properties asserted here (a gain
+# strictly below 1, monotone in coverage, and an exact identity at kappa = 0)
+# are the difference between a filter and a pass-through.
+# ---------------------------------------------------------------------------
+def _fe_panel(n=80, seed=0):
+    """Minimal KalmanPanelV2 carrying only what the shrinkage helper reads."""
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import KalmanPanelV2
+
+    rng = np.random.default_rng(seed)
+    frame = pd.DataFrame(
+        {
+            "isin": [f"X{i:03d}" for i in range(n)],
+            "n_analysts": rng.integers(2, 40, n).astype(float),
+        }
+    )
+    zeros = np.zeros(n)
+    return KalmanPanelV2(
+        frame=frame,
+        isins=frame["isin"].to_numpy(),
+        Y=np.zeros((n, 4)),
+        time_days=np.array([365.0, 91.0, 7.0, 0.0]),
+        X_drift=np.zeros((n, 1)),
+        drift_names=["a"],
+        dispersion_cv=np.clip(rng.normal(0.12, 0.05, n), 0.01, None),
+        precision_weight=np.ones(n),
+        vol_level=zeros,
+        log_mcap=zeros,
+        range_norm=zeros,
+        avg_beta=zeros,
+        size_ratio=zeros,
+        volume_ratio=zeros,
+        response_mean=0.19,
+        response_std=0.2207,
+    )
+
+
+def _fe_idata(panel, seed=1, state_sd=0.02):
+    """Stub posterior with the five variables the shrinkage helper reads."""
+    import types
+
+    import xarray as xr
+
+    rng = np.random.default_rng(seed)
+    n, c, d = len(panel.isins), 2, 60
+
+    def _da(v):
+        return xr.DataArray(
+            v, dims=("chain", "draw", "isin"), coords={"isin": panel.isins}
+        )
+
+    post = xr.Dataset(
+        {
+            "mu_scaled": _da(rng.normal(0.0, 0.3, (c, d, n))),
+            "state_now_mean": _da(rng.normal(0.0, 0.8, (c, d, n))),
+            "state_now_sd": _da(np.full((c, d, n), state_sd)),
+            "sigma_isin": _da(np.full((c, d, n), 0.55)),
+            "variance_weights": xr.DataArray(
+                np.tile([0.0044, 0.9940, 0.0016], (c, d, 1)),
+                dims=("chain", "draw", "variance_component"),
+            ),
+        }
+    )
+    return types.SimpleNamespace(posterior=post)
+
+
+def test_forecast_error_variance_is_zero_at_zero_multiplier():
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+        forecast_error_variance,
+    )
+
+    panel = _fe_panel()
+    np.testing.assert_allclose(
+        forecast_error_variance(panel, multiplier=0.0), 0.0
+    )
+    assert (forecast_error_variance(panel, multiplier=2.0) > 0).all()
+
+
+@pytest.mark.parametrize("bad", [-0.1, -1.0])
+def test_forecast_error_variance_rejects_a_negative_multiplier(bad):
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+        forecast_error_variance,
+    )
+
+    with pytest.raises(ValueError, match="non-negative"):
+        forecast_error_variance(_fe_panel(), multiplier=bad)
+
+
+def test_zero_multiplier_returns_the_unshrunk_latent_exactly():
+    """The opt-out path must be bit-exact, not merely close.
+
+    ``enable_forecast_error_shrinkage=False`` is the comparison arm for every
+    before/after measurement, so a gain of 1 that only approximately reproduces
+    the old latent would put noise into the very deltas the change is judged on.
+    """
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+        apply_forecast_error_shrinkage,
+    )
+
+    panel = _fe_panel()
+    idata = _fe_idata(panel)
+    theta, gain = apply_forecast_error_shrinkage(idata, panel, multiplier=0.0)
+
+    np.testing.assert_allclose(gain, 1.0)
+    s_mean = np.asarray(idata.posterior["state_now_mean"])
+    s_sd = np.asarray(idata.posterior["state_now_sd"])
+    rng = np.random.default_rng(42)  # the helper's default random_seed
+    expected = s_mean + s_sd * rng.standard_normal(s_mean.shape)
+    np.testing.assert_allclose(np.asarray(theta), expected)
+
+
+def test_gain_rises_with_coverage_and_falls_with_dispersion():
+    """The coverage_gradient gate reads this monotonicity.
+
+    Run 49e84d7e9d59 had ``kalman_gain`` correlating -0.004 with analyst count,
+    i.e. the exported confidence term was blind to how much information a name
+    carried. The shrinkage weight must not repeat that.
+    """
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+        apply_forecast_error_shrinkage,
+    )
+
+    panel = _fe_panel()
+    _, gain = apply_forecast_error_shrinkage(panel and _fe_idata(panel), panel,
+                                             multiplier=2.0)
+    n = panel.frame["n_analysts"]
+    cv = pd.Series(panel.dispersion_cv)
+    assert pd.Series(gain).corr(n, method="spearman") > 0.5
+    assert pd.Series(gain).corr(cv, method="spearman") < -0.5
+    assert (gain > 0).all() and (gain < 1).all()
+
+
+def test_shrinkage_pulls_the_latent_toward_the_fitted_mean():
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+        apply_forecast_error_shrinkage,
+        forecast_error_variance,
+    )
+
+    panel = _fe_panel()
+    idata = _fe_idata(panel)
+    _, gain = apply_forecast_error_shrinkage(idata, panel, multiplier=2.0)
+
+    # Assert on the closed form rather than on sampled draws: theta carries an
+    # added sd of ~sqrt(g * fe_var), so a 120-draw sample mean cannot resolve a
+    # shift this size (a real false negative seen while writing these tests).
+    mu = np.asarray(idata.posterior["mu_scaled"]).mean((0, 1))
+    s_mean = np.asarray(idata.posterior["state_now_mean"]).mean((0, 1))
+    theta_mean = mu + gain * (s_mean - mu)
+    assert np.all(np.abs(theta_mean - mu) <= np.abs(s_mean - mu) + 1e-12)
+    assert np.any(np.abs(theta_mean - mu) < np.abs(s_mean - mu))
+
+
+def test_shrinkage_widens_the_per_name_posterior():
+    """The prob_pos_degenerate warning is downstream of this.
+
+    With a 0.47pp posterior sd against an 18pp median upside, P(upside > 0)
+    saturates: 87.4% of the universe sat at exactly 1.0 on run 49e84d7e9d59.
+    """
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+        apply_forecast_error_shrinkage,
+    )
+
+    panel = _fe_panel()
+    idata = _fe_idata(panel, state_sd=0.02)
+    theta, _ = apply_forecast_error_shrinkage(idata, panel, multiplier=2.0)
+    assert np.all(np.asarray(theta).std((0, 1)) > 0.02)
+
+
+def test_shrinkage_rejects_a_panel_from_another_run():
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+        apply_forecast_error_shrinkage,
+    )
+
+    panel = _fe_panel(n=80)
+    idata = _fe_idata(_fe_panel(n=40))
+    with pytest.raises(ValueError, match="not from the same run"):
+        apply_forecast_error_shrinkage(idata, panel, multiplier=2.0)
+
+
+# ---------------------------------------------------------------------------
+# Risk book: return-space CVaR and the relative tail-risk floor (2026-08-20)
+# ---------------------------------------------------------------------------
+def _rb_frame(n=40, seed=3):
+    """Screen frame + posterior upside draws + MC return draws for the book."""
+    import xarray as xr
+
+    rng = np.random.default_rng(seed)
+    isins = np.array([f"N{i:02d}" for i in range(n)])
+    upside = rng.uniform(0.05, 0.60, n)
+    # Posterior draws of the MEAN: tight, as the real ones are (0.47pp median).
+    eu = xr.DataArray(
+        upside[None, None, :] + rng.normal(0.0, 0.005, (2, 200, n)),
+        dims=("chain", "draw", "isin"),
+        coords={"isin": isins},
+    )
+    # Forward-return draws: wide, as the real ones are (19pp median sd).
+    ret = upside[:, None] + rng.normal(0.0, 0.20, (n, 400))
+    results = pd.DataFrame(
+        {
+            "isin": isins,
+            "expected_pt": 100 * (1 + upside),
+            "expected_pt_hdi_lo": 100 * (1 + upside - 0.01),
+            "expected_pt_hdi_hi": 100 * (1 + upside + 0.01),
+            "expected_upside": upside,
+            "mc_prob_pos": np.clip(rng.uniform(0.6, 0.99, n), 0, 1),
+            "mcap_global_r": rng.uniform(0.0, 0.015, n),
+            "er_mean": upside,
+            "er_sd": ret.std(axis=1),
+            "er_p05": np.quantile(ret, 0.05, axis=1),
+        }
+    )
+    return object(), eu, results, ret
+
+
+def test_cvar_from_return_draws_is_a_real_loss_quantile():
+    """cvar05 must sit at or below er_p05 — a tail MEAN cannot exceed its own
+    tail QUANTILE. On run 49e84d7e9d59 it exceeded it for 88.4% of names,
+    because it was computed from the posterior of the mean instead."""
+    from probabilistic_ml_model.pymc_models.RiskBookModel import compute_cvar_aware_book
+
+    idata, eu, results, ret = _rb_frame()
+    rb = compute_cvar_aware_book(idata, eu, results, return_draws=ret)
+    a = rb.analytics
+    assert (a["cvar05"] <= a["er_p05"] + 1e-9).all()
+    np.testing.assert_allclose(a["exp_vol"], a["er_sd"], rtol=1e-9)
+
+
+def test_cvar_falls_back_to_the_posterior_and_says_so(caplog):
+    """The degraded path must be loud: silently sizing on estimation
+    uncertainty is exactly the failure this change exists to end."""
+    from probabilistic_ml_model.pymc_models.RiskBookModel import compute_cvar_aware_book
+
+    idata, eu, results, _ = _rb_frame()
+    with caplog.at_level(
+        "WARNING", logger="probabilistic_ml_model.pymc_models.RiskBookModel"
+    ):
+        rb = compute_cvar_aware_book(idata, eu, results, return_draws=None)
+    assert "return_draws" in caplog.text
+    # The posterior-derived vol is ~40x tighter than the return sd — the
+    # discrepancy that made the exported book report a positive CVaR.
+    assert (rb.analytics["exp_vol"] < rb.analytics["er_sd"] / 10).all()
+
+
+def test_relative_tail_floor_unpins_names_with_no_simulated_loss():
+    """The floor guards the POSTERIOR-derived path, which is where it bit.
+
+    Worth being precise about, because it is not what the plan assumed:
+    repointing ``cvar05`` at the return draws (R4) makes
+    ``expected_upside - cvar05`` roughly ``2 * er_sd``, which dominates any
+    sensible fraction of ``er_sd`` — so on the primary path the absolute floor
+    is already unreachable and the relative one never binds.
+
+    It binds exactly where the shipped book was broken: the fallback path, where
+    ``cvar05`` comes from the tight posterior-of-the-mean draws, the mean-to-CVaR
+    dispersion is ~1pp, and a name whose simulated 5% quantile is positive has no
+    downside term at all. That was 29.6% of the universe and 14 of the 25 book
+    names on run 49e84d7e9d59, where STARR became 100 x expected_upside.
+    """
+    from probabilistic_ml_model.pymc_models.RiskBookModel import (
+        MIN_TAIL_RISK,
+        compute_cvar_aware_book,
+    )
+
+    idata, eu, results, _ = _rb_frame()
+    results = results.copy()
+    # Entirely positive simulated distribution => no MC loss leg.
+    results["er_p05"] = results["er_p05"].abs() + 0.05
+
+    pinned = compute_cvar_aware_book(
+        idata, eu, results, return_draws=None, tail_risk_vol_floor_k=0.0
+    ).analytics
+    floored = compute_cvar_aware_book(
+        idata, eu, results, return_draws=None, tail_risk_vol_floor_k=0.25
+    ).analytics
+
+    # Without the relative floor everything sits in the floor regime: the only
+    # other live term is the ~1pp posterior mean-to-CVaR dispersion.
+    assert pinned["tail_risk"].max() < 2 * MIN_TAIL_RISK
+    assert (pinned["tail_risk"] >= MIN_TAIL_RISK - 1e-12).all()
+    # With it, every name is charged a real fraction of its own dispersion.
+    assert (floored["tail_risk"] > 2 * MIN_TAIL_RISK).all()
+    # STARR stops being ~100 x expected_upside, which is what made it bimodal.
+    assert floored["starr"].max() < pinned["starr"].max() / 2
+
+
+def test_screen_supplied_probability_columns_win_over_the_legacy_sigmoid():
+    """p_upside_pos_cond passed in by the workflow must not be overwritten by
+    the mc_prob_pos * kalman_gain product the risk book falls back to."""
+    from probabilistic_ml_model.pymc_models.RiskBookModel import compute_cvar_aware_book
+
+    idata, eu, results, ret = _rb_frame()
+    results = results.copy()
+    results["kalman_gain"] = 0.5
+    results["p_upside_pos_cond"] = 0.42
+    rb = compute_cvar_aware_book(idata, eu, results, return_draws=ret)
+    np.testing.assert_allclose(rb.analytics["p_upside_pos_cond"], 0.42)
+
+
+# ---------------------------------------------------------------------------
+# The tightened shrinkage gate (2026-08-20)
+# ---------------------------------------------------------------------------
+def test_shrinkage_gate_band_excludes_identity():
+    """Regression guard on the thresholds themselves.
+
+    The gate passed run 49e84d7e9d59 at slope 0.979 / intercept +0.0051 while
+    the screen reproduced consensus at Spearman 0.999995 and a 0.03pp median
+    revision. Slope and intercept alone cannot see that: an exact copy scores a
+    perfect 1.0 / 0.0. If someone widens the band back past 1.0, or drops either
+    companion statistic, this fails.
+    """
+    import pymc_kalman_filter_pt_v2 as kf2
+
+    cfg = kf2.KalmanRunConfigV2()
+    assert cfg.gate_shrinkage_slope_hi < 1.0
+    assert cfg.gate_shrinkage_rho_max < 1.0
+    assert cfg.gate_shrinkage_revision_min_pp > 0.0
+
+    # The shipped run's own numbers must be rejected.
+    rho, revision_pp = 0.999995, 0.03
+    assert rho > cfg.gate_shrinkage_rho_max
+    assert revision_pp < cfg.gate_shrinkage_revision_min_pp
+
+
+def test_the_gate_grades_center_shift_not_the_raw_intercept():
+    """The y-intercept cannot separate an offset from shrinkage.
+
+    Shrinking a cloud toward its centre ``c`` gives ``eu = c + s*(iu - c)``, so
+    ``intercept = (1 - s) * c`` identically. Measured across a multiplier sweep
+    on the production fit, ``intercept / (1 - slope)`` came out 0.2018, 0.2016,
+    0.2010, 0.2006, 0.2006, 0.2007 — the response centre, every time.
+
+    Pairing ``|intercept| <= 0.02`` with ``rho <= 0.995`` therefore had an EMPTY
+    feasible set on a response centred at +20%: the first needs slope >= 0.90,
+    the second needs slope <= ~0.88. This asserts the arithmetic that makes the
+    old threshold unusable, so nobody reinstates it.
+    """
+    import numpy as np
+
+    import pymc_kalman_filter_pt_v2 as kf2
+
+    cfg = kf2.KalmanRunConfigV2()
+    assert not hasattr(cfg, "gate_shrinkage_intercept_max")
+    assert cfg.gate_shrinkage_center_shift_max > 0
+
+    rng = np.random.default_rng(0)
+    iu = 0.20 + rng.normal(0.0, 0.30, 20_000)
+    # The SAMPLE centre: shrinking toward the population value would move the
+    # sample mean by (1-slope)*(population - sample), which is sampling error,
+    # not an offset, and would make the zero-shift assertion below a statement
+    # about the RNG rather than about shrinkage.
+    centre = float(iu.mean())
+    for slope in (0.70, 0.80, 0.90, 0.95):
+        eu = centre + slope * (iu - centre)          # pure shrinkage, no offset
+        fit_slope, intercept = np.polyfit(iu, eu, 1)
+        assert fit_slope == pytest.approx(slope, abs=1e-9)
+        assert intercept == pytest.approx((1 - slope) * centre, abs=1e-9)
+        # The intercept grows without bound as shrinkage strengthens...
+        assert intercept > 0
+        # ...while the quantity the gate actually grades stays at zero, because
+        # pure shrinkage moves no name's centre.
+        assert abs(eu.mean() - iu.mean()) < 1e-9
+        assert abs(eu.mean() - iu.mean()) <= cfg.gate_shrinkage_center_shift_max
+
+    # And a genuine universe-wide lift IS caught.
+    lifted = iu + 0.05
+    assert abs(lifted.mean() - iu.mean()) > cfg.gate_shrinkage_center_shift_max
+
+
+@pytest.mark.parametrize(
+    "field, bad",
+    [
+        ("forecast_error_multiplier", -1.0),
+        ("forecast_error_n_exponent", -0.5),
+        ("tail_risk_vol_floor_k", -0.1),
+        ("gate_shrinkage_rho_max", 1.5),
+    ],
+)
+def test_run_config_rejects_invalid_decision_knobs(field, bad):
+    import dataclasses
+
+    import pymc_kalman_filter_pt_v2 as kf2
+
+    with pytest.raises(ValueError):
+        dataclasses.replace(kf2.KalmanRunConfigV2(), **{field: bad})
+
+
+def test_shrinkage_recovers_the_latent_better_than_the_raw_consensus():
+    """Synthetic recovery: the whole claim, on data with a known truth.
+
+    Deliberately NOT built by extending ``_simulate_panel``. That simulator
+    generates the response from the fitted model, which has no forecast-error
+    component at all — adding one would change the generative process the
+    existing variance-split recovery selftest validates, and risk trading a
+    working acceptance check for a new one. The claim here is about the decision
+    layer, so it is tested on the decision layer directly.
+
+    The setup mirrors the real situation exactly:
+
+        theta_i     ~ N(mu_i, struct_sd)        the fair uplift (unobserved)
+        consensus_i  = theta_i + fe_i           analysts, off by forecast error
+        fe_i        ~ N(0, kappa * cv_i / sqrt(n_i))
+
+    The fitted model reproduces ``consensus_i`` — that is what run 49e84d7e9d59
+    did, at Spearman 0.999995. So ``state_now_mean = consensus`` is the honest
+    stand-in, and the question is whether shrinking it toward ``mu`` gets closer
+    to ``theta``. It must, and by the textbook amount: the posterior mean of a
+    normal-normal update is the minimum-MSE estimator.
+    """
+    import types
+
+    import xarray as xr
+
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+        apply_forecast_error_shrinkage,
+    )
+
+    n, kappa = 4000, 2.0
+    panel = _fe_panel(n=n, seed=11)
+    rng = np.random.default_rng(11)
+
+    struct_sd_std = 0.5559                     # sigma_state of the reference fit
+    sd = panel.response_std
+    mu = rng.normal(0.0, 0.30, n)              # the pooled drift + hierarchy view
+    theta = mu + rng.normal(0.0, struct_sd_std, n)
+
+    cv, n_an = panel.dispersion_cv, panel.frame["n_analysts"].to_numpy()
+    fe_sd = kappa * (cv / np.sqrt(n_an)) / sd  # standardised, as the helper builds it
+    consensus = theta + rng.normal(0.0, fe_sd)
+
+    c, d = 2, 40
+    def _da(v):
+        return xr.DataArray(
+            np.broadcast_to(v, (c, d, n)).copy(),
+            dims=("chain", "draw", "isin"), coords={"isin": panel.isins},
+        )
+
+    idata = types.SimpleNamespace(
+        posterior=xr.Dataset(
+            {
+                "mu_scaled": _da(mu),
+                "state_now_mean": _da(consensus),
+                "state_now_sd": _da(np.zeros(n)),   # isolate the shrinkage term
+                "sigma_isin": _da(np.full(n, struct_sd_std / np.sqrt(0.9984))),
+                "variance_weights": xr.DataArray(
+                    np.tile([0.0044, 0.9940, 0.0016], (c, d, 1)),
+                    dims=("chain", "draw", "variance_component"),
+                ),
+            }
+        )
+    )
+    _, gain = apply_forecast_error_shrinkage(
+        idata, panel, multiplier=kappa, random_seed=11
+    )
+    shrunk = mu + gain * (consensus - mu)
+
+    rmse_raw = float(np.sqrt(np.mean((consensus - theta) ** 2)))
+    rmse_shrunk = float(np.sqrt(np.mean((shrunk - theta) ** 2)))
+    assert rmse_shrunk < rmse_raw, (rmse_shrunk, rmse_raw)
+
+    # Not just better — near-optimal. The Bayes RMSE for this update is
+    # sqrt(mean(g * fe_var)), and the estimator should be within a few percent
+    # of it. A helper that shrank in the right direction by the wrong amount
+    # would pass the inequality above and fail here.
+    fe_var = fe_sd ** 2
+    bayes = float(np.sqrt(np.mean(gain * fe_var)))
+    assert rmse_shrunk == pytest.approx(bayes, rel=0.10)
+
+    # And it must beat the other degenerate choice: ignoring the name entirely.
+    rmse_pooled = float(np.sqrt(np.mean((mu - theta) ** 2)))
+    assert rmse_shrunk < rmse_pooled

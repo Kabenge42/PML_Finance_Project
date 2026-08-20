@@ -76,6 +76,13 @@ NUMERIC_COLUMNS: list[str] = [
     "reward_to_cvar",
     "expected_vol_kalman",
     "expected_sharpe_ratio",
+    # 2026-08-20 export. ``shrink_gain`` is the weight the forecast-error update
+    # puts on the name's own smoothed observation (1 - it is the weight on the
+    # pooled drift + hierarchy prediction); ``expected_upside_sd`` is the
+    # posterior sd of expected upside, which is what ``expected_vol_kalman``
+    # used to hold before it became the forward-return sd.
+    "shrink_gain",
+    "expected_upside_sd",
     # CAPM market sensitivity / analyst-consensus target levels.
     "beta",
     "implied_upside",
