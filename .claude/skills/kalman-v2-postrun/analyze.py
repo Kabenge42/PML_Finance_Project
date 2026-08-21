@@ -360,7 +360,18 @@ def read_gates(eng, screen: pd.DataFrame, diag: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def read_convergence(diag: pd.DataFrame) -> dict[str, Any]:
+def read_convergence(diag: pd.DataFrame, gates: dict[str, Any]) -> dict[str, Any]:
+    # The divergence count exists only inside a live run, so it is readable
+    # here only when the run persisted its gate report. Never defaulted to 0 --
+    # an absent count and a zero count are different claims.
+    div = None
+    if gates.get("source") == "table":
+        row = next((r for r in gates["results"] if r["gate"] == "divergences"), None)
+        if row is not None:
+            try:
+                div = int(str(row["value"]).split()[0])
+            except (ValueError, IndexError):
+                div = None
     free = diag[diag["sd"] > 1e-12]
     return {
         "n_monitored": int(len(diag)),
@@ -370,9 +381,7 @@ def read_convergence(diag: pd.DataFrame) -> dict[str, Any]:
         "min_ess_bulk": _f(free["ess_bulk"].min()),
         "worst_ess_param": str(free.loc[free["ess_bulk"].idxmin(), "index"]),
         "min_ess_tail": _f(free["ess_tail"].min()),
-        # Only a live run knows this. Never defaulted to 0 -- an absent
-        # divergence count and a zero divergence count are different claims.
-        "divergences": None,
+        "divergences": div,
     }
 
 
@@ -483,6 +492,136 @@ def read_risk(a: pd.DataFrame, book: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def read_detail(a: pd.DataFrame, risk: pd.DataFrame, book: pd.DataFrame,
+                diag: pd.DataFrame, groups: list[str]) -> dict[str, Any]:
+    """Per-run descriptive tables: drift betas, group scales, cross-sections.
+
+    These are the tables the write-up renders verbatim for ONE run and never
+    compares across runs, so they are emitted in the report and the ``--json``
+    payload but deliberately **not** written to the history file -- the history
+    is a comparison ledger, and a run-specific cross-section has nothing to be
+    compared against. They live here rather than in ad-hoc queries for the same
+    reason everything else does: a table in the write-up must come from the same
+    definition as the summary line above it.
+
+    Parameters
+    ----------
+    a
+        ``kalman_filtered_price_targets_v2`` -- the analytics-table column names.
+    risk
+        ``10b_risk_analytics_v2`` -- the whole universe with ``mcap_global_r``.
+    book
+        ``10b_risk_book_v2`` -- the 25 sized names.
+    diag
+        ``09_diagnostics_v2``.
+    groups
+        Group-effect level names, from :func:`read_structure`.
+    """
+
+    def rows(prefix: str) -> dict[str, dict[str, Optional[float]]]:
+        sel = diag[diag["index"].str.startswith(prefix + "[")]
+        return {
+            str(r["index"])[len(prefix) + 1:-1]: {
+                "mean": _f(r["mean"]),
+                "eti89_lb": _f(r["eti89_lb"]),
+                "eti89_ub": _f(r["eti89_ub"]),
+                "ess_bulk": _f(r["ess_bulk"]),
+                "sd": _f(r["sd"]),
+            }
+            for _, r in sel.iterrows()
+        }
+
+    def scalar(name: str) -> Optional[float]:
+        row = diag[diag["index"] == name]
+        return _f(row["mean"].iloc[0]) if len(row) else None
+
+    betas = rows("beta")
+    drift = sorted(
+        (
+            {
+                "feature": k,
+                "beta": v["mean"],
+                "eti89_lb": v["eti89_lb"],
+                "eti89_ub": v["eti89_ub"],
+                "ess_bulk": v["ess_bulk"],
+                "straddles_zero": bool(v["eti89_lb"] < 0 < v["eti89_ub"]),
+            }
+            for k, v in betas.items()
+        ),
+        key=lambda d: -abs(d["beta"] or 0.0),
+    )
+
+    # sigma_time[t3] / alpha_time[t3] are pinned concatenation anchors: they
+    # report sd 0 and R-hat NaN by construction, which is why the convergence
+    # gates filter on sd > 0. Reported here, flagged, never read as fitted.
+    time_keys = sorted(set(rows("alpha_time")) | set(rows("sigma_time")))
+    at, st_ = rows("alpha_time"), rows("sigma_time")
+    time = [
+        {
+            "t": k,
+            "alpha_time": (at.get(k) or {}).get("mean"),
+            "sigma_time": (st_.get(k) or {}).get("mean"),
+            # Same tolerance as read_convergence's sd > 1e-12 free-parameter
+            # filter, so "pinned" means the same thing in both places.
+            "pinned": bool(((st_.get(k) or {}).get("sd") or 0.0) <= 1e-12),
+        }
+        for k in time_keys
+    ]
+
+    w = book["weight"] if "weight" in book.columns else book["book_weight"]
+    top = book.assign(_w=w).nlargest(3, "_w")
+    eligible = int((risk["mcap_global_r"] < 0.01).sum()) if "mcap_global_r" in risk else None
+
+    def cross(frame: pd.DataFrame, key: str, weights: Optional[pd.Series] = None):
+        out = []
+        for name, g in frame.groupby(key, observed=True):
+            imp, exp = g["implied_upside"].median(), g["expected_return_kalman"].median()
+            row = {
+                key: str(name),
+                "n": int(len(g)),
+                "median_implied": _f(imp),
+                "median_expected": _f(exp),
+                "revision_pp": _f((exp - imp) * 100),
+                "median_er_sd": _f(g["er_sd"].median()),
+                "median_er_p05": _f(g["er_p05"].median()),
+                "median_p_upside_pos_cond": _f(g["p_upside_pos_cond"].median()),
+            }
+            if weights is not None:
+                row["book_weight"] = _f(weights.get(str(name), 0.0))
+            out.append(row)
+        return sorted(out, key=lambda r: -(r["median_implied"] or -9))
+
+    region_w = {str(k): float(v) for k, v in book.groupby("trading_region")[w.name].sum().items()}
+    sector_w = {str(k): float(v) for k, v in book.groupby("sector")[w.name].sum().items()}
+
+    return {
+        "drift": drift,
+        "group_scales": {g: scalar(f"sigma_{g}") for g in groups},
+        "group_effects": {g: {k: v["mean"] for k, v in rows(f"{g}_effect").items()} for g in groups},
+        "time": time,
+        "sigma_n_exponent": scalar("sigma_n_exponent"),
+        "sigma_base": scalar("sigma_base"),
+        "sigma_level": scalar("sigma_level"),
+        "sigma_state": scalar("sigma_state"),
+        "sigma_obs_base": scalar("sigma_obs_base"),
+        "book": {
+            "eligible_universe": eligible,
+            "sector_weights": dict(sorted(sector_w.items(), key=lambda kv: -kv[1])),
+            "region_weights": dict(sorted(region_w.items(), key=lambda kv: -kv[1])),
+            "max_weight": _f(w.max()),
+            "top_names": [
+                {"name": str(r["name"]), "ticker": str(r["ticker"]), "weight": _f(r["_w"])}
+                for _, r in top.iterrows()
+            ],
+            "w_expected_return": _f((w * book["expected_upside"]).sum()),
+            "w_er_mean": _f((w * book["er_mean"]).sum()),
+            "w_er_sd": _f((w * book["er_sd"]).sum()),
+        },
+        "by_sector": cross(a, "sector"),
+        "by_region": cross(a, "trading_region", weights=region_w),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Diff                                                                         #
 # --------------------------------------------------------------------------- #
@@ -580,17 +719,22 @@ def build(eng) -> dict[str, Any]:
     run_id, exported_at, missing = resolve_run(eng)
     diag = _read(eng, "09_diagnostics_v2")
     a = _read(eng, "kalman_filtered_price_targets_v2")
+    risk = _read(eng, "10b_risk_analytics_v2")
     book = _read(eng, "10b_risk_book_v2")
+    structure = read_structure(diag)
+    gates = read_gates(eng, a, diag)
     return {
         "run_id": run_id,
         "exported_at": exported_at,
         "analysed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "missing_tables": missing,
-        "gates": read_gates(eng, a, diag),
-        "convergence": read_convergence(diag),
-        "structure": read_structure(diag),
+        "gates": gates,
+        "convergence": read_convergence(diag, gates),
+        "structure": structure,
         "screen": read_screen(a),
         "risk": read_risk(a, book),
+        # Not recorded in the history -- see read_detail's docstring.
+        "detail": read_detail(a, risk, book, diag, structure["group_effects"]),
     }
 
 
@@ -636,6 +780,23 @@ def render(cur: dict[str, Any], deltas: list[dict[str, Any]]) -> str:
           f"cvar05>0 {rk['book_cvar_pos_n']}/{rk['book_n']}  "
           f"w-avg cvar05 {rk['book_w_cvar']*100:+.2f}%  w-avg er_p05 {rk['book_w_er_p05']*100:+.2f}%"]
 
+    dt = cur.get("detail")
+    if dt:
+        L += ["", "    drift betas (89% ETI; * straddles zero)"]
+        for d in dt["drift"]:
+            flag = "*" if d["straddles_zero"] else " "
+            L.append(f"    {flag} {d['feature']:34s} {d['beta']:+.4f}  "
+                     f"[{d['eti89_lb']:+.4f}, {d['eti89_ub']:+.4f}]  ess {d['ess_bulk']:.0f}")
+        gs = "  ".join(f"sigma_{k} {v:.4f}" for k, v in dt["group_scales"].items() if v is not None)
+        L += ["", f"    group scales: {gs}"]
+        bk = dt["book"]
+        L += [f"    book: eligible {bk['eligible_universe']} of {sc['n_names']}  "
+              f"max weight {bk['max_weight']*100:.1f}%  "
+              f"w-avg expected return {bk['w_expected_return']*100:.2f}%  "
+              f"w-avg er_sd {bk['w_er_sd']*100:.2f}%",
+              "    book sectors: " + "  ".join(f"{k} {v*100:.1f}%" for k, v in bk["sector_weights"].items()),
+              "    book regions: " + "  ".join(f"{k} {v*100:.1f}%" for k, v in bk["region_weights"].items())]
+
     L += ["", "(c) MOVED SINCE THE PREVIOUS RECORDED RUN"]
     mat = [d for d in deltas if d["verdict"] == "material"]
     if not mat:
@@ -670,7 +831,10 @@ def main() -> int:
 
     if args.append:
         # Idempotent on run_id: re-running the skill must not double-record.
-        history = [h for h in history if h["run_id"] != cur["run_id"]] + [cur]
+        # `detail` is dropped: the history is a cross-run comparison ledger and
+        # a per-run cross-section has nothing there to be compared against.
+        record = {k: v for k, v in cur.items() if k != "detail"}
+        history = [h for h in history if h["run_id"] != cur["run_id"]] + [record]
         hist_path.parent.mkdir(parents=True, exist_ok=True)
         hist_path.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
 

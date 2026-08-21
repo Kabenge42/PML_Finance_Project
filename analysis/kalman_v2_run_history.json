@@ -671,5 +671,398 @@
         "to": "21.4"
       }
     ]
+  },
+  {
+    "run_id": "0121366fbabf",
+    "exported_at": "2026-08-21 23:27:52.033447+02:00",
+    "analysed_at": "2026-08-21T22:00:04+00:00",
+    "missing_tables": [],
+    "gates": {
+      "source": "table",
+      "n_pass": 21,
+      "n_warn": 1,
+      "n_fail": 0,
+      "unavailable": [],
+      "results": [
+        {
+          "gate": "panel_t_eff",
+          "status": "PASS",
+          "value": "T_eff = 1.44 of T = 4",
+          "threshold": ">= 1.30"
+        },
+        {
+          "gate": "panel_kernel_fit",
+          "status": "PASS",
+          "value": "rho_inf 0.409, ell 101d, rmse 0.0254",
+          "threshold": "rmse <= 0.08"
+        },
+        {
+          "gate": "drift_contrast_leakage",
+          "status": "PASS",
+          "value": "0 of 9 feature(s) measure the trail's increments (max dominance 0.97)",
+          "threshold": "|corr(contrast)| <= 1.5 x max(|corr(level)|, 0.05)"
+        },
+        {
+          "gate": "drift_selection",
+          "status": "PASS",
+          "value": "9 column(s) admitted; thinnest feat_eps_signal_beat at 86.4%",
+          "threshold": "coverage >= 80% and |r(response)| >= 0.0248"
+        },
+        {
+          "gate": "runtime_estimate",
+          "status": "PASS",
+          "value": "3.39 ms/grad, 56 free params, ~10.8 min [nutpie/NumbaLinker]",
+          "threshold": "<= 90 min on a compiled sampler"
+        },
+        {
+          "gate": "prior_scale",
+          "status": "PASS",
+          "value": "prior/empirical 90% width = 7.1x",
+          "threshold": "1x - 10x"
+        },
+        {
+          "gate": "divergences",
+          "status": "PASS",
+          "value": "0",
+          "threshold": "0"
+        },
+        {
+          "gate": "r_hat",
+          "status": "PASS",
+          "value": "1.0023 (sigma_sector_offset[Industrials])",
+          "threshold": "< 1.01"
+        },
+        {
+          "gate": "ess_bulk",
+          "status": "PASS",
+          "value": "1704 (log_sigma_total)",
+          "threshold": ">= 400"
+        },
+        {
+          "gate": "mean_spread",
+          "status": "PASS",
+          "value": "Var(mu)/Var(y_now) = 0.44",
+          "threshold": "<= 1.00"
+        },
+        {
+          "gate": "mean_calibration",
+          "status": "PASS",
+          "value": "slope 1.047, 2Cov(mu,resid)/Var(y) = +0.041",
+          "threshold": "slope in [0.90, 1.10]"
+        },
+        {
+          "gate": "ppc_t_spread",
+          "status": "PASS",
+          "value": "IQR obs 1.025 vs rep [1.022, 1.062]",
+          "threshold": "observed IQR inside the replicated 94% interval"
+        },
+        {
+          "gate": "ppc_coverage",
+          "status": "PASS",
+          "value": "0.940 - 0.944 (target 0.94)",
+          "threshold": "within +/-0.02"
+        },
+        {
+          "gate": "ppc_decay",
+          "status": "PASS",
+          "value": "rho_inf obs 0.409 vs rep [0.385, 0.446]",
+          "threshold": "observed inside the replicated 94% interval"
+        },
+        {
+          "gate": "ppc_decay_residual",
+          "status": "PASS",
+          "value": "rho_inf obs 0.002 vs rep [0.000, 0.039]",
+          "threshold": "observed inside the replicated 94% interval"
+        },
+        {
+          "gate": "shrinkage_slope",
+          "status": "PASS",
+          "value": "slope 0.852, shift -0.0077, above 49.8%, rho 0.99313, median revision 0.96pp (intercept +0.0304)",
+          "threshold": "slope in [0.8, 0.98], |shift| <= 0.02, rho <= 0.995, revision >= 0.25pp"
+        },
+        {
+          "gate": "coverage_gradient",
+          "status": "WARN",
+          "value": "monotone, spread 1.52x",
+          "threshold": "monotone decreasing, spread >= 2x"
+        },
+        {
+          "gate": "prob_pos_degenerate",
+          "status": "PASS",
+          "value": "59.6% pinned at 1.0, p_upside_pos_cond span 0.578",
+          "threshold": "pinned <= 60%, p_upside_pos_cond p95-p05 >= 0.30"
+        },
+        {
+          "gate": "export_rowcount",
+          "status": "PASS",
+          "value": "7/7 non-empty; per-ISIN counts [6506]",
+          "threshold": "all non-empty, per-ISIN frames agree"
+        },
+        {
+          "gate": "export_finite",
+          "status": "PASS",
+          "value": "0 frame(s) with non-finite values",
+          "threshold": "all numeric cells finite"
+        },
+        {
+          "gate": "export_ranking_range",
+          "status": "PASS",
+          "value": "0 column(s) out of range",
+          "threshold": "|metric| <= 100 on non-suppressed rows"
+        },
+        {
+          "gate": "export_vintage",
+          "status": "PASS",
+          "value": "7/7 tables stamped 0121366fbabf",
+          "threshold": "every written table carries exactly this run_id"
+        }
+      ]
+    },
+    "convergence": {
+      "n_monitored": 99,
+      "n_pinned": 3,
+      "max_rhat": 1.0022689649236365,
+      "worst_rhat_param": "sigma_sector_offset[Industrials]",
+      "min_ess_bulk": 1703.57867240292,
+      "worst_ess_param": "log_sigma_total",
+      "min_ess_tail": 2356.63803618878,
+      "divergences": 0
+    },
+    "structure": {
+      "n_drift": 9,
+      "drift_names": [
+        "feat_analyst_rating",
+        "feat_coverage_drift",
+        "feat_eps_signal_beat",
+        "feat_eps_signal_coverage",
+        "feat_mcap_country_r",
+        "feat_median_piotroski_f_score",
+        "feat_net_eps_drift",
+        "feat_pt_achievement_1y",
+        "feat_pt_range_hit_rate"
+      ],
+      "n_drift_straddling_zero": 3,
+      "drift_straddling_zero": [
+        "feat_coverage_drift",
+        "feat_eps_signal_beat",
+        "feat_net_eps_drift"
+      ],
+      "group_effects": [
+        "sector",
+        "size_class",
+        "style_class",
+        "trading_region"
+      ],
+      "variance": {
+        "w_level": 0.005559790880211563,
+        "w_state": 0.9917285600426284,
+        "w_obs": 0.0027116490771599685,
+        "rho_inf": 0.004584270766740358,
+        "ell_days": 75.46239642376075,
+        "obs_share": 0.0017197840243914483,
+        "sigma_total": 0.5858122073380041,
+        "nu": 10.702247901114221,
+        "signal_exponent": 0.40247824599421084
+      }
+    },
+    "screen": {
+      "n_names": 6506,
+      "ladder": {
+        "implied_upside": {
+          "unit": "pct",
+          "mean": 0.257392130846066,
+          "median": 0.1855630310384635,
+          "sd": 0.3196874224675083,
+          "p05": -0.05493626152073733,
+          "p95": 0.76458062228187,
+          "spearman_vs_implied": 1.0
+        },
+        "expected_return_kalman": {
+          "unit": "pct",
+          "mean": 0.249650228755907,
+          "median": 0.18718973376426662,
+          "sd": 0.2773576100503677,
+          "p05": -0.03743037866092822,
+          "p95": 0.7173197346557032,
+          "spearman_vs_implied": 0.993128185584629
+        },
+        "er_mean": {
+          "unit": "pct",
+          "mean": 0.2770528359791118,
+          "median": 0.2054423190629434,
+          "sd": 0.29563633481030543,
+          "p05": -0.019522724836600943,
+          "p95": 0.7874115705216012,
+          "spearman_vs_implied": 0.9866307123404269
+        },
+        "er_p50": {
+          "unit": "pct",
+          "mean": 0.24786107050527192,
+          "median": 0.1853082750644883,
+          "sd": 0.2760824648454781,
+          "p05": -0.03942856610637195,
+          "p95": 0.7115744381927174,
+          "spearman_vs_implied": 0.9929390632508869
+        },
+        "risk_adj_return": {
+          "unit": "ratio",
+          "mean": 0.07324160835723856,
+          "median": -0.04105321290353196,
+          "sd": 0.9000046334587122,
+          "p05": -1.1046492047387666,
+          "p95": 1.6000125943050991,
+          "spearman_vs_implied": 0.952144648070232
+        },
+        "expected_sharpe_ratio": {
+          "unit": "ratio",
+          "mean": 1.0336573566842007,
+          "median": 1.0198351076001395,
+          "sd": 0.7391680691609323,
+          "p05": -0.10835177146497707,
+          "p95": 2.2334590663850893,
+          "spearman_vs_implied": 0.8232425911556732
+        },
+        "reward_to_cvar": {
+          "unit": "ratio",
+          "mean": 0.5530326561351632,
+          "median": 0.533289250501994,
+          "sd": 0.5850005588609298,
+          "p05": -0.1266077294406723,
+          "p95": 1.0878090431295961,
+          "spearman_vs_implied": 0.7624725138936435
+        },
+        "p_upside_pos_cond": {
+          "unit": "prob",
+          "mean": 0.8114856718798031,
+          "median": 0.873640625,
+          "sd": 0.18690427266420326,
+          "p05": 0.4165234375,
+          "p95": 0.9943359375,
+          "spearman_vs_implied": 0.7278558273594238
+        }
+      },
+      "spearman_vs_consensus": 0.993128185584629,
+      "revision_pp_med": 0.9572486646000842,
+      "revision_pp_p95": 7.615681347227837,
+      "ols_slope": 0.8517649179635798,
+      "ols_intercept": 0.030412641541336747,
+      "sd_ratio": 0.8675899974718497,
+      "post_sd_pp_med": 4.247637773064296,
+      "er_sd_pp_med": 20.013387163511275,
+      "dispersion_ratio": 4.711651094738566,
+      "shrink_gain_mean": 0.8471097990364711,
+      "prob_pos_pinned_pct": 59.62188748847218,
+      "kalman_gain_boundary_pct": 50.64555794651091,
+      "p_upside_interior_pct": 85.88994774054719,
+      "coverage_gradient_x": 1.5220563946558834,
+      "coverage_gradient_monotone": true
+    },
+    "risk": {
+      "cvar_med": -0.15110998668647774,
+      "cvar_pos_pct": 13.110974485090685,
+      "er_p05_neg_pct": 73.8702735936059,
+      "tail_floor_binds": 27,
+      "book_n": 25,
+      "book_weight_sum": 1.0,
+      "book_hhi": 0.04897923359287777,
+      "book_eff_n": 20.41681599822773,
+      "book_cvar_pos_n": 17,
+      "book_w_cvar": 0.08816191707717386,
+      "book_w_er_p05": -0.021971340392591802,
+      "book_w_er_sd": 0.20538625807289615,
+      "book_top_sector": "Information Technology",
+      "book_top_sector_w": 0.24607956332539047,
+      "book_regions": {
+        "Asia / Pacific": 0.1295137968246051,
+        "Europe": 0.09072118042611779,
+        "United States and Canada": 0.7797650227492773
+      }
+    },
+    "deltas": [
+      {
+        "metric": "Spearman vs consensus",
+        "verdict": "moved",
+        "from": "0.99313",
+        "to": "0.99313"
+      },
+      {
+        "metric": "median revision (pp)",
+        "verdict": "moved",
+        "from": "0.966",
+        "to": "0.957"
+      },
+      {
+        "metric": "posterior sd (pp)",
+        "verdict": "moved",
+        "from": "4.244",
+        "to": "4.248"
+      },
+      {
+        "metric": "prob_pos pinned (%)",
+        "verdict": "moved",
+        "from": "59.6",
+        "to": "59.6"
+      },
+      {
+        "metric": "coverage gradient (x)",
+        "verdict": "moved",
+        "from": "1.53",
+        "to": "1.52"
+      },
+      {
+        "metric": "shrink_gain mean",
+        "verdict": "moved",
+        "from": "0.8473",
+        "to": "0.8471"
+      },
+      {
+        "metric": "max R-hat",
+        "verdict": "moved",
+        "from": "1.0031",
+        "to": "1.0023"
+      },
+      {
+        "metric": "min bulk ESS",
+        "verdict": "moved",
+        "from": "1540",
+        "to": "1704"
+      },
+      {
+        "metric": "variance weight: level",
+        "verdict": "moved",
+        "from": "0.00597",
+        "to": "0.00556"
+      },
+      {
+        "metric": "OU length scale (days)",
+        "verdict": "moved",
+        "from": "74.4",
+        "to": "75.5"
+      },
+      {
+        "metric": "drift columns",
+        "verdict": "flat",
+        "from": "9",
+        "to": "9"
+      },
+      {
+        "metric": "book weighted cvar05",
+        "verdict": "material",
+        "from": "+0.0290",
+        "to": "+0.0882"
+      },
+      {
+        "metric": "book names with cvar05 > 0",
+        "verdict": "material",
+        "from": "13",
+        "to": "17"
+      },
+      {
+        "metric": "book effective N",
+        "verdict": "moved",
+        "from": "21.4",
+        "to": "20.4"
+      }
+    ]
   }
 ]
