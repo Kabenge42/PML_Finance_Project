@@ -25,9 +25,13 @@ classifiers = [
 
 dependencies = [
     # --- Numerical Computing & Data Structures ---
-    # numpy 2.5.x is blocked: numba (0.65.1 and 0.66.0) requires numpy<2.5,
-    # and numba is the default PyTensor backend for this project.
-    "numpy>=2.1.0,<3.0.0",
+    # numpy 2.5.x is blocked by a two-link chain: pytensor requires
+    # numba<=0.66.0, and numba 0.66.0 requires numpy<2.5. numba 0.67 +
+    # llvmlite 0.49 already allow numpy<2.6, so the whole set unblocks only
+    # when pytensor raises its numba cap -- track pytensor, not numpy.
+    # The cap below stays <3.0.0 deliberately: numba already enforces the
+    # real <2.5 bound, and duplicating it here is a second place to forget.
+    "numpy>=2.4.6,<3.0.0",
     "cython>=3.0.0",
     "pandas>=2.2.0,<4.0.0",
     "scipy>=1.16.0,<4.0.0",
@@ -73,21 +77,24 @@ dependencies = [
     # Bambi 0.16+ depends on PyMC >=6.0. nutpie 0.14+ pairs with PyMC 6.0
     # and is now PyMC's default sampler when numba (the new default
     # PyTensor backend) is available.
-    # pymc 6.2 <-> pytensor 3.2 are mutually required (pymc 6.1 caps
-    # pytensor<3.2, pymc 6.2 requires pytensor>=3.2.2,<3.3) — bump together.
-    "pymc>=6.2.0,<7.0.0",
-    "pytensor>=3.2.2,<4.0.0",
-    "arviz>=1.1.0,<2.0.0",
-    "arviz-base>=1.1.0,<2.0.0",
-    "arviz-stats>=1.1.0,<2.0.0",
-    "arviz-plots>=1.1.0,<2.0.0",
-    "bambi>=0.19.0,<1.0.0",
-    "nutpie>=0.16.0,<1.0.0",
-    "xarray>=2026.1.0,<2027.0.0",
-    "jax>=0.11.0,<1.0.0",
-    "jaxlib>=0.11.0,<1.0.0",
-    "numpyro>=0.18.0,<1.0.0",
-    "blackjax>=1.6.0,<2.0.0",
+    # pymc <-> pytensor are mutually required -- bump the pair together.
+    # pymc 6.3.1 requires pytensor>=3.2.2,<3.4 (pymc 6.2 capped it at <3.3,
+    # pymc 6.1 at <3.2). Verified working: pymc 6.3.1 + pytensor 3.3.0.
+    "pymc>=6.3.1,<7.0.0",
+    "pytensor>=3.3.0,<4.0.0",
+    "arviz>=1.3.0,<2.0.0",
+    "arviz-base>=1.3.0,<2.0.0",
+    "arviz-stats>=1.3.1,<2.0.0",
+    "arviz-plots>=1.3.0,<2.0.0",
+    "bambi>=0.20.0,<1.0.0",
+    "nutpie>=0.16.11,<1.0.0",
+    "xarray>=2026.7.0,<2027.0.0",
+    # jax and jaxlib are a mutually pinned pair (jax 0.11.1 requires
+    # jaxlib>=0.11.1,<=0.11.1) -- always bump them together.
+    "jax>=0.11.1,<1.0.0",
+    "jaxlib>=0.11.1,<1.0.0",
+    "numpyro>=0.21.0,<1.0.0",
+    "blackjax>=1.6.2,<2.0.0",
     # --- Hyperparameter Optimization ---
     "optuna>=4.5.0,<5.0.0",
     # --- Networking ---
@@ -126,10 +133,11 @@ tensorflow = [
 ]
 
 # Performance optimizations (numba 0.65.0+ supports Python 3.14).
-# pytensor 3.2.4 raised its numba cap to <=0.66.0 (was <=0.65.1), unblocking
-# numba 0.66 + llvmlite 0.48. numpy must stay <2.5 (numba 0.66 requirement).
+# numba is held at 0.66.0 by pytensor's numba<=0.66.0 cap, which in turn
+# forces llvmlite<0.49 and numpy<2.5. numba 0.67 + llvmlite 0.49 unblock
+# as a set only when pytensor lifts that cap.
 performance = [
-    "numba>=0.65.0,<1.0.0",
+    "numba>=0.66.0,<1.0.0",
 ]
 
 # Jupyter notebook support

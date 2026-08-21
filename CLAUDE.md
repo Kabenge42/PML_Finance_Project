@@ -11,19 +11,26 @@ PyMC 6.0), statistical analysis, and portfolio optimization.
 **Key Technologies:**
 
 - Python 3.12–3.14
-- **PyMC 6.2** + **PyTensor 3.2** + **ArviZ 1.1** — Bayesian inference and diagnostics
-    - `pymc` ↔ `pytensor` are a coupled pair (pymc 6.2 requires pytensor >=3.2.2,<3.3) — bump them together.
+- **PyMC 6.3** + **PyTensor 3.3** + **ArviZ 1.3** — Bayesian inference and diagnostics
+    - `pymc` ↔ `pytensor` are a coupled pair (pymc 6.3.1 requires pytensor >=3.2.2,<3.4; pymc 6.2 capped it
+      at <3.3) — bump them together.
     - ArviZ 1.x ships as three packages: `arviz-base` (data containers), `arviz-stats` (diagnostics), `arviz-plots` (
       visualization). The top-level `arviz` meta-package re-exports all three for backward-compatible imports.
     - ArviZ 1.x replaces `arviz.InferenceData` with `xarray.DataTree` as the canonical output type. Use the
       `InferenceLike` alias (defined in `probabilistic_ml_model/_pymc_arviz_compat.py`) for type annotations:
       `Union[arviz.InferenceData, xarray.DataTree]`.
     - **nutpie 0.16+** — default high-performance sampler (numba backend)
-    - **JAX 0.11+ / jaxlib 0.11+** (mutually pinned pair), **blackjax 1.6+**, **numpyro 0.18+** — alternative JAX-based samplers
-    - **bambi 0.19+** — formula-based GLM interface on top of PyMC
-    - **Blocked upgrades** (documented in-line in the dependency files): `numpy` stays <2.5 (numba 0.65/0.66 both
-      require it) — numba is the project's default PyTensor backend. numba 0.66 + llvmlite 0.48 are allowed since
-      pytensor 3.2.4 raised its numba cap to <=0.66.0 (0.65.1 was the ceiling under pytensor <=3.2.3).
+    - **JAX 0.11.1+ / jaxlib 0.11.1+** (mutually pinned pair — jax 0.11.1 requires jaxlib>=0.11.1,<=0.11.1),
+      **blackjax 1.6.2+**, **numpyro 0.21+** — alternative JAX-based samplers
+    - **bambi 0.20+** — formula-based GLM interface on top of PyMC. Caps `formulae<0.7.0` and `sparse<0.18`;
+      bambi is used only in `reference material/`, never in `probabilistic_ml_model/`.
+    - **Blocked upgrades** (documented in-line in the dependency files). One constraint gates three packages:
+      **pytensor requires `numba<=0.66.0`** — as a mandatory dependency, not an extra, because numba is the
+      default PyTensor backend. That cap forces `llvmlite<0.49` (numba 0.66's own bound) and `numpy<2.5`
+      (likewise). So `numba 0.67`, `llvmlite 0.49` and `numpy 2.5` are all blocked, and all three unblock as
+      a **set** the moment pytensor lifts the cap — numba 0.67 already permits `numpy<2.6`. **Track
+      pytensor's numba cap, not numpy's version.** Still true at pytensor 3.3.0 (verified 2026-08-21).
+      Adjacent: `sparse` stays <0.18, capped by bambi rather than by this chain.
 - PostgreSQL — centralized data storage with 17 feature views
 - pandas/NumPy/SciPy — data processing
 - scikit-learn, XGBoost, LightGBM, CatBoost — classical ML
