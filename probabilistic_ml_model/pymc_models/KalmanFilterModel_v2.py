@@ -155,6 +155,7 @@ __all__ = [
     "KalmanModelConfig",
     "KalmanPanelV2",
     "GROUP_EFFECT_SCALE",
+    "GROUP_EFFECTS_FINE",
     "KALMAN_V2_SCREEN_LATENT",
     "KALMAN_V2_SCREEN_LATENT_SD",
     "DEFAULT_LOOKBACK_DAYS",
@@ -181,6 +182,60 @@ __all__ = [
 #: against ``sigma_base`` on a low-``T_eff`` panel, and v1 records it sticking at
 #: R-hat 1.5-4.5 / ESS 4-7 in both centred and non-centred parameterisations.
 GROUP_EFFECT_SCALE: float = 0.25
+
+#: The finer crossed-hierarchy alternative to
+#: :attr:`KalmanModelConfig.group_effects`, for the ``hierarchy_fine``
+#: comparison arm.
+#:
+#: **Not the default, on purpose.** Adjudicate it on ELPD via
+#: ``run_model_comparison`` and promote it only if it wins *and* holds ESS —
+#: the same route ``rho_scale_buckets``, ``learn_group_effect_scale`` and
+#: ``signal_exponent`` each took.
+#:
+#: **Why a finer level is worth asking about.** On run ``37e6d8966250`` the
+#: largest fitted group scale is the *coarsest* geography available —
+#: ``sigma_trading_region`` 0.1525 against ``sigma_sector`` 0.0644,
+#: ``sigma_size_class`` 0.0249 and ``sigma_style_class`` 0.0127. A hierarchy
+#: whose top level carries 2.4x the next is one that has not been asked a fine
+#: enough question.
+#:
+#: **Why it stops at two.** Unpenalised OLS on that run's own exported panel
+#: frame, response ``feat_log_uplift_now``, design = the 10 drift columns plus
+#: crossed group dummies:
+#:
+#: ==========================  =====  =========  ========  =============
+#: group set                    cols  R2 (now)   R2 (1y)   residual rho_inf
+#: ==========================  =====  =========  ========  =============
+#: shipped four                   29     0.5046    0.3903         0.0710
+#: + country                     110     0.5467    0.4318         0.0585
+#: + industry                     93     0.5390    0.4166         0.0403
+#: **+ country + industry**      174   **0.5754**  **0.4541**   **0.0298**
+#: + exchange + unit             300     0.5878    0.4707         0.0399
+#: ==========================  =====  =========  ========  =============
+#:
+#: Country and industry together add 7.1 points of R2 at the anchor column and
+#: cut the residual asymptote by 58 %. Adding exchange and unit buys 1.2 more
+#: points of R2 while the asymptote goes back **up** — the signature of fitting
+#: noise, not structure. These are OLS proxies for what the fitted mean absorbs,
+#: with no shrinkage, so read the ORDERING and not the magnitudes: a fixed-scale
+#: ``ZeroSumNormal`` will recover far less of each.
+#:
+#: **ESS watch.** ``industry`` is the safe half: 65 levels, smallest 11 names,
+#: no level under 5. ``country`` has 82 levels of which **24 carry fewer than 5
+#: names and the smallest carries 1**. At :data:`GROUP_EFFECT_SCALE` those are
+#: shrunk hard so they are not a divergence risk, but they will report low ESS
+#: and contribute nothing. If the arm mixes badly, drop ``country`` before
+#: ``industry``. Keep ``learn_group_effect_scale = False`` either way — the
+#: free-scale variant returned ESS 8 / R-hat 1.21 on ``trading_region`` alone,
+#: with only 5 levels to identify.
+GROUP_EFFECTS_FINE: tuple[str, ...] = (
+    "trading_region",
+    "sector",
+    "style_class",
+    "size_class",
+    "country",
+    "industry",
+)
 
 #: The single decision latent. Every downstream consumer (screen, price-target
 #: Monte Carlo, risk book, analytics export) resolves the per-ISIN quantity

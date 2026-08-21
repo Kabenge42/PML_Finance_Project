@@ -11,8 +11,21 @@
 --           coord | index | observed | mutable_predictor |
 --           constant_data | derived_input | excluded
 --       - model_targets: TEXT[] keyed by MODEL_FEATURE_CONTAINERS
---         (earnings_beat, price_target, kalman_pt, dcf_pt,
+--         (earnings_beat, price_target, kalman_pt, kalman_pt_v2, dcf_pt,
 --          dividend_safety, credit_risk, accounting_anomaly).
+--
+-- ADDING A MODEL TARGET IS A THREE-FILE CHANGE. All of:
+--   1. the two CHECK constraints below (each repeated once per duplicate
+--      CREATE TABLE block, so FOUR edits in this file);
+--   2. the idempotent ALTER at the top of pml_df_metadata_populate.sql, which
+--      re-applies both CHECKs to a live database that already has the table;
+--   3. the mv_map VALUES list inside vw_pymc_catalogue_coverage_check in
+--      pml_feature_catalogue.sql.
+-- Miss (3) and the new MV's columns are never checked, which reads as passing
+-- rather than failing. Miss (1) -- as happened to 'kalman_pt_v2' between
+-- 2026-08-19 and 2026-08-21 -- and a rebuild from this file alone REJECTS every
+-- row for that target until the populate script's ALTER runs, because this DDL
+-- and the populate script disagreed about the vocabulary.
 -- =============================================================================
 -- =============================================================================
 -- PML SCHEMA METADATA TABLE FIXED
@@ -50,7 +63,8 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_metadata
 	-- The empty-array default trivially satisfies this.
 	CONSTRAINT ck_pml_df_metadata_model_targets
 		CHECK (model_targets <@ ARRAY ['earnings_beat', 'price_target', 'kalman_pt',
-			'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']::TEXT[])
+			'kalman_pt_v2', 'dcf_pt', 'dividend_safety', 'credit_risk',
+			'accounting_anomaly']::TEXT[])
 );
 
 -- References fix to avoid foreign key violation
@@ -76,8 +90,8 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_feature_alias
 		        'constant_data', 'derived_input', 'excluded')),
 	CONSTRAINT ck_pml_df_feature_alias_model_target
 		CHECK (model_target IN ('earnings_beat', 'price_target', 'kalman_pt',
-		                        'dcf_pt', 'dividend_safety', 'credit_risk',
-		                        'accounting_anomaly'))
+		                        'kalman_pt_v2', 'dcf_pt', 'dividend_safety',
+		                        'credit_risk', 'accounting_anomaly'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_pml_df_feature_alias_model ON pml.pml_df_feature_alias (model_target);
@@ -93,7 +107,7 @@ CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_feature_alias ON pml.pml_df_metad
 
 CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_model_targets ON pml.pml_df_metadata USING gin (model_targets);
 
-COMMENT ON TABLE pml.pml_df_metadata IS 'Metadata for pml.pml_df. (category, feature_role) drive domain/data-centric SQL filters; (pymc_role, model_targets) drive PyMC pm.Data container assignment and per-model feature selection. pymc_role vocabulary: coord | index | observed | mutable_predictor | constant_data | derived_input | excluded. model_targets is a TEXT[] keyed by MODEL_FEATURE_CONTAINERS (earnings_beat, price_target, kalman_pt, dcf_pt, dividend_safety, credit_risk, accounting_anomaly).';;
+COMMENT ON TABLE pml.pml_df_metadata IS 'Metadata for pml.pml_df. (category, feature_role) drive domain/data-centric SQL filters; (pymc_role, model_targets) drive PyMC pm.Data container assignment and per-model feature selection. pymc_role vocabulary: coord | index | observed | mutable_predictor | constant_data | derived_input | excluded. model_targets is a TEXT[] keyed by MODEL_FEATURE_CONTAINERS (earnings_beat, price_target, kalman_pt, kalman_pt_v2, dcf_pt, dividend_safety, credit_risk, accounting_anomaly).';;
 -- Create a metadata table documenting available pml_df schema columns.
 -- NOTE: this is the same definition as the block above (both are
 -- CREATE TABLE IF NOT EXISTS, so whichever runs first wins). The constraints
@@ -120,7 +134,8 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_metadata
 		        'score', 'historical', 'surprise', 'revision', 'metadata')),
 	CONSTRAINT ck_pml_df_metadata_model_targets
 		CHECK (model_targets <@ ARRAY ['earnings_beat', 'price_target', 'kalman_pt',
-			'dcf_pt', 'dividend_safety', 'credit_risk', 'accounting_anomaly']::TEXT[])
+			'kalman_pt_v2', 'dcf_pt', 'dividend_safety', 'credit_risk',
+			'accounting_anomaly']::TEXT[])
 );
 
 -- ---------------------------------------------------------------------------
@@ -145,8 +160,8 @@ CREATE TABLE IF NOT EXISTS pml.pml_df_feature_alias
 		        'constant_data', 'derived_input', 'excluded')),
 	CONSTRAINT ck_pml_df_feature_alias_model_target
 		CHECK (model_target IN ('earnings_beat', 'price_target', 'kalman_pt',
-		                        'dcf_pt', 'dividend_safety', 'credit_risk',
-		                        'accounting_anomaly'))
+		                        'kalman_pt_v2', 'dcf_pt', 'dividend_safety',
+		                        'credit_risk', 'accounting_anomaly'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_pml_df_feature_alias_model ON pml.pml_df_feature_alias (model_target);
@@ -165,7 +180,7 @@ CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_feature_alias ON pml.pml_df_metad
 -- (and `model_targets @> ARRAY['dcf_pt']`) become index-backed.
 CREATE INDEX IF NOT EXISTS idx_pml_df_metadata_model_targets ON pml.pml_df_metadata USING gin (model_targets);
 
-COMMENT ON TABLE pml.pml_df_metadata IS 'Metadata for pml.pml_df. (category, feature_role) drive domain/data-centric SQL filters; (pymc_role, model_targets) drive PyMC pm.Data container assignment and per-model feature selection. pymc_role vocabulary: coord | index | observed | mutable_predictor | constant_data | derived_input | excluded. model_targets is a TEXT[] keyed by MODEL_FEATURE_CONTAINERS (earnings_beat, price_target, kalman_pt, dcf_pt, dividend_safety, credit_risk, accounting_anomaly).';
+COMMENT ON TABLE pml.pml_df_metadata IS 'Metadata for pml.pml_df. (category, feature_role) drive domain/data-centric SQL filters; (pymc_role, model_targets) drive PyMC pm.Data container assignment and per-model feature selection. pymc_role vocabulary: coord | index | observed | mutable_predictor | constant_data | derived_input | excluded. model_targets is a TEXT[] keyed by MODEL_FEATURE_CONTAINERS (earnings_beat, price_target, kalman_pt, kalman_pt_v2, dcf_pt, dividend_safety, credit_risk, accounting_anomaly).';
 
 COMMENT ON COLUMN pml.pml_df_metadata.pymc_role IS 'PyMC pm.Data container kind for this column. Aligns with arviz.InferenceData groups: coord/index -> idata.constant_data + posterior.coords; observed -> idata.observed_data; mutable_predictor/constant_data -> idata.constant_data (mutable_predictor supports pm.set_data for OOS); derived_input -> must be transformed before pm.Data; excluded -> never wrapped.';
 

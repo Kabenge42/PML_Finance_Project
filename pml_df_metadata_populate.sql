@@ -2572,6 +2572,26 @@ WHERE column_name = 'price_target_1y_ago'
   AND model_target = 'price_target'
   AND feature_alias = 'feat_pt_achievement_1y';
 
+--   ...and then make "the self-row is canonical" actually true. FIXED
+--   2026-08-21: the DELETE above resolved the DUPLICATE by trading it for a
+--   MISSING_FROM_CATALOGUE, which is the strictly worse of the two statuses. The
+--   deleted alias row was the ONLY thing claiming feat_pt_achievement_1y for
+--   'price_target'; the surviving self-row carries model_targets
+--   {kalman_pt, kalman_pt_v2} and never carried 'price_target'. mv_pymc_price_target
+--   emits the column regardless, so from that day the catalogue did not know
+--   about it and the alignment layer silently reindexed it to 0.0 for the
+--   price_target model -- while assert_pymc_catalogue_coverage() RAISED, which
+--   is why `assert_coverage => TRUE` could not be turned on.
+--
+--   This was the single remaining violation database-wide (PHANTOM and
+--   DUPLICATE both 0 as of 2026-08-21). Canonicalising the self-row is the fix
+--   the original edit intended: one row, claimed by every model that emits it.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_append(model_targets, 'price_target'),
+    updated_at    = CURRENT_TIMESTAMP
+WHERE column_name = 'feat_pt_achievement_1y'
+  AND NOT ('price_target' = ANY (model_targets));
+
 -- 7i.4 PHANTOM_CATALOGUE_ALIAS - day-count aliases. mv_pymc_price_target emits
 --   the raw days_* names (days_to_next_earnings, ...), but the catalogue
 --   claimed feat_days_* variants that no MV produces. Drop the overrides so
@@ -2809,9 +2829,30 @@ VALUES
 	--   EPS legs into one column, but they sit on three scales (percent, share,
 	--   ratio), so the average was the percent legs wearing a different name.
 	--   The TREND leg is the parent feat_net_eps_drift, already registered.
+	-- feat_eps_signal_surprise KEEPS THIS ROW but left the v2 drift design
+	-- matrix on 2026-08-21. It stays 'mutable_predictor' and stays in the MV:
+	-- the catalogue records that the column EXISTS, Python decides which design
+	-- matrix it belongs to, and those are different questions. Withholding this
+	-- row to express the exclusion is the MISSING_FROM_CATALOGUE trap the
+	-- pml_df_metadata.sql footer warns about -- the MV would still emit the
+	-- column, assert_pymc_catalogue_coverage() would RAISE, and the alignment
+	-- layer would zero-fill it.
+	--
+	-- Measured on run 37e6d8966250 (n = 6,533): 79.1 % coverage against a
+	-- next-thinnest 86.3 %, |r(response)| 0.0071 against a next-weakest 0.0862,
+	-- contrast dominance 4.53 against a next-highest 0.93 -- the only drift
+	-- column failing any admission test, failing all three. The exclusion lives
+	-- in DRIFT_EXCLUSIONS in pymc_kalman_filter_pt_v2.py, with DRIFT_COVERAGE_MIN
+	-- and drift_signal_min() as the standing rule for future candidates.
+	--
+	-- The eps_gaap_est_avg_rev_pct_fy1e_* revision family was the proposed
+	-- replacement and was measured and REJECTED -- |r| 0.008-0.037 against 0.116
+	-- for feat_eps_signal_beat -- so no MV column changed. Do not reopen this
+	-- from coverage figures alone; coverage was the criterion that got it wrong.
 	('feat_eps_signal_surprise', 'eps', 'predictor', 'feat_eps_signal_surprise',
 	 'Mean of the non-NULL EPS surprise legs, rescaled /100 to a signed raw '
-		 'decimal. NULL when neither leg exists.',
+		 'decimal. NULL when neither leg exists. Retained for provenance and EDA; '
+		 'excluded from the v2 drift matrix in Python (79.1% coverage, |r| 0.007).',
 	 'ratio', 'mutable_predictor', ARRAY ['kalman_pt_v2'], CURRENT_TIMESTAMP),
 	('feat_eps_signal_beat', 'eps', 'predictor', 'feat_eps_signal_beat',
 	 'Mean of the non-NULL EPS beat-rate legs. A frequency in [0,1] -- a '

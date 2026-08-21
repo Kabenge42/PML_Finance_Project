@@ -1,0 +1,675 @@
+[
+  {
+    "run_id": "49e84d7e9d59",
+    "exported_at": "2026-08-19 18:37:00",
+    "analysed_at": "2026-08-20T00:00:00+00:00",
+    "_seed": {
+      "source": "seeded by hand from the published artifact and the CHANGELOG entry dated 2026-08-20; this run's analytics tables were overwritten long ago",
+      "confidence": "gate figures are from the run's own console report and are on the gate's definitions; anything null was never recorded"
+    },
+    "missing_tables": [],
+    "gates": {
+      "source": "run log (historical)",
+      "n_pass": 19,
+      "n_warn": 2,
+      "n_fail": 0,
+      "unavailable": [],
+      "results": [
+        {
+          "gate": "divergences",
+          "status": "PASS",
+          "value": "0",
+          "threshold": "0"
+        },
+        {
+          "gate": "r_hat",
+          "status": "PASS",
+          "value": "1.0025 (sector_effect[Energy])",
+          "threshold": "< 1.01"
+        },
+        {
+          "gate": "ess_bulk",
+          "status": "PASS",
+          "value": "1590 (log_sigma_total)",
+          "threshold": ">= 400"
+        },
+        {
+          "gate": "ppc_coverage",
+          "status": "PASS",
+          "value": "0.937-0.944 vs target 0.94",
+          "threshold": "within band"
+        },
+        {
+          "gate": "shrinkage_slope",
+          "status": "PASS",
+          "value": "slope 0.979, intercept +0.0051 -- PASSED A PASS-THROUGH; the gate was tightened afterwards",
+          "threshold": "slope in [0.80, 1.20] (pre-tightening)"
+        },
+        {
+          "gate": "coverage_gradient",
+          "status": "WARN",
+          "value": "monotone, spread 1.53x",
+          "threshold": "monotone decreasing, spread >= 2x"
+        },
+        {
+          "gate": "prob_pos_degenerate",
+          "status": "WARN",
+          "value": "87.4% pinned at 1.0",
+          "threshold": "<= 60%"
+        }
+      ]
+    },
+    "convergence": {
+      "n_monitored": 100,
+      "n_pinned": null,
+      "max_rhat": 1.0025,
+      "worst_rhat_param": "sector_effect[Energy]",
+      "min_ess_bulk": 1590,
+      "worst_ess_param": "log_sigma_total",
+      "min_ess_tail": null,
+      "divergences": 0
+    },
+    "structure": {
+      "n_drift": 10,
+      "drift_names": [],
+      "n_drift_straddling_zero": null,
+      "drift_straddling_zero": [],
+      "group_effects": [
+        "sector",
+        "size_class",
+        "style_class",
+        "trading_region"
+      ],
+      "variance": {
+        "w_level": 0.0044,
+        "w_state": 0.994,
+        "w_obs": 0.0016,
+        "rho_inf": 0.0034,
+        "ell_days": 84.5,
+        "obs_share": null,
+        "sigma_total": 0.5576,
+        "nu": 9.78,
+        "signal_exponent": 0.393
+      }
+    },
+    "screen": {
+      "n_names": 6500,
+      "ladder": {},
+      "spearman_vs_consensus": 0.999995,
+      "revision_pp_med": 0.03,
+      "revision_pp_p95": null,
+      "ols_slope": 0.9788,
+      "ols_intercept": 0.00507,
+      "sd_ratio": 0.9819,
+      "post_sd_pp_med": 0.47,
+      "er_sd_pp_med": 19.03,
+      "dispersion_ratio": 40.5,
+      "shrink_gain_mean": null,
+      "prob_pos_pinned_pct": 87.4,
+      "kalman_gain_boundary_pct": null,
+      "p_upside_interior_pct": null,
+      "coverage_gradient_x": 1.53,
+      "coverage_gradient_monotone": true
+    },
+    "risk": {
+      "cvar_med": 0.1728,
+      "cvar_pos_pct": 88.4,
+      "er_p05_neg_pct": 70.4,
+      "tail_floor_binds": null,
+      "book_n": 25,
+      "book_weight_sum": 1.0,
+      "book_hhi": 0.0416,
+      "book_eff_n": 24.0,
+      "book_cvar_pos_n": 24,
+      "book_w_cvar": 0.4269,
+      "book_w_er_p05": 0.1291,
+      "book_w_er_sd": 0.2244,
+      "book_top_sector": "Information Technology",
+      "book_top_sector_w": 0.342,
+      "book_regions": {
+        "Asia / Pacific": 0.497,
+        "United States and Canada": 0.366,
+        "Europe": 0.137
+      }
+    },
+    "deltas": []
+  },
+  {
+    "run_id": "512a53fd43eb",
+    "exported_at": "2026-08-20 12:49:44",
+    "analysed_at": "2026-08-20T00:00:00+00:00",
+    "_seed": {
+      "source": "seeded by hand from the published artifact's three-run comparison table; a verification fit that was never written to the database",
+      "confidence": "partial -- only the metrics that table carried"
+    },
+    "missing_tables": [],
+    "gates": {
+      "source": "run log (historical)",
+      "n_pass": 18,
+      "n_warn": 2,
+      "n_fail": 0,
+      "unavailable": [],
+      "results": [
+        {
+          "gate": "divergences",
+          "status": "PASS",
+          "value": "0",
+          "threshold": "0"
+        },
+        {
+          "gate": "r_hat",
+          "status": "PASS",
+          "value": "1.0023",
+          "threshold": "< 1.01"
+        },
+        {
+          "gate": "ess_bulk",
+          "status": "PASS",
+          "value": "1558",
+          "threshold": ">= 400"
+        },
+        {
+          "gate": "ppc_coverage",
+          "status": "PASS",
+          "value": "0.938-0.946",
+          "threshold": "within band"
+        },
+        {
+          "gate": "coverage_gradient",
+          "status": "WARN",
+          "value": "monotone, spread 1.56x",
+          "threshold": "monotone decreasing, spread >= 2x"
+        },
+        {
+          "gate": "prob_pos_degenerate",
+          "status": "PASS",
+          "value": "59.7% pinned at 1.0",
+          "threshold": "<= 60%"
+        }
+      ]
+    },
+    "convergence": {
+      "n_monitored": null,
+      "n_pinned": null,
+      "max_rhat": 1.0023,
+      "worst_rhat_param": null,
+      "min_ess_bulk": 1558,
+      "worst_ess_param": null,
+      "min_ess_tail": null,
+      "divergences": 0
+    },
+    "structure": {
+      "n_drift": 10,
+      "drift_names": [],
+      "n_drift_straddling_zero": null,
+      "drift_straddling_zero": [],
+      "group_effects": [
+        "sector",
+        "size_class",
+        "style_class",
+        "trading_region"
+      ],
+      "variance": {
+        "w_level": null,
+        "w_state": null,
+        "w_obs": null,
+        "rho_inf": null,
+        "ell_days": null,
+        "obs_share": null,
+        "sigma_total": null,
+        "nu": null,
+        "signal_exponent": null
+      }
+    },
+    "screen": {
+      "n_names": null,
+      "ladder": {},
+      "spearman_vs_consensus": 0.9921,
+      "revision_pp_med": 1.0,
+      "revision_pp_p95": null,
+      "ols_slope": null,
+      "ols_intercept": null,
+      "sd_ratio": null,
+      "post_sd_pp_med": 4.22,
+      "er_sd_pp_med": null,
+      "dispersion_ratio": null,
+      "shrink_gain_mean": null,
+      "prob_pos_pinned_pct": 59.7,
+      "kalman_gain_boundary_pct": null,
+      "p_upside_interior_pct": null,
+      "coverage_gradient_x": 1.56,
+      "coverage_gradient_monotone": true
+    },
+    "risk": {
+      "cvar_med": -0.149,
+      "cvar_pos_pct": null,
+      "er_p05_neg_pct": null,
+      "tail_floor_binds": 0,
+      "book_n": 25,
+      "book_weight_sum": null,
+      "book_hhi": null,
+      "book_eff_n": null,
+      "book_cvar_pos_n": null,
+      "book_w_cvar": 0.043,
+      "book_w_er_p05": null,
+      "book_w_er_sd": null,
+      "book_top_sector": null,
+      "book_top_sector_w": null,
+      "book_regions": {}
+    },
+    "deltas": []
+  },
+  {
+    "run_id": "37e6d8966250",
+    "exported_at": "2026-08-21 10:49:11",
+    "analysed_at": "2026-08-21T00:00:00+00:00",
+    "_seed": {
+      "source": "seeded by hand from this session's analysis of the run's own analytics tables, before they were overwritten by 78801513e2cf",
+      "confidence": "screen, risk, structure and convergence are from the exported tables and are reliable; NO gate report survives for this run",
+      "coverage_gradient_note": "NULL on purpose. The artifact records 1.99x for this run, but that was computed as the median of expected_upside_sd over two buckets (n<=3 vs n>=21) -- not the gate's definition, which is the MEAN of er_sd over the buckets [0,3,8,20,inf]. On run 78801513e2cf the two definitions give 1.98x and 1.53x respectively, so the artifact's 1.53 / 1.56 / 1.99 series compares two different measurements and its apparent improvement is an artefact. The gate value for this run is unrecoverable."
+    },
+    "missing_tables": [],
+    "gates": {
+      "source": "none -- not persisted for this run",
+      "n_pass": 0,
+      "n_warn": 0,
+      "n_fail": 0,
+      "unavailable": [
+        "every gate: the report was printed to console and dropped"
+      ],
+      "results": []
+    },
+    "convergence": {
+      "n_monitored": 100,
+      "n_pinned": 2,
+      "max_rhat": 1.0053,
+      "worst_rhat_param": "sigma_total",
+      "min_ess_bulk": 1472,
+      "worst_ess_param": "log_sigma_total",
+      "min_ess_tail": 2305,
+      "divergences": null
+    },
+    "structure": {
+      "n_drift": 10,
+      "drift_names": [
+        "feat_analyst_rating",
+        "feat_coverage_drift",
+        "feat_eps_signal_beat",
+        "feat_eps_signal_coverage",
+        "feat_eps_signal_surprise",
+        "feat_mcap_country_r",
+        "feat_median_piotroski_f_score",
+        "feat_net_eps_drift",
+        "feat_pt_achievement_1y",
+        "feat_pt_range_hit_rate"
+      ],
+      "n_drift_straddling_zero": 4,
+      "drift_straddling_zero": [
+        "feat_coverage_drift",
+        "feat_eps_signal_beat",
+        "feat_eps_signal_surprise",
+        "feat_net_eps_drift"
+      ],
+      "group_effects": [
+        "sector",
+        "size_class",
+        "style_class",
+        "trading_region"
+      ],
+      "variance": {
+        "w_level": 0.005922,
+        "w_state": 0.991817,
+        "w_obs": 0.00226,
+        "rho_inf": 0.004946,
+        "ell_days": 76.499,
+        "obs_share": 0.001267,
+        "sigma_total": 0.585867,
+        "nu": 10.752,
+        "signal_exponent": 0.40778
+      }
+    },
+    "screen": {
+      "n_names": 6506,
+      "ladder": {},
+      "spearman_vs_consensus": 0.992761,
+      "revision_pp_med": 0.9682,
+      "revision_pp_p95": 7.7738,
+      "ols_slope": 0.8502,
+      "ols_intercept": 0.031,
+      "sd_ratio": 0.8664,
+      "post_sd_pp_med": 4.236,
+      "er_sd_pp_med": 19.875,
+      "dispersion_ratio": 4.69,
+      "shrink_gain_mean": 0.844618,
+      "prob_pos_pinned_pct": 60.4,
+      "kalman_gain_boundary_pct": 53.5,
+      "p_upside_interior_pct": 85.3,
+      "coverage_gradient_x": null,
+      "coverage_gradient_monotone": null
+    },
+    "risk": {
+      "cvar_med": -0.147977,
+      "cvar_pos_pct": 13.6,
+      "er_p05_neg_pct": 73.1,
+      "tail_floor_binds": 30,
+      "book_n": 25,
+      "book_weight_sum": 1.0,
+      "book_hhi": 0.0522,
+      "book_eff_n": 19.2,
+      "book_cvar_pos_n": 18,
+      "book_w_cvar": 0.10433,
+      "book_w_er_p05": -0.0196,
+      "book_w_er_sd": 0.234,
+      "book_top_sector": "Information Technology",
+      "book_top_sector_w": 0.4384,
+      "book_regions": {
+        "United States and Canada": 0.6078,
+        "Asia / Pacific": 0.246,
+        "Europe": 0.1462
+      }
+    },
+    "deltas": []
+  },
+  {
+    "run_id": "78801513e2cf",
+    "exported_at": "2026-08-21 19:45:57.739337+02:00",
+    "analysed_at": "2026-08-21T19:40:28+00:00",
+    "missing_tables": [],
+    "gates": {
+      "source": "reconstructed",
+      "n_pass": 4,
+      "n_warn": 1,
+      "n_fail": 0,
+      "unavailable": [
+        "divergences",
+        "ppc_coverage",
+        "ppc_t_spread",
+        "ppc_decay",
+        "ppc_decay_residual",
+        "mean_spread",
+        "mean_calibration",
+        "panel_t_eff",
+        "panel_kernel_fit",
+        "drift_contrast_leakage",
+        "prior_scale",
+        "runtime_estimate",
+        "export_rowcount",
+        "export_finite",
+        "export_ranking_range",
+        "export_vintage"
+      ],
+      "results": [
+        {
+          "gate": "r_hat",
+          "status": "PASS",
+          "value": "1.0031 (sigma_n_exponent)",
+          "threshold": "< 1.01"
+        },
+        {
+          "gate": "ess_bulk",
+          "status": "PASS",
+          "value": "1540 (log_sigma_total)",
+          "threshold": ">= 400"
+        },
+        {
+          "gate": "shrinkage_slope",
+          "status": "PASS",
+          "value": "slope 0.852, shift -0.0077, rho 0.99313, median revision 0.97pp",
+          "threshold": "slope in [0.8, 0.98], |shift| <= 0.02, rho <= 0.995, revision >= 0.25pp"
+        },
+        {
+          "gate": "coverage_gradient",
+          "status": "WARN",
+          "value": "monotone, spread 1.53x",
+          "threshold": "monotone decreasing, spread >= 2.0x"
+        },
+        {
+          "gate": "prob_pos_degenerate",
+          "status": "PASS",
+          "value": "59.6% pinned at 1.0",
+          "threshold": "<= 60%"
+        }
+      ]
+    },
+    "convergence": {
+      "n_monitored": 99,
+      "n_pinned": 3,
+      "max_rhat": 1.0030799473352678,
+      "worst_rhat_param": "sigma_n_exponent",
+      "min_ess_bulk": 1539.5995377125505,
+      "worst_ess_param": "log_sigma_total",
+      "min_ess_tail": 1996.9571292348594,
+      "divergences": null
+    },
+    "structure": {
+      "n_drift": 9,
+      "drift_names": [
+        "feat_analyst_rating",
+        "feat_coverage_drift",
+        "feat_eps_signal_beat",
+        "feat_eps_signal_coverage",
+        "feat_mcap_country_r",
+        "feat_median_piotroski_f_score",
+        "feat_net_eps_drift",
+        "feat_pt_achievement_1y",
+        "feat_pt_range_hit_rate"
+      ],
+      "n_drift_straddling_zero": 3,
+      "drift_straddling_zero": [
+        "feat_coverage_drift",
+        "feat_eps_signal_beat",
+        "feat_net_eps_drift"
+      ],
+      "group_effects": [
+        "sector",
+        "size_class",
+        "style_class",
+        "trading_region"
+      ],
+      "variance": {
+        "w_level": 0.005968375144129885,
+        "w_state": 0.9910920485421436,
+        "w_obs": 0.002939576313726635,
+        "rho_inf": 0.004995937389028624,
+        "ell_days": 74.41689081308543,
+        "obs_share": 0.0019483950426678151,
+        "sigma_total": 0.5901038348549421,
+        "nu": 10.689849144870582,
+        "signal_exponent": 0.39939576075247185
+      }
+    },
+    "screen": {
+      "n_names": 6506,
+      "ladder": {
+        "implied_upside": {
+          "unit": "pct",
+          "mean": 0.25750394112323993,
+          "median": 0.18561860990624546,
+          "sd": 0.3190018820728467,
+          "p05": -0.054059974416303475,
+          "p95": 0.76458062228187,
+          "spearman_vs_implied": 1.0
+        },
+        "expected_return_kalman": {
+          "unit": "pct",
+          "mean": 0.24981224930294943,
+          "median": 0.18698546496985619,
+          "sd": 0.2768303916074637,
+          "p05": -0.037455316085851634,
+          "p95": 0.7187498144238165,
+          "spearman_vs_implied": 0.993129239526122
+        },
+        "er_mean": {
+          "unit": "pct",
+          "mean": 0.2773790670447051,
+          "median": 0.20632353953386656,
+          "sd": 0.29515074117564133,
+          "p05": -0.019405153224610828,
+          "p95": 0.7962024803148614,
+          "spearman_vs_implied": 0.9864528462458396
+        },
+        "er_p50": {
+          "unit": "pct",
+          "mean": 0.24802461948508325,
+          "median": 0.18633508502123292,
+          "sd": 0.27542125910594695,
+          "p05": -0.038717958484321455,
+          "p95": 0.7136600984856285,
+          "spearman_vs_implied": 0.992946859817928
+        },
+        "risk_adj_return": {
+          "unit": "ratio",
+          "mean": 0.07332548719005175,
+          "median": -0.038305127751381465,
+          "sd": 0.8978867919612921,
+          "p05": -1.110019384030857,
+          "p95": 1.5999750027963102,
+          "spearman_vs_implied": 0.9524040909097881
+        },
+        "expected_sharpe_ratio": {
+          "unit": "ratio",
+          "mean": 1.0336467185486538,
+          "median": 1.0219835692650225,
+          "sd": 0.7370875296007504,
+          "p05": -0.10937095666413743,
+          "p95": 2.233802948560854,
+          "spearman_vs_implied": 0.8210591964680386
+        },
+        "reward_to_cvar": {
+          "unit": "ratio",
+          "mean": 0.5589963767163848,
+          "median": 0.5404641051711071,
+          "sd": 0.5843549331784512,
+          "p05": -0.12219082217578661,
+          "p95": 1.1246292636222042,
+          "spearman_vs_implied": 0.7576007817501393
+        },
+        "p_upside_pos_cond": {
+          "unit": "prob",
+          "mean": 0.8118027205656317,
+          "median": 0.874015625,
+          "sd": 0.18639210271736956,
+          "p05": 0.418265625,
+          "p95": 0.9943125,
+          "spearman_vs_implied": 0.7256651772511211
+        }
+      },
+      "spearman_vs_consensus": 0.993129239526122,
+      "revision_pp_med": 0.9660635941734431,
+      "revision_pp_p95": 7.604300404746867,
+      "ols_slope": 0.8519172019572369,
+      "ols_intercept": 0.03044021228827765,
+      "sd_ratio": 0.8678017502863736,
+      "post_sd_pp_med": 4.243547200110545,
+      "er_sd_pp_med": 20.107819966606538,
+      "dispersion_ratio": 4.738446167414546,
+      "shrink_gain_mean": 0.8473477354080534,
+      "prob_pos_pinned_pct": 59.575776206578546,
+      "kalman_gain_boundary_pct": 50.06148170919151,
+      "p_upside_interior_pct": 85.99754073163234,
+      "coverage_gradient_x": 1.5326893222101408,
+      "coverage_gradient_monotone": true
+    },
+    "risk": {
+      "cvar_med": -0.15240530246115896,
+      "cvar_pos_pct": 13.095604057792807,
+      "er_p05_neg_pct": 73.90101444820166,
+      "tail_floor_binds": 30,
+      "book_n": 25,
+      "book_weight_sum": 0.9999999999999998,
+      "book_hhi": 0.046693090099380434,
+      "book_eff_n": 21.41644508580658,
+      "book_cvar_pos_n": 13,
+      "book_w_cvar": 0.029043786067235705,
+      "book_w_er_p05": -0.021536849667640193,
+      "book_w_er_sd": 0.23215229867822637,
+      "book_top_sector": "Information Technology",
+      "book_top_sector_w": 0.4187611097020166,
+      "book_regions": {
+        "Asia / Pacific": 0.21379239928985136,
+        "Europe": 0.0991691870192467,
+        "United States and Canada": 0.6870384136909018
+      }
+    },
+    "deltas": [
+      {
+        "metric": "Spearman vs consensus",
+        "verdict": "moved",
+        "from": "0.99276",
+        "to": "0.99313"
+      },
+      {
+        "metric": "median revision (pp)",
+        "verdict": "moved",
+        "from": "0.968",
+        "to": "0.966"
+      },
+      {
+        "metric": "posterior sd (pp)",
+        "verdict": "moved",
+        "from": "4.236",
+        "to": "4.244"
+      },
+      {
+        "metric": "prob_pos pinned (%)",
+        "verdict": "material",
+        "from": "60.4",
+        "to": "59.6"
+      },
+      {
+        "metric": "shrink_gain mean",
+        "verdict": "moved",
+        "from": "0.8446",
+        "to": "0.8473"
+      },
+      {
+        "metric": "max R-hat",
+        "verdict": "moved",
+        "from": "1.0053",
+        "to": "1.0031"
+      },
+      {
+        "metric": "min bulk ESS",
+        "verdict": "moved",
+        "from": "1472",
+        "to": "1540"
+      },
+      {
+        "metric": "variance weight: level",
+        "verdict": "moved",
+        "from": "0.00592",
+        "to": "0.00597"
+      },
+      {
+        "metric": "OU length scale (days)",
+        "verdict": "moved",
+        "from": "76.5",
+        "to": "74.4"
+      },
+      {
+        "metric": "drift columns",
+        "verdict": "material",
+        "from": "10",
+        "to": "9"
+      },
+      {
+        "metric": "book weighted cvar05",
+        "verdict": "material",
+        "from": "+0.1043",
+        "to": "+0.0290"
+      },
+      {
+        "metric": "book names with cvar05 > 0",
+        "verdict": "material",
+        "from": "18",
+        "to": "13"
+      },
+      {
+        "metric": "book effective N",
+        "verdict": "moved",
+        "from": "19.2",
+        "to": "21.4"
+      }
+    ]
+  }
+]

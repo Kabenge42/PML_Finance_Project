@@ -1,3 +1,33 @@
+-- =============================================================================
+-- NOT AUTHORITATIVE. This is a pg_dump-style EXTRACT of the materialized view as
+-- DEPLOYED. The single source of truth is the CREATE MATERIALIZED VIEW block in
+-- pml_feature_catalogue.sql; edit that file, never this one. Recreating the view
+-- from here would also silently drop the `pml.` schema qualifiers this extract
+-- lost when it was last regenerated (safe_divide, mv_pymc_kalman_pt), which only
+-- resolve under a search_path that happens to include pml.
+--
+-- Verified against the live database 2026-08-21: 198 columns, matching this
+-- file. In particular the six trail_days_{now,1w,1m,3m,6m,1y} literals are
+-- correctly ABSENT -- they were retired on 2026-08-19 (see
+-- pml_df_metadata_populate.sql section 7l) because they stored 0/7/30/91/182/365
+-- identically on every row while the model built the same grid in Python and
+-- never read them. The OU kernel's x-axis now has one home,
+-- pml.vw_pymc_trail_days, read by KalmanFilterModel_v2.load_trail_days_map() and
+-- tied to this MV's feat_log_uplift_* columns by pml.assert_pymc_trail_days_map().
+--
+-- pml_feature_catalogue.sql went on emitting those six literals until
+-- 2026-08-21, when the tombstone replacing them was added. That divergence was
+-- invisible rather than harmless: every MV in the catalogue is
+-- CREATE MATERIALIZED VIEW **IF NOT EXISTS**, so re-running the file no-ops
+-- instead of updating, and only an explicit DROP would have surfaced it -- by
+-- resurrecting six columns section 7l de-registers, i.e. as
+-- MISSING_FROM_CATALOGUE.
+--
+-- THE STANDING LESSON, and the reason this banner is here rather than a
+-- regenerated body: when this file and the catalogue disagree, find out WHICH
+-- side the database is on before assuming the extract is the stale one. Here it
+-- was the SSOT that had drifted.
+-- =============================================================================
 create materialized view pml.mv_pymc_kalman_pt_v2
 as
 WITH base AS (SELECT mv_pymc_kalman_pt.isin,
@@ -182,36 +212,36 @@ WITH base AS (SELECT mv_pymc_kalman_pt.isin,
                      mv_pymc_kalman_pt.feat_piotroski_f_score_neg2fy,
                      mv_pymc_kalman_pt.feat_piotroski_f_score_neg3fy,
                      mv_pymc_kalman_pt.feat_median_piotroski_f_score
-              FROM pml.mv_pymc_kalman_pt),
+              FROM mv_pymc_kalman_pt),
      uplift AS (SELECT b_1.isin,
                        CASE
-	                       WHEN pml.safe_divide(b_1.observed_pt, b_1.last_price) > 0::double precision
-		                       THEN ln(pml.safe_divide(b_1.observed_pt, b_1.last_price))
+	                       WHEN safe_divide(b_1.observed_pt, b_1.last_price) > 0::double precision
+		                       THEN ln(safe_divide(b_1.observed_pt, b_1.last_price))
 		                       ELSE NULL::double precision
 	                       END AS lu_now,
                        CASE
-	                       WHEN pml.safe_divide(b_1.price_target_1w_ago, b_1.price_1w_ago) > 0::double precision
-		                       THEN ln(pml.safe_divide(b_1.price_target_1w_ago, b_1.price_1w_ago))
+	                       WHEN safe_divide(b_1.price_target_1w_ago, b_1.price_1w_ago) > 0::double precision
+		                       THEN ln(safe_divide(b_1.price_target_1w_ago, b_1.price_1w_ago))
 		                       ELSE NULL::double precision
 	                       END AS lu_1w,
                        CASE
-	                       WHEN pml.safe_divide(b_1.price_target_1m_ago, b_1.price_1m_ago) > 0::double precision
-		                       THEN ln(pml.safe_divide(b_1.price_target_1m_ago, b_1.price_1m_ago))
+	                       WHEN safe_divide(b_1.price_target_1m_ago, b_1.price_1m_ago) > 0::double precision
+		                       THEN ln(safe_divide(b_1.price_target_1m_ago, b_1.price_1m_ago))
 		                       ELSE NULL::double precision
 	                       END AS lu_1m,
                        CASE
-	                       WHEN pml.safe_divide(b_1.price_target_3m_ago, b_1.price_3m_ago) > 0::double precision
-		                       THEN ln(pml.safe_divide(b_1.price_target_3m_ago, b_1.price_3m_ago))
+	                       WHEN safe_divide(b_1.price_target_3m_ago, b_1.price_3m_ago) > 0::double precision
+		                       THEN ln(safe_divide(b_1.price_target_3m_ago, b_1.price_3m_ago))
 		                       ELSE NULL::double precision
 	                       END AS lu_3m,
                        CASE
-	                       WHEN pml.safe_divide(b_1.price_target_6m_ago, b_1.price_6m_ago) > 0::double precision
-		                       THEN ln(pml.safe_divide(b_1.price_target_6m_ago, b_1.price_6m_ago))
+	                       WHEN safe_divide(b_1.price_target_6m_ago, b_1.price_6m_ago) > 0::double precision
+		                       THEN ln(safe_divide(b_1.price_target_6m_ago, b_1.price_6m_ago))
 		                       ELSE NULL::double precision
 	                       END AS lu_6m,
                        CASE
-	                       WHEN pml.safe_divide(b_1.price_target_1y_ago, b_1.price_1y_ago) > 0::double precision
-		                       THEN ln(pml.safe_divide(b_1.price_target_1y_ago, b_1.price_1y_ago))
+	                       WHEN safe_divide(b_1.price_target_1y_ago, b_1.price_1y_ago) > 0::double precision
+		                       THEN ln(safe_divide(b_1.price_target_1y_ago, b_1.price_1y_ago))
 		                       ELSE NULL::double precision
 	                       END AS lu_1y
                 FROM base b_1),
@@ -438,16 +468,6 @@ SELECT b.isin,
 	       WHEN u.lu_1y IS NOT NULL THEN 1
 	                                ELSE 0
 	       END                                         AS n_trail_obs,
-       -- trail_days_{now,1w,1m,3m,6m,1y} were emitted here as SQL literals until
-       -- 2026-08-19: 0/7/30/91/182/365, identical on every row, so zero
-       -- information stored once per name -- and the model never read them, it
-       -- built the same grid from DEFAULT_LOOKBACK_DAYS in Python. The OU
-       -- kernel's x-axis now has one home, pml.vw_pymc_trail_days
-       -- (pml_feature_catalogue.sql), which maps each offset to the
-       -- feat_log_uplift_* column it describes and is tied to this MV by
-       -- pml.assert_pymc_trail_days_map(). Their metadata rows are retired in
-       -- pml_df_metadata_populate.sql section 7l -- dropping the columns without
-       -- that de-registration raises PHANTOM_CATALOGUE_ALIAS.
        b.price_target_num_1w_ago                       AS n_analysts_1w,
        b.price_target_num_1m_ago                       AS n_analysts_1m,
        b.price_target_num_3m_ago                       AS n_analysts_3m,
