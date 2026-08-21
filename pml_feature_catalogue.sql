@@ -1427,23 +1427,27 @@ SELECT b.*,
         CASE WHEN u.lu_1y IS NOT NULL THEN 1 ELSE 0 END)::INT         AS n_trail_obs,
 
        -- ===================================================================
-       -- CALENDAR OFFSETS (pymc_role = 'constant_data')
+       -- CALENDAR OFFSETS -- REMOVED 2026-08-19, kept here as a tombstone
        -- ===================================================================
-       -- Nominal day offsets of each trail column. Emitted as columns rather
-       -- than hard-coded in Python so the OU kernel x-axis has an SSOT: if a
-       -- lookback meaning ever changes, the model gaps change with it instead
-       -- of silently disagreeing.
+       -- trail_days_{now,1w,1m,3m,6m,1y} were emitted here as SQL LITERALS
+       -- (0/7/30/91/182/365), identical on all ~6,500 rows, while the model
+       -- built the same grid from DEFAULT_LOOKBACK_DAYS in Python and never
+       -- read the columns. Two sources of truth for the OU kernel's x-axis, and
+       -- the one the model used was the one the database could not see.
        --
-       -- These are NOMINAL, not the exact as-of dates of each vendor snapshot,
-       -- which the source does not carry. The approximation is second-order:
-       -- the fitted kernel has RMSE 0.026 against nominal offsets, so any
-       -- date-alignment error is already inside the residual.
-       0::INT                                                         AS trail_days_now,
-       7::INT                                                         AS trail_days_1w,
-       30::INT                                                        AS trail_days_1m,
-       91::INT                                                        AS trail_days_3m,
-       182::INT                                                       AS trail_days_6m,
-       365::INT                                                       AS trail_days_1y,
+       -- The x-axis now has one home: pml.vw_pymc_trail_days (defined below),
+       -- read by KalmanFilterModel_v2.load_trail_days_map() and tied to this
+       -- MV's feat_log_uplift_* columns by pml.assert_pymc_trail_days_map() --
+       -- the foreign key a view cannot declare. Their metadata rows are retired
+       -- in pml_df_metadata_populate.sql section 7l.
+       --
+       -- DO NOT RE-ADD THEM HERE. This block survived in this file until
+       -- 2026-08-21 while the deployed MV had already dropped them, which was
+       -- harmless only because `CREATE MATERIALIZED VIEW IF NOT EXISTS` silently
+       -- no-ops: anyone following the documented DROP-and-recreate path would
+       -- have resurrected six columns that section 7l then de-registers, landing
+       -- them as MISSING_FROM_CATALOGUE -- the status where the alignment layer
+       -- zero-fills in silence.
 
        -- ===================================================================
        -- PER-LOOKBACK ANALYST COVERAGE (pymc_role = 'constant_data')
@@ -1511,16 +1515,29 @@ COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.feat_log_uplift_now IS
 COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.n_trail_obs IS
 	'Count of non-NULL trail cells, 1..6. The per-name T actually contributing to '
 		'the likelihood; cells outside it are masked, not imputed.';
-COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.trail_days_1y IS
-	'Nominal calendar offset in days of the 1y trail column. Feeds the OU kernel '
-		'exp(-gap/ell); emitted so the gaps have one source of truth.';
+-- (No COMMENT for trail_days_1y: the six trail_days_* columns were retired on
+--  2026-08-19 -- see the tombstone in the SELECT list above. This statement
+--  survived the removal and would have failed with "column does not exist" the
+--  first time anyone actually recreated the view, which is the usual first
+--  symptom of the IF NOT EXISTS no-op.)
 COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.n_analysts_1y IS
 	'Analyst count behind the 1y consensus (price_target_num_1y_ago). Per-cell '
 		'measurement precision; v1 had one weight for all T.';
+-- PROVENANCE CONTAINER since 2026-08-21, not a drift predictor. Kept in the MV
+-- and in the catalogue -- withholding either would be MISSING_FROM_CATALOGUE,
+-- not an exclusion -- but barred from the v2 drift design matrix in Python by
+-- DRIFT_EXCLUSIONS in pymc_kalman_filter_pt_v2.py. Same treatment, and the same
+-- reason, as feat_vol_drift on the parent MV.
 COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.feat_eps_signal_surprise IS
 	'Mean of whichever of feat_last_{q,y}_surprise is non-NULL, divided by 100 so '
 		'it is a signed RAW DECIMAL like every other feat_ column. NULL when neither '
-		'leg exists.';
+		'leg exists. RETAINED FOR PROVENANCE AND EDA, excluded from the v2 drift '
+		'matrix: on run 37e6d8966250 (n = 6,533) it measured 79.1% coverage against '
+		'a next-thinnest 86.3%, |r(feat_log_uplift_now)| 0.0071 against a '
+		'next-weakest 0.0862, and trail-contrast dominance 4.53 against a '
+		'next-highest 0.93 -- the only drift column failing any admission test, and '
+		'it failed all three. At 79.1% coverage a fifth of the universe enters '
+		'mean-imputed, which attenuates the slope before the sampler sees it.';
 COMMENT ON COLUMN pml.mv_pymc_kalman_pt_v2.feat_eps_signal_beat IS
 	'Mean of whichever of feat_eps_beat_rate{,_annual} is non-NULL. A frequency in '
 		'[0, 1] -- a different quantity from feat_eps_signal_surprise, which is a '

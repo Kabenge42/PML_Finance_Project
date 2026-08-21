@@ -41,6 +41,7 @@ Section  Function                            Stage (CLAUDE.md contract)
 7        :func:`sample_posterior`            Fitting
 8        :func:`run_posterior_predictive`    Model evaluation (PPC)
 9        :func:`run_diagnostics`             Fitting diagnostics
+9b       :func:`run_model_comparison`        Model comparison (opt-in)
 10       :func:`run_screen`                  Decision analysis
 10c      :func:`export_analytics`            Export
 14       :func:`summarise`                   Summary + gate report
@@ -74,7 +75,7 @@ import os
 import sys
 import uuid
 import warnings
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields as dc_fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
@@ -86,6 +87,7 @@ import pandas as pd
 from probabilistic_ml_model import _pytensor_env  # noqa: F401  (side effect)
 
 from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+    GROUP_EFFECTS_FINE,
     KALMAN_V2_SCREEN_LATENT,
     KalmanModelConfig,
     KalmanPanelV2,
@@ -99,6 +101,7 @@ from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
 )
 from probabilistic_ml_model.pymc_models._workflow import (
     MIN_ESS_GATE,
+    attach_log_likelihood,
     build_sample_kwargs,
     log_sample_diagnostics,
     posterior_predictive_check,
@@ -113,6 +116,9 @@ __all__ = [
     "GateReport",
     "GATE_CATALOGUE",
     "load_kalman_frame",
+    "DRIFT_COVERAGE_MIN",
+    "DRIFT_SIGNAL_MIN_FLOOR",
+    "drift_signal_min",
     "select_drift_features_v2",
     "screen_contrast_identities",
     "prepare_panel",
@@ -121,6 +127,9 @@ __all__ = [
     "sample_posterior",
     "run_posterior_predictive",
     "run_diagnostics",
+    "COMPARISON_ARMS",
+    "subsample_panel_v2",
+    "run_model_comparison",
     "run_screen",
     "export_analytics",
     "main",
@@ -165,6 +174,13 @@ _RANKING_RANGE_COLS: tuple[str, ...] = (
 #: deliberate edit here plus a dashboard deploy — never a side effect of a run.
 _ANALYTICS_TABLE_V2 = "kalman_filtered_price_targets_v2"
 _RISK_BOOK_KEY = "10b_risk_book_v2"
+
+#: Where the run's own gate verdicts land. Written by :func:`export_analytics`
+#: after every other frame, so it captures the gates that function adds; and by
+#: :func:`summarise` to CSV, so the early-abort paths that never reach an export
+#: still leave a record. One row per gate, keyed on the same ``run_id`` as the
+#: rest of the run's tables.
+_GATE_REPORT_KEY = "09_gate_report_v2"
 
 
 # =========================================================================== #
@@ -251,6 +267,19 @@ GATE_CATALOGUE: dict[str, str] = {
         "instead. That is the whole of the 2026-08-18 ppc_t_spread / "
         "ppc_coverage / ppc_decay failure, and it costs milliseconds to check "
         "before the fit."
+    ),
+    "drift_selection": (
+        "NEW, reported not gated: how much margin the admitted drift columns "
+        "have over the coverage and signal floors. A column enters the design "
+        "matrix mean-imputed wherever it is NULL, so a thin one is not an "
+        "error, it is an attenuated slope -- feat_eps_signal_surprise sat at "
+        "79.1% coverage and |r| 0.007 and was fitted at beta +0.002."
+    ),
+    "model_comparison": (
+        "NEW, reported not gated: ELPD contrast between named model arms, each "
+        "refit on the same ISIN subsample with a post-hoc log_likelihood. The "
+        "only stage that can decide whether a component EARNS its place rather "
+        "than merely converging -- the v2 workflow row had it blank."
     ),
     "mean_calibration": (
         "NEW: the slope of the response on the fitted mean must be ~1. An "
@@ -570,6 +599,23 @@ class KalmanRunConfigV2:
     p_long: float = 0.50
     mcap_country_r_max: float = 0.01
 
+    # ---- model comparison (§9b) --------------------------------------------
+    #: Run the ELPD comparison stage. **Off by default and deliberately not in
+    #: `from_env`**: each arm is a full production fit plus a pointwise
+    #: `log_likelihood`, so an N-arm comparison costs roughly N times a normal
+    #: run. It is a decision you make once about a component, not something a
+    #: production export should ever trip over.
+    enable_model_comparison: bool = False
+    #: ISIN subsample each arm is fitted on. The `log_likelihood` group is
+    #: `chains x draws x n_isin x T` floats — at the full 6.5k panel that is
+    #: hundreds of MB per arm, held simultaneously because `az.compare` needs
+    #: every arm at once. 800 keeps the contrast well-powered (the arms differ
+    #: in structure, not in a per-name effect) at a fraction of the memory.
+    comparison_max_isins: int = 800
+    #: Arms to run when `enable_model_comparison` is set. Keys of
+    #: :data:`COMPARISON_ARMS`. Empty means every registered arm.
+    comparison_arms: tuple[str, ...] = ()
+
     # ---- output ------------------------------------------------------------
     results_dir: Optional[str] = None
     write_analytics: bool = True
@@ -796,6 +842,29 @@ DRIFT_EXCLUSIONS: dict[str, str] = {
     "feat_mcap_region_r": "near-duplicate of feat_mcap_country_r",
     "feat_mcap_region_sec_r": "near-duplicate of feat_mcap_country_r",
     "feat_mcap_global_sec_r": "near-duplicate of feat_mcap_country_r",
+    # -- the consolidated EPS block, one leg retired (2026-08-21) -------------
+    # Run 37e6d8966250 fitted this at beta = +0.0020 with an 89 % ETI of
+    # [-0.0092, +0.0132]. Measured against the response on the same universe it
+    # is the ONLY drift column failing either admission test, and it fails both
+    # by a wide margin -- see DRIFT_COVERAGE_MIN for the full table.
+    #
+    # The mechanism is not that earnings surprise is uninformative in general;
+    # it is that ``_standardise`` z-scores NaN-safely and then fills NaN with
+    # 0.0, i.e. imputes the column mean. At 79.1 % coverage a fifth of the
+    # universe is pinned at the mean, which attenuates the slope toward zero
+    # before the sampler sees it.
+    #
+    # NOT replaced. ``eps_gaap_est_avg_rev_pct_fy1e_{1w,1m,3m,6m}`` were the
+    # proposed substitutes on coverage grounds (84.5-87.0 %) and were measured
+    # and rejected: |r(level)| 0.008 / 0.010 / 0.020 / 0.037 against 0.116 for
+    # feat_eps_signal_beat and 0.173 for feat_eps_signal_coverage, which are the
+    # two legs that would have been retired to make room. ``_1y`` and the
+    # non-GAAP ``_6m``/``_1y`` are trail-contrast identities (dominance 7.02 /
+    # 4.41 / 14.99) that `drift_contrast_leakage` would reject anyway, and the
+    # GAAP ``_1m``/``_3m`` pair correlates 0.969, so at most one could enter.
+    # Coverage alone was the wrong criterion; do not reopen this from coverage
+    # figures without the correlations beside them.
+    "feat_eps_signal_surprise": "79.1% cov, |r(level)| 0.007, contrast dominance 4.53",
 }
 
 #: Prefixes barred wholesale. ``feat_total_return_`` and ``feat_tr_cagr_`` are 18
@@ -822,7 +891,87 @@ DRIFT_EXCLUDED_PREFIXES: tuple[str, ...] = (
 MOMENTUM_REPRESENTATIVES: tuple[str, ...] = ()
 
 
-def select_drift_features_v2(frame: pd.DataFrame) -> list[str]:
+#: Minimum non-NULL share for a column to enter the drift design matrix.
+#:
+#: **Why a floor is needed at all.** :func:`_standardise` is NaN-safe by
+#: z-scoring and then filling NaN with ``0.0`` — that is, imputing the column
+#: mean. A thinly-covered column therefore does not fail loudly; it arrives with
+#: a large block of rows pinned at its own mean, which attenuates its slope
+#: toward zero and spends a design-matrix column on nothing. That is a
+#: measurement problem, not a modelling preference, which is why this is a
+#: selection rule rather than a judgement call per column.
+#:
+#: **Calibrated 2026-08-21** against run ``37e6d8966250``'s own universe
+#: (n = 6,533, ``n_trail_obs >= 2``). ``dominance`` is the
+#: :func:`screen_contrast_identities` statistic, repeated here so the three
+#: admission tests can be read together:
+#:
+#: =================================  =====  ==========  =========
+#: feature                            cov %  |r(level)|  dominance
+#: =================================  =====  ==========  =========
+#: ``feat_pt_achievement_1y``          97.0      0.5146       0.23
+#: ``feat_analyst_rating``             99.5      0.4651       0.10
+#: ``feat_mcap_country_r``            100.0      0.3230       0.13
+#: ``feat_eps_signal_coverage``       100.0      0.1731       0.14
+#: ``feat_median_piotroski_f_score``  100.0      0.1358       0.14
+#: ``feat_pt_range_hit_rate``         100.0      0.1313       0.47
+#: ``feat_eps_signal_beat``            86.3      0.1156       0.93
+#: ``feat_coverage_drift``            100.0      0.1053       0.53
+#: ``feat_net_eps_drift``             100.0      0.0862       0.37
+#: -- both thresholds sit here --      80.0      0.0247       1.50
+#: ``feat_eps_signal_surprise``        79.1      0.0071       4.53
+#: =================================  =====  ==========  =========
+#:
+#: One column fails, and it fails all three. The gaps either side are wide —
+#: 79.1 to 86.3 on coverage, 0.0071 to 0.0862 on signal — so neither threshold
+#: is fitted to its boundary case: both can move a long way without changing a
+#: verdict on this universe.
+#:
+#: The rule is the safety net for *future* candidates. Columns already known to
+#: fail are named in :data:`DRIFT_EXCLUSIONS`, which is tested first, so a
+#: retired column cannot silently re-enter when its coverage drifts back across
+#: 80 % on a later refresh.
+DRIFT_COVERAGE_MIN: float = 0.80
+
+#: Floor on ``|corr(column, response)|`` for drift-matrix entry, as a multiple of
+#: the sampling null rather than a bare literal.
+#:
+#: A correlation estimated on ``n`` rows carries se ~ ``1 / sqrt(n)``, so
+#: ``2 / sqrt(n)`` is roughly "distinguishable from zero at two standard
+#: errors". Writing the threshold as a constant would silently mean something
+#: different on a panel of a different size — tighter on a large one, and on a
+#: small one it would admit columns that are pure noise.
+#:
+#: The absolute floor of 0.02 keeps the rule meaningful if the universe ever
+#: grows large enough for the sampling null to fall below what is worth a design
+#: column at all. At n = 6,533 the binding term is ``2 / sqrt(n)`` = 0.0247.
+DRIFT_SIGNAL_MIN_FLOOR: float = 0.02
+
+
+def drift_signal_min(n: int) -> float:
+    """Return the minimum ``|r|`` a drift column must clear on ``n`` rows.
+
+    Parameters
+    ----------
+    n
+        Number of rows the correlation is estimated on.
+
+    Returns
+    -------
+    float
+        ``max(DRIFT_SIGNAL_MIN_FLOOR, 2 / sqrt(n))`` — see
+        :data:`DRIFT_SIGNAL_MIN_FLOOR`.
+    """
+    if n < 2:
+        return float("inf")
+    return max(DRIFT_SIGNAL_MIN_FLOOR, 2.0 / math.sqrt(float(n)))
+
+
+def select_drift_features_v2(
+    frame: pd.DataFrame,
+    *,
+    response_col: str = "feat_log_uplift_now",
+) -> list[str]:
     """Resolve the drift design matrix columns from the frame.
 
     Per the stage contract the *catalogue* decides which columns exist; this
@@ -833,10 +982,28 @@ def select_drift_features_v2(frame: pd.DataFrame) -> list[str]:
     ``assert_pymc_catalogue_coverage()`` then raises ``MISSING_FROM_CATALOGUE``.
     Exclusions live here, in Python, always.
 
+    Four tests, applied in order. The first two are *named*: a column somebody
+    decided about, recorded in :data:`DRIFT_EXCLUSIONS` or barred by family in
+    :data:`DRIFT_EXCLUDED_PREFIXES`. The last two are *measured*, and exist so a
+    column nobody has looked at yet cannot enter unexamined — a coverage floor
+    (:data:`DRIFT_COVERAGE_MIN`) and a signal floor (:func:`drift_signal_min`).
+    Both orders matter: named first, so a retired column stays retired even if a
+    later refresh moves it back across a threshold.
+
+    The measured pair is deliberately *not* the contrast screen, which runs
+    separately in :func:`screen_contrast_identities` on the standardised
+    response after this returns. That one asks whether a column's content can
+    legally enter a mean that is constant in ``t``; these two ask whether the
+    column carries enough of anything to be worth a design column at all.
+
     Parameters
     ----------
     frame
         The loaded modelling frame.
+    response_col
+        Column the signal floor measures against. When it is absent from
+        ``frame`` the signal test is skipped and the omission is logged — never
+        silently passed, since skipping it admits every candidate.
 
     Returns
     -------
@@ -846,6 +1013,20 @@ def select_drift_features_v2(frame: pd.DataFrame) -> list[str]:
     candidates = [c for c in frame.columns if c.startswith("feat_")]
     kept: list[str] = []
     dropped: dict[str, str] = {}
+
+    response: Optional[pd.Series] = None
+    if response_col in frame.columns:
+        response = pd.to_numeric(frame[response_col], errors="coerce")
+    else:
+        logger.warning(
+            "%s absent from the frame; the drift SIGNAL floor is skipped this "
+            "run and only coverage is enforced",
+            response_col,
+        )
+
+    n_rows = len(frame)
+    signal_min = drift_signal_min(n_rows) if response is not None else 0.0
+
     for col in candidates:
         if col in DRIFT_EXCLUSIONS:
             dropped[col] = DRIFT_EXCLUSIONS[col]
@@ -856,7 +1037,28 @@ def select_drift_features_v2(frame: pd.DataFrame) -> list[str]:
         if not pd.api.types.is_numeric_dtype(frame[col]):
             dropped[col] = "non-numeric"
             continue
+
+        series = pd.to_numeric(frame[col], errors="coerce")
+        coverage = float(series.notna().mean()) if n_rows else 0.0
+        if coverage < DRIFT_COVERAGE_MIN:
+            dropped[col] = (
+                f"coverage {coverage:.1%} < {DRIFT_COVERAGE_MIN:.0%} "
+                f"(mean-imputed rows attenuate the slope)"
+            )
+            continue
+
+        if response is not None:
+            corr = series.corr(response)
+            corr = 0.0 if not np.isfinite(corr) else abs(float(corr))
+            if corr < signal_min:
+                dropped[col] = (
+                    f"|r({response_col})| {corr:.4f} < {signal_min:.4f} "
+                    f"(2/sqrt(n), n={n_rows})"
+                )
+                continue
+
         kept.append(col)
+
     kept = sorted(kept)
     logger.info(
         "Drift features: %d kept, %d excluded (of %d feat_ columns)",
@@ -864,6 +1066,8 @@ def select_drift_features_v2(frame: pd.DataFrame) -> list[str]:
         len(dropped),
         len(candidates),
     )
+    for col, reason in sorted(dropped.items()):
+        logger.debug("  dropped %-34s %s", col, reason)
     logger.debug("kept: %s", kept)
     return kept
 
@@ -1364,6 +1568,54 @@ def run_panel_diagnostics(
                     f"max(|corr(level)|, {CONTRAST_CORR_FLOOR})"
                 ),
                 detail=detail,
+            )
+        )
+
+    # ---- what the admission rule let through -------------------------------
+    # Reported before the fit, next to the contrast screen, because all three
+    # admission tests are cheap and a design matrix is easier to argue about
+    # while it is still a list of names than after 40 minutes of NUTS.
+    #
+    # Non-blocking on purpose: the rule already removed the offenders inside
+    # select_drift_features_v2, so by the time this runs there is nothing left
+    # to fail on. It exists to make the margin VISIBLE — a surviving column
+    # sitting at 80.4 % coverage is a different situation from one at 97 %, and
+    # only one of them is a refresh away from silently changing the model.
+    # `drift_names` carries POST-rotation names, and orthogonalise_family
+    # renames the PT_HISTORY_FAMILY members to composites that have no frame
+    # column. Measure the ones that are still real columns and say how many were
+    # skipped rather than reporting a coverage figure for a linear combination.
+    n_rows = len(panel.frame)
+    measurable = [c for c in panel.drift_names if c in panel.frame.columns]
+    n_rotated = len(panel.drift_names) - len(measurable)
+    coverages = {
+        c: float(pd.to_numeric(panel.frame[c], errors="coerce").notna().mean())
+        for c in measurable
+    }
+    if coverages:
+        cov_at = min(coverages, key=coverages.__getitem__)
+        cov_min = coverages[cov_at]
+        out["drift_coverage"] = coverages
+        report.add(
+            GateResult(
+                name="drift_selection",
+                passed=True,
+                blocking=False,
+                value=(
+                    f"{len(panel.drift_names)} column(s) admitted; thinnest "
+                    f"{cov_at} at {cov_min:.1%}"
+                    + (f" ({n_rotated} rotated, not measurable)" if n_rotated else "")
+                ),
+                threshold=(
+                    f"coverage >= {DRIFT_COVERAGE_MIN:.0%} and "
+                    f"|r(response)| >= {drift_signal_min(n_rows):.4f}"
+                ),
+                detail=(
+                    "Reported, not gated: select_drift_features_v2 has already "
+                    "applied both floors. A column near the coverage threshold "
+                    "is one refresh away from leaving the design matrix, which "
+                    "changes the model without changing any code."
+                ),
             )
         )
 
@@ -2119,6 +2371,347 @@ def run_diagnostics(
             )
         )
     return summary
+
+
+# =========================================================================== #
+# §9b  Model comparison                                                       #
+# =========================================================================== #
+
+#: Named model arms the ELPD comparison can run, as edits to a base
+#: :class:`KalmanModelConfig`.
+#:
+#: Each entry answers exactly one question, and the *point* of a registry rather
+#: than ad-hoc ``replace`` calls at the call site is that the question is named
+#: and its arm is reproducible six months later.
+#:
+#: ``baseline``
+#:     The shipped configuration, unchanged. Always include it — an ELPD table
+#:     without a reference arm says which alternative is better, not whether
+#:     either beats what is running.
+#: ``level_off``
+#:     Pins the permanent per-ISIN level off. **The rec-01 question.** The level
+#:     block is what v2 exists to identify, and run ``37e6d8966250`` gave it
+#:     0.59 % of the variance with an 89 % interval of [0.20 %, 1.20 %] — near
+#:     zero, and confidently so rather than uncertainly. Two independent
+#:     measurements say that is correct rather than under-powered: standardising
+#:     the residual by the model's own ``sigma_i * tau_t`` takes the pooled
+#:     permanent correlation to exactly zero (see
+#:     :attr:`KalmanModelConfig.rho_scale_buckets`), and removing the fitted
+#:     regression mean from the raw trail takes the empirical asymptote from
+#:     0.420 to 0.071. What neither measurement settles is whether the block
+#:     should stay at 0.59 % or be pinned off, because a residual statistic is
+#:     not a predictive one. This arm settles it.
+#:
+#:     Clean at the shipped ``rho_scale_buckets = 1``: ``enable_isin_level =
+#:     False`` sets ``rho_inf`` to a constant zero and nothing else, since
+#:     ``rho_scale_slope`` is not created at all when buckets is 1. **Raise
+#:     ``rho_scale_buckets`` above 1 and this becomes a two-change arm** — the
+#:     tilt also requires ``enable_isin_level`` — at which point the contrast is
+#:     no longer attributable.
+#: ``hierarchy_fine``
+#:     Adds ``country`` and ``industry`` to the crossed group effects. **The
+#:     rec-02 question.** See :data:`GROUP_EFFECTS_FINE` for the OLS evidence and
+#:     the ESS watch.
+#: ``drift_strict``
+#:     The drift matrix as :func:`select_drift_features_v2` now selects it,
+#:     against the pre-2026-08-21 list that also carried
+#:     ``feat_eps_signal_surprise``. **The rec-03 question**, and the one arm
+#:     that changes the design matrix rather than the model graph — which is why
+#:     :func:`run_model_comparison` prepares a panel per arm instead of sharing
+#:     one.
+COMPARISON_ARMS: dict[str, Callable[[KalmanModelConfig], KalmanModelConfig]] = {
+    "baseline": lambda cfg: cfg,
+    "level_off": lambda cfg: replace(cfg, enable_isin_level=False),
+    "hierarchy_fine": lambda cfg: replace(cfg, group_effects=GROUP_EFFECTS_FINE),
+    "drift_strict": lambda cfg: cfg,
+}
+
+#: Columns the ``drift_strict`` arm re-admits to form its comparison baseline.
+#: The arm itself is the *current* selection; the contrast is against the design
+#: matrix as it stood before the admission rule landed.
+_DRIFT_LOOSE_READMIT: tuple[str, ...] = ("feat_eps_signal_surprise",)
+
+#: Fields of :class:`KalmanPanelV2` that are NOT indexed by ISIN and must survive
+#: subsampling unchanged. Everything else with a leading axis of length
+#: ``n_isin`` is sliced.
+_PANEL_NON_ISIN_FIELDS: frozenset[str] = frozenset(
+    {
+        "time_days",
+        "drift_names",
+        "coord_uniques",
+        "response_mean",
+        "response_std",
+        "orthogonal_rotation",
+        "orthogonal_source_names",
+        "contrast_screen",
+    }
+)
+
+
+def subsample_panel_v2(
+    panel: KalmanPanelV2,
+    max_isins: int,
+    *,
+    random_seed: int = 42,
+    keep_isins: Optional[Sequence[str]] = None,
+) -> KalmanPanelV2:
+    """Return ``panel`` restricted to at most ``max_isins`` names.
+
+    Slices every ISIN-indexed field by introspecting the dataclass rather than
+    listing them, so a field added to :class:`KalmanPanelV2` later is carried
+    automatically instead of silently keeping its full-panel length and failing
+    deep inside the likelihood. Fields in :data:`_PANEL_NON_ISIN_FIELDS` pass
+    through untouched.
+
+    ``coord_idx`` is sliced but ``coord_uniques`` is **not re-factorised**. A
+    group level left with no members is a harmless unused prior draw; re-indexing
+    would give two arms different ``coords``, and an ELPD contrast between models
+    with different coordinate sets is not a contrast between the two models.
+
+    Parameters
+    ----------
+    panel
+        The full panel.
+    max_isins
+        Cap. Values at or above ``panel.n_isin`` return the panel unchanged.
+    random_seed
+        Seed for the subsample, so repeated arms score identical rows.
+    keep_isins
+        Restrict to these ISINs before sampling. Used to intersect arms whose
+        panels dropped different rows.
+
+    Returns
+    -------
+    KalmanPanelV2
+        A new panel; the original is not mutated.
+    """
+    n = panel.n_isin
+    idx = np.arange(n)
+    if keep_isins is not None:
+        wanted = set(map(str, keep_isins))
+        idx = idx[np.array([str(i) in wanted for i in panel.isins], dtype=bool)]
+    if 0 < max_isins < idx.size:
+        idx = np.sort(
+            np.random.default_rng(random_seed).choice(idx, size=max_isins, replace=False)
+        )
+    if idx.size == n and keep_isins is None:
+        return panel
+
+    updates: dict[str, Any] = {}
+    for f in dc_fields(panel):
+        if f.name in _PANEL_NON_ISIN_FIELDS:
+            continue
+        value = getattr(panel, f.name)
+        if isinstance(value, pd.DataFrame):
+            if len(value) == n:
+                updates[f.name] = value.iloc[idx].reset_index(drop=True)
+        elif isinstance(value, dict):
+            updates[f.name] = {
+                k: (v[idx] if getattr(v, "shape", (0,))[0] == n else v)
+                for k, v in value.items()
+            }
+        elif isinstance(value, np.ndarray) and value.shape and value.shape[0] == n:
+            updates[f.name] = value[idx]
+
+    return replace(panel, **updates)
+
+
+def run_model_comparison(
+    frame: pd.DataFrame,
+    model_cfg: KalmanModelConfig,
+    run_cfg: KalmanRunConfigV2,
+    report: GateReport,
+    *,
+    arms: Optional[Sequence[str]] = None,
+) -> Optional[pd.DataFrame]:
+    """Compare named model arms on ELPD and record the result as a gate.
+
+    Closes the one blank cell in v2's Bayesian-workflow row. Every other gate in
+    this module scores the model against the analyst trail it was fitted to,
+    which is why a pass-through once cleared 19 of 21 of them; this is the only
+    stage that asks whether a component *earns* its place.
+
+    Each arm is prepared, fitted and scored independently:
+
+    1. :func:`prepare_panel` **per arm**, because ``drift_strict`` changes the
+       design matrix and a shared panel could not express it.
+    2. The **intersection** of ISINs across arms, then one subsample of that,
+       so every arm is scored on identical rows. Comparing ELPD across different
+       observation sets is meaningless, and prepare_panel's own filters can drop
+       different names under different configs.
+    3. ``attach_log_likelihood`` **post hoc**. :func:`sample_posterior` hard-codes
+       ``log_likelihood: False`` and nutpie — the default sampler — discards
+       ``idata_kwargs`` wholesale, so the ``idata_kwargs={'log_likelihood':
+       True}`` route silently does nothing here. A missing group is reported as a
+       failure, never treated as a tie.
+
+    Parameters
+    ----------
+    frame
+        The loaded modelling frame, before ``prepare_panel``.
+    model_cfg
+        Base config each arm edits.
+    run_cfg
+        Supplies the NUTS budget and :attr:`KalmanRunConfigV2.comparison_max_isins`.
+    report
+        Gate report the ``model_comparison`` result is added to.
+    arms
+        Names from :data:`COMPARISON_ARMS`. Defaults to
+        ``run_cfg.comparison_arms``, or every registered arm.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        The ``az.compare`` table, or ``None`` when the comparison could not be
+        completed. A ``None`` is always accompanied by a failed gate.
+    """
+    import arviz as az
+
+    names = list(arms or run_cfg.comparison_arms or COMPARISON_ARMS)
+    unknown = [a for a in names if a not in COMPARISON_ARMS]
+    if unknown:
+        raise ValueError(
+            f"Unknown comparison arm(s) {unknown!r}. Known: {sorted(COMPARISON_ARMS)}"
+        )
+    if len(names) < 2:
+        raise ValueError(f"Model comparison needs >= 2 arms, got {names!r}")
+
+    def _fail(msg: str) -> None:
+        logger.error("Model comparison: %s", msg)
+        report.add(
+            GateResult(
+                name="model_comparison",
+                passed=False,
+                blocking=False,
+                value=msg[:80],
+                threshold=">= 2 arms with a log_likelihood group",
+                detail="No ELPD contrast was produced; nothing is decided.",
+            )
+        )
+
+    # ---- resolve each arm's drift matrix, then build its panel --------------
+    # `drift_strict` is the only arm that changes the DESIGN rather than the
+    # graph, and it is expressed as a contrast: it keeps the current selection
+    # while every other arm gets the pre-rule list, which also re-admits
+    # _DRIFT_LOOSE_READMIT. With that arm absent, all arms share the default
+    # selection and `drift_names=None` lets prepare_panel resolve it.
+    drift_for: dict[str, Optional[list[str]]] = {arm: None for arm in names}
+    if "drift_strict" in names:
+        strict = select_drift_features_v2(frame)
+        loose = sorted(
+            set(strict) | {c for c in _DRIFT_LOOSE_READMIT if c in frame.columns}
+        )
+        if set(loose) == set(strict):
+            logger.warning(
+                "drift_strict arm is identical to its baseline: none of %s is in "
+                "the frame, so there is nothing to re-admit",
+                _DRIFT_LOOSE_READMIT,
+            )
+        drift_for = {arm: (strict if arm == "drift_strict" else loose) for arm in names}
+
+    panels: dict[str, KalmanPanelV2] = {
+        arm: prepare_panel(
+            frame, COMPARISON_ARMS[arm](model_cfg), run_cfg, drift_names=drift_for[arm]
+        )
+        for arm in names
+    }
+
+    first = panels[names[0]]
+    if first.n_time < 2:
+        _fail(f"T={first.n_time}; the level/state contrast needs T > 1")
+        return None
+
+    common = set(map(str, first.isins))
+    for arm in names[1:]:
+        common &= set(map(str, panels[arm].isins))
+    if not common:
+        _fail("arms share no ISINs after panel preparation")
+        return None
+
+    subs = {
+        arm: subsample_panel_v2(
+            p,
+            run_cfg.comparison_max_isins,
+            random_seed=run_cfg.random_seed,
+            keep_isins=sorted(common),
+        )
+        for arm, p in panels.items()
+    }
+    n_scored = subs[names[0]].n_isin
+    # Never let a truncated comparison read as a full one.
+    logger.info(
+        "Model comparison: %d arms on %d of %d ISINs (%.0f%%; cap=%d), T=%d, "
+        "%d chains x %d draws",
+        len(names), n_scored, first.n_isin, 100 * n_scored / max(first.n_isin, 1),
+        run_cfg.comparison_max_isins, first.n_time, run_cfg.chains, run_cfg.draws,
+    )
+
+    # ---- fit each arm --------------------------------------------------------
+    fits: dict[str, Any] = {}
+    for arm in names:
+        cfg = COMPARISON_ARMS[arm](model_cfg)
+        sub = subs[arm]
+        logger.info(
+            "  [%s] D=%d drift column(s), %d group level(s)",
+            arm, sub.X_drift.shape[1], sum(len(v) for v in sub.coord_uniques.values()),
+        )
+        model = build_kalman_pt_model_v2(sub, config=cfg)
+        idata = sample_posterior(model, run_cfg)
+        if idata is None:
+            _fail(f"sampling failed on the {arm!r} arm")
+            return None
+        attach_log_likelihood(idata, model)
+        if not hasattr(idata, "log_likelihood"):
+            _fail(f"could not attach a log_likelihood group to the {arm!r} arm")
+            return None
+        div = (
+            int(idata.sample_stats["diverging"].sum())
+            if "diverging" in getattr(idata, "sample_stats", {})
+            else 0
+        )
+        logger.info("  [%s] divergences=%d", arm, div)
+        fits[arm] = idata
+
+    try:
+        cmp_df = az.compare(fits)
+    except Exception as exc:  # pragma: no cover - arviz surface
+        _fail(f"az.compare failed: {exc!r}")
+        return None
+
+    # ArviZ 1.x exposes the value as `.elpd`. `.elpd_loo` was REMOVED, and a
+    # getattr fallback on the old name yields a silent nan -- even though the
+    # ELPDData repr still prints the "elpd_loo" row label.
+    elpds: dict[str, float] = {}
+    for arm, idata in fits.items():
+        try:
+            loo = az.loo(idata)
+            elpds[arm] = float(loo.elpd)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("  [%s] az.loo failed: %r", arm, exc)
+
+    winner = str(cmp_df.index[0])
+    runner = str(cmp_df.index[1]) if len(cmp_df.index) > 1 else ""
+    detail = (
+        f"Scored on {n_scored} of {first.n_isin} ISINs. "
+        + ", ".join(f"{k} elpd {v:,.1f}" for k, v in elpds.items())
+    )
+    if "baseline" in cmp_df.index and winner != "baseline":
+        detail += (
+            f". {winner!r} ranks above the shipped configuration -- promote it by "
+            "editing the corresponding default, not by leaving this arm enabled."
+        )
+    report.add(
+        GateResult(
+            name="model_comparison",
+            passed=True,
+            blocking=False,
+            value=f"{winner} ranks first of {len(names)}"
+            + (f" (next: {runner})" if runner else ""),
+            threshold="reported, not gated",
+            detail=detail,
+        )
+    )
+    return cmp_df.reset_index().rename(columns={"index": "arm"})
 
 
 # =========================================================================== #
@@ -2912,6 +3505,38 @@ def export_analytics(
     # ---- gate: single vintage ----------------------------------------------
     if engine is not None and counts:
         report.add(_check_export_vintage_v2(engine, schema, list(counts), run_id))
+
+    # ---- the gate report itself, written LAST -------------------------------
+    # Deliberately not a member of `frames`: this function ADDS four gates
+    # (rowcount, finite, ranking_range, vintage), so a snapshot taken before the
+    # loop would omit exactly the gates that describe the export. Writing it here
+    # is the only ordering that captures every gate the run produced.
+    #
+    # Why it exists at all: every gate verdict, the divergence count and all four
+    # PPC statistics used to be printed by `summarise()` and dropped. A completed
+    # run was unauditable an hour later, and answering any question about its
+    # calibration meant refitting it.
+    gate_df = report.to_frame()
+    if not gate_df.empty:
+        gate_df = gate_df.copy()
+        gate_df["run_id"] = run_id
+        gate_df["exported_at"] = stamped
+        wrote = False
+        if sql_ok and publish and engine is not None:
+            try:
+                gate_df.to_sql(
+                    _GATE_REPORT_KEY, engine, schema=schema,
+                    if_exists="replace", index=False,
+                )
+                logger.info(
+                    "wrote %s.%s (%d gates)", schema, _GATE_REPORT_KEY, len(gate_df)
+                )
+                wrote = True
+            except Exception as exc:
+                logger.error("SQL export failed for %s (%s); CSV only", _GATE_REPORT_KEY, exc)
+        if not wrote:
+            gate_df.to_csv(out_dir / f"{_GATE_REPORT_KEY}.csv", index=False)
+        counts[_GATE_REPORT_KEY] = len(gate_df)
     return counts
 
 
@@ -3129,14 +3754,51 @@ def _check_export_vintage_v2(engine: Any, schema: str, tables: list[str], run_id
 # =========================================================================== #
 
 
-def summarise(report: GateReport, extras: dict[str, Any]) -> None:
-    """Print the gate report and the run's headline numbers."""
+def summarise(
+    report: GateReport,
+    extras: dict[str, Any],
+    *,
+    results_path: Optional[Path] = None,
+) -> None:
+    """Print the gate report, and persist it when a results directory is given.
+
+    Parameters
+    ----------
+    report
+        The run's gates.
+    extras
+        Headline numbers printed under the report.
+    results_path
+        Artifact root. When supplied, ``report.to_frame()`` is also written to
+        ``<results_path>/09_gate_report_v2.csv``.
+
+    Notes
+    -----
+    The CSV is the reason this function takes a path at all. ``summarise`` is
+    called on **every** terminating path — dry run, benchmark, panel-audit
+    failure, runtime-gate failure and success — whereas
+    :func:`export_analytics` runs only on the last of those. Without this, an
+    aborted run left its gate verdicts in console scrollback and nowhere else,
+    which is precisely the situation where someone needs them.
+
+    On the success path the export writes the same frame again, to the database
+    and with the four export gates included. That one is authoritative; this is
+    the floor.
+    """
     print(report.render())
     if extras:
         print("\nRun summary")
         print("-" * 40)
         for k, v in extras.items():
             print(f"  {k:<28} {v}")
+    if results_path is not None:
+        try:
+            frame = report.to_frame()
+            if not frame.empty:
+                results_path.mkdir(parents=True, exist_ok=True)
+                frame.to_csv(results_path / f"{_GATE_REPORT_KEY}.csv", index=False)
+        except Exception as exc:  # pragma: no cover - never lose a run to this
+            logger.warning("Could not persist the gate report: %s", exc)
 
 
 def main(
@@ -3196,12 +3858,14 @@ def main(
                 "drift features": len(panel.drift_names),
                 "grid (days)": panel.time_days.tolist(),
             },
+            results_path=run_cfg.results_path,
         )
         return result
 
     if not report.ok:
         logger.error("Panel audit failed; not fitting. Fix the grid first.")
-        summarise(report, {"names": panel.n_isin, "T_eff": f"{audit['t_eff']:.2f}"})
+        summarise(report, {"names": panel.n_isin, "T_eff": f"{audit['t_eff']:.2f}"},
+                  results_path=run_cfg.results_path)
         return result
 
     model = build_kalman_pt_model_v2(panel, model_cfg)
@@ -3210,11 +3874,11 @@ def main(
     # seconds, rather than 45 minutes into a run that has produced eight draws.
     result["runtime"] = run_runtime_estimate(model, run_cfg, report)
     if benchmark:
-        summarise(report, dict(result["runtime"]))
+        summarise(report, dict(result["runtime"]), results_path=run_cfg.results_path)
         return result
     if not report.ok:
         logger.error("Runtime gate failed; not sampling.")
-        summarise(report, dict(result["runtime"]))
+        summarise(report, dict(result["runtime"]), results_path=run_cfg.results_path)
         return result
 
     result["prior_idata"] = run_prior_predictive(model, panel, run_cfg, report)
@@ -3224,6 +3888,13 @@ def main(
     result["ppc"] = run_posterior_predictive(
         model, idata, panel, run_cfg, model_cfg, report
     )
+
+    # §9b — opt-in, and it refits every arm from scratch, so it runs AFTER the
+    # production fit is complete and its gates are recorded. A comparison that
+    # crashes must not cost the run its screen and export.
+    if run_cfg.enable_model_comparison:
+        result["comparison"] = run_model_comparison(frame, model_cfg, run_cfg, report)
+
     screen, screen_draws = run_screen(idata, panel, run_cfg, report)
     result["screen"] = screen
     result["screen_draws"] = screen_draws
@@ -3266,6 +3937,8 @@ def main(
         frames["10_screen_mc_summary_v2"] = screen[
             ["isin", "er_mean", "er_sd", "er_p05", "er_p50", "er_p95", "mc_prob_pos"]
         ]
+    if isinstance(result.get("comparison"), pd.DataFrame):
+        frames["09b_comparison_v2"] = result["comparison"]
     if risk_book is not None:
         frames["10b_risk_analytics_v2"] = apply_out_of_support(
             risk_book.analytics.rename(columns={"expected_sharpe": "expected_sharpe_ratio"})
@@ -3283,6 +3956,7 @@ def main(
             "median implied upside": f"{screen['implied_upside'].median():.2%}",
             "above consensus": f"{(screen['expected_upside'] > screen['implied_upside']).mean():.1%}",
         },
+        results_path=run_cfg.results_path,
     )
     return result
 
@@ -3293,6 +3967,14 @@ def _cli() -> int:
     parser.add_argument("--benchmark", action="store_true",
                         help="build the model, time the gradient, project wall clock, stop")
     parser.add_argument("--write", action="store_true", help="write the analytics tables")
+    parser.add_argument(
+        "--compare", type=str, default=None,
+        help=(
+            "run the §9b ELPD comparison over these arms, comma-separated "
+            f"(known: {','.join(COMPARISON_ARMS)}). Each arm is a full refit plus "
+            "a pointwise log_likelihood, so N arms cost ~N runs."
+        ),
+    )
     parser.add_argument("--lookbacks", type=str, default=None,
                         help="comma-separated, e.g. 1y,6m,3m (omit 'now')")
     parser.add_argument("--draws", type=int, default=None)
@@ -3320,6 +4002,17 @@ def _cli() -> int:
     }
     if args.write:
         overrides["write_analytics"] = True
+    if args.compare is not None:
+        arms = tuple(s.strip() for s in args.compare.split(",") if s.strip())
+        unknown = [a for a in arms if a not in COMPARISON_ARMS]
+        if unknown:
+            parser.error(
+                f"unknown comparison arm(s) {unknown}; known: {sorted(COMPARISON_ARMS)}"
+            )
+        if len(arms) < 2:
+            parser.error("--compare needs at least two arms to contrast")
+        overrides["enable_model_comparison"] = True
+        overrides["comparison_arms"] = arms
     if overrides:
         run_cfg = replace(run_cfg, **overrides)
 
