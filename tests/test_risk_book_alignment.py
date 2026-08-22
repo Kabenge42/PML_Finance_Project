@@ -154,6 +154,37 @@ def test_risk_frames_agree_on_where_sizing_and_sharpe_live():
         assert rb.book["book_weight"].sum() > 0.99
 
 
+def test_export_blocks_frames_with_duplicate_columns():
+    """A duplicated column name must fail a gate, not crash the export.
+
+    This bug shipped twice from the same cause: `compute_cvar_aware_book` emits
+    both `expected_sharpe` and `expected_sharpe_ratio`, and BOTH places that
+    build an export frame renamed one onto the other. pandas allows it silently;
+    the ranking-range gate then hands `pd.to_numeric` a DataFrame and the export
+    dies with "arg must be a list, tuple, 1-d array, or Series" -- after the fit
+    has already been paid for.
+    """
+    import pymc_kalman_filter_pt_v2 as v2
+
+    report = v2.GateReport()
+    frames = {
+        "good_v2": pd.DataFrame([[1, 2.0]], columns=["isin", "expected_sharpe_ratio"]),
+        "bad_v2": pd.DataFrame(
+            [[1, 2.0, 3.0]],
+            columns=["isin", "expected_sharpe_ratio", "expected_sharpe_ratio"],
+        ),
+    }
+    counts = v2.export_analytics(
+        frames, v2.KalmanRunConfigV2(write_analytics=False), report, run_id="t0"
+    )
+    gate = next(r for r in report.results if r.name == "export_unique_columns")
+    assert not gate.passed
+    assert gate.blocking
+    assert "bad_v2" in gate.detail and "expected_sharpe_ratio" in gate.detail
+    # It must stop BEFORE the loops that would raise, not write a partial export.
+    assert counts == {}
+
+
 def test_tail_risk_has_no_expected_upside_leg():
     """tail_risk must not move when only expected_upside changes.
 

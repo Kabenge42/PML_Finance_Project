@@ -394,6 +394,13 @@ GATE_CATALOGUE: dict[str, str] = {
         "only stage that can decide whether a component EARNS its place rather "
         "than merely converging -- the v2 workflow row had it blank."
     ),
+    "export_unique_columns": (
+        "BLOCKING: no exported frame may carry the same column name twice. A "
+        "duplicate makes df[col] a DataFrame rather than a Series, so the "
+        "ranking-range gate dies with 'arg must be a list, tuple, 1-d array, or "
+        "Series' AFTER the fit has been paid for. Any rename() mapping one "
+        "existing column onto another existing one creates this silently."
+    ),
     "model_comparison_fast": (
         "SCREENING ONLY, reported not gated: a Max-and-Smooth ELPD contrast. It "
         "scores arms on per-ISIN PSEUDO-OBSERVATIONS built from one baseline "
@@ -3739,6 +3746,37 @@ def export_analytics(
         )
     )
 
+    # ---- gate: no duplicate column names -----------------------------------
+    # Cheap, and it fires BEFORE the loops that would otherwise die on it. A
+    # duplicated name makes `df[col]` a DataFrame, so `pd.to_numeric` below
+    # raises "arg must be a list, tuple, 1-d array, or Series" and the export
+    # aborts after the fit is already paid for. It is easy to reintroduce: any
+    # `rename()` that maps one existing column onto another existing one does it
+    # silently, which is how both `expected_sharpe -> expected_sharpe_ratio`
+    # sites managed it.
+    dupes = {
+        key: sorted({c for c in df.columns if list(df.columns).count(c) > 1})
+        for key, df in frames.items()
+        if df is not None and not df.empty
+        and len(df.columns) != len(set(df.columns))
+    }
+    report.add(
+        GateResult(
+            name="export_unique_columns",
+            passed=not dupes,
+            blocking=True,
+            value=f"{len(dupes)} frame(s) with duplicate columns",
+            threshold="every frame has unique column names",
+            detail="; ".join(f"{k}: {v}" for k, v in dupes.items()) if dupes else "",
+        )
+    )
+    if dupes:
+        # Returning here is deliberate: every remaining stage indexes by column
+        # name, so continuing produces a cascade of confusing errors instead of
+        # this one clear verdict.
+        logger.error("Duplicate columns block the export: %s", dupes)
+        return counts
+
     # ---- gate: ranking metrics in range ------------------------------------
     offenders: list[str] = []
     for key, df in frames.items():
@@ -4273,9 +4311,16 @@ def main(
     kalman_results = (
         risk_book.analytics.copy() if risk_book is not None else screen.copy()
     )
+    # Drop the alias BEFORE renaming, for the same reason as the risk table
+    # below: `compute_cvar_aware_book` emits both `expected_sharpe` and
+    # `expected_sharpe_ratio` since 2026-08-22, so renaming one onto the other
+    # produces two columns with that name. That is not merely untidy -- the
+    # export_ranking_range gate then hands `pd.to_numeric` a DataFrame instead of
+    # a Series and the whole export dies with "arg must be a list, tuple, 1-d
+    # array, or Series", after the fit has already been paid for.
+    kalman_results = kalman_results.drop(columns=["expected_sharpe"], errors="ignore")
     kalman_results = kalman_results.rename(
         columns={
-            "expected_sharpe": "expected_sharpe_ratio",
             "starr": "reward_to_cvar",
             "cvar05": "cvar_5pct_kalman",
             "exp_vol": "expected_vol_kalman",
