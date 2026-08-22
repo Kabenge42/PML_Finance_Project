@@ -1,4 +1,4 @@
-create view vw_pml_df_pymc_features
+create view pml.vw_pml_df_pymc_features
 			(model_name, column_name, category, feature_role, pymc_role, data_type, ordinal_position, description)
 as
 SELECT m.model_name,
@@ -14,6 +14,6 @@ FROM pml_df_metadata                  md,
 WHERE md.pymc_role = ANY (ARRAY ['coord'::text, 'observed'::text, 'mutable_predictor'::text, 'constant_data'::text])
 ;
 
-alter table vw_pml_df_pymc_features
+alter table pml.vw_pml_df_pymc_features
 	owner to postgres
 ;

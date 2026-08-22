@@ -78,6 +78,7 @@ import probabilistic_ml_model._pytensor_env  # noqa: F401  isort: skip
 import arviz_plots as azp
 import arviz_stats as azs
 import matplotlib
+import matplotlib.figure
 import matplotlib.pyplot as plt
 import matplotlib.colors as _mcolors
 
@@ -562,6 +563,7 @@ def kalman_df_query(config: Optional[KalmanRunConfig] = None) -> str:
            FROM pml.mv_pymc_kalman_pt mpkp
            WHERE observed_pt IS NOT NULL
              AND price_target_1m_ago IS NOT NULL
+             AND isin <> 'US3135861090' AND isin <> 'US3134003017'
              AND next_earnings >= '{cfg.min_next_earnings}'
              AND income_statement_report_date >= '{cfg.min_report_date}'
            """
@@ -940,7 +942,7 @@ def _plotly_figure_of(obj) -> Optional[object]:
     return None
 
 
-def _mpl_figure_of(obj) -> Optional["matplotlib.figure.Figure"]:
+def _mpl_figure_of(obj) -> Optional[matplotlib.figure.Figure]:
     """Best-effort: the underlying Matplotlib figure of ``obj``.
 
     The Matplotlib mirror of :func:`_plotly_figure_of`. An ``arviz_plots``
@@ -1124,7 +1126,7 @@ def _safe_show(obj: object, *, label: Optional[str] = None,
         logger.debug("Figure display skipped (renderer/transport failure): %r", exc)
         if _fallback is not None:
             try:
-                _fallback(obj)
+                _fallback
             except Exception:
                 pass
 

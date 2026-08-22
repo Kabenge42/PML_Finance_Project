@@ -1,4 +1,4 @@
-create table currency_mapping
+create table pml.currency_mapping
 (
 	unit      text
 		constraint currency_mapping_pk
@@ -7,6 +7,6 @@ create table currency_mapping
 )
 ;
 
-alter table currency_mapping
+alter table pml.currency_mapping
 	owner to postgres
 ;

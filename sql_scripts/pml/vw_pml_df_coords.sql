@@ -1,4 +1,4 @@
-create view vw_pml_df_coords(column_name, category, data_type, ordinal_position, description)
+create view pml.vw_pml_df_coords(column_name, category, data_type, ordinal_position, description)
 as
 SELECT column_name,
        category,
@@ -9,6 +9,6 @@ FROM pml_df_metadata
 WHERE pymc_role = 'coord'::text
 ;
 
-alter table vw_pml_df_coords
+alter table pml.vw_pml_df_coords
 	owner to postgres
 ;
