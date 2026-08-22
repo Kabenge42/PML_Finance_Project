@@ -230,6 +230,8 @@ def gaussian_likelihood_approximation(
     panel: KalmanPanelV2,
     idata: InferenceLike,
     config: Optional[KalmanModelConfig] = None,
+    *,
+    extra_group_cols: Sequence[str] = (),
 ) -> PseudoObservations:
     """Step 1 (Max): per-name Gaussian approximation of the likelihood.
 
@@ -248,6 +250,17 @@ def gaussian_likelihood_approximation(
     config
         Parameterisation of the baseline fit. Defaults to
         :class:`KalmanModelConfig`.
+    extra_group_cols
+        Categorical columns to factorise from ``panel.frame`` in ADDITION to the
+        ones ``prepare_panel`` already indexed.
+
+        **Not optional in practice for a multi-arm screen.** ``prepare_panel``
+        builds ``coord_idx`` from ``model_cfg.group_effects`` alone, so a panel
+        prepared for the shipped four-level hierarchy carries no ``country`` or
+        ``industry`` index — and the ``hierarchy_fine`` arm would then quietly
+        reduce to the baseline and screen as "no difference". A false negative
+        dressed as a result is worse than an error. Pass the UNION of every arm's
+        ``group_effects``.
 
     Returns
     -------
@@ -256,7 +269,8 @@ def gaussian_likelihood_approximation(
     Raises
     ------
     ValueError
-        If a required posterior variable is missing, or ``T < 2``.
+        If a required posterior variable is missing, ``T < 2``, or a name in
+        ``extra_group_cols`` is not a column of ``panel.frame``.
     """
     cfg = config or KalmanModelConfig()
     Y = np.asarray(panel.Y, dtype="float64")
@@ -389,6 +403,34 @@ def gaussian_likelihood_approximation(
         diagnostics["median_level_scale"],
     )
 
+    # Factorise any group column prepare_panel did not index, so an arm that
+    # names a finer hierarchy actually gets one.
+    coord_idx = {k: np.asarray(v) for k, v in panel.coord_idx.items()}
+    coord_uniques = {k: np.asarray(v) for k, v in panel.coord_uniques.items()}
+    wanted = [c for c in extra_group_cols if c not in coord_idx]
+    if wanted:
+        import pandas as pd
+
+        frame = panel.frame
+        absent = [c for c in wanted if c not in frame.columns]
+        if absent:
+            raise ValueError(
+                f"extra_group_cols {absent!r} are not columns of panel.frame; the "
+                f"arm naming them cannot be screened. Available: "
+                f"{sorted(frame.columns)[:20]}..."
+            )
+        for col in wanted:
+            codes, uniques = pd.factorize(frame[col].astype("string"), sort=True)
+            if (codes < 0).any():
+                raise ValueError(
+                    f"{col!r} has {int((codes < 0).sum())} null values; a "
+                    "ZeroSumNormal over it would silently pool them into one level."
+                )
+            coord_idx[col] = codes.astype("int32")
+            coord_uniques[col] = np.asarray(uniques)
+        logger.info("Max step factorised %d extra group column(s): %s",
+                    len(wanted), ", ".join(wanted))
+
     return PseudoObservations(
         isins=np.asarray(panel.isins)[keep],
         m_hat=m_out,
@@ -397,8 +439,8 @@ def gaussian_likelihood_approximation(
         n_obs=mask.sum(axis=1)[keep],
         X_drift=np.asarray(panel.X_drift, dtype="float64")[keep],
         drift_names=list(panel.drift_names),
-        coord_idx={k: np.asarray(v)[keep] for k, v in panel.coord_idx.items()},
-        coord_uniques={k: np.asarray(v) for k, v in panel.coord_uniques.items()},
+        coord_idx={k: v[keep] for k, v in coord_idx.items()},
+        coord_uniques=coord_uniques,
         diagnostics=diagnostics,
     )
 
@@ -437,13 +479,20 @@ def build_pseudo_model(
         raise ImportError("PyMC is not available. Install pymc to use Max-and-Smooth.")
     cfg = config or KalmanModelConfig()
 
-    groups = [g for g in cfg.group_effects if g in pseudo.coord_idx]
-    skipped = [g for g in cfg.group_effects if g not in pseudo.coord_idx]
-    if skipped:
-        logger.warning(
-            "group effects %r are not on the panel and are skipped; the arm is "
-            "not the hierarchy it names.", skipped,
+    # Hard error, not a warning. Skipping a missing level would reduce a finer
+    # hierarchy arm to the baseline and make the contrast report "no difference"
+    # -- a false negative indistinguishable from a real one. The Max step takes
+    # `extra_group_cols` precisely so this cannot happen; if it does, the caller
+    # forgot to pass the union of the arms' group_effects.
+    missing = [g for g in cfg.group_effects if g not in pseudo.coord_idx]
+    if missing:
+        raise ValueError(
+            f"group effects {missing!r} have no index in the pseudo-observations, "
+            f"so this arm would silently BE the baseline. Pass them as "
+            f"extra_group_cols to gaussian_likelihood_approximation. Indexed: "
+            f"{sorted(pseudo.coord_idx)}"
         )
+    groups = list(cfg.group_effects)
 
     coords: dict[str, Any] = {
         "isin": pseudo.isins,

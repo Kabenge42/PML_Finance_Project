@@ -157,6 +157,43 @@ def test_level_off_is_penalised_only_when_a_level_exists():
     assert _contrast(0.02) == "level_off", "no level: the free arm must not win"
 
 
+def test_a_finer_hierarchy_arm_cannot_silently_become_the_baseline():
+    """The false negative that would be indistinguishable from a real result.
+
+    ``prepare_panel`` indexes only the BASELINE's ``group_effects``, so an arm
+    naming a finer hierarchy has no index for its extra levels. Skipping them
+    would make the arm identical to the baseline and the contrast report "no
+    difference" -- so it must raise instead.
+    """
+    panel, cfg, idata = _case(n_isin=300)
+    ps = gaussian_likelihood_approximation(panel, idata, cfg)
+    fine = KalmanModelConfig(**{**cfg.__dict__, "group_effects": ("sector",)})
+    with pytest.raises(ValueError, match="silently BE the baseline"):
+        build_pseudo_model(ps, fine)
+
+
+def test_extra_group_cols_are_factorised_from_the_panel_frame():
+    panel, cfg, idata = _case(n_isin=300)
+    panel.frame["sector"] = np.where(np.arange(len(panel.isins)) % 3 == 0, "A", "B")
+    ps = gaussian_likelihood_approximation(
+        panel, idata, cfg, extra_group_cols=("sector",)
+    )
+    assert "sector" in ps.coord_idx
+    assert list(ps.coord_uniques["sector"]) == ["A", "B"]
+    assert len(ps.coord_idx["sector"]) == len(ps)
+    # ...and now the arm builds.
+    fine = KalmanModelConfig(**{**cfg.__dict__, "group_effects": ("sector",)})
+    build_pseudo_model(ps, fine)
+
+
+def test_unknown_extra_group_col_raises():
+    panel, cfg, idata = _case(n_isin=200)
+    with pytest.raises(ValueError, match="not columns of panel.frame"):
+        gaussian_likelihood_approximation(
+            panel, idata, cfg, extra_group_cols=("no_such_column",)
+        )
+
+
 def test_covariance_arms_are_refused():
     base = KalmanModelConfig()
     for fname, value in (

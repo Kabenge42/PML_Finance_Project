@@ -2964,8 +2964,23 @@ def compare_arms_fast(
         _fail("the drift_strict arm changes the design matrix; use --compare")
         return None
 
+    # The UNION of every arm's group effects, not the baseline's. `prepare_panel`
+    # indexes only `model_cfg.group_effects`, so a panel prepared for the shipped
+    # four-level hierarchy carries no `country` / `industry` index -- and
+    # `hierarchy_fine` would reduce to the baseline and screen as "no
+    # difference". The Max step factorises the extras from `panel.frame`.
+    extra_groups = sorted(
+        {
+            col
+            for arm in names
+            for col in COMPARISON_ARMS[arm](model_cfg).group_effects
+        }
+        - set(panel.coord_idx)
+    )
     try:
-        pseudo = gaussian_likelihood_approximation(panel, idata, model_cfg)
+        pseudo = gaussian_likelihood_approximation(
+            panel, idata, model_cfg, extra_group_cols=extra_groups
+        )
     except Exception as exc:
         _fail(f"Max step failed: {exc}")
         return None
