@@ -41,7 +41,8 @@ Section  Function                            Stage (CLAUDE.md contract)
 7        :func:`sample_posterior`            Fitting
 8        :func:`run_posterior_predictive`    Model evaluation (PPC)
 9        :func:`run_diagnostics`             Fitting diagnostics
-9b       :func:`run_model_comparison`        Model comparison (opt-in)
+9b       :func:`run_model_comparison`        Model comparison (opt-in, exact)
+9b-fast  :func:`compare_arms_fast`           Model comparison (Max-and-Smooth screen)
 10       :func:`run_screen`                  Decision analysis
 10c      :func:`export_analytics`            Export
 14       :func:`summarise`                   Summary + gate report
@@ -131,6 +132,10 @@ __all__ = [
     "COMPARISON_ARMS",
     "subsample_panel_v2",
     "run_model_comparison",
+    "compare_arms_fast",
+    "PROVENANCE_COLUMNS",
+    "stamp_export_provenance",
+    "resolve_source_revision",
     "run_screen",
     "export_analytics",
     "main",
