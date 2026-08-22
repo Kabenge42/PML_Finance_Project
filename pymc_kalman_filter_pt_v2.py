@@ -4298,8 +4298,12 @@ def main(
     if _cmp_parts:
         frames["09b_comparison_v2"] = pd.concat(_cmp_parts, ignore_index=True)
     if risk_book is not None:
+        # `compute_cvar_aware_book` emits BOTH names since 2026-08-22, so the old
+        # rename here would produce two columns called `expected_sharpe_ratio`
+        # and break `to_sql`. Drop the alias instead: the analytics table has
+        # always published the long name, and the DDL documents that one.
         frames["10b_risk_analytics_v2"] = apply_out_of_support(
-            risk_book.analytics.rename(columns={"expected_sharpe": "expected_sharpe_ratio"})
+            risk_book.analytics.drop(columns=["expected_sharpe"], errors="ignore")
         )
         frames[_RISK_BOOK_KEY] = risk_book.book
     result["export_counts"] = export_analytics(frames, run_cfg, report, run_id=run_id)

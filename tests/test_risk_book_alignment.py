@@ -127,6 +127,33 @@ def test_label_length_mismatch_raises():
         _book(screen, draws, isins, eu, return_draws_isins=isins[:-1])
 
 
+def test_risk_frames_agree_on_where_sizing_and_sharpe_live():
+    """One run must not export the same book under two schemas.
+
+    Both frames carry ``book_weight`` and ``expected_sharpe_ratio``; the older
+    ``weight`` / ``expected_sharpe`` spellings survive as aliases for one
+    release. Column names must be UNIQUE -- emitting both names meant the export's
+    old ``rename(expected_sharpe -> expected_sharpe_ratio)`` produced a duplicate
+    column and would have broken ``to_sql``.
+    """
+    screen, draws, isins, eu = _make_case(seed=19)
+    rb = _book(screen, draws, isins, eu, return_draws_isins=isins)
+
+    for label, frame in (("analytics", rb.analytics), ("book", rb.book)):
+        cols = list(frame.columns)
+        assert len(cols) == len(set(cols)), f"{label} has duplicate columns"
+        assert "book_weight" in cols, f"{label} lacks book_weight"
+        assert "expected_sharpe_ratio" in cols, f"{label} lacks expected_sharpe_ratio"
+
+    # The book's sizing must actually be there, not a column of zeros beside a
+    # populated `weight` -- which is exactly how the two frames disagreed.
+    if len(rb.book):
+        np.testing.assert_allclose(
+            rb.book["book_weight"].to_numpy(), rb.book["weight"].to_numpy(), rtol=1e-12
+        )
+        assert rb.book["book_weight"].sum() > 0.99
+
+
 def test_tail_risk_has_no_expected_upside_leg():
     """tail_risk must not move when only expected_upside changes.
 
