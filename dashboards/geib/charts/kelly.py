@@ -177,19 +177,23 @@ def _calculate_kelly_fraction(row) -> float:
         return 0.0
     # Kelly's ``b`` is the odds ratio: win size / LOSS size. This mirrors
     # RiskBookModel ``tail_risk`` term for term, so the card and the book cannot
-    # disagree about what a name's downside is — including the relative floor
-    # added 2026-08-20, without which every name whose simulated 5% quantile is
-    # positive falls to the 1pp absolute floor and its ``b`` becomes
+    # disagree about what a name's downside is.
+    #
+    # The ``expected_return - cvar_5pct_kalman`` term was REMOVED 2026-08-22, in
+    # the same commit as the book's. It fell as the tail improved, so ``b`` — and
+    # STARR with it — rose on numerator and denominator together, letting a
+    # favourable tail be counted twice. ``-er_p05`` is the loss quantile and
+    # ``_TAIL_RISK_VOL_FLOOR_K * er_sd`` the dispersion floor; neither depends on
+    # ``expected_return``. The relative floor is what now stops a positive-5%-
+    # quantile name falling to the 1pp absolute floor and its ``b`` becoming
     # ``100 * expected_return``.
     #
     # Historical note: dividing by ``abs(cvar_5pct_kalman)`` instead was tried
     # and is wrong even now that the column is a real return CVaR — it is a
     # LEVEL, not a dispersion, so ``b`` tracked expected_return itself (median
     # 1.28, sd 23.7 on the 2026-08-15 table, exploding as cvar approached zero).
-    # The mean-to-tail DISTANCE below is the dispersion.
     loss = max(
         -finite_cell(row, "er_p05", 0.0),
-        expected_return - finite_cell(row, "cvar_5pct_kalman", 0.0),
         _TAIL_RISK_VOL_FLOOR_K * finite_cell(row, "er_sd", 0.0),
         _MIN_TAIL_RISK,
     )

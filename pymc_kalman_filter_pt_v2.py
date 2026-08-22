@@ -597,7 +597,19 @@ class KalmanRunConfigV2:
     #: kalman_gain inside the risk book to give ``p_long_cond``, which is what
     #: ``p_upside_pos_cond`` is actually tested against.
     p_long: float = 0.50
-    mcap_country_r_max: float = 0.01
+    #: Market-cap pre-selection threshold for long-book eligibility: a name is
+    #: eligible when ``mcap_global_r < mcap_global_r_max``.
+    #:
+    #: **Renamed from ``mcap_country_r_max`` on 2026-08-22.** The old name said
+    #: *country* while the column it is compared against — and has always been
+    #: compared against, in ``RiskBookModel`` and in v1 before it — is
+    #: ``mcap_global_r``. Two different rank bases, one name, and no way to tell
+    #: from the call site which was meant. The column is the thing that cannot
+    #: move (``feat_mcap_global_r`` is the MV's contract and the size-tilt
+    #: driver), so the knob is what changes. :attr:`mcap_country_r_max` remains
+    #: as a read-only alias for one release; ``replace(cfg, mcap_country_r_max=…)``
+    #: raises rather than silently setting nothing.
+    mcap_global_r_max: float = 0.01
 
     # ---- model comparison (§9b) --------------------------------------------
     #: Run the ELPD comparison stage. **Off by default and deliberately not in
@@ -654,6 +666,24 @@ class KalmanRunConfigV2:
                 "gate_shrinkage_rho_max must be in (0, 1], got "
                 f"{self.gate_shrinkage_rho_max!r}"
             )
+
+    @property
+    def mcap_country_r_max(self) -> float:
+        """Deprecated alias of :attr:`mcap_global_r_max`.
+
+        The old name claimed a country-relative rank; the comparison has always
+        been against ``mcap_global_r``. Read-only on purpose — a writable alias
+        on a frozen dataclass would let ``replace()`` appear to work while
+        setting nothing.
+        """
+        warnings.warn(
+            "KalmanRunConfigV2.mcap_country_r_max is deprecated; it was renamed "
+            "to mcap_global_r_max because the threshold is compared against the "
+            "mcap_global_r column, not a country rank.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.mcap_global_r_max
 
     @property
     def gate_coverage_target(self) -> float:
@@ -3198,6 +3228,7 @@ def run_risk_book(
         if draws is not None:
             eu = draws.eu
             return_draws = draws.pooled_returns
+            return_draws_isins = draws.isins
         else:
             logger.warning(
                 "run_risk_book called without ScreenDraws: re-resolving the "
@@ -3219,6 +3250,7 @@ def run_risk_book(
                 coords={"isin": panel.isins},
             )
             return_draws = None
+            return_draws_isins = None
         book = compute_cvar_aware_book(
             idata,
             eu,
@@ -3227,8 +3259,9 @@ def run_risk_book(
             cap=run_cfg.weight_cap,
             k_book=run_cfg.k_book,
             p_long=run_cfg.p_long,
-            mcap_r_max=run_cfg.mcap_country_r_max,
+            mcap_r_max=run_cfg.mcap_global_r_max,
             return_draws=return_draws,
+            return_draws_isins=return_draws_isins,
             tail_risk_vol_floor_k=run_cfg.tail_risk_vol_floor_k,
         )
         logger.info(
