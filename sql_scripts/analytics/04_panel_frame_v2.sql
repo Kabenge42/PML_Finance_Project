@@ -1,4 +1,4 @@
-create table analytics."04_panel_frame"
+create table analytics."04_panel_frame_v2"
 (
 	isin                              text,
 	ticker                            text,
@@ -182,12 +182,29 @@ create table analytics."04_panel_frame"
 	feat_piotroski_f_score_neg2fy     bigint,
 	feat_piotroski_f_score_neg3fy     bigint,
 	feat_median_piotroski_f_score     double precision,
-	feat_log_uplift                   double precision,
+	feat_log_uplift_now               double precision,
+	feat_log_uplift_1w                double precision,
+	feat_log_uplift_1m                double precision,
+	feat_log_uplift_3m                double precision,
+	feat_log_uplift_6m                double precision,
+	feat_log_uplift_1y                double precision,
+	n_trail_obs                       bigint,
+	n_analysts_1w                     double precision,
+	n_analysts_1m                     double precision,
+	n_analysts_3m                     double precision,
+	n_analysts_6m                     double precision,
+	n_analysts_1y                     double precision,
+	feat_eps_signal_surprise          double precision,
+	feat_eps_signal_beat              double precision,
+	feat_eps_signal_coverage          double precision,
+	built_at                          timestamp with time zone,
 	run_id                            text,
-	exported_at                       timestamp with time zone
+	exported_at                       timestamp with time zone,
+	source_sha                        text,
+	source_dirty                      boolean
 )
 ;
 
-alter table analytics."04_panel_frame"
+alter table analytics."04_panel_frame_v2"
 	owner to postgres
 ;
