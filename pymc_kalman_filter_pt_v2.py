@@ -77,6 +77,7 @@ import uuid
 import warnings
 from dataclasses import dataclass, field, fields as dc_fields, replace
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
@@ -181,6 +182,113 @@ _RISK_BOOK_KEY = "10b_risk_book_v2"
 #: still leave a record. One row per gate, keyed on the same ``run_id`` as the
 #: rest of the run's tables.
 _GATE_REPORT_KEY = "09_gate_report_v2"
+
+#: Every column this workflow stamps onto an exported frame so a reader can tell
+#: which run — and which *source* — produced it.
+#:
+#: ``run_id`` and ``exported_at`` were stamped inline in three separate places
+#: before 2026-08-22; this is the SSOT they now share, matching v1's
+#: ``PROVENANCE_COLUMNS``.
+#:
+#: **Why the source revision was added.** Neither of the original pair says what
+#: CODE produced the row, and writing the fourth edition of the post-run analysis
+#: that gap cost a conclusion: run ``78801513e2cf`` was fitted from a working
+#: tree about two hours before commit ``c08422d`` landed, and ``0121366fbabf``
+#: was the first fit on committed source — so when the book's tail composition
+#: swung 13 -> 17 names there was no way to establish from the artefacts whether
+#: the two runs shared a specification at all. A three-run series was read as
+#: estimator spread on the strength of a git log and a diffstat, which is not
+#: provenance.
+#:
+#: It matters more now that :func:`run_model_comparison` decides questions by
+#: contrasting arms across fits: an ELPD contrast between two runs whose source
+#: is not pinned is not a contrast.
+#:
+#: ``source_dirty`` is **not an error flag** — most of these runs had an
+#: uncommitted tree. It is the fact a reader needs in order to know which
+#: cross-run comparisons are legitimate.
+PROVENANCE_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "exported_at",
+    "source_sha",
+    "source_dirty",
+)
+
+
+@lru_cache(maxsize=1)
+def resolve_source_revision() -> tuple[Optional[str], Optional[bool]]:
+    """Return ``(head_sha, dirty)`` for the working tree, or ``(None, None)``.
+
+    Cached: it shells out to git, the answer cannot change mid-run, and every
+    exported frame asks for it.
+
+    Never raises. A missing git, a non-repository directory or a timeout all
+    report ``(None, None)`` — the same "a failed export must not abort the
+    workflow" rule the rest of this module follows. ``None`` is honest and
+    readable; a fabricated SHA would not be.
+
+    Returns
+    -------
+    tuple[str or None, bool or None]
+        Full 40-character ``HEAD`` SHA, and whether tracked files differ from it.
+    """
+    import subprocess
+
+    root = Path(__file__).resolve().parent
+
+    def _git(*args: str) -> Optional[str]:
+        try:
+            out = subprocess.run(
+                ["git", *args],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("git %s failed: %s", " ".join(args), exc)
+            return None
+        if out.returncode != 0:
+            logger.debug("git %s exited %d", " ".join(args), out.returncode)
+            return None
+        return out.stdout
+
+    sha = _git("rev-parse", "HEAD")
+    if sha is None:
+        logger.info(
+            "source revision unavailable (not a git checkout?): exports carry a "
+            "NULL source_sha."
+        )
+        return None, None
+    status = _git("status", "--porcelain", "--untracked-files=no")
+    dirty = None if status is None else bool(status.strip())
+    return sha.strip() or None, dirty
+
+
+def stamp_export_provenance(
+    frame: pd.DataFrame, run_id: str, stamped: Any
+) -> pd.DataFrame:
+    """Return ``frame`` with :data:`PROVENANCE_COLUMNS` appended.
+
+    Idempotent — re-stamping overwrites in place rather than duplicating.
+
+    Parameters
+    ----------
+    frame
+        Frame to stamp. Not mutated; a shallow copy is returned.
+    run_id
+        The run's identifier, shared by every table it writes.
+    stamped
+        Export timestamp (UTC), shared likewise.
+    """
+    sha, dirty = resolve_source_revision()
+    out = frame.copy(deep=False)
+    out["run_id"] = run_id
+    out["exported_at"] = stamped
+    out["source_sha"] = sha
+    out["source_dirty"] = dirty
+    return out
 
 
 # =========================================================================== #
@@ -3501,21 +3609,35 @@ def export_analytics(
     # Render the DDL before any table write, and unconditionally: it needs no
     # connection, so an offline run still leaves a reviewable schema.
     if _ANALYTICS_TABLE_V2 in frames and not frames[_ANALYTICS_TABLE_V2].empty:
-        stamped_canonical = frames[_ANALYTICS_TABLE_V2].copy()
-        stamped_canonical["run_id"] = run_id
-        stamped_canonical["exported_at"] = stamped
+        stamped_canonical = stamp_export_provenance(
+            frames[_ANALYTICS_TABLE_V2], run_id, stamped
+        )
         try:
             write_analytics_ddl_v2(stamped_canonical)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("DDL render failed: %s", exc)
 
+    # Every other v2 frame gets a DDL too, since 2026-08-22. Only the canonical
+    # table used to, so the six pipeline tables landed via `to_sql` with no
+    # readable schema and no record of what their columns mean — the exact gap
+    # the v1 convention exists to close, applied to one table out of seven.
+    # `_ANALYTICS_COLUMN_COMMENTS_V2` is keyed by column name, so a column
+    # documented once is documented everywhere it appears.
+    for _key, _frame in frames.items():
+        if _key == _ANALYTICS_TABLE_V2 or _frame is None or _frame.empty:
+            continue
+        try:
+            write_analytics_ddl_v2(
+                stamp_export_provenance(_frame, run_id, stamped), table=_key
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("DDL render failed for %s: %s", _key, exc)
+
     sql_ok = engine is not None
     for key, df in frames.items():
         if df is None or df.empty:
             continue
-        stamped_df = df.copy()
-        stamped_df["run_id"] = run_id
-        stamped_df["exported_at"] = stamped
+        stamped_df = stamp_export_provenance(df, run_id, stamped)
         counts[key] = len(stamped_df)
 
         wrote_table = False
@@ -3551,9 +3673,7 @@ def export_analytics(
     # calibration meant refitting it.
     gate_df = report.to_frame()
     if not gate_df.empty:
-        gate_df = gate_df.copy()
-        gate_df["run_id"] = run_id
-        gate_df["exported_at"] = stamped
+        gate_df = stamp_export_provenance(gate_df, run_id, stamped)
         wrote = False
         if sql_ok and publish and engine is not None:
             try:
@@ -3656,6 +3776,18 @@ _ANALYTICS_COLUMN_COMMENTS_V2: dict[str, str] = {
     "state_now_sd": "Posterior sd of the per-name latent at the snapshot, standardised scale.",
     "run_id": "Export provenance. Every table written by one run shares it.",
     "exported_at": "Export provenance timestamp (UTC).",
+    "source_sha": (
+        "Git HEAD SHA of the source that produced this run, or NULL outside a "
+        "checkout. Cross-run comparisons -- notably any ELPD contrast between "
+        "comparison arms fitted in different runs -- are only legitimate between "
+        "rows sharing this value AND having source_dirty = FALSE."
+    ),
+    "source_dirty": (
+        "TRUE when tracked files differed from source_sha at export time. NOT an "
+        "error: most runs have an uncommitted tree. It is what tells a reader "
+        "that source_sha does not fully determine the code that ran, so two runs "
+        "sharing a SHA may still not share a specification."
+    ),
 }
 
 _ANALYTICS_DDL_HEADER_V2 = """\
@@ -3722,9 +3854,19 @@ def write_analytics_ddl_v2(
                 f'COMMENT ON COLUMN analytics."{table}"."{name}" IS\n    \'{escaped}\';'
             )
     body.append("")
-    body.append(f'CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_isin')
-    body.append(f'    ON analytics."{table}" (isin);')
-    body.append("")
+    # The index is emitted only when the frame actually justifies it. It used to
+    # be an unconditional UNIQUE on ``isin`` because this function only ever saw
+    # the canonical per-ISIN table; applied to the other six that is either a
+    # constraint the data violates (the risk book and the comparison table repeat
+    # or omit ``isin``) or a column that is not there at all (the diagnostics and
+    # gate frames). A DDL that will not apply is worse than no DDL.
+    if "isin" in frame.columns:
+        _unique = bool(frame["isin"].notna().all() and not frame["isin"].duplicated().any())
+        body.append(
+            f'CREATE {"UNIQUE " if _unique else ""}INDEX IF NOT EXISTS idx_{table}_isin'
+        )
+        body.append(f'    ON analytics."{table}" (isin);')
+        body.append("")
 
     path = out_path or Path("sql_scripts") / "analytics" / f"{table}.sql"
     path.parent.mkdir(parents=True, exist_ok=True)
