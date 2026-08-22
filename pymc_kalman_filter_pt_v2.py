@@ -389,6 +389,15 @@ GATE_CATALOGUE: dict[str, str] = {
         "only stage that can decide whether a component EARNS its place rather "
         "than merely converging -- the v2 workflow row had it blank."
     ),
+    "model_comparison_fast": (
+        "SCREENING ONLY, reported not gated: a Max-and-Smooth ELPD contrast. It "
+        "scores arms on per-ISIN PSEUDO-OBSERVATIONS built from one baseline "
+        "fit's covariance, not on the exact likelihood, and it costs seconds "
+        "rather than one production fit per arm. Deliberately a different gate "
+        "name from `model_comparison` so a screening verdict is never read as "
+        "the exact one: use it to pick the candidate, then confirm with "
+        "`--compare` before promoting anything."
+    ),
     "mean_calibration": (
         "NEW: the slope of the response on the fitted mean must be ~1. An "
         "over-shrunk mean does not lose its missing variance, it parks it in "
@@ -725,6 +734,17 @@ class KalmanRunConfigV2:
     #: `log_likelihood`, so an N-arm comparison costs roughly N times a normal
     #: run. It is a decision you make once about a component, not something a
     #: production export should ever trip over.
+    #: Run the §9b-fast Max-and-Smooth SCREEN over comparison arms.
+    #:
+    #: Unlike :attr:`enable_model_comparison` this reuses the production fit that
+    #: has just completed instead of refitting per arm, so it costs seconds. It
+    #: ranks arms; it does not decide them — take the winner to ``--compare``.
+    #: Off by default only because a screen nobody reads is noise in the gate
+    #: report, not because it is expensive.
+    enable_fast_comparison: bool = False
+    #: Arms for the fast screen. Empty means every registered arm that the Max
+    #: step can see (``drift_strict`` is skipped: it changes the design matrix).
+    fast_comparison_arms: tuple[str, ...] = ()
     enable_model_comparison: bool = False
     #: ISIN subsample each arm is fitted on. The `log_likelihood` group is
     #: `chains x draws x n_isin x T` floats — at the full 6.5k panel that is
@@ -2852,6 +2872,147 @@ def run_model_comparison(
     return cmp_df.reset_index().rename(columns={"index": "arm"})
 
 
+def compare_arms_fast(
+    panel: KalmanPanelV2,
+    idata: Any,
+    model_cfg: KalmanModelConfig,
+    run_cfg: KalmanRunConfigV2,
+    report: GateReport,
+    *,
+    arms: Optional[Sequence[str]] = None,
+) -> Optional[pd.DataFrame]:
+    """§9b-fast — screen comparison arms with Max-and-Smooth.
+
+    Runs against **one** baseline fit instead of one fit per arm. The Max step
+    turns each name's trail into a Gaussian pseudo-observation of ``mu_reg``
+    (conditioning on the baseline's covariance), and each arm is then a
+    linear-Gaussian regression over ~6.5k rows with ~20-175 free parameters.
+    Seconds per arm against roughly a production run per arm.
+
+    **This screens; it does not decide.** The contrast is on pseudo-observations,
+    so it ranks arms rather than measuring their exact ELPD. Take the winner to
+    :func:`run_model_comparison` before editing any default. The gate it writes is
+    named ``model_comparison_fast`` for exactly that reason.
+
+    Arms are refused when their config delta touches a field the Max step
+    conditioned on — see
+    :data:`~probabilistic_ml_model.pymc_models._max_and_smooth.COVARIANCE_FIELDS`.
+    ``level_off`` is admissible on purpose: the pseudo model carries the
+    permanent level as a free scale, so dropping it is a latent-side change.
+
+    Parameters
+    ----------
+    panel
+        The panel the baseline was fitted to.
+    idata
+        The baseline posterior.
+    model_cfg
+        The baseline config each arm edits.
+    run_cfg
+        Supplies ``random_seed`` and the draw budget.
+    report
+        Gate report the ``model_comparison_fast`` result is added to.
+    arms
+        Names from :data:`COMPARISON_ARMS`. Defaults to every registered arm.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        The ``az.compare`` table with a ``backend`` column, or ``None`` when the
+        screen could not be completed (always with a failed gate).
+    """
+    import arviz as az
+    import pymc as pm
+
+    from probabilistic_ml_model.pymc_models._max_and_smooth import (
+        assert_arm_is_screenable,
+        build_pseudo_model,
+        gaussian_likelihood_approximation,
+    )
+
+    names = list(arms or COMPARISON_ARMS)
+    unknown = [a for a in names if a not in COMPARISON_ARMS]
+    if unknown:
+        raise ValueError(
+            f"Unknown comparison arm(s) {unknown!r}. Known: {sorted(COMPARISON_ARMS)}"
+        )
+    if len(names) < 2:
+        raise ValueError(f"A contrast needs >= 2 arms, got {names!r}")
+
+    def _fail(msg: str) -> None:
+        logger.error("Fast model comparison: %s", msg)
+        report.add(
+            GateResult(
+                name="model_comparison_fast",
+                passed=False,
+                blocking=False,
+                value=msg[:80],
+                threshold=">= 2 screenable arms",
+                detail="No screening contrast was produced; nothing is indicated.",
+            )
+        )
+
+    # `drift_strict` changes the DESIGN matrix, which the pseudo-observations
+    # carry per name -- so it would need its own Max step against its own panel.
+    # Out of scope for a screen that exists to reuse one.
+    if "drift_strict" in names:
+        _fail("the drift_strict arm changes the design matrix; use --compare")
+        return None
+
+    try:
+        pseudo = gaussian_likelihood_approximation(panel, idata, model_cfg)
+    except Exception as exc:
+        _fail(f"Max step failed: {exc}")
+        return None
+
+    fits: dict[str, Any] = {}
+    for arm in names:
+        arm_cfg = COMPARISON_ARMS[arm](model_cfg)
+        try:
+            assert_arm_is_screenable(model_cfg, arm_cfg, arm)
+        except ValueError as exc:
+            logger.warning("%s", exc)
+            continue
+        try:
+            with build_pseudo_model(pseudo, arm_cfg) as pseudo_model:
+                post = pm.sample(
+                    draws=500, tune=500, chains=4, cores=1, target_accept=0.9,
+                    random_seed=run_cfg.random_seed, progressbar=False,
+                )
+                pm.compute_log_likelihood(post, model=pseudo_model, progressbar=False)
+            fits[arm] = post
+            logger.info("fast arm %r fitted (%d pseudo-observations)", arm, len(pseudo))
+        except Exception as exc:
+            logger.error("fast arm %r failed: %s", arm, exc, exc_info=True)
+
+    if len(fits) < 2:
+        _fail(f"only {len(fits)} arm(s) produced a screenable fit")
+        return None
+
+    cmp_df = az.compare(fits)
+    winner = str(cmp_df.index[0])
+    runner = str(cmp_df.index[1]) if len(cmp_df) > 1 else ""
+    report.add(
+        GateResult(
+            name="model_comparison_fast",
+            passed=True,
+            blocking=False,
+            value=f"{winner} ranks first of {len(fits)}"
+            + (f" (next: {runner})" if runner else ""),
+            threshold="reported, not gated",
+            detail=(
+                f"Max-and-Smooth screen over {len(pseudo)} pseudo-observations "
+                f"from run baseline; w_level {pseudo.diagnostics['w_level']:.4f}, "
+                f"t-inflation {pseudo.diagnostics['t_inflation']:.3f}. SCREEN ONLY "
+                f"-- confirm {winner!r} with --compare before editing a default."
+            ),
+        )
+    )
+    out = cmp_df.reset_index().rename(columns={"index": "arm"})
+    out["backend"] = "max_and_smooth"
+    return out
+
+
 # =========================================================================== #
 # §10  Screen + decision gates                                                #
 # =========================================================================== #
@@ -4070,6 +4231,16 @@ def main(
     if run_cfg.enable_model_comparison:
         result["comparison"] = run_model_comparison(frame, model_cfg, run_cfg, report)
 
+    # §9b-fast — the Max-and-Smooth SCREEN. Reuses the production fit that just
+    # finished rather than refitting anything, so it is cheap enough to leave on;
+    # it ranks arms and never decides one. Same placement rule as §9b: after the
+    # production gates are recorded, and a failure here costs nothing else.
+    if run_cfg.enable_fast_comparison:
+        result["comparison_fast"] = compare_arms_fast(
+            panel, idata, model_cfg, run_cfg, report,
+            arms=run_cfg.fast_comparison_arms or None,
+        )
+
     screen, screen_draws = run_screen(idata, panel, run_cfg, report)
     result["screen"] = screen
     result["screen_draws"] = screen_draws
@@ -4112,8 +4283,15 @@ def main(
         frames["10_screen_mc_summary_v2"] = screen[
             ["isin", "er_mean", "er_sd", "er_p05", "er_p50", "er_p95", "mc_prob_pos"]
         ]
-    if isinstance(result.get("comparison"), pd.DataFrame):
-        frames["09b_comparison_v2"] = result["comparison"]
+    # Both contrasts land in one table, distinguished by `backend`, so a reader
+    # can never mistake a seconds-long screen for an exact ELPD measurement.
+    _cmp_parts = [
+        df.assign(backend=df["backend"] if "backend" in df.columns else "nuts")
+        for df in (result.get("comparison"), result.get("comparison_fast"))
+        if isinstance(df, pd.DataFrame) and not df.empty
+    ]
+    if _cmp_parts:
+        frames["09b_comparison_v2"] = pd.concat(_cmp_parts, ignore_index=True)
     if risk_book is not None:
         frames["10b_risk_analytics_v2"] = apply_out_of_support(
             risk_book.analytics.rename(columns={"expected_sharpe": "expected_sharpe_ratio"})
@@ -4148,6 +4326,17 @@ def _cli() -> int:
             "run the §9b ELPD comparison over these arms, comma-separated "
             f"(known: {','.join(COMPARISON_ARMS)}). Each arm is a full refit plus "
             "a pointwise log_likelihood, so N arms cost ~N runs."
+        ),
+    )
+    parser.add_argument(
+        "--compare-fast", type=str, default=None,
+        help=(
+            "SCREEN these arms with Max-and-Smooth against the run's own fit, "
+            "comma-separated. Seconds per arm instead of a production fit per arm, "
+            "because it reuses one posterior's covariance and refits only the "
+            "latent structure. It RANKS arms; confirm the winner with --compare "
+            "before promoting anything. drift_strict is not screenable (it changes "
+            "the design matrix)."
         ),
     )
     parser.add_argument("--lookbacks", type=str, default=None,
@@ -4188,6 +4377,17 @@ def _cli() -> int:
             parser.error("--compare needs at least two arms to contrast")
         overrides["enable_model_comparison"] = True
         overrides["comparison_arms"] = arms
+    if args.compare_fast is not None:
+        fast_arms = tuple(s.strip() for s in args.compare_fast.split(",") if s.strip())
+        unknown = [a for a in fast_arms if a not in COMPARISON_ARMS]
+        if unknown:
+            parser.error(
+                f"unknown comparison arm(s) {unknown}; known: {sorted(COMPARISON_ARMS)}"
+            )
+        if len(fast_arms) < 2:
+            parser.error("--compare-fast needs at least two arms to contrast")
+        overrides["enable_fast_comparison"] = True
+        overrides["fast_comparison_arms"] = fast_arms
     if overrides:
         run_cfg = replace(run_cfg, **overrides)
 
