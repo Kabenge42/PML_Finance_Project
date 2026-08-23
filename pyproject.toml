@@ -185,3 +185,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "slow: draws posterior samples; minutes rather than seconds (deselect with -m 'not slow')",
+]

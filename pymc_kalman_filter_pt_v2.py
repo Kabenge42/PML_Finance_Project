@@ -41,7 +41,8 @@ Section  Function                            Stage (CLAUDE.md contract)
 7        :func:`sample_posterior`            Fitting
 8        :func:`run_posterior_predictive`    Model evaluation (PPC)
 9        :func:`run_diagnostics`             Fitting diagnostics
-9b       :func:`run_model_comparison`        Model comparison (opt-in)
+9b       :func:`run_model_comparison`        Model comparison (opt-in, exact)
+9b-fast  :func:`compare_arms_fast`           Model comparison (Max-and-Smooth screen)
 10       :func:`run_screen`                  Decision analysis
 10c      :func:`export_analytics`            Export
 14       :func:`summarise`                   Summary + gate report
@@ -77,6 +78,7 @@ import uuid
 import warnings
 from dataclasses import dataclass, field, fields as dc_fields, replace
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
@@ -130,6 +132,10 @@ __all__ = [
     "COMPARISON_ARMS",
     "subsample_panel_v2",
     "run_model_comparison",
+    "compare_arms_fast",
+    "PROVENANCE_COLUMNS",
+    "stamp_export_provenance",
+    "resolve_source_revision",
     "run_screen",
     "export_analytics",
     "main",
@@ -181,6 +187,113 @@ _RISK_BOOK_KEY = "10b_risk_book_v2"
 #: still leave a record. One row per gate, keyed on the same ``run_id`` as the
 #: rest of the run's tables.
 _GATE_REPORT_KEY = "09_gate_report_v2"
+
+#: Every column this workflow stamps onto an exported frame so a reader can tell
+#: which run — and which *source* — produced it.
+#:
+#: ``run_id`` and ``exported_at`` were stamped inline in three separate places
+#: before 2026-08-22; this is the SSOT they now share, matching v1's
+#: ``PROVENANCE_COLUMNS``.
+#:
+#: **Why the source revision was added.** Neither of the original pair says what
+#: CODE produced the row, and writing the fourth edition of the post-run analysis
+#: that gap cost a conclusion: run ``78801513e2cf`` was fitted from a working
+#: tree about two hours before commit ``c08422d`` landed, and ``0121366fbabf``
+#: was the first fit on committed source — so when the book's tail composition
+#: swung 13 -> 17 names there was no way to establish from the artefacts whether
+#: the two runs shared a specification at all. A three-run series was read as
+#: estimator spread on the strength of a git log and a diffstat, which is not
+#: provenance.
+#:
+#: It matters more now that :func:`run_model_comparison` decides questions by
+#: contrasting arms across fits: an ELPD contrast between two runs whose source
+#: is not pinned is not a contrast.
+#:
+#: ``source_dirty`` is **not an error flag** — most of these runs had an
+#: uncommitted tree. It is the fact a reader needs in order to know which
+#: cross-run comparisons are legitimate.
+PROVENANCE_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "exported_at",
+    "source_sha",
+    "source_dirty",
+)
+
+
+@lru_cache(maxsize=1)
+def resolve_source_revision() -> tuple[Optional[str], Optional[bool]]:
+    """Return ``(head_sha, dirty)`` for the working tree, or ``(None, None)``.
+
+    Cached: it shells out to git, the answer cannot change mid-run, and every
+    exported frame asks for it.
+
+    Never raises. A missing git, a non-repository directory or a timeout all
+    report ``(None, None)`` — the same "a failed export must not abort the
+    workflow" rule the rest of this module follows. ``None`` is honest and
+    readable; a fabricated SHA would not be.
+
+    Returns
+    -------
+    tuple[str or None, bool or None]
+        Full 40-character ``HEAD`` SHA, and whether tracked files differ from it.
+    """
+    import subprocess
+
+    root = Path(__file__).resolve().parent
+
+    def _git(*args: str) -> Optional[str]:
+        try:
+            out = subprocess.run(
+                ["git", *args],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("git %s failed: %s", " ".join(args), exc)
+            return None
+        if out.returncode != 0:
+            logger.debug("git %s exited %d", " ".join(args), out.returncode)
+            return None
+        return out.stdout
+
+    sha = _git("rev-parse", "HEAD")
+    if sha is None:
+        logger.info(
+            "source revision unavailable (not a git checkout?): exports carry a "
+            "NULL source_sha."
+        )
+        return None, None
+    status = _git("status", "--porcelain", "--untracked-files=no")
+    dirty = None if status is None else bool(status.strip())
+    return sha.strip() or None, dirty
+
+
+def stamp_export_provenance(
+    frame: pd.DataFrame, run_id: str, stamped: Any
+) -> pd.DataFrame:
+    """Return ``frame`` with :data:`PROVENANCE_COLUMNS` appended.
+
+    Idempotent — re-stamping overwrites in place rather than duplicating.
+
+    Parameters
+    ----------
+    frame
+        Frame to stamp. Not mutated; a shallow copy is returned.
+    run_id
+        The run's identifier, shared by every table it writes.
+    stamped
+        Export timestamp (UTC), shared likewise.
+    """
+    sha, dirty = resolve_source_revision()
+    out = frame.copy(deep=False)
+    out["run_id"] = run_id
+    out["exported_at"] = stamped
+    out["source_sha"] = sha
+    out["source_dirty"] = dirty
+    return out
 
 
 # =========================================================================== #
@@ -280,6 +393,22 @@ GATE_CATALOGUE: dict[str, str] = {
         "refit on the same ISIN subsample with a post-hoc log_likelihood. The "
         "only stage that can decide whether a component EARNS its place rather "
         "than merely converging -- the v2 workflow row had it blank."
+    ),
+    "export_unique_columns": (
+        "BLOCKING: no exported frame may carry the same column name twice. A "
+        "duplicate makes df[col] a DataFrame rather than a Series, so the "
+        "ranking-range gate dies with 'arg must be a list, tuple, 1-d array, or "
+        "Series' AFTER the fit has been paid for. Any rename() mapping one "
+        "existing column onto another existing one creates this silently."
+    ),
+    "model_comparison_fast": (
+        "SCREENING ONLY, reported not gated: a Max-and-Smooth ELPD contrast. It "
+        "scores arms on per-ISIN PSEUDO-OBSERVATIONS built from one baseline "
+        "fit's covariance, not on the exact likelihood, and it costs seconds "
+        "rather than one production fit per arm. Deliberately a different gate "
+        "name from `model_comparison` so a screening verdict is never read as "
+        "the exact one: use it to pick the candidate, then confirm with "
+        "`--compare` before promoting anything."
     ),
     "mean_calibration": (
         "NEW: the slope of the response on the fitted mean must be ~1. An "
@@ -597,7 +726,19 @@ class KalmanRunConfigV2:
     #: kalman_gain inside the risk book to give ``p_long_cond``, which is what
     #: ``p_upside_pos_cond`` is actually tested against.
     p_long: float = 0.50
-    mcap_country_r_max: float = 0.01
+    #: Market-cap pre-selection threshold for long-book eligibility: a name is
+    #: eligible when ``mcap_global_r < mcap_global_r_max``.
+    #:
+    #: **Renamed from ``mcap_country_r_max`` on 2026-08-22.** The old name said
+    #: *country* while the column it is compared against — and has always been
+    #: compared against, in ``RiskBookModel`` and in v1 before it — is
+    #: ``mcap_global_r``. Two different rank bases, one name, and no way to tell
+    #: from the call site which was meant. The column is the thing that cannot
+    #: move (``feat_mcap_global_r`` is the MV's contract and the size-tilt
+    #: driver), so the knob is what changes. :attr:`mcap_country_r_max` remains
+    #: as a read-only alias for one release; ``replace(cfg, mcap_country_r_max=…)``
+    #: raises rather than silently setting nothing.
+    mcap_global_r_max: float = 0.01
 
     # ---- model comparison (§9b) --------------------------------------------
     #: Run the ELPD comparison stage. **Off by default and deliberately not in
@@ -605,6 +746,17 @@ class KalmanRunConfigV2:
     #: `log_likelihood`, so an N-arm comparison costs roughly N times a normal
     #: run. It is a decision you make once about a component, not something a
     #: production export should ever trip over.
+    #: Run the §9b-fast Max-and-Smooth SCREEN over comparison arms.
+    #:
+    #: Unlike :attr:`enable_model_comparison` this reuses the production fit that
+    #: has just completed instead of refitting per arm, so it costs seconds. It
+    #: ranks arms; it does not decide them — take the winner to ``--compare``.
+    #: Off by default only because a screen nobody reads is noise in the gate
+    #: report, not because it is expensive.
+    enable_fast_comparison: bool = False
+    #: Arms for the fast screen. Empty means every registered arm that the Max
+    #: step can see (``drift_strict`` is skipped: it changes the design matrix).
+    fast_comparison_arms: tuple[str, ...] = ()
     enable_model_comparison: bool = False
     #: ISIN subsample each arm is fitted on. The `log_likelihood` group is
     #: `chains x draws x n_isin x T` floats — at the full 6.5k panel that is
@@ -654,6 +806,24 @@ class KalmanRunConfigV2:
                 "gate_shrinkage_rho_max must be in (0, 1], got "
                 f"{self.gate_shrinkage_rho_max!r}"
             )
+
+    @property
+    def mcap_country_r_max(self) -> float:
+        """Deprecated alias of :attr:`mcap_global_r_max`.
+
+        The old name claimed a country-relative rank; the comparison has always
+        been against ``mcap_global_r``. Read-only on purpose — a writable alias
+        on a frozen dataclass would let ``replace()`` appear to work while
+        setting nothing.
+        """
+        warnings.warn(
+            "KalmanRunConfigV2.mcap_country_r_max is deprecated; it was renamed "
+            "to mcap_global_r_max because the threshold is compared against the "
+            "mcap_global_r column, not a country rank.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.mcap_global_r_max
 
     @property
     def gate_coverage_target(self) -> float:
@@ -2714,6 +2884,162 @@ def run_model_comparison(
     return cmp_df.reset_index().rename(columns={"index": "arm"})
 
 
+def compare_arms_fast(
+    panel: KalmanPanelV2,
+    idata: Any,
+    model_cfg: KalmanModelConfig,
+    run_cfg: KalmanRunConfigV2,
+    report: GateReport,
+    *,
+    arms: Optional[Sequence[str]] = None,
+) -> Optional[pd.DataFrame]:
+    """§9b-fast — screen comparison arms with Max-and-Smooth.
+
+    Runs against **one** baseline fit instead of one fit per arm. The Max step
+    turns each name's trail into a Gaussian pseudo-observation of ``mu_reg``
+    (conditioning on the baseline's covariance), and each arm is then a
+    linear-Gaussian regression over ~6.5k rows with ~20-175 free parameters.
+    Seconds per arm against roughly a production run per arm.
+
+    **This screens; it does not decide.** The contrast is on pseudo-observations,
+    so it ranks arms rather than measuring their exact ELPD. Take the winner to
+    :func:`run_model_comparison` before editing any default. The gate it writes is
+    named ``model_comparison_fast`` for exactly that reason.
+
+    Arms are refused when their config delta touches a field the Max step
+    conditioned on — see
+    :data:`~probabilistic_ml_model.pymc_models._max_and_smooth.COVARIANCE_FIELDS`.
+    ``level_off`` is admissible on purpose: the pseudo model carries the
+    permanent level as a free scale, so dropping it is a latent-side change.
+
+    Parameters
+    ----------
+    panel
+        The panel the baseline was fitted to.
+    idata
+        The baseline posterior.
+    model_cfg
+        The baseline config each arm edits.
+    run_cfg
+        Supplies ``random_seed`` and the draw budget.
+    report
+        Gate report the ``model_comparison_fast`` result is added to.
+    arms
+        Names from :data:`COMPARISON_ARMS`. Defaults to every registered arm.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        The ``az.compare`` table with a ``backend`` column, or ``None`` when the
+        screen could not be completed (always with a failed gate).
+    """
+    import arviz as az
+    import pymc as pm
+
+    from probabilistic_ml_model.pymc_models._max_and_smooth import (
+        assert_arm_is_screenable,
+        build_pseudo_model,
+        gaussian_likelihood_approximation,
+    )
+
+    names = list(arms or COMPARISON_ARMS)
+    unknown = [a for a in names if a not in COMPARISON_ARMS]
+    if unknown:
+        raise ValueError(
+            f"Unknown comparison arm(s) {unknown!r}. Known: {sorted(COMPARISON_ARMS)}"
+        )
+    if len(names) < 2:
+        raise ValueError(f"A contrast needs >= 2 arms, got {names!r}")
+
+    def _fail(msg: str) -> None:
+        logger.error("Fast model comparison: %s", msg)
+        report.add(
+            GateResult(
+                name="model_comparison_fast",
+                passed=False,
+                blocking=False,
+                value=msg[:80],
+                threshold=">= 2 screenable arms",
+                detail="No screening contrast was produced; nothing is indicated.",
+            )
+        )
+
+    # `drift_strict` changes the DESIGN matrix, which the pseudo-observations
+    # carry per name -- so it would need its own Max step against its own panel.
+    # Out of scope for a screen that exists to reuse one.
+    if "drift_strict" in names:
+        _fail("the drift_strict arm changes the design matrix; use --compare")
+        return None
+
+    # The UNION of every arm's group effects, not the baseline's. `prepare_panel`
+    # indexes only `model_cfg.group_effects`, so a panel prepared for the shipped
+    # four-level hierarchy carries no `country` / `industry` index -- and
+    # `hierarchy_fine` would reduce to the baseline and screen as "no
+    # difference". The Max step factorises the extras from `panel.frame`.
+    extra_groups = sorted(
+        {
+            col
+            for arm in names
+            for col in COMPARISON_ARMS[arm](model_cfg).group_effects
+        }
+        - set(panel.coord_idx)
+    )
+    try:
+        pseudo = gaussian_likelihood_approximation(
+            panel, idata, model_cfg, extra_group_cols=extra_groups
+        )
+    except Exception as exc:
+        _fail(f"Max step failed: {exc}")
+        return None
+
+    fits: dict[str, Any] = {}
+    for arm in names:
+        arm_cfg = COMPARISON_ARMS[arm](model_cfg)
+        try:
+            assert_arm_is_screenable(model_cfg, arm_cfg, arm)
+        except ValueError as exc:
+            logger.warning("%s", exc)
+            continue
+        try:
+            with build_pseudo_model(pseudo, arm_cfg) as pseudo_model:
+                post = pm.sample(
+                    draws=500, tune=500, chains=4, cores=1, target_accept=0.9,
+                    random_seed=run_cfg.random_seed, progressbar=False,
+                )
+                pm.compute_log_likelihood(post, model=pseudo_model, progressbar=False)
+            fits[arm] = post
+            logger.info("fast arm %r fitted (%d pseudo-observations)", arm, len(pseudo))
+        except Exception as exc:
+            logger.error("fast arm %r failed: %s", arm, exc, exc_info=True)
+
+    if len(fits) < 2:
+        _fail(f"only {len(fits)} arm(s) produced a screenable fit")
+        return None
+
+    cmp_df = az.compare(fits)
+    winner = str(cmp_df.index[0])
+    runner = str(cmp_df.index[1]) if len(cmp_df) > 1 else ""
+    report.add(
+        GateResult(
+            name="model_comparison_fast",
+            passed=True,
+            blocking=False,
+            value=f"{winner} ranks first of {len(fits)}"
+            + (f" (next: {runner})" if runner else ""),
+            threshold="reported, not gated",
+            detail=(
+                f"Max-and-Smooth screen over {len(pseudo)} pseudo-observations "
+                f"from run baseline; w_level {pseudo.diagnostics['w_level']:.4f}, "
+                f"t-inflation {pseudo.diagnostics['t_inflation']:.3f}. SCREEN ONLY "
+                f"-- confirm {winner!r} with --compare before editing a default."
+            ),
+        )
+    )
+    out = cmp_df.reset_index().rename(columns={"index": "arm"})
+    out["backend"] = "max_and_smooth"
+    return out
+
+
 # =========================================================================== #
 # §10  Screen + decision gates                                                #
 # =========================================================================== #
@@ -3198,6 +3524,7 @@ def run_risk_book(
         if draws is not None:
             eu = draws.eu
             return_draws = draws.pooled_returns
+            return_draws_isins = draws.isins
         else:
             logger.warning(
                 "run_risk_book called without ScreenDraws: re-resolving the "
@@ -3219,6 +3546,7 @@ def run_risk_book(
                 coords={"isin": panel.isins},
             )
             return_draws = None
+            return_draws_isins = None
         book = compute_cvar_aware_book(
             idata,
             eu,
@@ -3227,8 +3555,9 @@ def run_risk_book(
             cap=run_cfg.weight_cap,
             k_book=run_cfg.k_book,
             p_long=run_cfg.p_long,
-            mcap_r_max=run_cfg.mcap_country_r_max,
+            mcap_r_max=run_cfg.mcap_global_r_max,
             return_draws=return_draws,
+            return_draws_isins=return_draws_isins,
             tail_risk_vol_floor_k=run_cfg.tail_risk_vol_floor_k,
         )
         logger.info(
@@ -3417,6 +3746,37 @@ def export_analytics(
         )
     )
 
+    # ---- gate: no duplicate column names -----------------------------------
+    # Cheap, and it fires BEFORE the loops that would otherwise die on it. A
+    # duplicated name makes `df[col]` a DataFrame, so `pd.to_numeric` below
+    # raises "arg must be a list, tuple, 1-d array, or Series" and the export
+    # aborts after the fit is already paid for. It is easy to reintroduce: any
+    # `rename()` that maps one existing column onto another existing one does it
+    # silently, which is how both `expected_sharpe -> expected_sharpe_ratio`
+    # sites managed it.
+    dupes = {
+        key: sorted({c for c in df.columns if list(df.columns).count(c) > 1})
+        for key, df in frames.items()
+        if df is not None and not df.empty
+        and len(df.columns) != len(set(df.columns))
+    }
+    report.add(
+        GateResult(
+            name="export_unique_columns",
+            passed=not dupes,
+            blocking=True,
+            value=f"{len(dupes)} frame(s) with duplicate columns",
+            threshold="every frame has unique column names",
+            detail="; ".join(f"{k}: {v}" for k, v in dupes.items()) if dupes else "",
+        )
+    )
+    if dupes:
+        # Returning here is deliberate: every remaining stage indexes by column
+        # name, so continuing produces a cascade of confusing errors instead of
+        # this one clear verdict.
+        logger.error("Duplicate columns block the export: %s", dupes)
+        return counts
+
     # ---- gate: ranking metrics in range ------------------------------------
     offenders: list[str] = []
     for key, df in frames.items():
@@ -3468,21 +3828,35 @@ def export_analytics(
     # Render the DDL before any table write, and unconditionally: it needs no
     # connection, so an offline run still leaves a reviewable schema.
     if _ANALYTICS_TABLE_V2 in frames and not frames[_ANALYTICS_TABLE_V2].empty:
-        stamped_canonical = frames[_ANALYTICS_TABLE_V2].copy()
-        stamped_canonical["run_id"] = run_id
-        stamped_canonical["exported_at"] = stamped
+        stamped_canonical = stamp_export_provenance(
+            frames[_ANALYTICS_TABLE_V2], run_id, stamped
+        )
         try:
             write_analytics_ddl_v2(stamped_canonical)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("DDL render failed: %s", exc)
 
+    # Every other v2 frame gets a DDL too, since 2026-08-22. Only the canonical
+    # table used to, so the six pipeline tables landed via `to_sql` with no
+    # readable schema and no record of what their columns mean — the exact gap
+    # the v1 convention exists to close, applied to one table out of seven.
+    # `_ANALYTICS_COLUMN_COMMENTS_V2` is keyed by column name, so a column
+    # documented once is documented everywhere it appears.
+    for _key, _frame in frames.items():
+        if _key == _ANALYTICS_TABLE_V2 or _frame is None or _frame.empty:
+            continue
+        try:
+            write_analytics_ddl_v2(
+                stamp_export_provenance(_frame, run_id, stamped), table=_key
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("DDL render failed for %s: %s", _key, exc)
+
     sql_ok = engine is not None
     for key, df in frames.items():
         if df is None or df.empty:
             continue
-        stamped_df = df.copy()
-        stamped_df["run_id"] = run_id
-        stamped_df["exported_at"] = stamped
+        stamped_df = stamp_export_provenance(df, run_id, stamped)
         counts[key] = len(stamped_df)
 
         wrote_table = False
@@ -3518,9 +3892,7 @@ def export_analytics(
     # calibration meant refitting it.
     gate_df = report.to_frame()
     if not gate_df.empty:
-        gate_df = gate_df.copy()
-        gate_df["run_id"] = run_id
-        gate_df["exported_at"] = stamped
+        gate_df = stamp_export_provenance(gate_df, run_id, stamped)
         wrote = False
         if sql_ok and publish and engine is not None:
             try:
@@ -3623,6 +3995,18 @@ _ANALYTICS_COLUMN_COMMENTS_V2: dict[str, str] = {
     "state_now_sd": "Posterior sd of the per-name latent at the snapshot, standardised scale.",
     "run_id": "Export provenance. Every table written by one run shares it.",
     "exported_at": "Export provenance timestamp (UTC).",
+    "source_sha": (
+        "Git HEAD SHA of the source that produced this run, or NULL outside a "
+        "checkout. Cross-run comparisons -- notably any ELPD contrast between "
+        "comparison arms fitted in different runs -- are only legitimate between "
+        "rows sharing this value AND having source_dirty = FALSE."
+    ),
+    "source_dirty": (
+        "TRUE when tracked files differed from source_sha at export time. NOT an "
+        "error: most runs have an uncommitted tree. It is what tells a reader "
+        "that source_sha does not fully determine the code that ran, so two runs "
+        "sharing a SHA may still not share a specification."
+    ),
 }
 
 _ANALYTICS_DDL_HEADER_V2 = """\
@@ -3689,9 +4073,19 @@ def write_analytics_ddl_v2(
                 f'COMMENT ON COLUMN analytics."{table}"."{name}" IS\n    \'{escaped}\';'
             )
     body.append("")
-    body.append(f'CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_isin')
-    body.append(f'    ON analytics."{table}" (isin);')
-    body.append("")
+    # The index is emitted only when the frame actually justifies it. It used to
+    # be an unconditional UNIQUE on ``isin`` because this function only ever saw
+    # the canonical per-ISIN table; applied to the other six that is either a
+    # constraint the data violates (the risk book and the comparison table repeat
+    # or omit ``isin``) or a column that is not there at all (the diagnostics and
+    # gate frames). A DDL that will not apply is worse than no DDL.
+    if "isin" in frame.columns:
+        _unique = bool(frame["isin"].notna().all() and not frame["isin"].duplicated().any())
+        body.append(
+            f'CREATE {"UNIQUE " if _unique else ""}INDEX IF NOT EXISTS idx_{table}_isin'
+        )
+        body.append(f'    ON analytics."{table}" (isin);')
+        body.append("")
 
     path = out_path or Path("sql_scripts") / "analytics" / f"{table}.sql"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -3895,6 +4289,16 @@ def main(
     if run_cfg.enable_model_comparison:
         result["comparison"] = run_model_comparison(frame, model_cfg, run_cfg, report)
 
+    # §9b-fast — the Max-and-Smooth SCREEN. Reuses the production fit that just
+    # finished rather than refitting anything, so it is cheap enough to leave on;
+    # it ranks arms and never decides one. Same placement rule as §9b: after the
+    # production gates are recorded, and a failure here costs nothing else.
+    if run_cfg.enable_fast_comparison:
+        result["comparison_fast"] = compare_arms_fast(
+            panel, idata, model_cfg, run_cfg, report,
+            arms=run_cfg.fast_comparison_arms or None,
+        )
+
     screen, screen_draws = run_screen(idata, panel, run_cfg, report)
     result["screen"] = screen
     result["screen_draws"] = screen_draws
@@ -3907,9 +4311,16 @@ def main(
     kalman_results = (
         risk_book.analytics.copy() if risk_book is not None else screen.copy()
     )
+    # Drop the alias BEFORE renaming, for the same reason as the risk table
+    # below: `compute_cvar_aware_book` emits both `expected_sharpe` and
+    # `expected_sharpe_ratio` since 2026-08-22, so renaming one onto the other
+    # produces two columns with that name. That is not merely untidy -- the
+    # export_ranking_range gate then hands `pd.to_numeric` a DataFrame instead of
+    # a Series and the whole export dies with "arg must be a list, tuple, 1-d
+    # array, or Series", after the fit has already been paid for.
+    kalman_results = kalman_results.drop(columns=["expected_sharpe"], errors="ignore")
     kalman_results = kalman_results.rename(
         columns={
-            "expected_sharpe": "expected_sharpe_ratio",
             "starr": "reward_to_cvar",
             "cvar05": "cvar_5pct_kalman",
             "exp_vol": "expected_vol_kalman",
@@ -3937,11 +4348,22 @@ def main(
         frames["10_screen_mc_summary_v2"] = screen[
             ["isin", "er_mean", "er_sd", "er_p05", "er_p50", "er_p95", "mc_prob_pos"]
         ]
-    if isinstance(result.get("comparison"), pd.DataFrame):
-        frames["09b_comparison_v2"] = result["comparison"]
+    # Both contrasts land in one table, distinguished by `backend`, so a reader
+    # can never mistake a seconds-long screen for an exact ELPD measurement.
+    _cmp_parts = [
+        df.assign(backend=df["backend"] if "backend" in df.columns else "nuts")
+        for df in (result.get("comparison"), result.get("comparison_fast"))
+        if isinstance(df, pd.DataFrame) and not df.empty
+    ]
+    if _cmp_parts:
+        frames["09b_comparison_v2"] = pd.concat(_cmp_parts, ignore_index=True)
     if risk_book is not None:
+        # `compute_cvar_aware_book` emits BOTH names since 2026-08-22, so the old
+        # rename here would produce two columns called `expected_sharpe_ratio`
+        # and break `to_sql`. Drop the alias instead: the analytics table has
+        # always published the long name, and the DDL documents that one.
         frames["10b_risk_analytics_v2"] = apply_out_of_support(
-            risk_book.analytics.rename(columns={"expected_sharpe": "expected_sharpe_ratio"})
+            risk_book.analytics.drop(columns=["expected_sharpe"], errors="ignore")
         )
         frames[_RISK_BOOK_KEY] = risk_book.book
     result["export_counts"] = export_analytics(frames, run_cfg, report, run_id=run_id)
@@ -3973,6 +4395,17 @@ def _cli() -> int:
             "run the §9b ELPD comparison over these arms, comma-separated "
             f"(known: {','.join(COMPARISON_ARMS)}). Each arm is a full refit plus "
             "a pointwise log_likelihood, so N arms cost ~N runs."
+        ),
+    )
+    parser.add_argument(
+        "--compare-fast", type=str, default=None,
+        help=(
+            "SCREEN these arms with Max-and-Smooth against the run's own fit, "
+            "comma-separated. Seconds per arm instead of a production fit per arm, "
+            "because it reuses one posterior's covariance and refits only the "
+            "latent structure. It RANKS arms; confirm the winner with --compare "
+            "before promoting anything. drift_strict is not screenable (it changes "
+            "the design matrix)."
         ),
     )
     parser.add_argument("--lookbacks", type=str, default=None,
@@ -4013,6 +4446,17 @@ def _cli() -> int:
             parser.error("--compare needs at least two arms to contrast")
         overrides["enable_model_comparison"] = True
         overrides["comparison_arms"] = arms
+    if args.compare_fast is not None:
+        fast_arms = tuple(s.strip() for s in args.compare_fast.split(",") if s.strip())
+        unknown = [a for a in fast_arms if a not in COMPARISON_ARMS]
+        if unknown:
+            parser.error(
+                f"unknown comparison arm(s) {unknown}; known: {sorted(COMPARISON_ARMS)}"
+            )
+        if len(fast_arms) < 2:
+            parser.error("--compare-fast needs at least two arms to contrast")
+        overrides["enable_fast_comparison"] = True
+        overrides["fast_comparison_arms"] = fast_arms
     if overrides:
         run_cfg = replace(run_cfg, **overrides)
 

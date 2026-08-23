@@ -25,6 +25,14 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
         ".KalmanFilterModel_v2",
         "fit_trail_correlation_kernel",
     ),
+    # ---- Max-and-Smooth screening backend (_max_and_smooth) -----------------
+    "PseudoObservations": ("._max_and_smooth", "PseudoObservations"),
+    "gaussian_likelihood_approximation": (
+        "._max_and_smooth",
+        "gaussian_likelihood_approximation",
+    ),
+    "build_pseudo_model": ("._max_and_smooth", "build_pseudo_model"),
+    "assert_arm_is_screenable": ("._max_and_smooth", "assert_arm_is_screenable"),
     "resolve_screen_latent_v2": (".KalmanFilterModel_v2", "resolve_screen_latent_v2"),
     "KALMAN_V2_SCREEN_LATENT": (".KalmanFilterModel_v2", "KALMAN_V2_SCREEN_LATENT"),
     "KALMAN_DRIFT_EXCLUDED_FEATURES": (

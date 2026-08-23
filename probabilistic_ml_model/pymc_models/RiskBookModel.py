@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -59,6 +59,15 @@ MIN_TAIL_RISK = 0.01
 #: ``100 x expected_upside`` for exactly those names — a ranking discontinuity
 #: dressed as conviction. 0.25 charges a quarter of the name's own dispersion,
 #: so a name with no simulated loss is still charged for the spread it has.
+#:
+#: **This became load-bearing on 2026-08-22**, when the ``expected_upside ->
+#: cvar05`` dispersion leg was removed from ``tail_risk``. Until then the leg was
+#: ``~2 * er_sd`` on the primary path and dominated any sensible fraction of
+#: ``er_sd``, making this floor inert by construction and reachable only on the
+#: ``return_draws=None`` fallback. It now binds for every favourable-tail name,
+#: so changing it moves the published book. Mirrored — deliberately, since the
+#: dashboard must not import the PyMC stack — as ``_TAIL_RISK_VOL_FLOOR_K`` in
+#: ``dashboards/geib/charts/kelly.py``; the two must change together.
 DEFAULT_TAIL_RISK_VOL_FLOOR_K = 0.25
 
 __all__ = [
@@ -159,6 +168,7 @@ def compute_cvar_aware_book(
         p_long: float = DEFAULT_P_LONG,
         mcap_r_max: float = DEFAULT_MCAP_R_MAX,
         return_draws: Optional[np.ndarray] = None,
+        return_draws_isins: Optional[Sequence[str]] = None,
         tail_risk_vol_floor_k: float = DEFAULT_TAIL_RISK_VOL_FLOOR_K,
 ) -> RiskBook:
     """Build the CVaR-aware long book and per-name risk analytics (SSOT).
@@ -189,15 +199,34 @@ def compute_cvar_aware_book(
         read from ``results``.
     eu
         Posterior ``expected_upside`` draws over ``(chain, draw, isin)`` as
-        decimals (``ScreenContext.eu``). Still the source of ``p_upside_pos`` and
-        the ``expected_upside -> CVaR`` dispersion leg of ``tail_risk``, and the
-        fallback for ``cvar05`` / ``exp_vol`` when ``return_draws`` is absent.
+        decimals (``ScreenContext.eu``). The source of ``p_upside_pos``, and the
+        fallback for ``cvar05`` / ``exp_vol`` when ``return_draws`` is absent. It
+        no longer feeds ``tail_risk``: the ``expected_upside -> CVaR`` dispersion
+        leg was removed 2026-08-22 because it fell as ``cvar05`` improved, so
+        STARR rose on numerator and denominator together.
     return_draws
-        Monte-Carlo forward returns as decimals, shape
-        ``(n_isin, n_samples)``, row-aligned to ``results['isin']``. Supply
-        ``ScreenDraws.pooled_returns``, whose pooling matches the exported
+        Monte-Carlo forward returns as decimals, shape ``(n_isin, n_samples)``.
+        Supply ``ScreenDraws.pooled_returns``, whose pooling matches the exported
         ``er_*`` summary so a CVaR taken here and the ``er_p05`` in the same row
         describe one distribution.
+
+        **Pass ``return_draws_isins`` with it.** Rows are no longer assumed to be
+        in ``results['isin']`` order.
+    return_draws_isins
+        ISIN labels for the rows of ``return_draws`` (``ScreenDraws.isins``).
+        Used to reindex the draws onto ``results['isin']`` by key.
+
+        .. versionadded:: 2026-08-22
+           Positional alignment was **silently wrong**. ``run_screen`` returns the
+           screen sorted by ``expected_upside`` while the draws stay in
+           ``panel.isins`` order, so every risk column was attributed to the wrong
+           name — a permutation the length-only guard could not see. On run
+           ``0121366fbabf`` ``exp_vol`` and ``er_sd`` (the pooled sd of the same
+           array, so necessarily equal) correlated **-0.007** while their sorted
+           values matched to 1e-9 for 100 % of names, and the identity
+           ``cvar05 <= er_p05`` failed for 35.7 % of the universe. Omitting this
+           argument keeps the old positional behaviour but warns; the
+           ``exp_vol`` vs ``er_sd`` self-check runs either way.
     tail_risk_vol_floor_k
         Floor on ``tail_risk`` as a fraction of the name's own return sd. The
         absolute :data:`MIN_TAIL_RISK` floor binds for names whose simulated 5 %
@@ -205,6 +234,11 @@ def compute_cvar_aware_book(
         run ``49e84d7e9d59`` — and turns STARR into ``100 x expected_upside`` for
         exactly those names, which is what made the ranking bimodal (median 2.35,
         p75 25.6). ``0.0`` restores the pre-2026-08-20 behaviour.
+
+        **Load-bearing since 2026-08-22.** With the dispersion leg removed this
+        is the only term standing between a favourable-tail name and the absolute
+        floor, so it now moves the book directly instead of being inert on the
+        primary path. Raise it toward ``1.0`` to charge a name its full return sd.
     results
         Per-ISIN screen table; must carry ``isin``, ``expected_pt``,
         ``expected_pt_hdi_{lo,hi}`` and ``expected_upside``. ``mcap_global_r``,
@@ -336,18 +370,104 @@ def compute_cvar_aware_book(
     _ret = None
     if return_draws is not None:
         _ret = np.asarray(return_draws, dtype='float64')
-        if _ret.ndim != 2 or _ret.shape[0] != len(nm):
+        # The row-count check applies ONLY to the unlabelled path. With labels the
+        # rows are matched by key, so a draw set that covers a subset (or a
+        # superset) of the screen is not an error — it reindexes, and the names it
+        # cannot supply become NaN a few lines below. Requiring equal length here
+        # was what made the labelled subset case fall back to the posterior.
+        _bad_rank = _ret.ndim != 2
+        _bad_len = return_draws_isins is None and _ret.shape[0] != len(nm)
+        if _bad_rank or _bad_len:
             logger.warning(
-                'return_draws has shape %s but the screen carries %d names; '
-                'falling back to the posterior upside draws, which makes cvar05 '
-                'an estimation-uncertainty quantity rather than a loss quantile.',
+                'return_draws has shape %s but the screen carries %d names and no '
+                'labels were supplied; falling back to the posterior upside draws, '
+                'which makes cvar05 an estimation-uncertainty quantity rather than '
+                'a loss quantile.',
                 _ret.shape, len(nm),
             )
             _ret = None
+
+    # ---- ALIGN THE RETURN DRAWS BY ISIN, NEVER BY POSITION -----------------
+    #
+    # This was a positional assignment until 2026-08-22, and it was wrong.
+    # ``run_screen`` ends with
+    # ``screen.sort_values('expected_upside').reset_index(drop=True)`` while
+    # ``ScreenDraws.pooled_returns`` stays in ``panel.isins`` order, so row i of
+    # the draws belonged to a DIFFERENT NAME than row i of the screen. The only
+    # guard was the length check above, which a permutation passes.
+    #
+    # Measured on the exported run ``0121366fbabf``: ``exp_vol`` and ``er_sd``
+    # are the pooled sd of the same array and must be equal to the last bit —
+    # they correlated **-0.007**, and their SORTED values agreed to 1e-9 for
+    # 100.00% of 6,506 names. That is the signature of a permutation, not of a
+    # different quantity. ``cvar05 <= er_p05`` — an arithmetic identity for one
+    # distribution — failed for 35.7% of the universe.
+    #
+    # Everything downstream inherited it: ``cvar05``, ``exp_vol``,
+    # ``ret_vol_ratio``, ``tail_risk``, ``starr``, the sized book, and the
+    # dashboard's ``cvar_5pct_kalman`` / ``expected_vol_kalman``. It also
+    # explains the instability that made the STARR item unreadable — a book
+    # tail composition swinging 18/13/17 names across three fits of ONE
+    # specification is what a re-drawn permutation looks like, because the
+    # ``expected_upside`` sort order changes slightly between fits and permutes
+    # the risk columns differently every run.
+    #
+    # ``er_*`` escaped because ``run_screen`` merges them ON ``isin``. The keyed
+    # ``reindex`` used for the ``eu`` fallback a few lines below was always the
+    # correct pattern; the primary path simply did not use it.
     if _ret is not None:
+        if return_draws_isins is not None:
+            _draw_isins = np.asarray(return_draws_isins).astype(str)
+            if len(_draw_isins) != _ret.shape[0]:
+                raise ValueError(
+                    f'return_draws_isins has {len(_draw_isins)} labels for '
+                    f'{_ret.shape[0]} draw rows.'
+                )
+            _pos = pd.Series(np.arange(_ret.shape[0]), index=_draw_isins)
+            _take = _pos.reindex(nm['isin'].astype(str)).to_numpy()
+            _missing = int(np.isnan(_take).sum())
+            if _missing:
+                logger.warning(
+                    '%d of %d screen names have no row in return_draws; their '
+                    'cvar05 / exp_vol are NaN rather than another name\'s.',
+                    _missing, len(nm),
+                )
+            _safe = np.nan_to_num(_take, nan=0.0).astype('int64')
+            _ret = _ret[_safe]
+            _absent = np.isnan(_take)
+        else:
+            logger.warning(
+                'return_draws supplied without return_draws_isins: assuming the '
+                'rows are already in results["isin"] order. This assumption was '
+                'silently FALSE until 2026-08-22 and corrupted every risk column. '
+                'Pass the labels (ScreenDraws.isins).'
+            )
+            _absent = np.zeros(len(nm), dtype=bool)
+
         _cvar, _sd = _tail_stats(_ret)
+        _cvar = np.where(_absent, np.nan, _cvar)
+        _sd = np.where(_absent, np.nan, _sd)
         nm['cvar05'] = _cvar
         nm['exp_vol'] = _sd
+
+        # Self-check on an identity, not on a plausibility. ``exp_vol`` and
+        # ``er_sd`` are the pooled sd of the same draws, so any disagreement
+        # beyond floating point means the rows are still misaligned. This is the
+        # exact test that caught the original bug; it now runs on every call.
+        if 'er_sd' in nm.columns:
+            _ref = pd.to_numeric(nm['er_sd'], errors='coerce').to_numpy(dtype='float64')
+            _cmp = np.isfinite(_ref) & np.isfinite(_sd) & (np.abs(_ref) > 0)
+            if _cmp.any():
+                _rel = np.abs(_ref[_cmp] - _sd[_cmp]) / np.abs(_ref[_cmp])
+                _bad = float((_rel > 1e-6).mean())
+                if _bad > 0.01:
+                    logger.error(
+                        'exp_vol disagrees with er_sd for %.1f%% of names. These '
+                        'are the pooled sd of the SAME Monte-Carlo draws, so this '
+                        'can only mean the return draws are misaligned to the '
+                        'screen. Every risk column and the sized book are '
+                        'attributed to the wrong names.', 100.0 * _bad,
+                    )
     elif _eu_vals is not None and _isin_order is not None:
         logger.warning(
             'no return_draws supplied: cvar05 and exp_vol fall back to the '
@@ -372,30 +492,43 @@ def compute_cvar_aware_book(
     #     not of a realised equity return. It reads as a t-statistic on the
     #     uplift estimate, so book values of 5-7 are normal and are NOT
     #     investment Sharpe ratios. Exported as ``expected_sharpe_ratio``.
-    #   * tail_risk        - binding downside: the largest of the mean->CVaR
-    #     dispersion, the Student-t MC 5% loss magnitude, and a RELATIVE floor at
-    #     ``tail_risk_vol_floor_k`` of the name's own return sd, with the
-    #     absolute ``MIN_TAIL_RISK`` as a last resort.
+    #   * tail_risk        - binding downside. ON THE RETURN-DRAW PATH: the larger
+    #     of the Student-t MC 5% loss magnitude and a RELATIVE floor at
+    #     ``tail_risk_vol_floor_k`` of the name's own return sd, with the absolute
+    #     ``MIN_TAIL_RISK`` as a last resort. On the ``return_draws=None``
+    #     fallback the mean->CVaR dispersion leg is still included, because it is
+    #     the only dispersion that path has — see the branch below.
     #
-    #     The relative floor was added 2026-08-20, and it is worth being precise
-    #     about what it does and does not fix. The failure it was written for:
-    #     with ``cvar05`` taken from the posterior of the MEAN, the mean-to-CVaR
-    #     dispersion is only ~1pp, so any name whose simulated 5% quantile was
-    #     positive had no binding downside term at all and fell to the 1pp
-    #     absolute floor — making ``starr`` ``100 x expected_upside`` for it.
-    #     That was 29.6% of the universe on run ``49e84d7e9d59`` and it selected
-    #     the book: 14 of 25 names sat on the floor and 24 of 25 had
-    #     ``er_p05 > 0``, while only 16 of the top-100 STARR names were top-100
-    #     by upside.
+    #     THE MEAN->CVaR DISPERSION LEG WAS REMOVED 2026-08-22 (return-draw path
+    #     only). It led the
+    #     reduce as ``(expected_upside - cvar05).clip(lower=0)``, and it made
+    #     ``starr`` reward a favourable tail twice: the term SHRINKS as ``cvar05``
+    #     improves, so the ratio rose on numerator and denominator together and
+    #     the book was being selected partly on the sign of its own tail. The
+    #     measurement that settled it — three fits of one specification with
+    #     nothing in this file changed — gave 18 / 13 / 17 book names on a
+    #     positive 5% tail and +10.4% / +2.9% / +8.8% weighted ``cvar05`` against
+    #     a 13.1% universe base rate. A defect ranging over a factor of three
+    #     between draws cannot be tracked to a conclusion; an earlier reading of
+    #     the middle figure as the defect shrinking was reading the estimator's
+    #     spread. That series is the BEFORE-measurement for this change, and the
+    #     success criterion is that it stops oscillating, not that any single run
+    #     lands on a particular number.
     #
-    #     Supplying ``return_draws`` fixes that on its own: ``expected_upside -
-    #     cvar05`` then becomes roughly ``2 * er_sd``, which dominates any
-    #     sensible fraction of ``er_sd``, and the absolute floor is unreachable.
-    #     So on the primary path this term is inert BY CONSTRUCTION — it is
-    #     defence for the ``return_draws=None`` fallback (where the old
-    #     behaviour returns exactly) and for a degenerate MC distribution. Kept
-    #     because both of those are reachable and neither announces itself in
-    #     the output.
+    #     Once ``cvar05`` comes from the return draws the leg had no remaining
+    #     job the survivors do not do better: ``-er_p05`` IS the loss quantile and
+    #     ``tail_risk_vol_floor_k * er_sd`` IS the dispersion floor, and neither
+    #     depends on ``expected_upside``.
+    #
+    #     THE RELATIVE FLOOR IS NOW LOAD-BEARING, which inverts its original
+    #     rationale. Added 2026-08-20, it was defence for the
+    #     ``return_draws=None`` fallback: on the primary path the dispersion leg
+    #     was ``~2 * er_sd`` and dominated any sensible fraction of ``er_sd``, so
+    #     the floor was inert BY CONSTRUCTION. With the leg gone it binds for
+    #     every name whose simulated 5% quantile is positive — which is the whole
+    #     point, since such a name is charged for the spread it has instead of
+    #     falling to a 1pp absolute floor and scoring ``100 x expected_upside``.
+    #     Changing ``tail_risk_vol_floor_k`` now moves the book directly.
     #   * starr            - reward per unit expected-shortfall (STARR ratio).
     #
     # Every denominator is floored at ``MIN_RATIO_DENOMINATOR`` and every result
@@ -415,7 +548,14 @@ def compute_cvar_aware_book(
         nm['expected_sharpe'] = _safe_ratio(nm['er_mean'], nm['er_sd'])
     else:  # pragma: no cover - older screen frame without the MC summary
         nm['expected_sharpe'] = np.nan
-    _md_disp = (nm['expected_upside'] - nm['cvar05']).fillna(0.0).clip(lower=0.0)
+    # One quantity, one name at the frame boundary. ``expected_sharpe`` and the
+    # exported ``expected_sharpe_ratio`` were the same number under two names,
+    # and which one a frame carried depended on which export path produced it
+    # (``10b_risk_analytics_v2`` had the long name, ``10b_risk_book_v2`` the
+    # short one). Both are emitted here so a consumer of either frame reads the
+    # same column; ``expected_sharpe`` is the alias and is retained for one
+    # release, as with ``weight`` above.
+    nm['expected_sharpe_ratio'] = nm['expected_sharpe']
     _mc_loss = (-nm['er_p05'].astype('float64')
                 if 'er_p05' in nm.columns else pd.Series(0.0, index=nm.index)).fillna(0.0)
     _vol_floor = (
@@ -424,12 +564,34 @@ def compute_cvar_aware_book(
         if 'er_sd' in nm.columns
         else pd.Series(0.0, index=nm.index)
     )
-    nm['tail_risk'] = np.maximum.reduce([
-        _md_disp.to_numpy(),
+    _legs = [
         _mc_loss.to_numpy(),
         np.asarray(_vol_floor, dtype='float64'),
         np.full(len(nm), MIN_TAIL_RISK),
-    ])
+    ]
+
+    # The dispersion leg is dropped ONLY on the return-draw path, because that is
+    # the only path on which the surviving legs exist.
+    #
+    # On the fallback (``return_draws is None``) ``cvar05`` is the 5 % tail of the
+    # POSTERIOR upside draws and ``er_p05`` / ``er_sd`` are typically absent
+    # altogether, so removing the leg would leave ``tail_risk`` pinned at
+    # ``MIN_TAIL_RISK`` for every name — a CONSTANT denominator, making ``starr``
+    # a rescaling of ``expected_upside`` and the book a pure upside ranking
+    # wearing a risk-adjusted name. v1 (``pymc_kalman_filter_pt.py``) always takes
+    # this path, so the leg stays exactly as it was there.
+    if _ret is None:
+        _legs.insert(0, (nm['expected_upside'] - nm['cvar05']).fillna(0.0)
+                     .clip(lower=0.0).to_numpy())
+        if 'er_p05' not in nm.columns and 'er_sd' not in nm.columns:
+            logger.warning(
+                'tail_risk is built from the POSTERIOR upside dispersion: no '
+                'return draws and no er_* columns. It measures estimation '
+                'uncertainty, not loss, so starr is not a return-risk ratio. '
+                'Pass return_draws (ScreenDraws.pooled_returns) for the real one.'
+            )
+
+    nm['tail_risk'] = np.maximum.reduce(_legs)
     nm['starr'] = _safe_ratio(nm['expected_upside'], nm['tail_risk'])
 
     # Market-cap pre-selection: only top-of-country names (mcap_global_r <
@@ -459,7 +621,15 @@ def compute_cvar_aware_book(
     if len(_book):
         _book = _book.sort_values('starr', ascending=False).head(k_book)
         _w = _cap_normalize_weights(_book['starr'].to_numpy(), cap)
-        _book = _book.assign(weight=_w)
+        # ``book_weight`` is the canonical name and the one the analytics table
+        # and the generated DDL document. It is stamped on BOTH frames since
+        # 2026-08-22: ``_book`` is copied out of ``nm`` before the stamp-back
+        # below, so it used to carry an all-zero ``book_weight`` beside a
+        # populated ``weight`` while ``nm`` carried the reverse — one run
+        # exporting the same book under two schemas, which is what made
+        # ``10b_risk_book_v2`` and ``10b_risk_analytics_v2`` disagree about where
+        # the sizing lives. ``weight`` is retained as an alias for one release.
+        _book = _book.assign(weight=_w, book_weight=_w)
         nm.loc[_book.index, 'book_weight'] = _w  # stamp weights back (0 elsewhere)
         _book = _book.reset_index(drop=True)
 

@@ -1006,6 +1006,13 @@ The other ~45 files there are hand-written screen/analysis scripts unmanaged by 
   `pymc_kalman_filter_pt.py`. Every `_SQL_EXPORT_ARTIFACTS` frame and the analytics table carry `run_id` /
   `exported_at`. Resolve which tables are stamped from `information_schema` **first** — a speculative
   `SELECT run_id` aborts the PostgreSQL transaction and poisons every later query on that connection.
+  **v2 has its own** `PROVENANCE_COLUMNS` / `stamp_export_provenance` / `resolve_source_revision` in
+  `pymc_kalman_filter_pt_v2.py` (added 2026-08-22 — before that v2 stamped inline in three places and had no
+  SSOT). It carries four columns: `run_id`, `exported_at`, **`source_sha`** and **`source_dirty`**. Neither of the
+  original pair says what *code* produced a row, and an ELPD contrast between two runs whose source is not pinned
+  is not a contrast. `source_dirty` is a **fact, not an error** — most runs have an uncommitted tree; it is what
+  tells a reader that `source_sha` does not fully determine what ran. `write_analytics_ddl_v2` renders a DDL with
+  `COMMENT ON COLUMN` for **every** v2 frame, not just the canonical table.
 - Reward/risk ratio floor: `MIN_RATIO_DENOMINATOR` in `RiskBookModel.py`. A bare `> 0` guard is not enough; a
   denormal `er_sd` passes it and publishes a 1e15 ratio.
 - Kalman decision latent: `KALMAN_SCREEN_LATENT` / `resolve_screen_latent` in `pymc_kalman_filter_pt.py` — every
@@ -1034,6 +1041,27 @@ The other ~45 files there are hand-written screen/analysis scripts unmanaged by 
   under an accurate name. `MIN_TAIL_RISK` / `DEFAULT_TAIL_RISK_VOL_FLOOR_K` in `RiskBookModel.py` are
   **duplicated** in `dashboards/geib/charts/kelly.py` (the dashboard must not import the PyMC stack) — change
   them together or the card and the book disagree about a name's downside.
+- **Return draws are aligned BY ISIN, never by position (since 2026-08-22).** Pass `return_draws_isins`
+  (`ScreenDraws.isins`) alongside `return_draws`. `run_screen` returns the screen sorted by `expected_upside`
+  while `pooled_returns` stays in `panel.isins` order, so the old positional assignment attributed every risk
+  column to the wrong name — a permutation the length-only guard could not see. The identity that catches it is
+  `exp_vol == er_sd` (both are the pooled sd of the same draws); on run `0121366fbabf` they correlated **−0.007**
+  while their *sorted* values matched to 1e-9 for 100% of names, and `cvar05 <= er_p05` failed for 35.7% of the
+  universe. `compute_cvar_aware_book` now self-checks that identity on every call. **Any analysis of a v2 export
+  written before this fix should be re-derived** — `cvar05`, `exp_vol`, `ret_vol_ratio`, `tail_risk`, `starr` and
+  the sized book were all affected. v1 never passed `return_draws`, so it is unaffected.
+- **`tail_risk` has no `expected_upside` leg on the return-draw path (since 2026-08-22).** It is
+  `max(-er_p05, k*er_sd, MIN_TAIL_RISK)`. The `expected_upside - cvar05` term fell as the tail improved, so STARR
+  rose on numerator and denominator together. It is **kept** on the `return_draws=None` fallback, where it is the
+  only dispersion available — v1 always takes that path. This makes `tail_risk_vol_floor_k` load-bearing rather
+  than inert.
+- **Max-and-Smooth arm screening:** `pymc_models/_max_and_smooth.py` + `compare_arms_fast` / `--compare-fast`.
+  Screens comparison arms in seconds against **one** baseline fit instead of one fit per arm, by turning each
+  name's trail into a Gaussian pseudo-observation of `mu_reg`. It **ranks arms; it does not decide them** —
+  confirm the winner with `--compare` before editing a default, which is why its gate is `model_comparison_fast`
+  and the export carries a `backend` column. The partition puts `w_L` on the *latent* side, which is the only
+  reason `level_off` is screenable at all. `COVARIANCE_FIELDS` + `assert_arm_is_screenable` refuse any arm that
+  touches what the Max step froze; `drift_strict` is refused too (it changes the design matrix).
 - **Point-in-time vintages:** `analytics.panel_vintage_v2` +
   `scripts/{capture,score}_panel_vintage{,s}.py`. Every gate in the v2 workflow scores the model against the
   analyst trail it was fitted to, which is why a pass-through cleared 19 of 21 gates. Append-only, because the
