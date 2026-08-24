@@ -5,6 +5,113 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - v2 figures, frame reconciliation, catalogue gate (2026-08-25)
+
+Acts on the post-run analysis of run `0aa3397b1d01` ("The Second Moment"): its
+items 04 and 06, its three catalogue findings, and the gap none of them named —
+**v2 had no visualizations at all**. `grep -c "plotly\|matplotlib"` on
+`pymc_kalman_filter_pt_v2.py` returned 0, which is why every chart in that
+analysis is hand-drawn, and why its own decay ladder still describes run
+`37e6d8966250` and understates the current trail asymptote by 0.026.
+
+Nothing here changes the likelihood or the posterior. The exported VALUES change
+in exactly one way — two duplicate columns stop being written — and no gate that
+passed stops passing.
+
+### Added
+
+- **A visualization and statistics layer for v2** (`kalman_viz_v2.py`, 14 panels
+  and 7 tables). Three groups. The workflow stages (prior, PPC, diagnostics,
+  screen, risk book) mirror v1 section for section. The **v2-only** panels —
+  decay ladder, variance simplex, `sigma_time`-vs-staleness, drift forest — have
+  no v1 equivalent, because v1 has no correlated trail and no Dirichlet variance
+  split; these draw what v2 exists to model. And two answer questions the export
+  could not:
+
+  - `plot_rank_correlations` measures how far each exported column departs from a
+    consensus sort. The post-run analysis rebuilds this by hand every edition —
+    precisely what its own skill warns against — and it is how `reward_to_cvar`'s
+    drift toward consensus (0.7625 → 0.8356 → 0.8685) became visible. Now a
+    pipeline artifact with one fixed definition.
+  - `plot_er_sd_calibration` scores the forward-return second moment against
+    realised volatility, which is what could give `tail_risk_vol_floor_k = 0.25`
+    a measured rationale rather than a value. **Reported, not gated**: one run is
+    a measurement, not a calibration.
+
+  No panel recomputes a statistic the workflow already gates. Payload budget
+  honoured by construction — pre-binned densities, gridded ECDFs, decimated
+  scatters with summary statistics on the full frame, heavy backend for facet
+  grids. Verified on a full fit; the v1 notebook that motivated these rules
+  reached 233 MB.
+
+- **`probabilistic_ml_model/visualizations/kalman_shared.py`** — one home for the
+  theming, payload budget, reference geometry and section-directory machinery
+  both workflows render through. A **move**, not a rewrite: 78 definitions lifted
+  out of v1 and imported straight back under the same private names, so all ~200
+  call sites are untouched. The three run-level settings the figure layer needs
+  are resolved through `set_viz_config_resolver`, which takes a **callable** —
+  v1 hands over `get_run_config` itself, so `main(config=...)` still redirects
+  artifacts as it always did.
+
+- **`export_duplicate_content`** — the sibling of `export_unique_columns`, which
+  checks duplicate *names* and therefore passes on `weight` beside a
+  byte-identical `book_weight`. WARNs rather than blocks: an all-zero column
+  legitimately equals another, and a warning must never cost a run a fit already
+  paid for.
+
+- `export_figures` / `--no-figures` / `fig_width_px` on `KalmanRunConfigV2`, with
+  `from_env` now reading `PML_FIG_WIDTH_PX` — one knob sizing both workflows.
+
+- `04b_audit` in `_EXPORT_SECTION_DIRS`. Without it every panel-audit artifact
+  resolves to `00_misc`.
+
+### Changed
+
+- **One name per quantity in every risk frame.** `compute_cvar_aware_book` emits
+  `book_weight` and `expected_sharpe_ratio` only. The `weight` /
+  `expected_sharpe` aliases it kept "for one release" are gone — that release is
+  this one. `10b_risk_book_v2` had been shipping every quantity twice,
+  byte-identical, because the de-duplicating drop was applied to the analytics
+  frame and not to the book. Fixed at the source rather than with a second drop.
+
+- **`assert_coverage` defaults to TRUE** in
+  `pml.refresh_pymc_materialized_views`. It was opt-in because the non-kalman
+  models carried ~50 real violations; measured against the live database before
+  changing anything, `vw_pymc_catalogue_coverage_check` now returns **zero rows**
+  and `assert_pymc_catalogue_coverage()` passes.
+  `MISSING_FROM_CATALOGUE` — the status where the alignment layer silently
+  reindexes a column to 0.0 — is caught only when someone remembers to ask, which
+  is the argument for a default rather than a flag.
+
+### Removed
+
+- **`kalman_gain` leaves the GEIB selectable-metric surface.** It does not order
+  the universe (54.0% of names at exactly 0 or 1 on run `0aa3397b1d01`, up from
+  50.6%), and its "Achieve Prob." label named `achieve_prob`, a Deterministic v2
+  removed. The column is still exported and still loads. `shrink_gain` is the
+  successor but is **not** substituted yet: the board reads the v1 table and v1
+  does not compute it — that would be a dead slider. `available_metrics()` now
+  drops any metric whose column the loaded frame lacks, guarding the class rather
+  than the instance.
+
+- `prob_pos` and `kalman_gain` are relabelled **NON-RANKING** in the generated
+  DDL, with their pinning shares and the column to rank on instead.
+
+### Notes
+
+- **Two pre-existing test failures were found, not introduced.**
+  `tests/test_kalman_filter_pt.py` has 4 failures at commit `d410041` with this
+  work stashed: `KalmanRunConfig.mcap_country_r_max` is `0.01` while
+  `test_run_config_mcap_gate_default` asserts `0.02`, and three `cvar_book_mcap`
+  tests expect the older `DEFAULT_MCAP_R_MAX`. Which side is stale is a decision
+  about the sizing defaults, not a test fix, so they are reported rather than
+  silently reconciled.
+
+- **The comparison arms are still unrun.** `--compare baseline,level_off`
+  (item 05) and `--compare baseline,hierarchy_fine` (item 06) need a fit each,
+  from a committed tree. Both harnesses have been built for four editions;
+  "built is not decided".
+
 ## [Unreleased] - Kalman v2 decision layer (2026-08-20)
 
 Run `49e84d7e9d59` cleared 19 of 21 gates — 0 divergences, max R-hat 1.0025, min
