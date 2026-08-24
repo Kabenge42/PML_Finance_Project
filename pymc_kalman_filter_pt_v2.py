@@ -884,9 +884,11 @@ def kalman_v2_query(run_cfg: KalmanRunConfigV2) -> str:
         SELECT *
         FROM {_MV}
         WHERE feat_log_uplift_now IS NOT NULL
+          AND size_class <> 'n/a'
           AND n_trail_obs >= {run_cfg.min_trail_obs}
           AND next_earnings >= '{run_cfg.min_next_earnings}'
           AND income_statement_report_date >= '{run_cfg.min_report_date}'{excl}
+          
     """
 
 

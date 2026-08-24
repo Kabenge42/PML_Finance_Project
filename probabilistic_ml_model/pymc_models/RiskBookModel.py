@@ -34,9 +34,9 @@ logger = logging.getLogger(__name__)
 #: direct call to :func:`compute_cvar_aware_book` reproduces the workflow.
 DEFAULT_CVAR_ALPHA = 0.05
 DEFAULT_WEIGHT_CAP = 0.10
-DEFAULT_K_BOOK = 25
+DEFAULT_K_BOOK = 35
 DEFAULT_P_LONG = 0.50
-DEFAULT_MCAP_R_MAX = 0.01
+DEFAULT_MCAP_R_MAX = 0.03
 
 #: Smallest dispersion accepted as a reward-to-risk DENOMINATOR, in decimal
 #: return units. A ``> 0`` test is not enough: when every Monte-Carlo draw for a
@@ -55,10 +55,18 @@ MIN_TAIL_RISK = 0.01
 
 #: Default floor on ``tail_risk`` as a fraction of the name's own Monte-Carlo
 #: return sd. Without it the absolute :data:`MIN_TAIL_RISK` binds for every name
-#: whose simulated 5% quantile happens to be POSITIVE, and STARR becomes
+#: whose simulated expected shortfall happens to be POSITIVE, and STARR becomes
 #: ``100 x expected_upside`` for exactly those names — a ranking discontinuity
 #: dressed as conviction. 0.25 charges a quarter of the name's own dispersion,
 #: so a name with no simulated loss is still charged for the spread it has.
+#:
+#: **It is the whole denominator for the book, not a floor.** On run
+#: e903ceb94655 it binds for 40.1% of the universe and for 25 of 25 selected
+#: names, because every one of them has a positive simulated 5% tail. Where it
+#: binds, ``starr`` reduces exactly to ``expected_upside / (k * er_sd)`` — a
+#: rescaled reward-to-variability ratio, which is why ``reward_to_cvar``
+#: correlates 0.9938 with ``expected_sharpe_ratio`` universe-wide. Treat ``k`` as
+#: a ranking parameter of the published book, not as a guard rail.
 #:
 #: **This became load-bearing on 2026-08-22**, when the ``expected_upside ->
 #: cvar05`` dispersion leg was removed from ``tail_risk``. Until then the leg was
@@ -493,11 +501,35 @@ def compute_cvar_aware_book(
     #     uplift estimate, so book values of 5-7 are normal and are NOT
     #     investment Sharpe ratios. Exported as ``expected_sharpe_ratio``.
     #   * tail_risk        - binding downside. ON THE RETURN-DRAW PATH: the larger
-    #     of the Student-t MC 5% loss magnitude and a RELATIVE floor at
-    #     ``tail_risk_vol_floor_k`` of the name's own return sd, with the absolute
-    #     ``MIN_TAIL_RISK`` as a last resort. On the ``return_draws=None``
-    #     fallback the mean->CVaR dispersion leg is still included, because it is
-    #     the only dispersion that path has — see the branch below.
+    #     of the MC EXPECTED SHORTFALL magnitude (``-cvar05``) and a RELATIVE
+    #     floor at ``tail_risk_vol_floor_k`` of the name's own return sd, with the
+    #     absolute ``MIN_TAIL_RISK`` as a last resort. On the ``return_draws=None``
+    #     fallback the leg is ``-er_p05`` and the mean->CVaR dispersion leg is
+    #     still included, because it is the only dispersion that path has — see
+    #     the branch below.
+    #
+    #     WHAT THIS DOES NOT FIX, MEASURED. The change was made to close a
+    #     naming/semantics gap, and it does that. It does NOT reduce the book's
+    #     selection toward favourable-tail names, and the reason is structural
+    #     rather than a matter of picking a better leg. On run e903ceb94655 all
+    #     25 book names have ``er_p05 > 0``, so for every one of them BOTH
+    #     candidate legs are negative and the relative floor takes the whole
+    #     denominator: ``max(-er_p05, k*sd)``, ``max(-er_p05, 0) + k*sd`` and
+    #     ``max(-cvar05, k*sd)`` are numerically IDENTICAL there, and all three
+    #     select the same 25 names with the same weights (positive-tail
+    #     enrichment 6.65x the universe base rate under each).
+    #
+    #     That is not an accident of this run. Any leg that is CLIPPED on the
+    #     favourable side collapses to the floor exactly where the book lives;
+    #     any leg that stays SENSITIVE there must fall as the tail improves,
+    #     which is the double-reward removed on 2026-08-22. So no reshaping of
+    #     this expression reaches the target. The enrichment is a property of
+    #     ranking on a reward/downside ratio when the downside is un-modelled for
+    #     the candidates — 26.3 % of the eligible pool has ``er_p05 > 0`` and
+    #     100 % of the selected book does. The next move is either a denominator
+    #     built from the draws below zero (a downside deviation, which stays
+    #     sensitive without inverting) or a different ranking column; both need a
+    #     refit to evaluate, since neither is recoverable from the export.
     #
     #     THE MEAN->CVaR DISPERSION LEG WAS REMOVED 2026-08-22 (return-draw path
     #     only). It led the
@@ -556,8 +588,29 @@ def compute_cvar_aware_book(
     # same column; ``expected_sharpe`` is the alias and is retained for one
     # release, as with ``weight`` above.
     nm['expected_sharpe_ratio'] = nm['expected_sharpe']
-    _mc_loss = (-nm['er_p05'].astype('float64')
-                if 'er_p05' in nm.columns else pd.Series(0.0, index=nm.index)).fillna(0.0)
+    # THE LOSS LEG IS THE EXPECTED SHORTFALL, NOT THE QUANTILE (2026-08-23).
+    # ``starr`` is exported as ``reward_to_cvar`` and documented as reward per
+    # unit expected shortfall, but the leg was ``-er_p05`` — the 5 % QUANTILE
+    # (a VaR), not the mean of the draws beyond it (the CVaR the name promises).
+    # ``cvar05 <= er_p05`` always, so the old leg under-charged every name whose
+    # tail is fatter than its quantile suggests, which is exactly the case the
+    # measure exists to catch. VaR is also not sub-additive, so ranking a book on
+    # reward-per-VaR is not a coherent risk ordering; CVaR is.
+    #
+    # Measured on run e903ceb94655 at the switch: the loss leg goes from live on
+    # 59.8 % of the universe to 77.3 %, and rho(starr, expected_sharpe_ratio)
+    # falls 0.9982 -> 0.9938. On the FALLBACK path the leg stays ``-er_p05``
+    # (usually absent, hence 0.0), because there ``cvar05`` is the posterior
+    # upside tail rather than a return CVaR and the dispersion leg below already
+    # carries it — switching it there would silently change v1.
+    #
+    # NOT the same as dividing by ``abs(cvar05)``, which was tried and rejected
+    # (``kelly.py``): that uses the shortfall as the WHOLE denominator with no
+    # floor, so the ratio explodes as the shortfall approaches zero. Here it is
+    # one leg of a ``max`` whose relative floor bounds the denominator below.
+    _loss_col = 'cvar05' if _ret is not None else 'er_p05'
+    _mc_loss = (-nm[_loss_col].astype('float64')
+                if _loss_col in nm.columns else pd.Series(0.0, index=nm.index)).fillna(0.0)
     _vol_floor = (
         float(tail_risk_vol_floor_k)
         * pd.to_numeric(nm['er_sd'], errors='coerce').fillna(0.0).clip(lower=0.0)

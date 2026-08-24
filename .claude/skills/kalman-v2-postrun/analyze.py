@@ -466,6 +466,11 @@ def read_screen(a: pd.DataFrame) -> dict[str, Any]:
         "p_upside_interior_pct": _f(a["p_upside_pos_cond"].between(0.02, 0.98).mean() * 100),
         "coverage_gradient_x": _f(grad.max() / max(grad.min(), 1e-12)),
         "coverage_gradient_monotone": bool(grad.is_monotonic_decreasing),
+        # The two risk-normalised ranking columns should not be one ordering
+        # under two names. When ``tail_risk`` sits on its volatility floor the
+        # STARR numerator and a Sharpe share a denominator up to a constant, so
+        # this rides up with ``tail_floor_pct`` below and is read with it.
+        "starr_sharpe_rho": _spearman(a["reward_to_cvar"], a["expected_sharpe_ratio"]),
     }
 
 
@@ -478,6 +483,13 @@ def read_risk(a: pd.DataFrame, book: pd.DataFrame) -> dict[str, Any]:
         "cvar_pos_pct": _f((a["cvar_5pct_kalman"] > 0).mean() * 100),
         "er_p05_neg_pct": _f((a["er_p05"] < 0).mean() * 100),
         "tail_floor_binds": int(np.isclose(a["tail_risk"], 0.25 * a["er_sd"], rtol=1e-6).sum()),
+        # The share, not just the count: the count is not comparable across runs
+        # whose universe size moves, and this statistic is the one that says
+        # whether ``tail_risk`` is still a tail statistic or a rescaled sd.
+        "tail_floor_pct": _f(np.isclose(a["tail_risk"], 0.25 * a["er_sd"], rtol=1e-6).mean() * 100),
+        "book_tail_floor_n": int(
+            np.isclose(book["tail_risk"], 0.25 * book["er_sd"], rtol=1e-6).sum()
+        ) if {"tail_risk", "er_sd"} <= set(book.columns) else None,
         "book_n": int(len(book)),
         "book_weight_sum": _f(w.sum()),
         "book_hhi": _f(hhi),
@@ -691,6 +703,9 @@ def diff_against(prev: Optional[dict[str, Any]], cur: dict[str, Any]) -> list[di
     cmp("structure.variance.w_level", "variance weight: level", crossing=0.01, rel_move=1.0, fmt="{:.5f}")
     cmp("structure.variance.ell_days", "OU length scale (days)", rel_move=0.10, fmt="{:.1f}")
     cmp("structure.n_drift", "drift columns", abs_move=0.5, fmt="{:.0f}")
+    cmp("screen.starr_sharpe_rho", "rho(reward_to_cvar, sharpe)", abs_move=0.02, fmt="{:.4f}")
+    cmp("risk.tail_floor_pct", "universe on tail_risk floor (%)", abs_move=5.0, fmt="{:.1f}")
+    cmp("risk.book_tail_floor_n", "book names on tail_risk floor", abs_move=3.0, fmt="{:.0f}")
     cmp("risk.book_w_cvar", "book weighted cvar05", abs_move=0.03, fmt="{:+.4f}")
     cmp("risk.book_cvar_pos_n", "book names with cvar05 > 0", abs_move=3.0, fmt="{:.0f}")
     cmp("risk.book_eff_n", "book effective N", abs_move=3.0, fmt="{:.1f}")
@@ -778,7 +793,12 @@ def render(cur: dict[str, Any], deltas: list[dict[str, Any]]) -> str:
           f"obs {st['variance']['w_obs']:.5f}  ell {st['variance']['ell_days']:.1f}d",
           f"    book      : n={rk['book_n']} effN {rk['book_eff_n']:.1f}  "
           f"cvar05>0 {rk['book_cvar_pos_n']}/{rk['book_n']}  "
-          f"w-avg cvar05 {rk['book_w_cvar']*100:+.2f}%  w-avg er_p05 {rk['book_w_er_p05']*100:+.2f}%"]
+          f"w-avg cvar05 {rk['book_w_cvar']*100:+.2f}%  w-avg er_p05 {rk['book_w_er_p05']*100:+.2f}%",
+          f"    tail_risk : floor binds {rk['tail_floor_pct']:.1f}% of universe"
+          + (f", {rk['book_tail_floor_n']}/{rk['book_n']} of the book"
+             if rk.get("book_tail_floor_n") is not None else "")
+          + (f"  rho(starr, sharpe) {sc['starr_sharpe_rho']:.4f}"
+             if sc.get("starr_sharpe_rho") is not None else "")]
 
     dt = cur.get("detail")
     if dt:

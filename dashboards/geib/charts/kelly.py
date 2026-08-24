@@ -182,18 +182,23 @@ def _calculate_kelly_fraction(row) -> float:
     # The ``expected_return - cvar_5pct_kalman`` term was REMOVED 2026-08-22, in
     # the same commit as the book's. It fell as the tail improved, so ``b`` — and
     # STARR with it — rose on numerator and denominator together, letting a
-    # favourable tail be counted twice. ``-er_p05`` is the loss quantile and
-    # ``_TAIL_RISK_VOL_FLOOR_K * er_sd`` the dispersion floor; neither depends on
-    # ``expected_return``. The relative floor is what now stops a positive-5%-
-    # quantile name falling to the 1pp absolute floor and its ``b`` becoming
-    # ``100 * expected_return``.
+    # favourable tail be counted twice.
     #
-    # Historical note: dividing by ``abs(cvar_5pct_kalman)`` instead was tried
-    # and is wrong even now that the column is a real return CVaR — it is a
-    # LEVEL, not a dispersion, so ``b`` tracked expected_return itself (median
-    # 1.28, sd 23.7 on the 2026-08-15 table, exploding as cvar approached zero).
+    # The loss leg became ``-cvar_5pct_kalman`` on 2026-08-23, mirroring
+    # ``RiskBookModel``: the expected shortfall, not the 5 % quantile that
+    # ``reward_to_cvar`` was never actually dividing by. ``cvar05 <= er_p05``
+    # always, so this charges at least as much as before, never less.
+    #
+    # This is NOT the rejected form. Dividing by ``abs(cvar_5pct_kalman)`` was
+    # tried and is wrong: it makes the shortfall the WHOLE denominator with no
+    # floor, so ``b`` tracked expected_return itself and exploded as cvar
+    # approached zero (median 1.28, sd 23.7 on the 2026-08-15 table). Here it is
+    # one leg of a ``max`` bounded below by ``_TAIL_RISK_VOL_FLOOR_K * er_sd``,
+    # which is what stops the explosion — and which, for a favourable-tail name,
+    # IS the denominator. Keep these three terms identical to the book's or the
+    # card and the book will disagree about a name's downside.
     loss = max(
-        -finite_cell(row, "er_p05", 0.0),
+        -finite_cell(row, "cvar_5pct_kalman", 0.0),
         _TAIL_RISK_VOL_FLOOR_K * finite_cell(row, "er_sd", 0.0),
         _MIN_TAIL_RISK,
     )
