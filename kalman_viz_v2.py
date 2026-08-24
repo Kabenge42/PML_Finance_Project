@@ -1499,8 +1499,11 @@ def render_run(
     Parameters
     ----------
     result
-        The dict :func:`main` assembles: ``audit``, ``prior``, ``ppc``,
-        ``ppc_idata``, ``idata``, ``diagnostics``, ``screen``, ``risk_book``.
+        The dict :func:`main` assembles. Read by the pipeline's own key names --
+        ``panel_audit``, ``prior_idata``, ``ppc``, ``idata``, ``diagnostics``,
+        ``screen``, ``risk_book``, ``kalman_results`` -- because that dict is a
+        published contract with other consumers and the figure layer is the
+        newcomer. Every key is optional.
     panel
         The fitted :class:`KalmanPanelV2`.
     run_cfg
@@ -1514,9 +1517,11 @@ def render_run(
         logger.info("figures disabled; skipping the panel set")
         return
 
-    audit = result.get("audit") or {}
+    audit = result.get("panel_audit") or result.get("audit") or {}
     idata = result.get("idata")
     ppc = result.get("ppc") or {}
+    if kalman_results is None:
+        kalman_results = result.get("kalman_results")
 
     if audit:
         with section("04b_audit"):
@@ -1524,9 +1529,10 @@ def render_run(
             _attempt("decay_ladder", plot_decay_ladder, panel, audit, idata,
                      residual_kernel=ppc.get("decay_residual") or ppc.get("decay"))
 
-    if result.get("prior") is not None:
+    prior = result.get("prior_idata") or result.get("prior")
+    if prior is not None:
         with section("06_prior"):
-            _attempt("prior_predictive", plot_prior_predictive, result["prior"], panel)
+            _attempt("prior_predictive", plot_prior_predictive, prior, panel)
 
     if ppc:
         with section("08_ppc"):

@@ -781,6 +781,22 @@ class KalmanRunConfigV2:
 
     # ---- output ------------------------------------------------------------
     results_dir: Optional[str] = None
+
+    # ---- figures -----------------------------------------------------------
+    #: Draw the §4b/§6/§8/§9/§10/§10b panels and write the statistics tables
+    #: beside them. v2 shipped with none of this, which is why every chart in the
+    #: post-run analysis was hand-drawn and went stale between runs.
+    #:
+    #: Figures are written AFTER the export, never before, and every panel is
+    #: individually wrapped -- a plotting failure must not cost a run the
+    #: analytics write it has already paid a fit for. ``--no-figures`` turns the
+    #: set off for a run where only the tables are wanted.
+    export_figures: bool = True
+
+    #: Target figure width in px, matching v1's ``PML_FIG_WIDTH_PX`` knob so one
+    #: environment variable sizes both workflows. Read by the shared figure layer
+    #: through the resolver ``kalman_viz_v2.install`` hands it.
+    fig_width_px: int = 1150
     write_analytics: bool = True
     log_level: str = "INFO"
 
@@ -848,7 +864,13 @@ class KalmanRunConfigV2:
 
     @classmethod
     def from_env(cls) -> "KalmanRunConfigV2":
-        """Build from the five environment variables the deployment sets."""
+        """Build from the environment variables the deployment sets.
+
+        ``PML_FIG_WIDTH_PX`` joins the set on 2026-08-24. v1 has always honoured
+        it; v2 ignored it because it had no figures to size, and leaving it
+        unread once v2 gained them would mean one knob sizing one of two
+        workflows.
+        """
 
         def _int(name: str, default: int) -> int:
             raw = os.environ.get(name)
@@ -863,6 +885,7 @@ class KalmanRunConfigV2:
             results_dir=os.environ.get("KALMAN_PT_RESULTS_DIR") or None,
             write_analytics=os.environ.get("KALMAN_PT_SQL_EXPORT", "1") != "0",
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
+            fig_width_px=_int("PML_FIG_WIDTH_PX", 1150),
         )
 
     @property
@@ -4281,6 +4304,39 @@ def summarise(
             logger.warning("Could not persist the gate report: %s", exc)
 
 
+def _render_figures(result: dict[str, Any], panel: KalmanPanelV2,
+                    run_cfg: KalmanRunConfigV2) -> None:
+    """Draw the run's panels, and never let a figure cost the run anything.
+
+    Called LAST on every terminating path -- after ``export_analytics`` and after
+    ``summarise`` -- so the analytics tables and the gate report are already on
+    disk before a plotting library gets a chance to fail. The import is deferred
+    for the same reason the panels are: ``kalman_viz_v2`` pulls in plotly,
+    matplotlib and seaborn, and a workflow that only wants the tables should not
+    pay for them, nor fail to run if they are missing.
+
+    On the ``--dry-run`` path this draws the §4b panel audit and the decay
+    ladder, which are the two figures that make a dry run worth looking at
+    rather than merely reading.
+    """
+    if not run_cfg.export_figures:
+        logger.info("figures disabled (--no-figures)")
+        return
+    try:
+        import kalman_viz_v2 as viz
+    except Exception as exc:  # pragma: no cover - optional plotting stack
+        logger.warning(
+            "figures skipped: kalman_viz_v2 is unavailable (%s). The analytics "
+            "export and the gate report are unaffected.", exc,
+        )
+        return
+    try:
+        viz.install(run_cfg)
+        viz.render_run(result, panel, run_cfg)
+    except Exception as exc:  # pragma: no cover - figures are best-effort
+        logger.warning("figure rendering failed: %s", exc)
+
+
 def main(
     *,
     model_config: Optional[KalmanModelConfig] = None,
@@ -4340,6 +4396,7 @@ def main(
             },
             results_path=run_cfg.results_path,
         )
+        _render_figures(result, panel, run_cfg)
         return result
 
     if not report.ok:
@@ -4472,6 +4529,7 @@ def main(
         },
         results_path=run_cfg.results_path,
     )
+    _render_figures(result, panel, run_cfg)
     return result
 
 
@@ -4481,6 +4539,14 @@ def _cli() -> int:
     parser.add_argument("--benchmark", action="store_true",
                         help="build the model, time the gradient, project wall clock, stop")
     parser.add_argument("--write", action="store_true", help="write the analytics tables")
+    parser.add_argument(
+        "--no-figures", action="store_true",
+        help=(
+            "skip the §4b/§6/§8/§9/§10/§10b panels and their statistics tables. "
+            "The analytics export is unaffected either way -- figures are drawn "
+            "after it, never before."
+        ),
+    )
     parser.add_argument(
         "--compare", type=str, default=None,
         help=(
@@ -4527,6 +4593,8 @@ def _cli() -> int:
     }
     if args.write:
         overrides["write_analytics"] = True
+    if args.no_figures:
+        overrides["export_figures"] = False
     if args.compare is not None:
         arms = tuple(s.strip() for s in args.compare.split(",") if s.strip())
         unknown = [a for a in arms if a not in COMPARISON_ARMS]
