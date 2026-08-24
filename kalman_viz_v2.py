@@ -67,18 +67,18 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 
 from probabilistic_ml_model.visualizations.kalman_shared import (
-    C_ACCENT, C_DRAWS, C_FORECAST, C_MUTED, C_OBSERVED, C_POSTERIOR, C_REF,
+    C_ACCENT, C_FORECAST, C_MUTED, C_OBSERVED, C_POSTERIOR, C_REF,
     CS_DIV, CS_SEQ,
     _PPC_ECDF_GRID, _SCREEN_SCATTER_MAX_POINTS,
-    _add_binned_density, _add_ref_line, _azp_backend, _azp_figure_kwargs,
+    _add_binned_density, _add_ref_line, _azp_backend,
     _decimate_frame, _ecdf_xy, _export_path, _fmt_axis, _forest_height_px,
-    _hex_to_rgba, _next_stem, _plotly_band, _render_plotly, _safe_show,
+    _hex_to_rgba, _next_stem, _render_plotly, _safe_show,
     enable_artifact_export, export_section, get_export_state,
     set_viz_config_resolver, setup_plotting,
 )
