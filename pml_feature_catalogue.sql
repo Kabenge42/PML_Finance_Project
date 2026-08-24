@@ -2017,13 +2017,23 @@ $$;
 -- =============================================================================
 -- Drop the previous single-arg signature so adding `assert_coverage` does not
 -- create an ambiguous overload for `CALL pml.refresh_pymc_materialized_views();`.
--- `assert_coverage` is opt-in (default FALSE) mirroring the env-gated
--- PML_STRICT_STREAK_MERGE fail-fast convention: pass TRUE (e.g. in CI /
--- regression) to make Findings 1/3/4 raise on refresh. Call
--- pml.assert_pymc_catalogue_coverage() directly for an ad-hoc gate.
+--
+-- `assert_coverage` DEFAULTS TO TRUE since 2026-08-24. It was opt-in for one
+-- reason only -- the non-kalman models carried ~50 real violations, so a strict
+-- default would have failed every refresh on a defect nobody was about to fix.
+-- That reason is gone: `pml.vw_pymc_catalogue_coverage_check` returns ZERO rows
+-- database-wide and `pml.assert_pymc_catalogue_coverage()` passes, once
+-- pml_df_metadata_populate.sql §7i.3 canonicalises the feat_pt_achievement_1y
+-- self-row (verified against the live database on 2026-08-24).
+--
+-- Defaulting it on is the point of having built it. MISSING_FROM_CATALOGUE is
+-- the dangerous status -- the MV emits a column, no catalogue row claims it, and
+-- the alignment layer silently reindexes it to 0.0 -- and a check that is off by
+-- default catches it only when someone remembers to ask. Pass FALSE explicitly
+-- to refresh a database that has not had the §7i reconciliation applied yet.
 DROP PROCEDURE IF EXISTS pml.refresh_pymc_materialized_views(BOOLEAN);
 CREATE OR REPLACE PROCEDURE pml.refresh_pymc_materialized_views(use_concurrently BOOLEAN DEFAULT TRUE,
-                                                                assert_coverage  BOOLEAN DEFAULT FALSE)
+                                                                assert_coverage  BOOLEAN DEFAULT TRUE)
 	LANGUAGE plpgsql AS
 $$
 DECLARE
@@ -2102,13 +2112,14 @@ COMMENT ON PROCEDURE pml.refresh_kalman_pt_v2(BOOLEAN, BOOLEAN) IS
 --    Full signature (both arguments are frequently overlooked):
 --      CALL pml.refresh_pymc_materialized_views(
 --               use_concurrently => TRUE,   -- REFRESH ... CONCURRENTLY
---               assert_coverage  => FALSE); -- run the catalogue coverage gate
+--               assert_coverage  => TRUE);  -- run the catalogue coverage gate
 --
---    `assert_coverage => TRUE` runs pml.assert_pymc_catalogue_coverage() after
---    the refresh, which RAISES if any mv_pymc_* feat_/observed_/n_ column is
---    unregistered, duplicated or phantom in the catalogue. It defaults to
---    FALSE because the non-kalman models still carry known violations; the
---    kalman_pt path is clean. Enumerate what is outstanding with:
+--    `assert_coverage` runs pml.assert_pymc_catalogue_coverage() after the
+--    refresh, which RAISES if any mv_pymc_* feat_/observed_/n_ column is
+--    unregistered, duplicated or phantom in the catalogue. It now defaults to
+--    TRUE: the violations that kept it off are cleared database-wide. Pass
+--    FALSE for a database without the §7i reconciliation. Enumerate what is
+--    outstanding with:
 --      SELECT model_target, status, count(*),
 --             string_agg(feat_name, ', ' ORDER BY feat_name)
 --      FROM pml.vw_pymc_catalogue_coverage_check
