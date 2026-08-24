@@ -1319,7 +1319,13 @@ _EXPORT_SLUG_MAXLEN = 48
 # ``10b_risk`` catches ``10b_risk_analytics`` / ``_book`` / ``_summary``
 # alongside the ``10b_risk_book_NN_*`` section stems.
 _EXPORT_SECTION_DIRS: tuple[str, ...] = (
-    '01_data', '02_eda', '03_features', '04_panel', '06_prior', '07_posterior',
+    # `04b_audit` is v2's panel-information audit (`run_panel_diagnostics`), the
+    # stage v1 has no equivalent of. Safe beside `04_panel` because
+    # `_export_dir_for` resolves ties with `max(matches, key=len)`, so the longer
+    # prefix wins; without the entry every §4b artifact silently lands in
+    # `00_misc`, which is how the decay ladder would have gone missing.
+    '01_data', '02_eda', '03_features', '04_panel', '04b_audit',
+    '06_prior', '07_posterior',
     '08_ppc', '09_diagnostics', '09b_comparison', '10_screen', '10b_risk',
     '10c_analytics',
     '10k_universe', '11_single_isin', '11b_single_sv', '12_mingled',
