@@ -165,12 +165,16 @@ _RANKING_COLS: tuple[str, ...] = (
 )
 
 #: Columns the ``export_ranking_range`` gate bounds. Both the exported names and
-#: the intermediate risk-book names, because v1 guards only the former and the
-#: latter still ships an ``expected_sharpe`` of -2,142 to any SQL consumer.
+#: the intermediate risk-book names, because v1 guards only the former -- which
+#: is how an ``expected_sharpe_ratio`` of -2,142 once reached a SQL consumer.
+#:
+#: The short ``expected_sharpe`` alias was removed from this list on 2026-08-24
+#: along with the column itself: ``compute_cvar_aware_book`` now emits
+#: ``expected_sharpe_ratio`` only, so bounding a name nothing produces would
+#: quietly bound nothing.
 _RANKING_RANGE_COLS: tuple[str, ...] = (
     "expected_sharpe_ratio",
     "reward_to_cvar",
-    "expected_sharpe",
     "p_upside_pos_cond",
 )
 
@@ -393,6 +397,13 @@ GATE_CATALOGUE: dict[str, str] = {
         "refit on the same ISIN subsample with a post-hoc log_likelihood. The "
         "only stage that can decide whether a component EARNS its place rather "
         "than merely converging -- the v2 workflow row had it blank."
+    ),
+    "export_duplicate_content": (
+        "WARN: no exported frame should carry the same QUANTITY under two "
+        "names. The sibling of export_unique_columns, which checks names and "
+        "therefore passes on `weight` beside a byte-identical `book_weight`. "
+        "Not blocking: an all-zero column legitimately equals another all-zero "
+        "column, and a warning must never cost a run a fit already paid for."
     ),
     "export_unique_columns": (
         "BLOCKING: no exported frame may carry the same column name twice. A "
@@ -3497,7 +3508,7 @@ def run_risk_book(
 
     ``compute_cvar_aware_book`` needs the screen frame to already carry
     ``er_mean`` / ``er_sd`` / ``er_p05`` and ``mc_prob_pos``. Without them
-    ``expected_sharpe`` silently becomes NaN, ``tail_risk`` loses its Monte-Carlo
+    ``expected_sharpe_ratio`` silently becomes NaN, ``tail_risk`` loses its Monte-Carlo
     loss leg, and ``p_upside_pos_cond`` degrades to ``p_upside_pos * kalman_gain``
     — three quiet degradations rather than one loud failure, which is why
     :func:`run_screen` builds those columns first.
@@ -3779,6 +3790,69 @@ def export_analytics(
         logger.error("Duplicate columns block the export: %s", dupes)
         return counts
 
+    # ---- gate: no duplicated column CONTENT --------------------------------
+    # The sibling of the gate above, and the reason it needed one. A frame can
+    # carry the same numbers under two names and pass `export_unique_columns`
+    # perfectly correctly -- that gate checks duplicate NAMES. `10b_risk_book_v2`
+    # shipped `weight` beside `book_weight` and `expected_sharpe` beside
+    # `expected_sharpe_ratio`, byte-identical, for two releases, because the
+    # de-duplicating drop was applied to the analytics frame and not to the book.
+    #
+    # WARN, never blocking. Two genuinely all-zero or all-constant columns are
+    # legitimate (`cvar_book_weight` is 0.0 for every name outside the book), and
+    # aborting an export over one would cost a run a fit that is already paid
+    # for. The verdict names the PAIRS, so the next reader gets the list rather
+    # than a count and can tell a real alias from a coincidence.
+    content_dupes: dict[str, list[str]] = {}
+    for key, df in frames.items():
+        if df is None or df.empty or len(df.columns) < 2:
+            continue
+        # `duplicated` on the transpose compares whole rows -- i.e. whole columns
+        # of the original -- and treats NaN as equal to NaN, which is what is
+        # wanted: two all-NaN aliases are still one quantity under two names.
+        numeric = df.select_dtypes(include=[np.number])
+        if numeric.shape[1] < 2:
+            continue
+        try:
+            marks = numeric.T.duplicated(keep=False)
+        except TypeError:  # pragma: no cover - unhashable/ragged dtypes
+            continue
+        if not marks.any():
+            continue
+        # Group the marked columns into equal-valued sets so the detail reads
+        # "book_weight == weight" rather than a flat list of four names.
+        groups: dict[tuple, list[str]] = {}
+        for col in numeric.columns[marks.to_numpy()]:
+            sig = tuple(pd.isna(numeric[col]).tolist()), tuple(
+                numeric[col].fillna(0.0).to_numpy().tolist()
+            )
+            groups.setdefault(sig, []).append(str(col))
+        pairs = [" == ".join(sorted(g)) for g in groups.values() if len(g) > 1]
+        if pairs:
+            content_dupes[key] = sorted(pairs)
+    report.add(
+        GateResult(
+            name="export_duplicate_content",
+            passed=not content_dupes,
+            blocking=False,
+            value=f"{len(content_dupes)} frame(s) with duplicated content",
+            threshold="one column per quantity in every frame",
+            detail=(
+                "; ".join(f"{k}: {', '.join(v)}" for k, v in content_dupes.items())
+                if content_dupes
+                else ""
+            ),
+        )
+    )
+    if content_dupes:
+        logger.warning(
+            "Frames carry the same quantity under two names: %s. Pick one name "
+            "per quantity at the SOURCE (compute_cvar_aware_book), not with a "
+            "drop here -- a drop applied to one frame and not another is what "
+            "produced this.",
+            content_dupes,
+        )
+
     # ---- gate: ranking metrics in range ------------------------------------
     offenders: list[str] = []
     for key, df in frames.items():
@@ -3972,20 +4046,30 @@ _ANALYTICS_COLUMN_COMMENTS_V2: dict[str, str] = {
         "out_of_support."
     ),
     "prob_pos": (
-        "Share of the per-name posterior above zero. REPORTED, NOT RANKED -- "
-        "rank on p_upside_pos_cond. Historically this saturated at 1.0 for most "
-        "of the universe (87.4% on run 49e84d7e9d59) because the smoother is "
-        "Rao-Blackwellised over the latent and the posterior sd collapsed to "
-        "0.47pp; the forecast-error term added 2026-08-20 widens it, and the "
-        "prob_pos_degenerate gate warns if it re-pins."
+        "NON-RANKING -- reported diagnostic. Share of the per-name posterior "
+        "above zero. Do not rank, filter or size on it; rank on "
+        "p_upside_pos_cond. It saturates: 59.4% of the universe sat at exactly "
+        "1.0 on run 0aa3397b1d01 and 87.4% on the pass-through 49e84d7e9d59, "
+        "because the smoother is Rao-Blackwellised over the latent and the "
+        "posterior sd collapsed to 0.47pp. The forecast-error term added "
+        "2026-08-20 widens it and the prob_pos_degenerate gate warns if it "
+        "re-pins -- but that gate passes at 59.4% against a 60% ceiling, so it "
+        "is reporting the threshold as much as the model. A column pinned for "
+        "three names in five has almost no ordering to offer."
     ),
     "kalman_gain": (
-        "DEPRECATED NAME, changed meaning 2026-08-20. Now P(risk_adj_return > 0) "
-        "over posterior draws -- a real tail probability. It was "
-        "sigmoid(risk_adj_return), a sigmoid of a standardised log-uplift, which "
-        "is not the probability of any event and correlated -0.004 with analyst "
-        "count. It is NOT a Kalman gain and never was: for the shrinkage weight "
-        "see shrink_gain."
+        "NON-RANKING -- reported diagnostic, and a DEPRECATED NAME. Removed from "
+        "the GEIB selectable-metric surface on 2026-08-24: 54.0% of the universe "
+        "sat at exactly 0 or exactly 1 on run 0aa3397b1d01, up from 50.6%, so it "
+        "orders barely half the names and is degenerate for the rest. Rank on "
+        "p_upside_pos_cond instead. "
+        "Definition, for the rows where it is not pinned: P(risk_adj_return > 0) "
+        "over posterior draws -- a real tail probability since 2026-08-20. It "
+        "was sigmoid(risk_adj_return), a sigmoid of a standardised log-uplift, "
+        "which is not the probability of any event and correlated -0.004 with "
+        "analyst count. It is NOT a Kalman gain and never was: for the shrinkage "
+        "weight, which is the quantity this name has always suggested, see "
+        "shrink_gain."
     ),
     "reward_to_cvar": "expected_return_kalman / tail_risk (STARR). NULL when out_of_support.",
     "cvar_book_weight": "Weight in the CVaR-sized book, 0 outside it and 0 when out_of_support.",
@@ -4313,13 +4397,14 @@ def main(
     kalman_results = (
         risk_book.analytics.copy() if risk_book is not None else screen.copy()
     )
-    # Drop the alias BEFORE renaming, for the same reason as the risk table
-    # below: `compute_cvar_aware_book` emits both `expected_sharpe` and
-    # `expected_sharpe_ratio` since 2026-08-22, so renaming one onto the other
-    # produces two columns with that name. That is not merely untidy -- the
-    # export_ranking_range gate then hands `pd.to_numeric` a DataFrame instead of
-    # a Series and the whole export dies with "arg must be a list, tuple, 1-d
-    # array, or Series", after the fit has already been paid for.
+    # A one-release guard, not a live hazard. `compute_cvar_aware_book` stopped
+    # emitting the `expected_sharpe` alias on 2026-08-24, so this is a no-op
+    # against the current RiskBookModel. It is retained because a stale or
+    # pinned RiskBookModel that still emits both would otherwise rename one onto
+    # the other and produce two columns with that name -- not merely untidy: the
+    # export_ranking_range gate then hands `pd.to_numeric` a DataFrame instead
+    # of a Series and the whole export dies with "arg must be a list, tuple,
+    # 1-d array, or Series", after the fit has already been paid for.
     kalman_results = kalman_results.drop(columns=["expected_sharpe"], errors="ignore")
     kalman_results = kalman_results.rename(
         columns={
@@ -4336,7 +4421,7 @@ def main(
     # Suppression runs BEFORE anything is written, so every consumer — including
     # the intermediate risk table — sees the same guarded values. In v1 this ran
     # after 10b_risk_analytics was persisted, which is why that table still
-    # carries an expected_sharpe of -2,142.
+    # carries an expected_sharpe_ratio of -2,142.
     kalman_results = apply_out_of_support(kalman_results)
     result["kalman_results"] = kalman_results
 
@@ -4360,10 +4445,15 @@ def main(
     if _cmp_parts:
         frames["09b_comparison_v2"] = pd.concat(_cmp_parts, ignore_index=True)
     if risk_book is not None:
-        # `compute_cvar_aware_book` emits BOTH names since 2026-08-22, so the old
-        # rename here would produce two columns called `expected_sharpe_ratio`
-        # and break `to_sql`. Drop the alias instead: the analytics table has
-        # always published the long name, and the DDL documents that one.
+        # Same one-release guard as above, and the reason this frame is no
+        # longer the odd one out: the drop used to be applied HERE and to
+        # `kalman_results` but never to `risk_book.book`, so `10b_risk_book_v2`
+        # shipped `weight` beside `book_weight` and `expected_sharpe` beside
+        # `expected_sharpe_ratio` -- byte-identical pairs that
+        # `export_unique_columns` cannot see, because it checks duplicate NAMES.
+        # Fixed at the source in `compute_cvar_aware_book` (2026-08-24) so BOTH
+        # frames carry one column per quantity, with `export_duplicate_content`
+        # below watching for a recurrence.
         frames["10b_risk_analytics_v2"] = apply_out_of_support(
             risk_book.analytics.drop(columns=["expected_sharpe"], errors="ignore")
         )

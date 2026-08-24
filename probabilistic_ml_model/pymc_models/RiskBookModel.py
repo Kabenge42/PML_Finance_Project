@@ -13,7 +13,7 @@ is importable, testable and reusable on its own.
 
 **Unit convention.** Every return/risk column is a raw decimal (0.25 = +25%),
 matching ``analytics.kalman_filtered_price_targets``; ratios
-(``ret_vol_ratio``, ``starr``, ``expected_sharpe``) are dimensionless. Percent
+(``ret_vol_ratio``, ``starr``, ``expected_sharpe_ratio``) are dimensionless. Percent
 scaling happens only at visualization / print boundaries.
 """
 
@@ -103,7 +103,7 @@ class RiskBook:
         ``mcap_global_r`` size-rank ratio) augmented with the risk columns
         ``p_upside_pos``, ``kalman_gain``, ``p_upside_pos_cond``, ``band_width``,
         ``exp_vol``, ``cvar05``, ``ret_vol_ratio``, ``tail_risk``, ``starr``,
-        ``expected_sharpe`` and the normalised ``book_weight`` (0 for names
+        ``expected_sharpe_ratio`` and the normalised ``book_weight`` (0 for names
         outside the sized book). All return/risk columns are raw decimals
         (0.25 = +25%); ratios are dimensionless. ``p_upside_pos_cond`` is the
         PRIMARY probability column and the one rankings use: since 2026-08-20 the
@@ -495,11 +495,11 @@ def compute_cvar_aware_book(
     #   * ret_vol_ratio    - reward per unit return dispersion when
     #     ``return_draws`` is supplied; per unit POSTERIOR dispersion (parameter
     #     uncertainty, not a Sharpe ratio) on the fallback path.
-    #   * expected_sharpe  - er_mean / er_sd over Monte-Carlo draws of the LOG
-    #     PRICE-TARGET UPLIFT (the distance from price to the smoothed target),
-    #     not of a realised equity return. It reads as a t-statistic on the
-    #     uplift estimate, so book values of 5-7 are normal and are NOT
-    #     investment Sharpe ratios. Exported as ``expected_sharpe_ratio``.
+    #   * expected_sharpe_ratio - er_mean / er_sd over Monte-Carlo draws of the
+    #     LOG PRICE-TARGET UPLIFT (the distance from price to the smoothed
+    #     target), not of a realised equity return. It reads as a t-statistic on
+    #     the uplift estimate, so book values of 5-7 are normal and are NOT
+    #     investment Sharpe ratios.
     #   * tail_risk        - binding downside. ON THE RETURN-DRAW PATH: the larger
     #     of the MC EXPECTED SHORTFALL magnitude (``-cvar05``) and a RELATIVE
     #     floor at ``tail_risk_vol_floor_k`` of the name's own return sd, with the
@@ -577,17 +577,20 @@ def compute_cvar_aware_book(
 
     nm['ret_vol_ratio'] = _safe_ratio(nm['expected_upside'], nm['exp_vol'])
     if {'er_mean', 'er_sd'} <= set(nm.columns):
-        nm['expected_sharpe'] = _safe_ratio(nm['er_mean'], nm['er_sd'])
+        nm['expected_sharpe_ratio'] = _safe_ratio(nm['er_mean'], nm['er_sd'])
     else:  # pragma: no cover - older screen frame without the MC summary
-        nm['expected_sharpe'] = np.nan
-    # One quantity, one name at the frame boundary. ``expected_sharpe`` and the
-    # exported ``expected_sharpe_ratio`` were the same number under two names,
-    # and which one a frame carried depended on which export path produced it
-    # (``10b_risk_analytics_v2`` had the long name, ``10b_risk_book_v2`` the
-    # short one). Both are emitted here so a consumer of either frame reads the
-    # same column; ``expected_sharpe`` is the alias and is retained for one
-    # release, as with ``weight`` above.
-    nm['expected_sharpe_ratio'] = nm['expected_sharpe']
+        nm['expected_sharpe_ratio'] = np.nan
+    # ONE QUANTITY, ONE NAME (2026-08-24). ``expected_sharpe`` used to be emitted
+    # beside ``expected_sharpe_ratio`` carrying byte-identical values, because
+    # which spelling a frame had depended on which export path produced it
+    # (``10b_risk_analytics_v2`` the long name, ``10b_risk_book_v2`` the short
+    # one). Emitting both fixed the disagreement and created a worse one: the
+    # frames shipped the same number twice, and the ``export_unique_columns``
+    # gate could not see it because it checks duplicate NAMES, not duplicate
+    # CONTENT. The alias is now gone -- ``expected_sharpe_ratio`` is the only
+    # spelling, it is the one the analytics table and the generated DDL have
+    # always published, and ``export_duplicate_content`` in
+    # ``pymc_kalman_filter_pt_v2.py`` now warns if a pair like this reappears.
     # THE LOSS LEG IS THE EXPECTED SHORTFALL, NOT THE QUANTILE (2026-08-23).
     # ``starr`` is exported as ``reward_to_cvar`` and documented as reward per
     # unit expected shortfall, but the leg was ``-er_p05`` — the 5 % QUANTILE
@@ -674,15 +677,16 @@ def compute_cvar_aware_book(
     if len(_book):
         _book = _book.sort_values('starr', ascending=False).head(k_book)
         _w = _cap_normalize_weights(_book['starr'].to_numpy(), cap)
-        # ``book_weight`` is the canonical name and the one the analytics table
-        # and the generated DDL document. It is stamped on BOTH frames since
-        # 2026-08-22: ``_book`` is copied out of ``nm`` before the stamp-back
-        # below, so it used to carry an all-zero ``book_weight`` beside a
-        # populated ``weight`` while ``nm`` carried the reverse — one run
-        # exporting the same book under two schemas, which is what made
-        # ``10b_risk_book_v2`` and ``10b_risk_analytics_v2`` disagree about where
-        # the sizing lives. ``weight`` is retained as an alias for one release.
-        _book = _book.assign(weight=_w, book_weight=_w)
+        # ``book_weight`` is the ONLY name for the sizing, on both frames.
+        # ``_book`` is copied out of ``nm`` before the stamp-back below, so it
+        # once carried an all-zero ``book_weight`` beside a populated ``weight``
+        # while ``nm`` carried the reverse -- one run exporting the same book
+        # under two schemas, which is what made ``10b_risk_book_v2`` and
+        # ``10b_risk_analytics_v2`` disagree about where the sizing lives.
+        # Stamping both names fixed that and left the sizing duplicated
+        # byte-for-byte within each frame; the ``weight`` alias is now dropped
+        # (2026-08-24) so there is one column per quantity.
+        _book = _book.assign(book_weight=_w)
         nm.loc[_book.index, 'book_weight'] = _w  # stamp weights back (0 elsewhere)
         _book = _book.reset_index(drop=True)
 
@@ -700,7 +704,7 @@ def compute_cvar_aware_book(
                 port_up = float(_port_draws.mean())
                 wavg_cvar = float(np.nansum(_wk * _book['cvar05'].to_numpy()[_keep]))
         port_vol = float(np.nansum(
-            _book['weight'].to_numpy() * _book['exp_vol'].to_numpy()))
+            _book['book_weight'].to_numpy() * _book['exp_vol'].to_numpy()))
         summary.update(
             n_book=float(len(_book)), port_up=port_up, port_cvar=port_cvar,
             wavg_cvar=wavg_cvar, port_vol=port_vol,
@@ -710,6 +714,6 @@ def compute_cvar_aware_book(
                  if np.isfinite(port_cvar) and port_cvar != 0 else float('nan')),
         )
     else:
-        _book = _book.assign(weight=pd.Series(dtype='float64')).reset_index(drop=True)
+        _book = _book.assign(book_weight=pd.Series(dtype='float64')).reset_index(drop=True)
 
     return RiskBook(analytics=nm, book=_book, summary=summary)

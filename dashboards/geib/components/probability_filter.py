@@ -70,16 +70,77 @@ class ProbabilityMetric:
     hi: float
 
 
+# ``kalman_gain`` was removed from this tuple on 2026-08-24 and deliberately
+# NOT replaced. Two reasons, either sufficient:
+#
+#   * It does not order the universe. Under the v2 definition
+#     (P(risk_adj_return > 0)) 54.0% of names sat at exactly 0 or exactly 1 on
+#     run 0aa3397b1d01, up from 50.6%; under the v1 definition this board
+#     actually reads, it is ``sigmoid(risk_adj_return)`` -- a sigmoid of a
+#     standardised log-uplift, which is not the probability of any event and
+#     correlated -0.004 with analyst count. Degenerate under one definition and
+#     meaningless under the other.
+#   * Its label named a variable that no longer exists. "Achieve Prob." was
+#     ``achieve_prob``, the Deterministic v2 removed for exactly that reason.
+#
+# The column is still exported and still loads (``data.NUMERIC_COLUMNS``); it is
+# simply no longer offered as something to filter or rank on. Anything that
+# needs a probability should use ``p_upside_pos_cond``, which is the screen's
+# primary column and the one furthest from a consensus sort.
+#
+# ``shrink_gain`` is the successor -- it is the quantity the retired name always
+# suggested (the weight the forecast-error update puts on the name's own
+# smoothed observation, ``struct_var / (struct_var + fe_var)``, so [0, 1] by
+# construction, averaging ~0.847 and rising monotonically with analyst
+# coverage). It is NOT added here yet: this board reads
+# ``analytics.kalman_filtered_price_targets``, the **v1** table, and v1 does not
+# compute ``shrink_gain`` at all. Add the entry below in the same edit that
+# points ``data.TABLE_NAME`` at the v2 table, not before.
 PROBABILITY_METRICS: tuple[ProbabilityMetric, ...] = (
     ProbabilityMetric("p_upside_pos_cond", "Conditional Prob. Positive", 0.0, 1.0),
     ProbabilityMetric("mc_prob_pos", "Monte Carlo Prob. Positive", 0.0, 1.0),
-    ProbabilityMetric("kalman_gain", "Kalman Gain (Achieve Prob.)", 0.0, 1.0),
     ProbabilityMetric("analyst_conviction", "Analyst Conviction", -1.0, 1.0),
 )
 
 METRICS_BY_COLUMN: dict[str, ProbabilityMetric] = {m.column: m for m in PROBABILITY_METRICS}
 
 METRIC_OPTIONS: list[dict] = [{"label": m.label, "value": m.column} for m in PROBABILITY_METRICS]
+
+
+def available_metrics(df: pd.DataFrame) -> tuple[ProbabilityMetric, ...]:
+    """Return the registry entries whose column is present in *df*.
+
+    The loader issues ``SELECT *`` and coerces only the columns that came back
+    (``data._coerce_dtypes``), so a registry entry naming a column the live
+    analytics table does not have yields a slider that filters nothing and says
+    nothing about why. That is a live hazard rather than a hypothetical: the
+    board reads the v1 table, and half the columns documented in the v2 DDL do
+    not exist there.
+
+    Parameters
+    ----------
+    df
+        The loaded analytics frame.
+
+    Returns
+    -------
+    tuple[ProbabilityMetric, ...]
+        The subset of :data:`PROBABILITY_METRICS` backed by a real column,
+        registry order preserved. Empty only if the frame carries none of them.
+    """
+    cols = set(df.columns)
+    return tuple(m for m in PROBABILITY_METRICS if m.column in cols)
+
+
+def metric_options(df: Optional[pd.DataFrame] = None) -> list[dict]:
+    """Dropdown options, restricted to metrics *df* can actually support.
+
+    Falls back to the full registry when no frame is supplied, so an import-time
+    caller with nothing loaded yet behaves as before.
+    """
+    if df is None:
+        return METRIC_OPTIONS
+    return [{"label": m.label, "value": m.column} for m in available_metrics(df)]
 
 DEFAULT_METRIC = "p_upside_pos_cond"
 

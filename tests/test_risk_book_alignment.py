@@ -127,14 +127,27 @@ def test_label_length_mismatch_raises():
         _book(screen, draws, isins, eu, return_draws_isins=isins[:-1])
 
 
-def test_risk_frames_agree_on_where_sizing_and_sharpe_live():
-    """One run must not export the same book under two schemas.
+#: Spellings retired on 2026-08-24. Each was a byte-identical duplicate of the
+#: canonical name beside it, and neither frame may carry one again.
+RETIRED_ALIASES: tuple[tuple[str, str], ...] = (
+    ("weight", "book_weight"),
+    ("expected_sharpe", "expected_sharpe_ratio"),
+)
 
-    Both frames carry ``book_weight`` and ``expected_sharpe_ratio``; the older
-    ``weight`` / ``expected_sharpe`` spellings survive as aliases for one
-    release. Column names must be UNIQUE -- emitting both names meant the export's
-    old ``rename(expected_sharpe -> expected_sharpe_ratio)`` produced a duplicate
-    column and would have broken ``to_sql``.
+
+def test_risk_frames_carry_one_column_per_quantity():
+    """One run must not export the same book under two schemas -- or twice under one.
+
+    Two defects, one test. The first was the frames DISAGREEING: ``rb.book``
+    carried ``weight`` while ``rb.analytics`` carried ``book_weight``, so which
+    spelling an export had depended on which path produced it. Stamping both
+    names on both frames fixed that and created the second: every quantity
+    shipped TWICE, byte-identical, and ``export_unique_columns`` could not see it
+    because that gate checks duplicate NAMES rather than duplicate CONTENT.
+
+    The aliases are now gone at the source. This test pins their ABSENCE, not
+    merely the presence of the canonical names -- asserting only the latter is
+    what let the duplication survive a passing suite.
     """
     screen, draws, isins, eu = _make_case(seed=19)
     rb = _book(screen, draws, isins, eu, return_draws_isins=isins)
@@ -144,25 +157,78 @@ def test_risk_frames_agree_on_where_sizing_and_sharpe_live():
         assert len(cols) == len(set(cols)), f"{label} has duplicate columns"
         assert "book_weight" in cols, f"{label} lacks book_weight"
         assert "expected_sharpe_ratio" in cols, f"{label} lacks expected_sharpe_ratio"
+        for alias, canonical in RETIRED_ALIASES:
+            assert alias not in cols, (
+                f"{label} still carries the retired alias {alias!r}; "
+                f"{canonical!r} is the only name for that quantity"
+            )
 
-    # The book's sizing must actually be there, not a column of zeros beside a
-    # populated `weight` -- which is exactly how the two frames disagreed.
+    # The book's sizing must actually be there, not a column of zeros -- which is
+    # the half of the original defect that the de-duplication must not undo.
     if len(rb.book):
-        np.testing.assert_allclose(
-            rb.book["book_weight"].to_numpy(), rb.book["weight"].to_numpy(), rtol=1e-12
-        )
         assert rb.book["book_weight"].sum() > 0.99
+
+
+def test_no_exported_frame_carries_a_duplicated_column_pair(tmp_path, monkeypatch):
+    """Byte-identical column pairs must be caught by a gate, not by a reader.
+
+    ``export_unique_columns`` passes on a frame carrying the same numbers under
+    two names, correctly -- it checks names. ``export_duplicate_content`` is the
+    sibling gate that checks values, and it WARNS rather than blocks: two
+    genuinely all-zero columns are legitimate and must not abort an export that
+    has already paid for a fit.
+    """
+    import pymc_kalman_filter_pt_v2 as v2
+
+    report = v2.GateReport()
+    frames = {
+        "clean_v2": pd.DataFrame(
+            {"isin": ["a", "b"], "starr": [1.0, 2.0], "exp_vol": [0.3, 0.4]}
+        ),
+        "dupe_v2": pd.DataFrame(
+            {
+                "isin": ["a", "b"],
+                "book_weight": [0.5, 0.5],
+                "weight": [0.5, 0.5],  # the retired alias, reintroduced
+            }
+        ),
+    }
+    # Two side effects to contain, both of which this test would otherwise leave
+    # in the repository:
+    #
+    #   * `export_analytics` writes its CSVs UNCONDITIONALLY -- only the DATABASE
+    #     write is gated -- so it needs a tmp results root.
+    #   * `write_analytics_ddl_v2` renders into `sql_scripts/analytics/`, which is
+    #     deliberate (that DDL is the reviewable, committed schema) and therefore
+    #     must be stubbed rather than redirected.
+    monkeypatch.setattr(v2, "write_analytics_ddl_v2", lambda *a, **k: tmp_path)
+    v2.export_analytics(
+        frames,
+        v2.KalmanRunConfigV2(write_analytics=False, results_dir=str(tmp_path)),
+        report,
+        run_id="t0",
+    )
+    gate = next(r for r in report.results if r.name == "export_duplicate_content")
+    assert not gate.passed
+    assert not gate.blocking, "a duplicate-content warning must never abort an export"
+    assert "dupe_v2" in gate.detail
+    assert "book_weight" in gate.detail and "weight" in gate.detail
+    assert "clean_v2" not in gate.detail
 
 
 def test_export_blocks_frames_with_duplicate_columns():
     """A duplicated column name must fail a gate, not crash the export.
 
-    This bug shipped twice from the same cause: `compute_cvar_aware_book` emits
-    both `expected_sharpe` and `expected_sharpe_ratio`, and BOTH places that
-    build an export frame renamed one onto the other. pandas allows it silently;
-    the ranking-range gate then hands `pd.to_numeric` a DataFrame and the export
-    dies with "arg must be a list, tuple, 1-d array, or Series" -- after the fit
-    has already been paid for.
+    This bug shipped twice from the same cause: `compute_cvar_aware_book` used
+    to emit both `expected_sharpe` and `expected_sharpe_ratio`, and BOTH places
+    that build an export frame renamed one onto the other. pandas allows it
+    silently; the ranking-range gate then hands `pd.to_numeric` a DataFrame and
+    the export dies with "arg must be a list, tuple, 1-d array, or Series" --
+    after the fit has already been paid for.
+
+    The alias is gone as of 2026-08-24, so this now guards the class of defect
+    rather than one instance of it: any future rename that collides must still
+    be stopped BEFORE the loops that would raise.
     """
     import pymc_kalman_filter_pt_v2 as v2
 

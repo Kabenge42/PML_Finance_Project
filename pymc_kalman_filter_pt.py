@@ -7044,13 +7044,15 @@ def export_analytics(idata, panel: KalmanPanelInputs, screen: ScreenContext,
     # exactly as the docstring promises. ``RiskBook.analytics`` carries the per-ISIN
     # book_weight / cvar05 / starr keyed on isin.
     rb = _resolve_risk_book(risk_book, idata, panel, screen, screen.results)
+    # ``expected_sharpe_ratio`` is selected under its own name: RiskBookModel
+    # stopped emitting the short ``expected_sharpe`` alias on 2026-08-24, so the
+    # rename that used to map one onto the other has nothing left to map.
     _sized = (rb.analytics[['isin', 'book_weight', 'cvar05', 'starr', 'exp_vol',
-                            'expected_sharpe', 'p_upside_pos_cond']]
+                            'expected_sharpe_ratio', 'p_upside_pos_cond']]
               .rename(columns={'book_weight': 'cvar_book_weight',
                                'cvar05': 'cvar_5pct_kalman',
                                'starr': 'reward_to_cvar',
-                               'exp_vol': 'expected_vol_kalman',
-                               'expected_sharpe': 'expected_sharpe_ratio'}))
+                               'exp_vol': 'expected_vol_kalman'}))
     kalman_results = kalman_results.merge(_sized, on='isin', how='left')
 
     # Guarantee the column exists regardless of whether a risk book was passed.
@@ -8449,7 +8451,7 @@ def plot_book_composition(rb: RiskBook) -> None:
     """
     if not _HAS_PLOTLY or rb is None or rb.book is None or len(rb.book) == 0:
         return
-    book = rb.book.sort_values('weight', ascending=True)
+    book = rb.book.sort_values('book_weight', ascending=True)
     _tk = book.get('ticker', pd.Series(index=book.index, dtype=object))
     labels = [t if isinstance(t, str) and t.strip() else str(i)[:8]
               for t, i in zip(_tk, book['isin'])]
@@ -8462,7 +8464,7 @@ def plot_book_composition(rb: RiskBook) -> None:
         _dupe_n[_lab] = _dupe_n.get(_lab, 0) + 1
         if _dupe_n[_lab] > 1:
             labels[_i] = f'{_lab} ({_dupe_n[_lab]})'
-    w_pct = (pd.to_numeric(book['weight'], errors='coerce')
+    w_pct = (pd.to_numeric(book['book_weight'], errors='coerce')
              .replace([np.inf, -np.inf], np.nan) * 100.0)
     cvar_pct = (pd.to_numeric(book.get('cvar05'), errors='coerce')
                 .replace([np.inf, -np.inf], np.nan) * 100.0)
@@ -9199,7 +9201,7 @@ def run_recommendations(idata, panel: KalmanPanelInputs, results: pd.DataFrame,
     if len(_book):
         print(f'   {"NAME":<14}  {"wt":>6}  {"upside":>8}  {"vol":>7}  {"CVaR5":>8}  {"STARR":>6}')
         for _, r in _book.iterrows():
-            print(f'   {_nm_label(r):<14.14s}  {r["weight"] * 100:5.1f}%  '
+            print(f'   {_nm_label(r):<14.14s}  {r["book_weight"] * 100:5.1f}%  '
                   f'{r["expected_upside_pct"]:7.2f}%  {_na(r["exp_vol_pct"], 1, "%"):>7}  '
                   f'{_na(r["cvar05_pct"], 1, "%"):>8}  {_na(r["starr"], 2):>6}')
         print(f'   PORTFOLIO  expected upside={_na(_s["port_up"] * 100.0, 2, "%")}  '
