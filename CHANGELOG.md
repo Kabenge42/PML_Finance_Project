@@ -97,6 +97,57 @@ passed stops passing.
 - `prob_pos` and `kalman_gain` are relabelled **NON-RANKING** in the generated
   DDL, with their pinning shares and the column to rank on instead.
 
+### Fixed
+
+- **The ELPD comparison could not run at all**, and that is why items 05 and 06
+  have been "built but unrun" for four editions of the post-run analysis. The v2
+  likelihood is one `MvStudentT` per covariance group, so `log_likelihood`
+  carries `target_pct_obs_g0..gN` and `az.compare` raises `TypeError:
+  Encountered error trying to compute ELPD from model <arm>` because it cannot
+  choose among them. Measured: `baseline` vs `level_off` fitted both arms
+  cleanly at **zero divergences in 9.7 minutes**, on a panel that split into 3
+  groups of [776, 20, 4] — and produced nothing.
+
+  It survived because the **single-group case works**. `_simulate_panel` returns
+  a fully-observed panel, which partitions into exactly one group and emits an
+  unsuffixed `target_pct_obs`, so every self-test passed while the production
+  path could not run. A fixture that cannot reach the branch under test is not
+  coverage; `tests/test_model_comparison_loglik.py` forces a partition in every
+  case, and one test deliberately pins the BROKEN behaviour so a future arviz
+  change surfaces loudly rather than silently.
+
+  `collapse_group_loglik` stitches the groups into one variable over **names**.
+  The pointwise unit is a modelling statement, not a convenience: each group's
+  `MvStudentT` is a multivariate density over one name's T observations and
+  already emits one log-density per row, and a name's cells are correlated by
+  construction — that correlation *is* the model — so leaving out a single cell
+  would not be a leave-one-out. LOO here is leave-one-name-out, which is exactly
+  what the level-vs-state question asks.
+
+### Measured
+
+- **Item 05, the level block: `level_off` ranks first.** First ELPD contrast v2
+  has ever produced. `baseline` is **2.0 ELPD worse, dse 0.86**, both arms at
+  zero divergences, effective parameters 52.5 vs 52.0, absolute ELPD
+  indistinguishable at −1900 ± 67.
+
+  **Read the diagnostic column, not the ranking.** ArviZ flags the contrast
+  itself: `|elpd_diff| < 4`, its own threshold for "too small to be reliable".
+  At ~2.3 dse this is suggestive, not decisive, and it is scored on 800 of 6,509
+  names (12%) against the analyst trail rather than realised returns — the same
+  limitation every one of the 23 gates has.
+
+  The defensible statement is therefore narrow: **dropping the level block costs
+  nothing measurable and buys a free parameter**, and nothing here argues for
+  keeping it. That agrees with every other measurement — `w_level` 0.57%,
+  `rho_inf` ≈ 0.005 on five fits, the empirical asymptote moving 0.409 → 0.446
+  without the posterior following, and the pooled permanent correlation
+  standardising to exactly zero outside Q5.
+
+  `enable_isin_level` is **deliberately left at its default**. Changing a model
+  default on a difference arviz marks unreliable is a decision, not a
+  conclusion; raising `comparison_max_isins` is the cheap way to firm it up.
+
 ### Notes
 
 - **Two pre-existing test failures were found, not introduced.**
