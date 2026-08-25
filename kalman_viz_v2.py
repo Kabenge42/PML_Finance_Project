@@ -286,8 +286,8 @@ def plot_panel_audit(panel: Any, audit: dict) -> Optional[Any]:
     t_eff = float(audit.get("t_eff", float("nan")))
     fig.update_layout(
         title=(
-            f"Panel information audit &mdash; T_eff {t_eff:.2f} of T = {panel.n_time}"
-            f" &nbsp;&middot;&nbsp; {panel.n_isin:,} names"
+            f"Panel information audit — T_eff {t_eff:.2f} of T = {panel.n_time}"
+            f"  ·  {panel.n_isin:,} names"
         ),
     )
     _render_plotly(fig, height=H_PANEL, label="04b_panel_audit")
@@ -358,7 +358,7 @@ def plot_decay_ladder(
         go.Scatter(
             x=gaps, y=vals, mode="markers", name="measured trail correlation",
             marker=dict(color=C_OBSERVED, size=10, line=dict(width=1, color=C_PANEL_EDGE)),
-            hovertemplate="gap %{x:.0f}d &rarr; r = %{y:.3f}<extra></extra>",
+            hovertemplate="gap %{x:.0f}d → r = %{y:.3f}<extra></extra>",
         )
     )
 
@@ -369,7 +369,7 @@ def plot_decay_ladder(
         fig.add_trace(
             go.Scatter(
                 x=grid, y=_decay_curve(raw_rho, raw_ell, grid), mode="lines",
-                name=f"raw trail &middot; rho_inf {raw_rho:.3f}, ell {raw_ell:.0f}d",
+                name=f"raw trail · rho_inf {raw_rho:.3f}, ell {raw_ell:.0f}d",
                 line=dict(color=C_OBSERVED, width=2.4),
                 hovertemplate="raw: r(%{x:.0f}d) = %{y:.3f}<extra></extra>",
             )
@@ -388,7 +388,7 @@ def plot_decay_ladder(
             fig.add_trace(
                 go.Scatter(
                     x=grid, y=_decay_curve(r_rho, r_ell, grid), mode="lines",
-                    name=f"after the fitted mean &middot; rho_inf {r_rho:.3f}, ell {r_ell:.0f}d",
+                    name=f"after the fitted mean · rho_inf {r_rho:.3f}, ell {r_ell:.0f}d",
                     line=dict(color=C_FORECAST, width=2.4, dash="dash"),
                     hovertemplate="residual: r(%{x:.0f}d) = %{y:.3f}<extra></extra>",
                 )
@@ -404,7 +404,7 @@ def plot_decay_ladder(
         fig.add_trace(
             go.Scatter(
                 x=grid, y=_decay_curve(pr, pe, grid), mode="lines",
-                name=f"posterior &middot; rho_inf {pr:.4f}, ell {pe:.0f}d",
+                name=f"posterior · rho_inf {pr:.4f}, ell {pe:.0f}d",
                 line=dict(color=C_POSTERIOR, width=2.8),
                 hovertemplate="posterior: r(%{x:.0f}d) = %{y:.3f}<extra></extra>",
             )
@@ -417,10 +417,10 @@ def plot_decay_ladder(
     fig.update_yaxes(range=[-0.05, 1.02])
     fig.update_layout(
         title=(
-            "The decay ladder &mdash; how much of the trail correlation is a "
+            "The decay ladder — how much of the trail correlation is a "
             "permanent level<br><sub>Points are measured at the "
             f"{gaps.size} calendar gaps this grid provides. Curves are "
-            "r(d) = rho_inf + (1 &minus; rho_inf)&middot;exp(&minus;d/ell).</sub>"
+            "r(d) = rho_inf + (1 − rho_inf)·exp(−d/ell).</sub>"
         ),
         legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98),
     )
@@ -509,8 +509,8 @@ def plot_prior_predictive(prior_idata: Any, panel: Any) -> Optional[Any]:
     ratio = (p_hi - p_lo) / max(o_hi - o_lo, 1e-12)
     fig.update_layout(
         title=(
-            f"Prior predictive &mdash; prior/empirical 90% width {ratio:.1f}x "
-            "<sub>(gate wants 1x&ndash;10x)</sub>"
+            f"Prior predictive — prior/empirical 90% width {ratio:.1f}x "
+            "<sub>(gate wants 1x–10x)</sub>"
         ),
         legend=dict(font_size=11),
     )
@@ -566,8 +566,8 @@ def plot_ppc_overlay(ppc_out: dict, panel: Any, ppc_idata: Optional[Any] = None)
 
     fig = make_subplots(
         rows=1, cols=2, horizontal_spacing=0.10,
-        subplot_titles=("Density &mdash; replicated vs observed",
-                        "ECDF &mdash; where the two actually differ"),
+        subplot_titles=("Density — replicated vs observed",
+                        "ECDF — where the two actually differ"),
     )
     _add_binned_density(fig, obs, row=1, col=1, bins=80, color=C_OBSERVED,
                         fill=False, name="observed",
@@ -593,9 +593,9 @@ def plot_ppc_overlay(ppc_out: dict, panel: Any, ppc_idata: Optional[Any] = None)
     obs_iqr = ts.get("observed_iqr", float("nan"))
     fig.update_layout(
         title=(
-            f"Posterior predictive &mdash; observed IQR {obs_iqr:.3f} in "
+            f"Posterior predictive — observed IQR {obs_iqr:.3f} in "
             f"[{ts.get('lo', float('nan')):.3f}, {ts.get('hi', float('nan')):.3f}]"
-            f" &nbsp;&middot;&nbsp; {obs.size:,} observed cells"
+            f"  ·  {obs.size:,} observed cells"
         )
     )
     _render_plotly(fig, height=H_SHORT, label="08_ppc_overlay")
@@ -635,8 +635,8 @@ def plot_ppc_calibration(ppc_out: dict, panel: Any, run_cfg: Any) -> Optional[An
     worst = float(np.max(np.abs(cov - target)))
     fig.update_layout(
         title=(
-            f"Per-lookback predictive coverage &mdash; worst deviation {worst:.3f} "
-            f"<sub>(tolerance &plusmn;{tol})</sub>"
+            f"Per-lookback predictive coverage — worst deviation {worst:.3f} "
+            f"<sub>(tolerance ±{tol})</sub>"
         )
     )
     _render_plotly(fig, height=H_SHORT, label="08_ppc_coverage")
@@ -682,7 +682,7 @@ def plot_ppc_decay(ppc_out: dict) -> Optional[Any]:
         fig.add_trace(go.Scatter(
             x=[lo, hi], y=[i, i], mode="lines",
             line=dict(color=_hex_to_rgba(colour, 0.55), width=14),
-            name=f"{label} &mdash; replicated 94%",
+            name=f"{label} — replicated 94%",
             hovertemplate=f"{label}: replicated [{lo:.3f}, {hi:.3f}]<extra></extra>",
         ))
         fig.add_trace(go.Scatter(
@@ -705,10 +705,10 @@ def plot_ppc_decay(ppc_out: dict) -> Optional[Any]:
     _add_ref_line(fig, x=0.0, kind="zero")
     _fmt_axis(fig, x="rho_inf (permanent share of trail correlation)")
     share = ppc_out.get("decay_mean_share")
-    sub = f" &nbsp;&middot;&nbsp; mean explains {share:.0%} of the raw asymptote" \
+    sub = f"  ·  mean explains {share:.0%} of the raw asymptote" \
         if isinstance(share, (int, float)) and np.isfinite(share) else ""
     fig.update_layout(
-        title=f"Correlation decay &mdash; observed against replicated{sub}",
+        title=f"Correlation decay — observed against replicated{sub}",
         legend=dict(font_size=11),
     )
     _render_plotly(fig, height=H_SHORT, label="08_ppc_decay")
@@ -749,7 +749,7 @@ def plot_rhat_ess(diag: pd.DataFrame, run_cfg: Any) -> Optional[Any]:
                     line=dict(width=0.8, color=C_PANEL_EDGE),
                     colorbar=dict(title="ESS bulk")),
         text=d[name_col].astype(str),
-        hovertemplate="%{text}<br>R-hat %{x:.4f} &middot; ESS %{y:,.0f}<extra></extra>",
+        hovertemplate="%{text}<br>R-hat %{x:.4f} · ESS %{y:,.0f}<extra></extra>",
     ))
     _add_ref_line(fig, x=rhat_gate, kind="anchor", annotation_text=f"R-hat gate {rhat_gate}")
     _add_ref_line(fig, y=ess_gate, kind="anchor", annotation_text=f"ESS gate {ess_gate:.0f}")
@@ -759,7 +759,7 @@ def plot_rhat_ess(diag: pd.DataFrame, run_cfg: Any) -> Optional[Any]:
     thin = d.loc[d["ess_bulk"].idxmin()]
     fig.update_layout(
         title=(
-            f"Convergence &mdash; worst R-hat {worst['r_hat']:.4f} "
+            f"Convergence — worst R-hat {worst['r_hat']:.4f} "
             f"({worst[name_col]}), lowest ESS {thin['ess_bulk']:,.0f} "
             f"({thin[name_col]}) over {len(d)} globals"
         )
@@ -887,9 +887,9 @@ def plot_variance_legs(idata: Any) -> Optional[Any]:
             extras.append(f"{nm} {float(np.mean(v)):.4g}")
     fig.update_layout(
         title=(
-            f"Variance legs &mdash; level carries {mean[0] * 100:.2f}% "
+            f"Variance legs — level carries {mean[0] * 100:.2f}% "
             f"<sub>89% ETI [{lo[0] * 100:.2f}%, {hi[0] * 100:.2f}%]</sub>"
-            + (f"<br><sub>{' &middot; '.join(extras)}</sub>" if extras else "")
+            + (f"<br><sub>{' · '.join(extras)}</sub>" if extras else "")
         )
     )
     _render_plotly(fig, height=H_SHORT, label="09_variance_legs")
@@ -1053,14 +1053,14 @@ def plot_drift_forest(idata: Any, panel: Any) -> Optional[Any]:
             marker=dict(color=colour, size=11, line=dict(width=1, color=C_PANEL_EDGE)),
             hovertemplate=(f"{names[j]}<br>beta %{{x:+.4f}}<br>"
                            f"89% ETI [{lo[j]:+.4f}, {hi[j]:+.4f}]"
-                           f"{' &middot; straddles zero' if straddles[j] else ''}"
+                           f"{' · straddles zero' if straddles[j] else ''}"
                            "<extra></extra>"),
         ))
     _add_ref_line(fig, x=0.0, kind="zero")
     _fmt_axis(fig, x="beta (standardised response per standardised feature)")
     fig.update_layout(
         title=(
-            f"Drift coefficients &mdash; {len(names)} features, "
+            f"Drift coefficients — {len(names)} features, "
             f"{int(straddles.sum())} straddling zero <sub>(89% ETI; grey = "
             "indistinguishable from zero)</sub>"
         ),
@@ -1127,7 +1127,7 @@ def plot_screen_overview(screen: pd.DataFrame, panel: Any) -> Optional[Any]:
                                   in shown.columns else "E[upside]")),
         # No per-point identity string: hover text is the bulk of a large
         # scatter's payload and is unreadable in a cloud this dense.
-        hovertemplate="implied %{x:.1f}% &rarr; model %{y:.1f}%<extra></extra>",
+        hovertemplate="implied %{x:.1f}% → model %{y:.1f}%<extra></extra>",
     ))
     lim = float(np.nanpercentile(np.abs(df[["implied_upside", "expected_upside"]].to_numpy()), 99)) * 100.0
     grid = np.array([-lim, lim])
@@ -1146,7 +1146,7 @@ def plot_screen_overview(screen: pd.DataFrame, panel: Any) -> Optional[Any]:
               x_kind="pct", y_kind="pct")
     fig.update_layout(
         title=(
-            f"Screen &mdash; Spearman {rho:.4f}, OLS slope {slope:.3f}, median "
+            f"Screen — Spearman {rho:.4f}, OLS slope {slope:.3f}, median "
             f"absolute revision {med_rev * 100:.2f}pp"
             f"<br><sub>{len(shown):,} of {len(df):,} names drawn"
             f"{' (stratified sample)' if decimated else ''}; statistics on all "
@@ -1309,7 +1309,7 @@ def plot_er_sd_calibration(frame: pd.DataFrame, panel: Any) -> Optional[Any]:
     fig.add_trace(go.Scattergl(
         x=shown["vol_level"], y=shown["er_sd"], mode="markers", showlegend=False,
         marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.5), size=4),
-        hovertemplate="realised vol %{x:.3f} &rarr; er_sd %{y:.3f}<extra></extra>",
+        hovertemplate="realised vol %{x:.3f} → er_sd %{y:.3f}<extra></extra>",
     ), row=1, col=1)
     xg = np.linspace(float(df["vol_level"].min()), float(df["vol_level"].max()), 50)
     fig.add_trace(go.Scatter(
@@ -1331,7 +1331,7 @@ def plot_er_sd_calibration(frame: pd.DataFrame, panel: Any) -> Optional[Any]:
 
     fig.update_layout(
         title=(
-            f"Second-moment calibration &mdash; slope {slope:.3f}, R&sup2; {r2:.3f}, "
+            f"Second-moment calibration — slope {slope:.3f}, R² {r2:.3f}, "
             f"Spearman {rho:.3f}, median ratio {r_med:.3f}"
             f"<br><sub>{len(shown):,} of {len(df):,} names drawn; statistics on all "
             f"{len(df):,}. Reported, not gated.</sub>"
@@ -1403,8 +1403,11 @@ def plot_risk_book(risk_book: Any, run_cfg: Any) -> Optional[Any]:
         on_floor = np.isclose(pd.to_numeric(b["tail_risk"], errors="coerce"), floor,
                               rtol=1e-9, atol=1e-12)
 
-    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.05,
-                        subplot_titles=("book weight", "5% expected shortfall"))
+    # No `subplot_titles`. They anchor at paper y=1, inside the top margin, which
+    # `_render_plotly` pins at 70px AFTER this function returns -- so the two-line
+    # title below overprints them and neither is readable. The x-axis titles
+    # ("weight (%)" / "CVaR 5% (%)") already name both panels.
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.05)
     fig.add_trace(go.Bar(
         x=pd.to_numeric(b["book_weight"], errors="coerce") * 100.0, y=labels,
         orientation="h", marker=dict(color=_hex_to_rgba(C_POSTERIOR, 0.85)),
@@ -1427,16 +1430,29 @@ def plot_risk_book(risk_book: Any, run_cfg: Any) -> Optional[Any]:
         _add_ref_line(fig, x=0, kind="zero", row=1, col=2)
         _fmt_axis(fig, x="CVaR 5% (%)", x_kind="pct", row=1, col=2)
 
+    # Pin the label axis to `category`. A book of global names routinely holds
+    # exchange-code tickers -- "700", "2330", "601318", "532454" -- and under the
+    # project's arviz dark template Plotly's axis autotype resolves a MIXED
+    # alphabetic/numeric label array to `linear` rather than `category`. (The same
+    # array autotypes as `category` under the stock template, which is why this
+    # only ever showed up on exported panels.) On a linear axis the numeric
+    # tickers become COORDINATES -- scattering four or five hairline bars across a
+    # 0-600k range -- and every alphabetic label coerces to NaN and is dropped, so
+    # a fully-populated 25-name book renders as an empty panel with a correct
+    # title. `categoryarray` keeps the book_weight sort explicit rather than
+    # leaving it to trace order.
+    fig.update_yaxes(type="category", categoryorder="array", categoryarray=labels)
+
     s = risk_book.summary or {}
     n_floor = int(on_floor.sum()) if on_floor is not None else -1
     w = pd.to_numeric(b["book_weight"], errors="coerce").fillna(0.0).to_numpy()
     hhi = float((w ** 2).sum())
     fig.update_layout(
         title=(
-            f"Risk book &mdash; {len(b)} names, effective N {1.0 / hhi if hhi else float('nan'):.1f}, "
+            f"Risk book — {len(b)} names, effective N {1.0 / hhi if hhi else float('nan'):.1f}, "
             f"HHI {hhi:.4f}"
             + (f"<br><sub>{n_floor} of {len(b)} names charged the VOLATILITY FLOOR "
-               f"(k = {k}) rather than their tail &mdash; for those, "
+               f"(k = {k}) rather than their tail — for those, "
                "reward_to_cvar is a rescaling of expected_sharpe_ratio</sub>"
                if n_floor >= 0 else "")
         ),
