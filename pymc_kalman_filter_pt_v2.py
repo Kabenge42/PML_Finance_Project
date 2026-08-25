@@ -2424,6 +2424,61 @@ def run_posterior_predictive(
 # =========================================================================== #
 
 
+def free_global_summary(idata: Any, *, ci_prob: float = 0.89) -> pd.DataFrame:
+    """Return the convergence summary over the FREE global parameters.
+
+    The single definition of "which parameters the convergence numbers describe",
+    shared by :func:`run_diagnostics` and :func:`run_model_comparison`. A second
+    implementation would let the production fit and the comparison arms report
+    min-ESS on different parameter sets, and two numbers under one name is how a
+    reader concludes that an arm mixes worse than the baseline when it was only
+    measured differently.
+
+    Two filters, both load-bearing:
+
+    ``globals only``
+        Per-ISIN vectors have thousands of entries whose extreme order
+        statistics are dominated by the tail of a large sample, so their max
+        R-hat is not a convergence signal. The size cap additionally excludes
+        wide non-ISIN tensors.
+    ``sd > 0``
+        ``alpha_time[t3]`` and ``sigma_time[t3]`` are the pinned anchors of
+        ``pt.concatenate([free, zeros(1)])``. R-hat and ESS are between-chain
+        statistics dividing by a within-chain variance of exactly zero, so they
+        come back NaN -- and an unfiltered ``ess_bulk.min()`` would report a
+        pinned constant as the thinnest parameter in the model.
+
+    Parameters
+    ----------
+    idata
+        A fitted arm or production fit.
+    ci_prob
+        Interval width for the summary table.
+
+    Returns
+    -------
+    pandas.DataFrame
+        ``az.summary`` restricted to the free globals. Empty if none qualify.
+    """
+    import arviz as az
+
+    post = idata.posterior
+    globals_ = [
+        v
+        for v in post.data_vars
+        if "isin" not in post[v].dims
+        and post[v].size <= post.sizes["chain"] * post.sizes["draw"] * 32
+    ]
+    if not globals_:
+        return pd.DataFrame()
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="invalid value encountered", category=RuntimeWarning
+        )
+        summary = az.summary(idata, var_names=globals_, ci_prob=ci_prob)
+    return summary.loc[summary["sd"] > _EPS]
+
+
 def run_diagnostics(
     idata: Any,
     panel: KalmanPanelV2,
@@ -2453,22 +2508,17 @@ def run_diagnostics(
         for v in post.data_vars
         if "isin" not in post[v].dims and post[v].size <= post.sizes["chain"] * post.sizes["draw"] * 32
     ]
-    # `alpha_time[t3]` and `sigma_time[t3]` are the anchors of
-    # `pt.concatenate([free, zeros(1)])`, so they are pinned at 0 and 1 by
-    # construction. R-hat and ESS are between-chain statistics and divide by a
-    # within-chain variance of exactly zero: that is where the three
-    # arviz_stats "invalid value encountered in scalar divide" RuntimeWarnings
-    # come from. Suppress them at the source rather than at the console, keep
-    # the rows in the exported table (they are real parameters, just pinned),
-    # and gate on the free ones only -- `.max()`/`.min()` skip the NaN anyway,
-    # so this changes no value today but stops a future pinned parameter from
-    # reading as converged.
+    # The global / free-parameter selection lives in `free_global_summary`, which
+    # `run_model_comparison` also calls -- see there for why the pinned anchors
+    # must be excluded before any `.min()`. `summary` is still built here because
+    # the exported table keeps the pinned rows (they are real parameters) while
+    # the GATES read only the free ones.
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", message="invalid value encountered", category=RuntimeWarning
         )
         summary = az.summary(idata, var_names=globals_, ci_prob=0.89)
-    free = summary.loc[summary["sd"] > _EPS]
+    free = free_global_summary(idata)
     n_pinned = len(summary) - len(free)
     if n_pinned:
         logger.debug(
@@ -2967,6 +3017,9 @@ def run_model_comparison(
 
     # ---- fit each arm --------------------------------------------------------
     fits: dict[str, Any] = {}
+    #: Per-arm convergence, carried onto the returned frame so a reader can see
+    #: whether a ranking came from an arm that actually mixed.
+    convergence: dict[str, dict[str, Any]] = {}
     for arm in names:
         cfg = COMPARISON_ARMS[arm](model_cfg)
         sub = subs[arm]
@@ -2999,7 +3052,56 @@ def run_model_comparison(
             if "diverging" in getattr(idata, "sample_stats", {})
             else 0
         )
-        logger.info("  [%s] divergences=%d", arm, div)
+        # Per-arm convergence, on the SAME parameter selection the production
+        # gates use (`free_global_summary`).
+        #
+        # Why this is not decoration. An arm that ranks first on ELPD while
+        # mixing badly has not won -- its ELPD is computed from draws that do
+        # not represent the posterior -- and without this the reader cannot
+        # tell the two apart from the comparison's own output. It was a live
+        # gap: the `hierarchy_fine` arm adds 147 shrunk group levels, 24 of
+        # `country`'s 82 carrying fewer than 5 names and the smallest carrying
+        # 1, and the standing instruction is "if the arm mixes badly, drop
+        # country before industry". That instruction was unactionable, because
+        # the run reported divergences and nothing else -- and zero divergences
+        # is exactly what a hard-shrunk, badly-identified level produces.
+        #
+        # The THINNEST PARAMETER's name is the actionable half. `min ESS 14 on
+        # country[XK]` says drop country; `min ESS 1465 on log_sigma_total` says
+        # the arm is fine and the binding parameter is the one it always is.
+        min_ess = max_rhat = float("nan")
+        worst_ess_param = worst_rhat_param = ""
+        try:
+            free_arm = free_global_summary(idata)
+            if len(free_arm):
+                min_ess = float(free_arm["ess_bulk"].min())
+                worst_ess_param = str(free_arm["ess_bulk"].idxmin())
+                max_rhat = float(free_arm["r_hat"].max())
+                worst_rhat_param = str(free_arm["r_hat"].idxmax())
+        except Exception as exc:  # pragma: no cover - diagnostic only
+            logger.warning("  [%s] convergence summary unavailable: %s", arm, exc)
+
+        logger.info(
+            "  [%s] divergences=%d  min ESS %s (%s)  max R-hat %s (%s)",
+            arm, div,
+            f"{min_ess:,.0f}" if np.isfinite(min_ess) else "n/a", worst_ess_param or "n/a",
+            f"{max_rhat:.4f}" if np.isfinite(max_rhat) else "n/a", worst_rhat_param or "n/a",
+        )
+        if np.isfinite(min_ess) and min_ess < run_cfg.gate_ess_min:
+            logger.warning(
+                "  [%s] min bulk ESS %.0f is BELOW the %.0f gate (thinnest: %s). "
+                "This arm's ELPD is computed from draws that may not represent "
+                "its posterior -- treat its ranking as unmeasured, not as a win.",
+                arm, min_ess, run_cfg.gate_ess_min, worst_ess_param,
+            )
+        convergence[arm] = {
+            "divergences": div,
+            "min_ess_bulk": min_ess,
+            "min_ess_param": worst_ess_param,
+            "max_r_hat": max_rhat,
+            "max_r_hat_param": worst_rhat_param,
+            "n_group_levels": sum(len(v) for v in sub.coord_uniques.values()),
+        }
         fits[arm] = idata
 
     try:
@@ -3030,6 +3132,34 @@ def run_model_comparison(
             f". {winner!r} ranks above the shipped configuration -- promote it by "
             "editing the corresponding default, not by leaving this arm enabled."
         )
+    # A thin arm is reported in the VERDICT, not just the frame: a ranking from
+    # an arm that did not mix is not a ranking, and the gate line is what a
+    # reader sees first.
+    _thin = [
+        f"{a} min ESS {c['min_ess_bulk']:,.0f} ({c['min_ess_param']})"
+        for a, c in convergence.items()
+        if np.isfinite(c.get("min_ess_bulk", float("nan")))
+        and c["min_ess_bulk"] < run_cfg.gate_ess_min
+    ]
+    if not detail.endswith("."):
+        detail += "."
+    if _thin:
+        detail += (
+            f" CONVERGENCE WARNING -- {'; '.join(_thin)}, below the "
+            f"{run_cfg.gate_ess_min:.0f} gate. Treat those arms' rankings as "
+            "unmeasured rather than as results."
+        )
+    else:
+        _worst = min(
+            (c for c in convergence.values() if np.isfinite(c.get("min_ess_bulk", float("nan")))),
+            key=lambda c: c["min_ess_bulk"], default=None,
+        )
+        if _worst is not None:
+            detail += (
+                f" Thinnest arm: min ESS {_worst['min_ess_bulk']:,.0f} "
+                f"({_worst['min_ess_param']}), above the "
+                f"{run_cfg.gate_ess_min:.0f} gate."
+            )
     report.add(
         GateResult(
             name="model_comparison",
@@ -3041,7 +3171,15 @@ def run_model_comparison(
             detail=detail,
         )
     )
-    return cmp_df.reset_index().rename(columns={"index": "arm"})
+    out = cmp_df.reset_index().rename(columns={"index": "arm"})
+    # Convergence travels WITH the ELPD table, into `09b_comparison_v2`. A
+    # contrast archived without it cannot be re-read later for whether the
+    # winning arm mixed -- which is precisely the question the numbers alone
+    # invite and cannot answer.
+    for col in ("divergences", "min_ess_bulk", "min_ess_param", "max_r_hat",
+                "max_r_hat_param", "n_group_levels"):
+        out[col] = out["arm"].map(lambda a, _c=col: convergence.get(a, {}).get(_c))
+    return out
 
 
 def compare_arms_fast(

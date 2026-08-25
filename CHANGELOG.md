@@ -189,10 +189,24 @@ passed stops passing.
   neither produced a decisive contrast — see **Measured** above. The reason they
   had never run is a defect, not neglect: see **Fixed**.
 
-- **`run_model_comparison` does not record ESS per arm.** It logs divergences
-  only, which is what made the `hierarchy_fine` ESS question unanswerable from
-  its own output. Adding per-arm min bulk ESS to the comparison frame would
-  close it.
+- **`run_model_comparison` now records convergence per arm** (closed
+  2026-08-25). Each arm carries `divergences`, `min_ess_bulk`, `min_ess_param`,
+  `max_r_hat`, `max_r_hat_param` and `n_group_levels` onto the returned frame
+  and into `09b_comparison_v2`, and a thin arm is named in the gate verdict
+  rather than only in the table.
+
+  The **parameter name** is the half that makes it actionable: `min ESS 14
+  (country[XK])` says drop `country`, while `min ESS 1,695
+  (log_sigma_total)` says the arm is fine and the binding parameter is the one
+  it always is. The selection comes from `free_global_summary`, extracted so
+  `run_diagnostics` and the comparison cannot report min-ESS over different
+  parameter sets — two numbers under one name is how a reader concludes an arm
+  mixes worse when it was only measured differently.
+
+  Re-run on `baseline` vs `level_off`: both arms **0 divergences, min ESS 1,531
+  and 1,695 against a 400 gate, max R-hat 1.0020 / 1.0021**. So the level
+  contrast's small difference is a genuinely small difference, not a
+  measurement artifact — which the earlier run could not establish.
 
 ## [Unreleased] - Kalman v2 decision layer (2026-08-20)
 

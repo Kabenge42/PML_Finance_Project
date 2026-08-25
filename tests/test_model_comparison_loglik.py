@@ -201,3 +201,66 @@ def test_missing_group_variable_raises_rather_than_scoring_a_subset():
 
     with pytest.raises(KeyError, match="log_likelihood lacks"):
         v2.collapse_group_loglik(idata, panel, cfg)
+
+
+# --------------------------------------------------------------------------- #
+#  Per-arm convergence                                                        #
+# --------------------------------------------------------------------------- #
+def test_free_global_summary_excludes_pinned_and_per_isin(fitted_multigroup):
+    """The selection the convergence numbers describe, pinned down.
+
+    Both filters matter and each has its own failure mode. Per-ISIN vectors have
+    thousands of entries whose extreme order statistics track sample size rather
+    than convergence. The pinned anchors (``alpha_time[t3]``, ``sigma_time[t3]``)
+    divide by a within-chain variance of exactly zero, so an unfiltered
+    ``ess_bulk.min()`` would nominate a constant as the model's thinnest
+    parameter -- and a constant always looks converged.
+    """
+    _panel, _cfg, _groups, idata = fitted_multigroup
+    free = v2.free_global_summary(idata)
+
+    assert len(free), "no free globals selected"
+    assert (free["sd"] > 0).all(), "a pinned parameter leaked into the free set"
+    assert np.isfinite(free["ess_bulk"]).all(), "NaN ESS reached the gated set"
+    assert np.isfinite(free["r_hat"]).all(), "NaN R-hat reached the gated set"
+    # Nothing indexed by ISIN: those are excluded before the summary is built.
+    assert not [i for i in free.index if str(i).startswith("state_now")], list(free.index)
+
+
+def test_diagnostics_gate_reads_the_same_number_as_the_helper(fitted_multigroup):
+    """One selection, two consumers -- run_diagnostics and run_model_comparison.
+
+    A second implementation would let the production fit and the comparison arms
+    report min-ESS over different parameter sets, and two numbers under one name
+    is how a reader concludes that an arm mixes worse than the baseline when it
+    was only measured differently.
+    """
+    panel, _cfg, _groups, idata = fitted_multigroup
+    free = v2.free_global_summary(idata)
+    expected_ess = float(free["ess_bulk"].min())
+    expected_param = str(free["ess_bulk"].idxmin())
+
+    report = v2.GateReport()
+    v2.run_diagnostics(idata, panel, v2.KalmanRunConfigV2(), report)
+    gate = next(r for r in report.results if r.name == "ess_bulk")
+
+    assert expected_param in gate.value, (gate.value, expected_param)
+    assert f"{expected_ess:,.0f}".replace(",", "") in gate.value.replace(",", "")
+
+
+def test_free_global_summary_survives_a_posterior_with_no_globals():
+    """An empty selection returns an empty frame rather than raising.
+
+    `run_model_comparison` calls this per arm inside a try/except and must
+    degrade to "convergence unavailable", never take the contrast down with it.
+    """
+    import xarray as xr
+
+    class _Fake:
+        posterior = xr.Dataset(
+            {"state_now_mean": (("chain", "draw", "isin"), np.zeros((2, 5, 3)))},
+            coords={"chain": [0, 1], "draw": range(5), "isin": ["a", "b", "c"]},
+        )
+
+    out = v2.free_global_summary(_Fake())
+    assert out.empty
