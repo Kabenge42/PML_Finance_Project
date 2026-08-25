@@ -148,6 +148,33 @@ passed stops passing.
   default on a difference arviz marks unreliable is a decision, not a
   conclusion; raising `comparison_max_isins` is the cheap way to firm it up.
 
+- **Item 06, country + industry: `hierarchy_fine` ranks first, and the ranking
+  is the weakest part of the evidence.** `baseline` is 20.0 ELPD worse — but at
+  **dse 11.0**, i.e. **1.8×**, under the conventional 2× bar. Both arms sampled
+  at zero divergences, including the arm carrying 169 group levels against
+  baseline's 22.
+
+  Two things undercut it further, and both are in the table:
+
+  - ArviZ reports **`4 k̂ > 0.70`** on the `hierarchy_fine` arm — four
+    observations whose Pareto-k makes the PSIS-LOO estimate unreliable *for
+    that arm specifically*. The number being compared is itself suspect.
+  - **Effective parameters more than double, 52.0 → 118.4**, for a gain inside
+    its own standard error. That is the signature the backlog already named
+    when it rejected adding `exchange` and `unit`: R² rises while the residual
+    asymptote goes back up, which is fitting noise rather than structure.
+
+  Stacking weights say the same thing more quietly — 0.64/0.36, against
+  1.00/0.00 for the level contrast.
+
+  `group_effects` is **left unchanged**. The artifact's own rule was "promote by
+  editing the default only if it wins *and* holds ESS"; it wins on rank alone,
+  and a 1.8-dse difference with four bad k̂ and 66 extra effective parameters is
+  not a win that survives its own diagnostics. The ESS half of that rule is
+  **not yet answered**: `run_model_comparison` logs divergences per arm but not
+  ESS, so the `country` concern (82 levels, 24 under 5 names, smallest 1) is
+  untested rather than cleared. Worth adding before this arm is revisited.
+
 ### Notes
 
 - **Two pre-existing test failures were found, not introduced.**
@@ -158,10 +185,14 @@ passed stops passing.
   about the sizing defaults, not a test fix, so they are reported rather than
   silently reconciled.
 
-- **The comparison arms are still unrun.** `--compare baseline,level_off`
-  (item 05) and `--compare baseline,hierarchy_fine` (item 06) need a fit each,
-  from a committed tree. Both harnesses have been built for four editions;
-  "built is not decided".
+- **Both comparison arms have now been run**, from a committed tree, and
+  neither produced a decisive contrast — see **Measured** above. The reason they
+  had never run is a defect, not neglect: see **Fixed**.
+
+- **`run_model_comparison` does not record ESS per arm.** It logs divergences
+  only, which is what made the `hierarchy_fine` ESS question unanswerable from
+  its own output. Adding per-arm min bulk ESS to the comparison frame would
+  close it.
 
 ## [Unreleased] - Kalman v2 decision layer (2026-08-20)
 
