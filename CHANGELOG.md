@@ -133,9 +133,12 @@ passed stops passing.
 
   **Read the diagnostic column, not the ranking.** ArviZ flags the contrast
   itself: `|elpd_diff| < 4`, its own threshold for "too small to be reliable".
-  At ~2.3 dse this is suggestive, not decisive, and it is scored on 800 of 6,509
-  names (12%) against the analyst trail rather than realised returns — the same
-  limitation every one of the 23 gates has.
+  And **mind the rounding**: arviz's `elpd_diff` column is displayed to one
+  significant figure, so the "2.0" is really **1.6** — the unrounded per-arm
+  values are baseline −1,886.3 against level_off −1,884.7. Against `dse` 0.86
+  that is **≈1.9 dse, under the conventional 2× bar**, not over it. Scored on
+  800 of 6,509 names (12%) against the analyst trail rather than realised
+  returns — the same limitation every one of the 23 gates has.
 
   The defensible statement is therefore narrow: **dropping the level block costs
   nothing measurable and buys a free parameter**, and nothing here argues for
@@ -154,7 +157,11 @@ passed stops passing.
   at zero divergences, including the arm carrying 169 group levels against
   baseline's 22.
 
-  Two things undercut it further, and both are in the table:
+  Same rounding caveat: the "20.0" is **15.8** unrounded (baseline −1,886.3
+  against hierarchy_fine −1,870.5), so against `dse` 11.0 the contrast is
+  **≈1.4 dse** — further under the bar than the level contrast, not nearer it.
+
+  Two further things undercut it, both in the table:
 
   - ArviZ reports **`4 k̂ > 0.70`** on the `hierarchy_fine` arm — four
     observations whose Pareto-k makes the PSIS-LOO estimate unreliable *for
@@ -167,13 +174,27 @@ passed stops passing.
   Stacking weights say the same thing more quietly — 0.64/0.36, against
   1.00/0.00 for the level contrast.
 
-  `group_effects` is **left unchanged**. The artifact's own rule was "promote by
-  editing the default only if it wins *and* holds ESS"; it wins on rank alone,
-  and a 1.8-dse difference with four bad k̂ and 66 extra effective parameters is
-  not a win that survives its own diagnostics. The ESS half of that rule is
-  **not yet answered**: `run_model_comparison` logs divergences per arm but not
-  ESS, so the `country` concern (82 levels, 24 under 5 names, smallest 1) is
-  untested rather than cleared. Worth adding before this arm is revisited.
+  **The ESS concern is cleared, and it is worth being precise about what that
+  does and does not mean** (re-run 2026-08-25 with per-arm convergence
+  recorded). `hierarchy_fine`: **0 divergences, min bulk ESS 1,951, max R-hat
+  1.0048** across 169 group levels. The thinnest parameter is
+  `sector_effect[Financials]` — an existing baseline level, **not** one of the
+  24 sparse `country` levels — and min ESS is *higher* than baseline's 1,531 on
+  `sigma_n_exponent`. The prediction that `country` "will report low ESS" is
+  falsified.
+
+  **But high ESS is not evidence that those levels contribute anything.** A
+  parameter that is entirely unidentified samples freely from its prior and
+  mixes beautifully; low ESS is the signature of a *weakly identified* parameter
+  correlated with others, not of an unconstrained one. So the fixed-scale
+  `ZeroSumNormal` shrinking a 1-name country level toward zero produces exactly
+  what is seen here — no divergence, no ESS penalty — while the level does no
+  work. The second half of the original prediction, "and contribute nothing", is
+  untested by this measurement and would need the levels' posterior scales.
+
+  `group_effects` is **left unchanged**. The rule was "promote only if it wins
+  *and* holds ESS". It now holds ESS. It does not win: ≈1.4 dse, four bad k̂,
+  and 66 extra effective parameters for a gain inside its own standard error.
 
 ### Notes
 
@@ -203,10 +224,17 @@ passed stops passing.
   parameter sets — two numbers under one name is how a reader concludes an arm
   mixes worse when it was only measured differently.
 
-  Re-run on `baseline` vs `level_off`: both arms **0 divergences, min ESS 1,531
-  and 1,695 against a 400 gate, max R-hat 1.0020 / 1.0021**. So the level
-  contrast's small difference is a genuinely small difference, not a
-  measurement artifact — which the earlier run could not establish.
+  Re-run on both contrasts. `baseline` vs `level_off`: **0 divergences, min ESS
+  1,531 and 1,695, max R-hat 1.0020 / 1.0021**. `baseline` vs
+  `hierarchy_fine`: **0 divergences, min ESS 1,531 and 1,951, max R-hat 1.0020 /
+  1.0048**. Every arm clears the 400 gate by a factor of 3.8 or better, so both
+  contrasts' small differences are genuinely small differences rather than
+  measurement artifacts — which neither earlier run could establish.
+
+  The baseline arm reproduced **to the digit** across the two contrasts (min ESS
+  1,531 on `sigma_n_exponent`, max R-hat 1.0020 on `trading_region_effect[Africa
+  / Middle East]`), which is the check that makes the arms comparable across
+  runs rather than only within one.
 
 ## [Unreleased] - Kalman v2 decision layer (2026-08-20)
 
