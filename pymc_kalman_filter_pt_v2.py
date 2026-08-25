@@ -2722,6 +2722,119 @@ def subsample_panel_v2(
     return replace(panel, **updates)
 
 
+def collapse_group_loglik(idata: Any, panel: KalmanPanelV2,
+                          model_cfg: KalmanModelConfig) -> Any:
+    """Stitch the per-covariance-group ``log_likelihood`` into ONE variable.
+
+    Without this the ELPD comparison cannot run on any real panel, and that is
+    not a hypothetical: the v2 likelihood is one ``MvStudentT`` per covariance
+    group, so ``log_likelihood`` carries ``target_pct_obs_g0..gN`` and
+    ``az.compare`` raises ``TypeError: Encountered error trying to compute ELPD
+    from model <arm>`` because it cannot choose among them. Measured 2026-08-25:
+    a ``baseline`` vs ``level_off`` contrast fitted both arms cleanly at zero
+    divergences in 9.7 minutes and then produced nothing, on a panel that
+    partitioned into 3 groups of [776, 20, 4]. The single-group case
+    (``target_pct_obs``, no suffix) works, which is why the failure survived a
+    self-test on a synthetic panel that never partitions.
+
+    **The pointwise unit is the NAME, not the cell**, and that is a modelling
+    statement rather than a convenience. Each group's ``MvStudentT`` is a
+    multivariate density over one name's T observations, so it already emits one
+    log-density per row; a name's cells are correlated by construction -- that
+    correlation *is* the model -- so leaving out a single cell would not be a
+    leave-one-out at all. LOO here is leave-one-name-out, which is exactly the
+    question the level-vs-state contrast asks.
+
+    Parameters
+    ----------
+    idata
+        A fitted arm carrying a ``log_likelihood`` group.
+    panel
+        The panel the arm was fitted on; supplies ``n_isin`` and the row order.
+    model_cfg
+        Resolves the partition through :func:`covariance_groups_for` -- the SAME
+        helper the builder and §8 use, so the group order and the
+        ``target_pct_obs_g{k}`` names cannot disagree.
+
+    Returns
+    -------
+    Any
+        ``idata`` with its ``log_likelihood`` group replaced by a single
+        ``target_pct_obs`` variable of dims ``(chain, draw, isin)``.
+
+    Raises
+    ------
+    KeyError
+        If a group's variable is absent -- scoring a subset silently would drop
+        names from one arm and not the other, which is not a contrast.
+
+    Notes
+    -----
+    **Mutates ``idata`` in place** and returns it, matching the convention of
+    :func:`attach_log_likelihood`, which it always follows. It is IDEMPOTENT:
+    calling it on an already-stitched arm returns that arm untouched rather than
+    raising about the group variables it consumed on the first pass. That is not
+    defensive decoration -- an in-place rewrite that is not idempotent turns any
+    second call into a confusing ``KeyError`` about variables the caller never
+    removed.
+    """
+    import xarray as xr
+
+    ll = idata.log_likelihood
+    # Already stitched: one variable, over names. Return unchanged.
+    _vars = [str(v) for v in ll.data_vars]
+    if _vars == ["target_pct_obs"] and "isin" in ll["target_pct_obs"].dims:
+        return idata
+
+    groups, _ = covariance_groups_for(panel, model_cfg)
+    names = [
+        f"target_pct_obs_g{gi}" if len(groups) > 1 else "target_pct_obs"
+        for gi in range(len(groups))
+    ]
+    missing = [n for n in names if n not in ll.data_vars]
+    if missing:
+        raise KeyError(
+            f"log_likelihood lacks {missing}; cannot assemble a pointwise "
+            "log-likelihood over names"
+        )
+    if len(names) == 1:
+        return idata  # single group; the variable is already unsuffixed
+
+    first = ll[names[0]]
+    n_chain = int(first.sizes["chain"])
+    n_draw = int(first.sizes["draw"])
+    out = np.full((n_chain, n_draw, panel.n_isin), np.nan, dtype="float64")
+    for (rows, _cols, _bkt), nm in zip(groups, names):
+        arr = np.asarray(ll[nm], dtype="float64")
+        # (chain, draw, rows_k) -- one log-density per NAME in this group.
+        if arr.ndim != 3 or arr.shape[2] != len(rows):
+            raise KeyError(
+                f"{nm} has shape {arr.shape}, expected (chain, draw, {len(rows)})"
+            )
+        out[:, :, np.asarray(rows, dtype=int)] = arr
+
+    if np.isnan(out).any():
+        n_bad = int(np.isnan(out).any(axis=(0, 1)).sum())
+        raise KeyError(
+            f"{n_bad} name(s) received no log-likelihood from any group; the "
+            "partition does not cover the panel"
+        )
+
+    combined = xr.Dataset(
+        {"target_pct_obs": (("chain", "draw", "isin"), out)},
+        coords={
+            "chain": np.asarray(first["chain"]),
+            "draw": np.asarray(first["draw"]),
+            "isin": np.asarray(panel.isins, dtype=object),
+        },
+    )
+    try:
+        idata.log_likelihood = combined
+    except Exception:  # pragma: no cover - DataTree vs InferenceData surface
+        idata["log_likelihood"] = combined
+    return idata
+
+
 def run_model_comparison(
     frame: pd.DataFrame,
     model_cfg: KalmanModelConfig,
@@ -2869,6 +2982,17 @@ def run_model_comparison(
         attach_log_likelihood(idata, model)
         if not hasattr(idata, "log_likelihood"):
             _fail(f"could not attach a log_likelihood group to the {arm!r} arm")
+            return None
+        # The likelihood is one MvStudentT per covariance group, so the group
+        # this just attached carries `target_pct_obs_g0..gN` and `az.compare`
+        # cannot choose among them. Collapse to one variable over NAMES before
+        # scoring -- see `collapse_group_loglik` for why the name is the right
+        # pointwise unit and why this was invisible until the harness was
+        # actually run.
+        try:
+            idata = collapse_group_loglik(idata, sub, cfg)
+        except Exception as exc:
+            _fail(f"could not assemble a pointwise log-likelihood for {arm!r}: {exc}")
             return None
         div = (
             int(idata.sample_stats["diverging"].sum())
