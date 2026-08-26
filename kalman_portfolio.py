@@ -864,7 +864,7 @@ def export_frames(
     """
     out_dir = cfg.results_path / "15_portfolio"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamped = pd.Timestamp.utcnow()
+    stamped = pd.Timestamp.now('UTC')
     counts: dict[str, int] = {}
 
     for stem, frame in frames.items():

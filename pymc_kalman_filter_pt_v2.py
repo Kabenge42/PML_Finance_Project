@@ -4401,7 +4401,7 @@ def write_forecast_handoff(
             identity=identity,
             provenance={
                 "run_id": run_id,
-                "exported_at": str(pd.Timestamp.utcnow()),
+                "exported_at": str(pd.Timestamp.now("UTC")),
                 "source_sha": sha or "",
                 "source_dirty": bool(dirty) if dirty is not None else False,
             },
