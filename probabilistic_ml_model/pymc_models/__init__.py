@@ -78,6 +78,36 @@ _LAZY_IMPORT_MAP: dict[str, tuple[str, str]] = {
     # Decision analysis — CVaR-aware risk book (see RiskBookModel.py)
     "RiskBook": (".RiskBookModel", "RiskBook"),
     "compute_cvar_aware_book": (".RiskBookModel", "compute_cvar_aware_book"),
+    # Forecast layer — joint forward-return scenarios (see KalmanForecast.py)
+    "ForecastConfig": (".KalmanForecast", "ForecastConfig"),
+    "ForecastDraws": (".KalmanForecast", "ForecastDraws"),
+    "ForecastInputs": (".KalmanForecast", "ForecastInputs"),
+    "forecast_from_posterior": (".KalmanForecast", "forecast_from_posterior"),
+    "prepare_forecast_inputs": (".KalmanForecast", "prepare_forecast_inputs"),
+    "simulate_forecast": (".KalmanForecast", "simulate_forecast"),
+    "summarize_forecast": (".KalmanForecast", "summarize_forecast"),
+    # Decision layer — objective functions, generative risk, capital allocation
+    # (see PortfolioOptimizationModel.py)
+    "Portfolio": (".PortfolioOptimizationModel", "Portfolio"),
+    "LinearPositionLoss": (".PortfolioOptimizationModel", "LinearPositionLoss"),
+    "downside_deviation": (".PortfolioOptimizationModel", "downside_deviation"),
+    "ergodicity_report": (".PortfolioOptimizationModel", "ergodicity_report"),
+    "expected_loss": (".PortfolioOptimizationModel", "expected_loss"),
+    "fractional_kelly": (".PortfolioOptimizationModel", "fractional_kelly"),
+    "generative_expected_shortfall": (
+        ".PortfolioOptimizationModel",
+        "generative_expected_shortfall",
+    ),
+    "generative_tail_risk": (".PortfolioOptimizationModel", "generative_tail_risk"),
+    "generative_var": (".PortfolioOptimizationModel", "generative_var"),
+    "kelly_fraction_from_draws": (
+        ".PortfolioOptimizationModel",
+        "kelly_fraction_from_draws",
+    ),
+    "mean_variance_frontier": (".PortfolioOptimizationModel", "mean_variance_frontier"),
+    "minimize_expected_loss": (".PortfolioOptimizationModel", "minimize_expected_loss"),
+    "optimize_portfolio": (".PortfolioOptimizationModel", "optimize_portfolio"),
+    "terminal_wealth_curve": (".PortfolioOptimizationModel", "terminal_wealth_curve"),
     # Multi-level hierarchical shrinkage infrastructure (see _hierarchy.py)
     "HIERARCHICAL_CATEGORY_COLS": ("._hierarchy", "HIERARCHICAL_CATEGORY_COLS"),
     "PARENT_MAP": ("._hierarchy", "PARENT_MAP"),

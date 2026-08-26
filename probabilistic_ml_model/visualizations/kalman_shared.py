@@ -1330,7 +1330,13 @@ _EXPORT_SECTION_DIRS: tuple[str, ...] = (
     '10c_analytics',
     '10k_universe', '11_single_isin', '11b_single_sv', '12_mingled',
     '12b_mingled_sv', '13_forest', '13b_further_views', '14_summary',
-    '14b_recommendations', '00_misc',
+    '14b_recommendations',
+    # `15_forecast` / `15b_decision` are the v2 forecast and decision layers
+    # (`KalmanForecast` / `PortfolioOptimizationModel`). They sit after §14 rather
+    # than beside §10b because they are a separate stage, not a variant of the risk
+    # book: §10b sizes on posterior upside draws, §15 simulates a forward horizon
+    # first and §15b decides on THOSE draws.
+    '15_forecast', '15b_decision', '00_misc',
 )
 
 
