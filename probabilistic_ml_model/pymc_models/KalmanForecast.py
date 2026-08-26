@@ -85,6 +85,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
+from dataclasses import replace as _dc_replace
 from typing import Any, Optional, Sequence
 
 import numpy as np
@@ -113,13 +114,19 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "FORECAST_BACKENDS",
+    "DEFAULT_HANDOFF_SAMPLES",
     "ForecastConfig",
     "ForecastDraws",
+    "ForecastHandoff",
     "ForecastInputs",
     "prepare_forecast_inputs",
+    "save_forecast_handoff",
+    "load_forecast_handoff",
     "simulate_forecast",
     "forecast_from_posterior",
     "summarize_forecast",
+    "sweep_factor_share",
+    "compare_forecast_engines",
 ]
 
 #: The backends :class:`ForecastConfig` accepts. ``native`` is always available;
@@ -532,19 +539,417 @@ def _flat_draws(
     return arr.reshape(-1)
 
 
-def prepare_forecast_inputs(
+# ---------------------------------------------------------------------------
+# The forecast handoff — one fit, replayed
+# ---------------------------------------------------------------------------
+#
+# The v2 workflow never persisted its posterior. Every sensitivity this module's
+# priors invite -- grid `factor_share`, grid `forecast_error_multiplier`, contrast
+# ranking rules on one fit -- therefore cost a full NUTS run, which is why none had
+# been run. This is the artifact that makes the forecast and decision layers
+# replayable in seconds.
+#
+# It is deliberately NOT the raw InferenceData. Only four posterior quantities reach
+# the simulator, and one of them -- the decision latent -- must be the SHRUNK one the
+# screen reported. Persisting `ScreenDraws.eu` itself rather than the ingredients to
+# re-derive it is what keeps a replay from silently describing a different model from
+# the run that produced it.
+
+
+#: Default number of posterior samples retained in a handoff. The scenario generator
+#: binds one posterior sample per scenario, so samples beyond ``n_scenarios`` are never
+#: read: at 6.5k names a full 8,000-draw grid is ~417 MB per array in float64, against
+#: ~52 MB thinned to 2,000 in float32. Thinning is by seeded random choice WITHOUT
+#: replacement, not by stride -- the flattened sample axis is chain-major, so a stride
+#: would sample chains unevenly and quietly narrow the very between-chain spread the
+#: forecast exists to carry.
+DEFAULT_HANDOFF_SAMPLES: int = 2000
+
+#: dtype the draw arrays are stored in. Both quantities are O(1) -- a standardised
+#: latent and a log-scale sd -- and float32 carries ~7 significant digits, far beyond
+#: the Monte-Carlo error of 2,000 samples.
+_HANDOFF_DTYPE = "float32"
+
+
+@dataclass(frozen=True)
+class ForecastHandoff:
+    """Everything the forward simulation needs from a fit, and nothing else.
+
+    Written by :func:`save_forecast_handoff`, read by :func:`load_forecast_handoff`,
+    and accepted directly by :func:`prepare_forecast_inputs` in place of
+    ``(idata, panel)``.
+
+    Attributes
+    ----------
+    isins
+        ``(n_isin,)`` identifiers. The key for every later join; never positional.
+    mu_std
+        ``(n_isin, n_samples)`` decision latent on the **standardised** scale. Stored
+        standardised rather than in log-return space so ``response_mean`` /
+        ``response_std`` remain the single de-standardisation point, exactly as on the
+        live path. Axis order matches :class:`ForecastInputs`, so no transpose happens
+        on load.
+    sigma_std
+        ``(n_isin, n_samples)`` raw ``sigma_isin`` draws, before the ``response_std``
+        multiplication.
+    nu
+        ``(n_samples,)`` Student-t degrees of freedom, or length 1.
+    response_mean, response_std
+        The panel's standardisation constants.
+    ou_length_scale_days
+        Posterior mean of the fitted OU length scale, or ``None``.
+    coord_idx
+        Level name -> ``(n_isin,)`` integer codes, for the shared-factor structure.
+    coord_uniques
+        Level name -> the labels those codes index, so a replay can report a sector or
+        region by name without the panel.
+    identity
+        Optional per-name identity frame keyed by ``isin``.
+    attrs
+        Provenance and thinning record: ``run_id``, ``exported_at``, ``source_sha``,
+        ``source_dirty``, ``n_samples_original``, ``thin_factor``.
+    """
+
+    isins: np.ndarray
+    mu_std: np.ndarray
+    sigma_std: np.ndarray
+    nu: np.ndarray
+    response_mean: float = 0.0
+    response_std: float = 1.0
+    ou_length_scale_days: Optional[float] = None
+    coord_idx: dict[str, np.ndarray] = field(default_factory=dict)
+    coord_uniques: dict[str, np.ndarray] = field(default_factory=dict)
+    identity: Any = None
+    attrs: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.mu_std.ndim != 2:
+            raise ValueError(
+                f"mu_std must be 2-D (n_isin, n_samples), got {self.mu_std.shape}"
+            )
+        if self.sigma_std.shape != self.mu_std.shape:
+            raise ValueError(
+                f"sigma_std {self.sigma_std.shape} must match mu_std {self.mu_std.shape}"
+            )
+        if len(self.isins) != self.mu_std.shape[0]:
+            raise ValueError(
+                f"isins has {len(self.isins)} entries but mu_std has "
+                f"{self.mu_std.shape[0]} rows"
+            )
+        if not np.isfinite(self.response_std) or self.response_std <= 0:
+            raise ValueError(f"response_std must be positive, got {self.response_std!r}")
+
+    @property
+    def n_isin(self) -> int:
+        return int(self.mu_std.shape[0])
+
+    @property
+    def n_samples(self) -> int:
+        return int(self.mu_std.shape[1])
+
+    def describe(self) -> str:
+        """One line naming the fit this handoff came from and how thinned it is."""
+        a = self.attrs
+        dirty = " DIRTY" if a.get("source_dirty") else ""
+        return (
+            f"handoff run={a.get('run_id', '?')} src={a.get('source_sha', '?')}{dirty} "
+            f"{self.n_isin} names x {self.n_samples} samples "
+            f"(thinned {a.get('thin_factor', 1)}x from "
+            f"{a.get('n_samples_original', self.n_samples)}), "
+            f"OU length scale {self.ou_length_scale_days}"
+        )
+
+
+def _thin_index(n_available: int, n_keep: Optional[int], seed: int) -> np.ndarray:
+    """Seeded sample indices without replacement, or every index when not thinning."""
+    if n_keep is None or n_keep >= n_available:
+        return np.arange(n_available)
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(n_available, size=int(n_keep), replace=False))
+
+
+def save_forecast_handoff(
+        path: Any,
         idata: "InferenceLike",
         panel: Any,
+        *,
+        latent: Any,
+        n_samples: Optional[int] = DEFAULT_HANDOFF_SAMPLES,
+        identity: Any = None,
+        provenance: Optional[dict[str, Any]] = None,
+        random_seed: int = 42,
+) -> Any:
+    """Write the forward simulation's inputs to a NetCDF file.
+
+    Call this **after the screen** and before the forecast layer, so ``latent`` is the
+    shrunk decision latent the screen reported rather than the raw posterior one.
+
+    Parameters
+    ----------
+    path
+        Destination ``.nc`` path. Parent directories are created.
+    idata
+        The fitted posterior. Read for ``sigma_isin``, ``nu`` and
+        ``ou_length_scale_days`` only.
+    panel
+        The ``KalmanPanelV2`` it was fitted on. Supplies ``isins``, the standardisation
+        constants and the group coordinate codes.
+    latent
+        ``ScreenDraws.eu`` on the **standardised** scale, dims ``(..., isin)``.
+        **Required and keyword-only** -- making it easy to omit is exactly what would
+        let a replay silently forecast the unshrunk latent.
+    n_samples
+        Retain this many posterior samples; ``None`` keeps all. See
+        :data:`DEFAULT_HANDOFF_SAMPLES` for why the default is not "everything".
+    identity
+        Optional per-name frame carrying an ``isin`` column, stored alongside so a
+        replay can label figures without reaching for the database.
+    provenance
+        ``run_id`` / ``exported_at`` / ``source_sha`` / ``source_dirty``, recorded as
+        dataset attributes. A handoff whose producing revision is unattributable
+        cannot be contrasted against a later one.
+    random_seed
+        Seeds the thinning choice, so one fit always yields the same handoff.
+
+    Returns
+    -------
+    pathlib.Path
+        The written path.
+
+    Raises
+    ------
+    KeyError
+        If ``sigma_isin`` is absent from the posterior.
+    ValueError
+        If the latent and ``sigma_isin`` disagree in shape -- they must come from the
+        same fit.
+    """
+    import pathlib
+
+    import xarray as xr
+
+    dest = pathlib.Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    latent_arr = np.asarray(latent)
+    if latent_arr.ndim < 2:
+        raise ValueError(
+            f"latent must carry at least (sample, isin) axes, got shape {latent_arr.shape}"
+        )
+    # (sample, isin) -> (isin, sample), the ForecastInputs convention.
+    mu_std = latent_arr.reshape(-1, latent_arr.shape[-1]).T
+    sigma_std = _flat_draws(idata, "sigma_isin")
+    if sigma_std.shape != mu_std.shape:
+        raise ValueError(
+            f"sigma_isin draws {sigma_std.shape} do not match the latent's "
+            f"{mu_std.shape}. The two must come from the same fit."
+        )
+
+    try:
+        nu = np.atleast_1d(_flat_draws(idata, "nu", per_isin=False)).astype("float64")
+    except KeyError:
+        logger.info("no 'nu' in the posterior; the handoff records Gaussian shocks")
+        nu = np.array([np.inf])
+
+    n_available = mu_std.shape[1]
+    keep = _thin_index(n_available, n_samples, random_seed)
+    thin_factor = n_available / max(len(keep), 1)
+    if len(keep) < n_available:
+        # Say it out loud. A silently thinned artifact is exactly the thing a later
+        # reader mistakes for the fit itself.
+        logger.info(
+            "thinning the handoff %d -> %d posterior samples (%.1fx) by seeded choice "
+            "without replacement",
+            n_available, len(keep), thin_factor,
+        )
+    mu_std = mu_std[:, keep]
+    sigma_std = sigma_std[:, keep]
+    if nu.size == n_available:
+        nu = nu[keep]
+
+    ou_days: Optional[float] = None
+    post = _posterior_group(idata)
+    if "ou_length_scale_days" in post:
+        ou_days = float(np.asarray(post["ou_length_scale_days"]).mean())
+
+    isins = np.asarray(getattr(panel, "isins")).astype(str)
+    data_vars: dict[str, Any] = {
+        "mu_std": (("isin", "sample"), mu_std.astype(_HANDOFF_DTYPE)),
+        "sigma_std": (("isin", "sample"), sigma_std.astype(_HANDOFF_DTYPE)),
+        "nu": (("nu_sample",), nu),
+    }
+
+    coord_idx = getattr(panel, "coord_idx", {}) or {}
+    coord_uniques = getattr(panel, "coord_uniques", {}) or {}
+    for level, codes in coord_idx.items():
+        codes_arr = np.asarray(codes, dtype="int64")
+        if len(codes_arr) != len(isins):
+            logger.warning(
+                "coord level %r has %d codes for %d names; not stored",
+                level, len(codes_arr), len(isins),
+            )
+            continue
+        data_vars[f"coord__{level}"] = (("isin",), codes_arr)
+        uniques = coord_uniques.get(level)
+        if uniques is not None:
+            data_vars[f"uniques__{level}"] = (
+                (f"level__{level}",), np.asarray(uniques).astype(str)
+            )
+
+    if identity is not None and getattr(identity, "empty", True) is False:
+        # Reindexed BY ISIN, never positionally -- the screen is sorted by
+        # expected_upside while the panel is in universe order, and a positional
+        # attach hands every name someone else's country while the row count matches.
+        ident = identity.drop_duplicates("isin").set_index("isin").reindex(isins)
+        for col in ident.columns:
+            values = ident[col].to_numpy()
+            if values.dtype == object:
+                values = np.asarray([("" if v is None else str(v)) for v in values])
+            data_vars[f"ident__{col}"] = (("isin",), values)
+
+    attrs: dict[str, Any] = {
+        "n_samples_original": int(n_available),
+        "thin_factor": float(thin_factor),
+        "response_mean": float(getattr(panel, "response_mean", 0.0)),
+        "response_std": float(getattr(panel, "response_std", 1.0)),
+        "random_seed": int(random_seed),
+    }
+    if ou_days is not None:
+        attrs["ou_length_scale_days"] = float(ou_days)
+    for key, value in (provenance or {}).items():
+        # NetCDF attributes take scalars and strings. A bool would round-trip as an
+        # int and read as 0/1 rather than as a flag, so make the coercion explicit.
+        attrs[key] = int(value) if isinstance(value, bool) else value
+
+    ds = xr.Dataset(data_vars, coords={"isin": isins}, attrs=attrs)
+    ds.to_netcdf(dest)
+    logger.info(
+        "forecast handoff written: %s (%d names x %d samples, %.1f MB)",
+        dest, len(isins), mu_std.shape[1], dest.stat().st_size / 1e6,
+    )
+    return dest
+
+
+def load_forecast_handoff(path: Any) -> ForecastHandoff:
+    """Read a handoff written by :func:`save_forecast_handoff`.
+
+    Parameters
+    ----------
+    path
+        The ``.nc`` file.
+
+    Returns
+    -------
+    ForecastHandoff
+        Ready to hand to :func:`prepare_forecast_inputs`.
+
+    Raises
+    ------
+    FileNotFoundError
+        Naming both ways to produce one, rather than only that the file is missing.
+    """
+    import pathlib
+
+    import pandas as pd
+    import xarray as xr
+
+    src = pathlib.Path(path)
+    if not src.exists():
+        raise FileNotFoundError(
+            f"No forecast handoff at {src}. Run the v2 workflow to produce one, or "
+            f"pass --fit to build it in process."
+        )
+    with xr.open_dataset(src) as opened:
+        ds = opened.load()
+
+    attrs = dict(ds.attrs)
+    coord_idx: dict[str, np.ndarray] = {}
+    coord_uniques: dict[str, np.ndarray] = {}
+    ident_cols: dict[str, Any] = {}
+    for name in ds.data_vars:
+        key = str(name)
+        if key.startswith("coord__"):
+            coord_idx[key[len("coord__"):]] = np.asarray(ds[name].values, dtype="int64")
+        elif key.startswith("uniques__"):
+            coord_uniques[key[len("uniques__"):]] = np.asarray(ds[name].values).astype(str)
+        elif key.startswith("ident__"):
+            ident_cols[key[len("ident__"):]] = np.asarray(ds[name].values)
+
+    isins = np.asarray(ds["isin"].values).astype(str)
+    identity = None
+    if ident_cols:
+        identity = pd.DataFrame({"isin": isins, **ident_cols})
+
+    handoff = ForecastHandoff(
+        isins=isins,
+        mu_std=np.asarray(ds["mu_std"].values, dtype="float64"),
+        sigma_std=np.asarray(ds["sigma_std"].values, dtype="float64"),
+        nu=np.atleast_1d(np.asarray(ds["nu"].values, dtype="float64")),
+        response_mean=float(attrs.get("response_mean", 0.0)),
+        response_std=float(attrs.get("response_std", 1.0)),
+        ou_length_scale_days=(
+            float(attrs["ou_length_scale_days"])
+            if "ou_length_scale_days" in attrs else None
+        ),
+        coord_idx=coord_idx,
+        coord_uniques=coord_uniques,
+        identity=identity,
+        attrs=attrs,
+    )
+    logger.info("loaded %s", handoff.describe())
+    return handoff
+
+
+def _inputs_from_handoff(
+        handoff: ForecastHandoff, config: ForecastConfig
+) -> ForecastInputs:
+    """De-standardise a handoff into :class:`ForecastInputs`.
+
+    The same two lines the live path runs, against the same constants -- which is the
+    point. One code path into the simulator is what keeps a replay from drifting from
+    the run that produced it.
+    """
+    group_index: dict[str, np.ndarray] = {}
+    for level in config.factor_levels:
+        codes = handoff.coord_idx.get(level)
+        if codes is None:
+            logger.warning(
+                "factor level %r is not in the handoff (have: %s); it will carry no "
+                "shared factor",
+                level, sorted(handoff.coord_idx),
+            )
+            continue
+        group_index[level] = np.asarray(codes, dtype="int64")
+
+    return ForecastInputs(
+        isins=handoff.isins,
+        mu_log=handoff.mu_std * handoff.response_std + handoff.response_mean,
+        sigma_log=handoff.sigma_std * handoff.response_std,
+        nu=handoff.nu,
+        group_index=group_index,
+        ou_length_scale_days=handoff.ou_length_scale_days,
+    )
+
+
+def prepare_forecast_inputs(
+        idata: "InferenceLike",
+        panel: Any = None,
         *,
         config: Optional[ForecastConfig] = None,
         latent: Optional[Any] = None,
 ) -> ForecastInputs:
     """De-standardise the posterior into the log-return quantities the sim needs.
 
+    Accepts **either** a live ``(idata, panel)`` pair or a :class:`ForecastHandoff`
+    read back from disk, as the first positional argument. One function, one code
+    path into the simulator: a replay that built its inputs somewhere else would be
+    free to disagree with the run it claims to reproduce.
+
     Parameters
     ----------
     idata
-        Fitted v2 inference data.
+        Fitted v2 inference data, or a :class:`ForecastHandoff`. When a handoff is
+        passed, ``panel`` and ``latent`` are ignored -- it already carries both.
     panel
         The :class:`~KalmanFilterModel_v2.KalmanPanelV2` the model was fitted on.
         Supplies ``isins``, ``response_mean`` / ``response_std`` and the group
@@ -575,6 +980,19 @@ def prepare_forecast_inputs(
         there is no forward dispersion to simulate.
     """
     cfg = config or ForecastConfig()
+
+    if isinstance(idata, ForecastHandoff):
+        if panel is not None or latent is not None:
+            logger.info(
+                "prepare_forecast_inputs got a ForecastHandoff; ignoring panel/latent "
+                "because the handoff already carries both"
+            )
+        return _inputs_from_handoff(idata, cfg)
+    if panel is None:
+        raise TypeError(
+            "prepare_forecast_inputs needs a panel alongside an InferenceData. Pass "
+            "a ForecastHandoff instead to replay a persisted fit."
+        )
 
     if latent is None:
         from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
@@ -1023,16 +1441,17 @@ def simulate_forecast(
 
 def forecast_from_posterior(
         idata: "InferenceLike",
-        panel: Any,
+        panel: Any = None,
         *,
         config: Optional[ForecastConfig] = None,
         latent: Optional[Any] = None,
 ) -> ForecastDraws:
     """Prepare inputs and simulate, dispatching on ``config.backend``.
 
-    This is the entry point the workflow calls. See
-    :func:`prepare_forecast_inputs` for why ``latent`` should be passed when the
-    caller has already applied forecast-error shrinkage.
+    This is the entry point the workflow calls. ``idata`` may be a live posterior or a
+    :class:`ForecastHandoff` read back from disk -- see
+    :func:`prepare_forecast_inputs`, which is also where the reason to pass ``latent``
+    on the live path is recorded.
 
     Raises
     ------
@@ -1113,3 +1532,213 @@ def summarize_forecast(
         out[f"er_p{int(round(q * 100)):02d}"] = np.quantile(vals, q, axis=1)
     out["prob_pos"] = (vals > 0.0).mean(axis=1)
     return pd.DataFrame(out)
+
+
+# ---------------------------------------------------------------------------
+# Sensitivity to the two priors this layer rests on
+# ---------------------------------------------------------------------------
+#
+# `factor_share` and `forecast_error_multiplier` are PRIORS, not estimates, and the
+# whole departure from analyst consensus rests on them. The right way to report a
+# prior nothing identifies is to grid it and publish the consequence -- not to quote
+# its own posterior, which only says the prior was applied.
+
+
+def _top_k_isins(values: np.ndarray, isins: np.ndarray, k: int) -> set:
+    """The ``k`` names with the largest finite ``values``, as a set of identifiers."""
+    finite = np.isfinite(values)
+    if not finite.any():
+        return set()
+    idx = np.flatnonzero(finite)
+    order = idx[np.argsort(-values[idx], kind="stable")]
+    return set(np.asarray(isins)[order[:k]].tolist())
+
+
+def sweep_factor_share(
+        source: Any,
+        shares: Sequence[float],
+        *,
+        panel: Any = None,
+        latent: Optional[Any] = None,
+        config: Optional[ForecastConfig] = None,
+        baseline_share: Optional[float] = None,
+        k_book: int = 25,
+        rank_values: Optional[np.ndarray] = None,
+) -> "pd.DataFrame":
+    """Grid ``factor_share`` on one fit and report what it moves.
+
+    ``factor_share`` routes a fraction of each name's forward shock VARIANCE through
+    shared factors. The split is variance-preserving, so per-name marginals --
+    ``er_sd``, and therefore ``exp_vol`` -- are **invariant** to it, and only the
+    joint distribution moves. That makes it harmless to the screen and decisive for
+    every portfolio statistic, which is exactly why a single reported multiple is a
+    weaker statement than a curve.
+
+    Parameters
+    ----------
+    source
+        A :class:`ForecastHandoff`, or a live posterior with ``panel`` and ``latent``.
+    shares
+        The grid. ``0.0`` is worth including: it reproduces the independent-shock
+        behaviour of the AR simulator, which is the assumption that lets a long book
+        report a positive expected shortfall.
+    panel, latent
+        Only for the live path; ignored when ``source`` is a handoff.
+    config
+        Base configuration. ``factor_share`` is overridden per row.
+    baseline_share
+        The share every row is compared against. Defaults to ``config.factor_share``.
+    k_book
+        Book size for the membership-overlap column.
+    rank_values
+        Optional per-name ranking column, aligned to the source's ``isins`` **by
+        position of that array** -- pass the values already reindexed onto
+        ``handoff.isins``. When ``None``, names are ranked on the terminal mean, which
+        makes the overlap column a statement about the forecast alone.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per share: ``factor_share``, ``spearman_terminal_mean``,
+        ``spearman_rank_values``, ``top_k_overlap``, ``top_k_jaccard``,
+        ``book_sd_ratio``, ``er_sd_max_abs_diff``, ``port_gvar``, ``port_ges``,
+        ``effective_n``.
+
+    Notes
+    -----
+    ``er_sd_max_abs_diff`` is the invariance check, reported rather than asserted: it
+    should be at Monte-Carlo noise for every row. A row where it is not means the
+    variance split has stopped preserving the marginals, which would silently move
+    ``exp_vol`` and every ratio built on it.
+    """
+    import pandas as pd
+    from scipy import stats as _stats
+
+    cfg = config or ForecastConfig()
+    base_share = float(cfg.factor_share if baseline_share is None else baseline_share)
+
+    def _run(share: float) -> ForecastDraws:
+        return forecast_from_posterior(
+            source, panel,
+            config=_dc_replace(cfg, factor_share=float(share)),
+            latent=latent,
+        )
+
+    base = _run(base_share)
+    base_terminal_mean = base.terminal.mean(axis=1)
+    base_sd = base.terminal.std(axis=1)
+    base_rank = base_terminal_mean if rank_values is None else np.asarray(rank_values)
+    base_book = _top_k_isins(base_rank, base.isins, k_book)
+
+    rows: list[dict[str, Any]] = []
+    for share in shares:
+        draws = base if float(share) == base_share else _run(float(share))
+        terminal_mean = draws.terminal.mean(axis=1)
+        sd = draws.terminal.std(axis=1)
+
+        # Equal-weight book sd: the joint statistic the share actually moves.
+        n = min(k_book, draws.n_isin)
+        w = np.full(n, 1.0 / n)
+        book_sd = float((w @ draws.terminal[:n]).std())
+
+        rank = terminal_mean if rank_values is None else np.asarray(rank_values)
+        book = _top_k_isins(rank, draws.isins, k_book)
+        overlap = len(book & base_book)
+        union = len(book | base_book)
+
+        weights_full = np.zeros(draws.n_isin)
+        sel = [i for i, isin in enumerate(draws.isins) if isin in book]
+        if sel:
+            weights_full[sel] = 1.0 / len(sel)
+        port = weights_full @ draws.terminal
+
+        rows.append({
+            "factor_share": float(share),
+            "spearman_terminal_mean": float(
+                _stats.spearmanr(terminal_mean, base_terminal_mean).statistic
+            ),
+            "spearman_rank_values": (
+                float(_stats.spearmanr(rank, base_rank).statistic)
+                if rank_values is not None else float("nan")
+            ),
+            "top_k_overlap": int(overlap),
+            "top_k_jaccard": float(overlap / union) if union else float("nan"),
+            "book_sd_ratio": float(book_sd / float((w @ base.terminal[:n]).std())),
+            "book_sd": book_sd,
+            # The invariance the split promises, measured rather than assumed.
+            "er_sd_max_abs_diff": float(np.nanmax(np.abs(sd - base_sd))),
+            "port_gvar": float(np.quantile(port, 0.01)),
+            "port_ges": float(port[port <= np.quantile(port, 0.05)].mean())
+            if port.size else float("nan"),
+            "effective_n": float(1.0 / np.sum(weights_full[sel] ** 2)) if sel else 0.0,
+        })
+
+    out = pd.DataFrame(rows)
+    logger.info(
+        "factor_share sweep over %s: book sd ratio %.2fx-%.2fx, per-name er_sd moves "
+        "at most %.2e (the split is variance-preserving, so this is noise)",
+        list(out["factor_share"]),
+        out["book_sd_ratio"].min(), out["book_sd_ratio"].max(),
+        out["er_sd_max_abs_diff"].max(),
+    )
+    return out
+
+
+def compare_forecast_engines(
+        draws: ForecastDraws,
+        mc_summary: "pd.DataFrame",
+        *,
+        terminal: bool = False,
+) -> "pd.DataFrame":
+    """Contrast this module's forward draws against the shipped AR simulator's.
+
+    The two engines answer the same question differently. ``ForecastConfig.step_days``
+    defaults to 91 so that a 365-day horizon takes four steps -- deliberately the same
+    step count as ``simulate_lagged_risk_adjusted_returns``' unitless ``horizon=4`` --
+    and this function is what makes that choice checkable rather than merely asserted.
+    Where the AR simulator decays at a hand-set ``rho=0.85``, the decay here **is** the
+    fitted ``ou_length_scale_days`` kernel.
+
+    Parameters
+    ----------
+    draws
+        This module's output.
+    mc_summary
+        The shipped ``10_screen_mc_summary_v2`` frame, or anything carrying ``isin``
+        and ``er_*`` columns.
+    terminal
+        Passed through to :func:`summarize_forecast`. Leave ``False`` to contrast
+        pooled per-step marginals, which is the like-for-like comparison -- the AR
+        simulator has no cumulative-horizon quantity to compare ``terminal=True``
+        against.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per name present in both, with ``_fc`` and ``_ar`` suffixes on each
+        shared ``er_*`` column and a ``sd_ratio``.
+
+    Notes
+    -----
+    Joined **by ISIN**. The screen is sorted by ``expected_upside`` while the panel is
+    in universe order, so a positional merge would contrast each name against a
+    different one while every row count still matched -- a permutation a length check
+    cannot see.
+    """
+    import pandas as pd
+
+    left = summarize_forecast(draws, terminal=terminal)
+    shared = [c for c in left.columns if c != "isin" and c in mc_summary.columns]
+    merged = left.merge(
+        mc_summary[["isin", *shared]], on="isin", how="inner",
+        suffixes=("_fc", "_ar"),
+    )
+    if "er_sd_fc" in merged.columns and "er_sd_ar" in merged.columns:
+        denom = merged["er_sd_ar"].replace(0.0, np.nan)
+        merged["sd_ratio"] = merged["er_sd_fc"] / denom
+    logger.info(
+        "engine contrast: %d of %d names matched by ISIN; median sd ratio %s",
+        len(merged), draws.n_isin,
+        f"{merged['sd_ratio'].median():.3f}" if "sd_ratio" in merged else "n/a",
+    )
+    return merged
