@@ -75,6 +75,7 @@ import pandas as pd
 
 from probabilistic_ml_model.pymc_models.RiskBookModel import (
     MIN_RATIO_DENOMINATOR,
+    MIN_TAIL_RISK,
     _cap_normalize_weights,
 )
 
@@ -82,8 +83,14 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_KELLY_MULTIPLIER",
+    "DEFAULT_RANKING_RULE",
     "DEFAULT_VAR_PROB",
     "MAX_KELLY_FRACTION",
+    "RANKING_RULES",
+    "RANKING_RULES_EXTERNAL",
+    "RANK_TIEBREAK",
+    "RELATIVE_DENOMINATOR_Q",
+    "kelly_report",
     "LossFunction",
     "LinearPositionLoss",
     "Portfolio",
@@ -116,6 +123,36 @@ DEFAULT_KELLY_MULTIPLIER: float = 0.25
 #: losing scenario at all, where the log-optimal fraction is unbounded and the answer
 #: is a statement about the simulation rather than about the opportunity.
 MAX_KELLY_FRACTION: float = 1.0
+
+#: Relative floor on a ranking denominator, as a fraction of the eligible universe's
+#: MEDIAN denominator. ``0.0`` disables it and reproduces the absolute-floor-only
+#: behaviour exactly.
+#:
+#: Why a second floor. ``MIN_RATIO_DENOMINATOR`` is an absolute guard against a
+#: denormal, and it does its job: it excludes the names whose modelled downside is
+#: exactly zero. The names it *admits* are the problem. Measured on run
+#: ``448e7f055ef3``, every one of the twenty-five names ``reward_to_downside``
+#: selected had a downside deviation between 0.000101 and 0.000538 against a universe
+#: median of 0.0150 -- two orders of magnitude below it -- and the resulting ratio
+#: spanned 75 to 4,997 inside a single book. That is not a reward-to-risk ranking; it
+#: is a ranking on the ABSENCE of modelled downside, and the model's left tail is the
+#: one thing nothing has validated.
+#:
+#: The default is 0.0 on purpose. Turning this on changes which names a book holds,
+#: and that decision belongs to the caller and to a realised-return vintage, not to a
+#: constant. What it is for is measurement: set it, read the log line saying how many
+#: book names the relative floor binds on, and the answer is the finding.
+RELATIVE_DENOMINATOR_Q: float = 0.0
+
+#: Tie-break for a SATURATED ranking column, applied left to right after the rule.
+#:
+#: ``p_upside_pos_cond`` is bounded -- its virtue, and the reason it is the one
+#: untried ranking candidate -- but it saturates: 59.4% of the universe sits at
+#: exactly 1.0. A top-25 cut therefore lands entirely inside the tie, and without an
+#: explicit rule ``argsort``'s ordering silently becomes the selection. Probability
+#: first, then how much the name's own trail actually moved its estimate, then
+#: magnitude.
+RANK_TIEBREAK: tuple[str, ...] = ("shrink_gain", "expected_return")
 
 _EPS = 1e-12
 
@@ -613,6 +650,274 @@ def fractional_kelly(
     return float(max(0.0, fraction) * multiplier)
 
 
+def kelly_report(
+        returns: np.ndarray,
+        *,
+        multiplier: float = 1.0,
+        max_fraction: float = MAX_KELLY_FRACTION,
+) -> dict[str, float]:
+    """The Kelly fraction plus enough context to tell a solution from a pin.
+
+    :func:`kelly_fraction_from_draws` returns ``max_fraction`` in two very different
+    situations: when the log-optimal fraction genuinely sits at the cap, and when
+    ``E[log(1 + f*r)]`` never turned over anywhere inside the feasible interval
+    because no draw loses money. On run ``448e7f055ef3`` the second case covered
+    **89.3% of the universe** and all 25 names of the decision book. A column reading
+    ``1.000`` for nine names in ten is not a sizing recommendation; it is the
+    bisection reporting that it had nothing to solve, and it must not be readable as
+    the former.
+
+    Returns
+    -------
+    dict[str, float]
+        ``kelly_fraction`` -- as :func:`kelly_fraction_from_draws`.
+        ``kelly_interior`` -- 1.0 when the solution lies strictly inside
+        ``(0, max_fraction)``, i.e. the criterion actually chose it.
+        ``kelly_endpoint_score`` -- ``E[r / (1 + f*r)]`` evaluated at ``max_fraction``.
+        Positive means log growth was still RISING at the cap, which is the signature
+        of a pin. Zero would be a genuine optimum sitting exactly there.
+        ``kelly_max_feasible`` -- the largest ``f`` with ``1 + f*r > 0`` on every
+        draw. ``inf`` when no scenario loses money, which is the real binding
+        constraint in that case and the honest thing to report instead of a fraction.
+    """
+    vals = _finite_1d(returns)
+    if vals.size == 0:
+        nan = float("nan")
+        return {"kelly_fraction": nan, "kelly_interior": nan,
+                "kelly_endpoint_score": nan, "kelly_max_feasible": nan}
+
+    f = kelly_fraction_from_draws(vals, multiplier=multiplier, max_fraction=max_fraction)
+    feasible = _max_feasible_fraction(vals)
+    cap_f = min(max_fraction, feasible * (1.0 - 1e-9)) if np.isfinite(feasible) else max_fraction
+    with np.errstate(divide="ignore", invalid="ignore"):
+        endpoint = float(np.mean(vals / (1.0 + cap_f * vals)))
+    interior = bool(_EPS < f < max_fraction * (1.0 - 1e-9))
+    return {
+        "kelly_fraction": float(f),
+        "kelly_interior": float(interior),
+        "kelly_endpoint_score": endpoint,
+        "kelly_max_feasible": float(feasible),
+    }
+
+
+# ---------------------------------------------------------------------------
+# E. Ranking rules — three arms, one SSOT, no default moved
+# ---------------------------------------------------------------------------
+#
+# Two candidate ranking denominators have now been shipped and measured, and both
+# failed the same way. `tail_risk = max(-cvar05, 0.25*er_sd, MIN_TAIL_RISK)` collapses
+# to its volatility floor for every name the book selects, so STARR is a
+# reward-to-VARIABILITY ratio wearing a tail ratio's name. `downside_dev` was proposed
+# as the cure and correlates 0.9948 with the STARR it replaced and 0.9883 with
+# expected Sharpe -- one near-Sharpe ratio traded for another -- while selecting
+# denominators two orders of magnitude below the universe median.
+#
+# `p_upside_pos_cond` is the one untried candidate, and its virtue is structural: a
+# probability is BOUNDED, so it cannot be inflated by a vanishing denominator, which
+# is the failure mode both ratio candidates share. Whether it is BETTER is a question
+# about realised returns and nothing else, which is why all three ship as labelled
+# arms and the default does not move.
+
+#: Ranking rule name -> the analytics column it sorts on, descending.
+RANKING_RULES: dict[str, str] = {
+    "reward_to_downside": "reward_to_downside",
+    "reward_to_cvar": "reward_to_cvar",
+    "p_upside_pos_cond": "p_upside_pos_cond",
+}
+
+#: Rules whose column this module cannot compute from the draws and must be handed.
+RANKING_RULES_EXTERNAL: frozenset[str] = frozenset({"p_upside_pos_cond"})
+
+#: The arm that ships. Changing this changes the book, so it changes on evidence
+#: about realised returns, not on a correlation.
+DEFAULT_RANKING_RULE: str = "reward_to_downside"
+
+
+def _floor_denominator(
+        values: np.ndarray,
+        eligible: np.ndarray,
+        relative_q: float,
+        label: str,
+) -> tuple[np.ndarray, float, int]:
+    """Mask denominators below the absolute and relative floors, and count the effect.
+
+    The floor **excludes**, it does not clamp. Clamping would hand every name below
+    the floor the same capped-but-still-enormous ratio and leave it in the running --
+    which admits precisely the names this floor exists to keep out. It is also what
+    the absolute floor already did before the relative one joined it, so excluding
+    keeps the shipped arm bit-identical when ``relative_q`` is 0.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, float, int]
+        The masked denominator (``nan`` below the floor), the floor, and the number
+        of ELIGIBLE names it removed. That count is the point: a book whose every
+        name sits below a floor derived from the universe median is a book selected
+        on the absence of modelled risk, and the only way anyone finds that out is if
+        it is counted.
+    """
+    den = np.asarray(values, dtype="float64").copy()
+    rel = 0.0
+    if relative_q > 0.0:
+        pool = den[eligible & np.isfinite(den) & (den > 0.0)]
+        if pool.size:
+            rel = float(relative_q * np.median(pool))
+    floor = max(MIN_RATIO_DENOMINATOR, rel)
+    below = np.isfinite(den) & (den < floor)
+    binds = int(np.sum(eligible & below))
+    if binds:
+        logger.info(
+            "%s: the denominator floor %.3e excludes %d of %d eligible names "
+            "(absolute %.0e, relative %.3e = %.3g x universe median)",
+            label, floor, binds, int(eligible.sum()), MIN_RATIO_DENOMINATOR, rel, relative_q,
+        )
+    den[below] = np.nan
+    return den, floor, binds
+
+
+def _attach_ranking_columns(
+        analytics: "pd.DataFrame",
+        *,
+        rank_by: str,
+        rank_values: Optional[np.ndarray],
+        rank_isins: Optional[Sequence[str]],
+        eligible: np.ndarray,
+        relative_denominator_q: float,
+) -> "pd.DataFrame":
+    """Build every ranking column, plus the diagnostics that make one readable.
+
+    ``rank_denominator_pctile`` is the column that would have made the measured
+    failure visible without recomputing anything: it is where each name's ranking
+    denominator sits in the eligible universe's distribution. Every name of the run
+    ``448e7f055ef3`` book sat in its bottom ~2%.
+    """
+    out = analytics.copy()
+    ranks_needing_values = rank_by in RANKING_RULES_EXTERNAL
+
+    for name, denom_col in (("reward_to_downside", "downside_dev"),
+                            ("reward_to_cvar", "tail_risk")):
+        den, floor, _binds = _floor_denominator(
+            out[denom_col].to_numpy(), eligible, relative_denominator_q, name
+        )
+        out[f"{denom_col}_admitted"] = den
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = out["expected_return"].to_numpy() / den
+        out[name] = np.where(np.isfinite(ratio), ratio, np.nan)
+
+    if ranks_needing_values:
+        col = RANKING_RULES[rank_by]
+        if rank_values is None:
+            raise ValueError(
+                f"rank_by={rank_by!r} needs rank_values: {col!r} is a screen column, "
+                "not something the forward draws can produce. Pass it (and "
+                "rank_isins) rather than letting this module invent one."
+            )
+        values = np.asarray(rank_values, dtype="float64")
+        if rank_isins is None:
+            if values.shape[0] != len(out):
+                raise ValueError(
+                    f"rank_values has {values.shape[0]} entries for {len(out)} names "
+                    "and no rank_isins to align them by"
+                )
+            logger.warning(
+                "rank_values aligned BY POSITION because rank_isins was not given. "
+                "Pass rank_isins: a screen sorted by expected_upside against draws in "
+                "universe order is a permutation no length check can see."
+            )
+            out[col] = values
+        else:
+            keyed = pd.Series(values, index=pd.Index(np.asarray(rank_isins), name="isin"))
+            out[col] = keyed.reindex(out["isin"].to_numpy()).to_numpy()
+            missing = int(np.sum(~np.isfinite(out[col].to_numpy())))
+            if missing:
+                logger.warning(
+                    "%d of %d names have no %s value after the ISIN join; they cannot "
+                    "be ranked on this arm", missing, len(out), col,
+                )
+
+    # Where each name's ranking denominator sits in the eligible universe. The column
+    # that turns "selected on the absence of downside" from a diagnosis into a read.
+    denom_col = {"reward_to_downside": "downside_dev",
+                 "reward_to_cvar": "tail_risk"}.get(rank_by)
+    if denom_col is not None:
+        pool = out.loc[eligible, denom_col].to_numpy()
+        pool = pool[np.isfinite(pool)]
+        if pool.size:
+            out["rank_denominator"] = out[denom_col]
+            out["rank_denominator_pctile"] = [
+                float(np.mean(pool <= v)) if np.isfinite(v) else np.nan
+                for v in out[denom_col].to_numpy()
+            ]
+    else:
+        # A bounded probability has no denominator to report, which is exactly why it
+        # is the one candidate immune to this failure mode.
+        out["rank_denominator"] = np.nan
+        out["rank_denominator_pctile"] = np.nan
+    return out
+
+
+def _cap_normalize_with_groups(
+        w: np.ndarray,
+        cap: float,
+        *,
+        groups: Optional[np.ndarray] = None,
+        group_cap: Optional[float] = None,
+        max_passes: int = 64,
+) -> np.ndarray:
+    """Project onto the capped simplex, then onto the group-capped one, and repeat.
+
+    The per-name cap is :func:`RiskBookModel._cap_normalize_weights` unchanged --
+    there is no second copy of it here. The group pass scales any group over
+    ``group_cap`` down to it and spills the remainder onto the groups below their cap,
+    proportionally. The two constraints interact, so the passes alternate until both
+    hold or ``max_passes`` is spent.
+
+    A sector cap is a decision to take deliberately. Its absence is also a decision,
+    and on run ``448e7f055ef3`` that decision produced a book **60.9% in Information
+    Technology** -- taken by omission, which is the only way it should never be taken.
+    """
+    out = _cap_normalize_weights(w, cap)
+    if groups is None or group_cap is None or not (0.0 < group_cap < 1.0):
+        return out
+
+    codes = np.asarray(groups)
+    for _ in range(max_passes):
+        totals = {g: out[codes == g].sum() for g in np.unique(codes)}
+        over = {g: t for g, t in totals.items() if t > group_cap + 1e-12}
+        if not over:
+            break
+        excess = 0.0
+        for g, total in over.items():
+            sel = codes == g
+            scale = group_cap / total
+            excess += total - group_cap
+            out[sel] *= scale
+        room = np.array([
+            max(group_cap - totals[g], 0.0) if g not in over else 0.0 for g in codes
+        ])
+        headroom = np.array([
+            (max(group_cap - totals[g], 0.0) if g not in over else 0.0) for g in np.unique(codes)
+        ]).sum()
+        if headroom <= _EPS:
+            # Nowhere to spill: the cap cannot be met at this book size. Normalise and
+            # let the caller see the breach in the exported concentration column
+            # rather than looping forever on an infeasible constraint.
+            logger.warning(
+                "sector cap %.0f%% is infeasible for this book (%d groups); the "
+                "weights are normalised without it",
+                100.0 * group_cap, len(totals),
+            )
+            break
+        # Spill proportionally to each under-cap name's share of its group's headroom.
+        weight_room = np.where(room > 0, out + _EPS, 0.0)
+        if weight_room.sum() <= _EPS:
+            break
+        out = out + excess * weight_room / weight_room.sum()
+        out = _cap_normalize_weights(out, cap)
+    total = out.sum()
+    return out / total if total > 0 else out
+
+
 @dataclass(frozen=True, eq=False)
 class Portfolio:
     """A sized book plus the risk it carries, all measured on the joint draws.
@@ -666,6 +971,13 @@ def optimize_portfolio(
         kelly_multiplier: float = DEFAULT_KELLY_MULTIPLIER,
         var_prob: float = DEFAULT_VAR_PROB,
         eligible: Optional[np.ndarray] = None,
+        rank_by: str = DEFAULT_RANKING_RULE,
+        rank_values: Optional[np.ndarray] = None,
+        rank_isins: Optional[Sequence[str]] = None,
+        tail_risk_vol_floor_k: float = 0.25,
+        relative_denominator_q: float = RELATIVE_DENOMINATOR_Q,
+        groups: Optional[Sequence[Any]] = None,
+        sector_cap: Optional[float] = None,
         max_iter: int = 500,
         learning_rate: float = 0.05,
         random_seed: int = 42,
@@ -697,9 +1009,12 @@ def optimize_portfolio(
         risk columns by position rather than by key is the failure this project has
         already shipped once.
     k_book
-        Number of names in the book. No default is asserted here — ``DEFAULT_K_BOOK``
-        in ``RiskBookModel`` and the value the pipeline actually passes disagree, so
-        this module takes it from the caller.
+        Number of names in the book. Taken from the caller rather than defaulted to
+        ``RiskBookModel.DEFAULT_K_BOOK``. The two had disagreed; as of 2026-08-26 the
+        constant (50) and what ``KalmanRunConfigV2`` passes (50) agree, and the same
+        holds for ``DEFAULT_MCAP_R_MAX`` / ``mcap_global_r_max`` at 0.03 — verified,
+        not assumed. Deferring to the caller anyway is what stops the two drifting
+        apart again silently.
     cap
         Maximum single-name weight.
     kelly_multiplier
@@ -709,7 +1024,28 @@ def optimize_portfolio(
         Confidence for the GVaR / GES columns.
     eligible
         Optional boolean mask over names. Anything already excluded upstream (market
-        cap, support, out-of-support rows) belongs here rather than being re-derived.
+        cap, support, out-of-support rows, the size-down watch) belongs here rather
+        than being re-derived.
+    rank_by
+        Which arm of :data:`RANKING_RULES` selects the book. The default does not
+        move; the other arms are contrasts, and every frame records which one ran.
+    rank_values, rank_isins
+        The column for a rule this module cannot compute -- currently only
+        ``p_upside_pos_cond``, which comes from the screen. Aligned **by ISIN** when
+        ``rank_isins`` is given, which it should be: passing values in the screen's
+        ``expected_upside`` order against draws in universe order is the positional
+        join this project has already shipped once.
+    tail_risk_vol_floor_k
+        Relative volatility floor in the ``reward_to_cvar`` arm's denominator,
+        mirroring ``RiskBookModel``. Load-bearing rather than inert: it is what the
+        denominator collapses to for every name the book selects.
+    relative_denominator_q
+        See :data:`RELATIVE_DENOMINATOR_Q`. ``0.0`` (the default) reproduces the
+        absolute-floor-only behaviour exactly.
+    groups, sector_cap
+        Optional per-name group labels and a maximum weight for any one group.
+        ``None`` keeps today's behaviour -- see :func:`_cap_normalize_with_groups`
+        for why the absence of a sector cap is itself a decision.
     max_iter, learning_rate
         Exponentiated-gradient budget and step size.
     random_seed
@@ -737,54 +1073,103 @@ def optimize_portfolio(
         raise ValueError(f"cap must be in (0, 1], got {cap!r}")
     _ = random_seed
 
+    if rank_by not in RANKING_RULES:
+        raise ValueError(
+            f"Unknown rank_by {rank_by!r}. Valid arms: {sorted(RANKING_RULES)}"
+        )
+
     n_isin = draws.shape[0]
+    kelly = [kelly_report(draws[i], max_fraction=MAX_KELLY_FRACTION) for i in range(n_isin)]
     per_name = {
         "isin": labels,
         "expected_return": draws.mean(axis=1),
-        "kelly_fraction": np.array(
-            [kelly_fraction_from_draws(draws[i]) for i in range(n_isin)]
-        ),
+        "er_sd": draws.std(axis=1),
+        "kelly_fraction": np.array([k["kelly_fraction"] for k in kelly]),
+        # Not decoration: without these a `kelly_fraction` of 1.000 for nine names in
+        # ten is unreadable as the pin it is. See `kelly_report`.
+        "kelly_interior": np.array([k["kelly_interior"] for k in kelly]).astype(bool),
+        "kelly_endpoint_score": np.array([k["kelly_endpoint_score"] for k in kelly]),
+        "kelly_max_feasible": np.array([k["kelly_max_feasible"] for k in kelly]),
         "gvar": np.array([generative_var(draws[i], prob=var_prob) for i in range(n_isin)]),
         "ges": np.array(
             [generative_expected_shortfall(draws[i], prob=var_prob) for i in range(n_isin)]
         ),
         "gtr": np.array([generative_tail_risk(draws[i]) for i in range(n_isin)]),
         "downside_dev": np.array([downside_deviation(draws[i]) for i in range(n_isin)]),
+        "er_p05": np.quantile(draws, 0.05, axis=1),
     }
     analytics = pd.DataFrame(per_name)
 
-    # Reward per unit downside. Floored by MIN_RATIO_DENOMINATOR for the same reason
-    # RiskBookModel floors its ratios: a denormal denominator passes a bare `> 0`
-    # guard and publishes a ratio of 1e15.
-    den = analytics["downside_dev"].where(
-        analytics["downside_dev"] >= MIN_RATIO_DENOMINATOR
-    )
-    analytics["reward_to_downside"] = (analytics["expected_return"] / den).where(
-        lambda s: np.isfinite(s)
+    # The `reward_to_cvar` arm: RiskBookModel's shipped STARR denominator, computed
+    # here on the terminal draws so the two rankings contrast like with like. The
+    # `expected_upside - cvar05` leg is deliberately absent, as it is on the
+    # return-draw path there -- it fell as the tail improved, so the ratio rose on
+    # numerator and denominator together.
+    analytics["tail_risk"] = np.maximum.reduce([
+        -analytics["er_p05"].to_numpy(),
+        float(tail_risk_vol_floor_k) * analytics["er_sd"].to_numpy(),
+        np.full(n_isin, MIN_TAIL_RISK),
+    ])
+    analytics["tail_risk_on_floor"] = (
+        analytics["tail_risk"].to_numpy()
+        <= float(tail_risk_vol_floor_k) * analytics["er_sd"].to_numpy() + 1e-12
     )
 
     mask = np.ones(n_isin, dtype=bool) if eligible is None else np.asarray(eligible, dtype=bool)
     if mask.shape[0] != n_isin:
         raise ValueError(f"eligible has {mask.shape[0]} entries for {n_isin} names")
+
+    analytics = _attach_ranking_columns(
+        analytics,
+        rank_by=rank_by,
+        rank_values=rank_values,
+        rank_isins=rank_isins,
+        eligible=mask,
+        relative_denominator_q=float(relative_denominator_q),
+    )
+
+    rank_col = RANKING_RULES[rank_by]
     selectable = (
         mask
         & (analytics["expected_return"].to_numpy() > 0.0)
-        & np.isfinite(analytics["reward_to_downside"].to_numpy())
+        & np.isfinite(analytics[rank_col].to_numpy())
     )
 
     analytics["weight"] = 0.0
+    # Explicit tie-break. `p_upside_pos_cond` saturates at 1.0 for the majority of the
+    # universe, so a top-k cut lands inside the tie and argsort's order would silently
+    # become the selection rule. Descending on every key; missing keys are skipped.
+    sort_cols = [rank_col] + [c for c in RANK_TIEBREAK
+                              if c in analytics.columns and c != rank_col]
     chosen = (
         analytics.loc[selectable]
-        .sort_values("reward_to_downside", ascending=False)
+        .sort_values(sort_cols, ascending=[False] * len(sort_cols), kind="mergesort")
         .head(int(k_book))
     )
-    summary: dict[str, float] = {
+    tie_span = int(
+        (analytics.loc[selectable, rank_col] == chosen[rank_col].min()).sum()
+    ) if len(chosen) else 0
+    if tie_span > 1 and len(chosen) >= int(k_book):
+        logger.info(
+            "the %s cut at rank %d fell among %d tied names; broken on %s",
+            rank_col, int(k_book), tie_span, list(sort_cols[1:]) or "nothing",
+        )
+
+    summary: dict[str, Any] = {
         "k_book": float(k_book),
         "cap": float(cap),
         "var_prob": float(var_prob),
         "kelly_multiplier": float(kelly_multiplier),
         "n_eligible": float(int(selectable.sum())),
         "n_book": float(len(chosen)),
+        "rank_by": rank_by,
+        "rank_tiebreak": ",".join(sort_cols[1:]),
+        "rank_tie_span": float(tie_span),
+        "sector_cap": float(sector_cap) if sector_cap is not None else float("nan"),
+        "relative_denominator_q": float(relative_denominator_q),
+        # The 89.3% finding, as a tracked number rather than an anecdote.
+        "kelly_interior_share": float(analytics.loc[mask, "kelly_interior"].mean())
+        if mask.any() else float("nan"),
     }
 
     if chosen.empty:
@@ -814,10 +1199,24 @@ def optimize_portfolio(
     held = draws[rows]
     k = len(rows)
 
+    held_groups: Optional[np.ndarray] = None
+    if groups is not None and sector_cap is not None:
+        all_groups = np.asarray(groups)
+        if all_groups.shape[0] != n_isin:
+            raise ValueError(
+                f"groups has {all_groups.shape[0]} entries for {n_isin} names"
+            )
+        held_groups = all_groups[rows]
+
+    def _project(vec: np.ndarray) -> np.ndarray:
+        return _cap_normalize_with_groups(
+            vec, cap, groups=held_groups, group_cap=sector_cap
+        )
+
     # Exponentiated gradient ascent on E[log(1 + w @ r)]. Multiplicative updates keep
     # the weights non-negative without a projection, and the cap-and-spill step is
     # what puts them back on the capped simplex.
-    w = _cap_normalize_weights(np.ones(k), cap)
+    w = _project(np.ones(k))
     best_w, best_obj = w.copy(), _log_growth(w, held)
     for _ in range(int(max_iter)):
         port = w @ held
@@ -829,7 +1228,7 @@ def optimize_portfolio(
         if not np.isfinite(scale) or scale <= _EPS:
             break
         w_new = w * np.exp(learning_rate * grad / scale)
-        w_new = _cap_normalize_weights(w_new, cap)
+        w_new = _project(w_new)
         obj = _log_growth(w_new, held)
         if not np.isfinite(obj):
             break
@@ -883,14 +1282,41 @@ def optimize_portfolio(
             else float("nan")
         ),
         effective_n=float(1.0 / np.sum(w * w)) if np.sum(w * w) > 0 else 0.0,
+        # Reported at the FRACTIONAL multiplier, not full Kelly. Overbetting is the
+        # asymmetric error and the edge here rests on a prior-driven shrinkage, so
+        # the full fraction is an upper bound rather than a recommendation.
+        port_kelly_full=kelly_fraction_from_draws(port_draws),
+        # Where the book's names sit in the eligible universe's denominator
+        # distribution. On the shipped arm this is the measurement that says whether
+        # the ranking chose low risk or merely unmodelled risk.
+        book_denominator_pctile_max=(
+            float(chosen["rank_denominator_pctile"].max())
+            if "rank_denominator_pctile" in chosen else float("nan")
+        ),
+        book_kelly_interior_share=float(chosen["kelly_interior"].mean()),
     )
+    if held_groups is not None:
+        totals = pd.Series(w).groupby(pd.Series(held_groups).to_numpy()).sum()
+        summary["top_group_weight"] = float(totals.max())
+        summary["top_group"] = str(totals.idxmax())
+        summary["n_groups"] = float(totals.size)
+    elif groups is not None:
+        all_groups = np.asarray(groups)
+        totals = pd.Series(w).groupby(all_groups[rows]).sum()
+        summary["top_group_weight"] = float(totals.max())
+        summary["top_group"] = str(totals.idxmax())
+        summary["n_groups"] = float(totals.size)
     logger.info(
-        "book: %d names, effective N %.1f, E[r] %.2f%%, GVaR %.2f%%, growth %.5f",
+        "book [%s]: %d names, effective N %.1f, E[r] %.2f%%, GVaR %.2f%%, growth "
+        "%.5f, interior Kelly %.0f%% of book, top group %s",
+        rank_by,
         len(rows),
         summary["effective_n"],
         100.0 * summary["port_expected"],
         100.0 * summary["port_gvar"],
         summary["log_growth"],
+        100.0 * summary["book_kelly_interior_share"],
+        f"{summary['top_group_weight']:.1%}" if "top_group_weight" in summary else "n/a",
     )
     return Portfolio(weights=weights, analytics=analytics, summary=summary)
 
