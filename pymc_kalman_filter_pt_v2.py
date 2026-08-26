@@ -183,6 +183,10 @@ _RANKING_RANGE_COLS: tuple[str, ...] = (
 #: the two models coexist and can be compared on one database. Promoting v2 is a
 #: deliberate edit here plus a dashboard deploy — never a side effect of a run.
 _ANALYTICS_TABLE_V2 = "kalman_filtered_price_targets_v2"
+
+#: Filename of the forecast handoff (§F1) inside ``KalmanRunConfigV2.results_path``.
+#: One name, one place: ``kalman_portfolio.py`` defaults to exactly this.
+_HANDOFF_STEM = "07_forecast_handoff_v2.nc"
 _RISK_BOOK_KEY = "10b_risk_book_v2"
 
 #: Where the run's own gate verdicts land. Written by :func:`export_analytics`
@@ -216,6 +220,370 @@ _GATE_REPORT_KEY = "09_gate_report_v2"
 #: ``source_dirty`` is **not an error flag** — most of these runs had an
 #: uncommitted tree. It is the fact a reader needs in order to know which
 #: cross-run comparisons are legitimate.
+#: Identity, geography, fiscal-calendar and size block carried by **every
+#: per-ISIN export frame**, in export order, with the SQL type each column is
+#: declared as.
+#:
+#: WHY AN SSOT RATHER THAN A LIST PER FRAME. Before this existed, `run_screen`
+#: hand-listed nine identity columns and every downstream frame inherited
+#: whatever that constructor happened to build. The forecast and decision frames
+#: picked five, the mc-summary frame one, and the panel frame carried all of them
+#: only because it is `SELECT *`. So the same name arrived at a reader with a
+#: different amount of context depending on which table they opened, and adding a
+#: column meant finding every constructor. One tuple, applied once at export.
+#:
+#: WHY THE TYPES ARE DECLARED AND NOT INFERRED. `write_analytics_ddl_v2` maps
+#: pandas dtypes to SQL, and pandas cannot represent what these columns are:
+#: a DATE read back through `read_sql` is `datetime64[ns]`, which infers as
+#: TIMESTAMP, and an all-NULL text column infers as `float64` -> DOUBLE
+#: PRECISION. Both are silent schema drift on a table nobody re-reads. The type
+#: here wins over inference, so `last_updated` is a DATE in the DDL on a run
+#: where every value happens to be missing.
+#:
+#: The types mirror `pml.pml_df` exactly -- verified column by column against
+#: `sql_scripts/pml/pml_df.sql`. `mv_pymc_kalman_pt` emits all 42 and
+#: `mv_pymc_kalman_pt_v2` re-emits them via `SELECT b.*`, so the universe query's
+#: `SELECT *` already carries them into `panel.frame`; nothing new is read.
+#:
+#: NOT IN SCOPE OF THE CATALOGUE COVERAGE CHECK. None of these match
+#: `feat\_%` / `observed\_%` / `n\_%`, which is what
+#: `vw_pymc_catalogue_coverage_check` scans, so registering them in
+#: `pml_df_metadata` cannot raise PHANTOM_CATALOGUE_ALIAS and omitting them
+#: cannot raise MISSING_FROM_CATALOGUE. They are registered anyway, as coords and
+#: constant_data, because the catalogue is what tells a reader what a column is
+#: for -- see §7m of `pml_df_metadata_populate.sql`.
+EXPORT_IDENTITY_COLUMNS: tuple[tuple[str, str], ...] = (
+    # ---- identity ---------------------------------------------------------
+    ("isin", "TEXT"),
+    ("ticker", "TEXT"),
+    ("name", "TEXT"),
+    # ---- geography and classification -------------------------------------
+    # Both the code and its resolved label are carried. The code is what joins
+    # and groups; the label is what a dashboard prints. Exporting only the code
+    # forces every consumer to re-join `pml.country_name()` et al., and those are
+    # STABLE single-overload lookups, not immutable ones.
+    ("trading_region", "TEXT"),
+    ("region", "TEXT"),
+    ("country", "TEXT"),
+    ("country_name", "TEXT"),
+    ("trading_country", "TEXT"),
+    ("trading_country_name", "TEXT"),
+    ("exchange", "TEXT"),
+    ("exchange_name", "TEXT"),
+    ("unit", "TEXT"),
+    ("unit_name", "TEXT"),
+    ("style_class", "TEXT"),
+    ("size_class", "TEXT"),
+    ("sector", "TEXT"),
+    ("industry", "TEXT"),
+    # ---- fiscal calendar --------------------------------------------------
+    ("last_updated", "DATE"),
+    ("income_statement_report_date", "DATE"),
+    ("next_earnings", "DATE"),
+    ("next_earnings_when", "TEXT"),
+    ("next_earnings_status", "TEXT"),
+    ("fy_end_date", "DATE"),
+    # A DATE despite the name: `pml.calculate_next_fiscal_quarter` returns the
+    # ordinal 1-4, but the COLUMN is built by
+    # `pml.calculate_next_fiscal_quarter_date` and `mv_pymc_kalman_pt` computes
+    # `(next_fiscal_quarter - CURRENT_DATE)::INT` from it, which only type-checks
+    # for a date. `pml_df.sql` declares it `date`.
+    ("next_fiscal_quarter", "DATE"),
+    ("next_income_statement_report_date", "DATE"),
+    ("next_fy_end_date", "DATE"),
+    ("expected_report_date", "DATE"),
+    # ---- day-count horizons ------------------------------------------------
+    # NOT REPRODUCIBLE ACROSS REFRESH DATES. Every one of these is computed
+    # against CURRENT_DATE inside the MV, so refreshing on a different day shifts
+    # all seven. Fine for a live screen and unusable as-is for a point-in-time
+    # backtest, which is what `pml.kalman_pt_v2_asof(p_asof)` exists to
+    # recompute. It is also why the family is barred from the drift matrix by
+    # `KALMAN_TIME_COVARIATE_PREFIX`: exported for context, never fitted on.
+    ("days_to_next_earnings", "INTEGER"),
+    ("days_since_last_report", "INTEGER"),
+    ("days_to_next_fy_end", "INTEGER"),
+    ("days_to_next_fiscal_quarter", "INTEGER"),
+    ("days_to_next_report", "INTEGER"),
+    ("days_to_expected_report", "INTEGER"),
+    ("days_since_fy_end", "INTEGER"),
+    # ---- size --------------------------------------------------------------
+    ("market_cap", "DOUBLE PRECISION"),
+    ("enterprise_value", "DOUBLE PRECISION"),
+    # RAW INTEGER RANKS, 1 = largest. Do NOT confuse these with the screen's
+    # `mcap_global_r` / `mcap_country_r`, which are the MV's derived RATIOS
+    # `(100 - market_cap_*_r) / 100` where ~0 means largest. Both appear on the
+    # same exported row under names one underscore apart, and only the ratio
+    # drives `mcap_global_r_max`. The rank is the auditable input; the ratio is
+    # what the gate compares.
+    ("market_cap_global_r", "INTEGER"),
+    ("market_cap_global_sec_r", "INTEGER"),
+    ("market_cap_region_r", "INTEGER"),
+    ("market_cap_region_sec_r", "INTEGER"),
+    ("market_cap_country_r", "INTEGER"),
+    ("market_cap_country_sec_r", "INTEGER"),
+)
+
+#: `EXPORT_IDENTITY_COLUMNS` as a name -> SQL type map, for the DDL writer.
+EXPORT_IDENTITY_TYPES: dict[str, str] = dict(EXPORT_IDENTITY_COLUMNS)
+
+#: Just the names, in export order.
+EXPORT_IDENTITY_NAMES: tuple[str, ...] = tuple(n for n, _ in EXPORT_IDENTITY_COLUMNS)
+
+#: Frames with no ISIN axis, which therefore CANNOT carry the identity block.
+#:
+#: This is not an oversight and must not be "fixed" by joining something in.
+#: `09_diagnostics_v2` is one row per model PARAMETER (`sigma_total`, `nu`,
+#: `beta[...]`); `09b_comparison_v2` is one row per comparison ARM;
+#: `09_gate_report_v2` is one row per GATE. Attaching a company identity to a row
+#: describing `sigma_state`'s R-hat would invent a relationship that does not
+#: exist. `_attach_identity_frames` skips them by name and logs that it did, so
+#: their absence is recorded rather than inferred from silence.
+EXPORT_NON_ISIN_FRAMES: frozenset[str] = frozenset(
+    {"09_diagnostics_v2", "09b_comparison_v2", _GATE_REPORT_KEY}
+)
+
+
+def _coerce_identity_dtypes(frame: pd.DataFrame) -> pd.DataFrame:
+    """Coerce the identity block to dtypes matching its declared SQL types.
+
+    Mutates ``frame``; callers pass a copy. Dates become ``datetime64[ns]`` (normalised to
+    midnight), integer ranks become nullable ``Int64`` -- NOT numpy ``int64``,
+    which cannot hold the NULL a name outside a ranking universe legitimately
+    has -- and text stays object.
+
+    ``Int64`` is deliberate over ``float64``: a rank written through a float
+    round-trips as ``1.0`` and reads back as a float column, which is how an
+    integer rank ends up declared DOUBLE PRECISION in a table nobody re-reads.
+    """
+    out = frame
+    for col, sql_type in EXPORT_IDENTITY_COLUMNS:
+        if col not in out.columns:
+            continue
+        try:
+            if sql_type == "DATE":
+                # Fast path for what the database actually returns. Re-parsing an
+                # already-datetime column costs a full dateutil pass per element
+                # on 6,500 rows and warns about an inferred format it never
+                # needed to infer.
+                if pd.api.types.is_datetime64_any_dtype(out[col]):
+                    out[col] = out[col].dt.normalize()
+                else:
+                    out[col] = pd.to_datetime(out[col], errors="coerce").dt.normalize()
+            elif sql_type == "INTEGER":
+                out[col] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
+            elif sql_type == "DOUBLE PRECISION":
+                out[col] = pd.to_numeric(out[col], errors="coerce")
+        except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "could not coerce identity column %r to %s (%s); leaving as-is",
+                col,
+                sql_type,
+                exc,
+            )
+    return out
+
+
+def attach_identity_columns(
+    frame: pd.DataFrame,
+    source: pd.DataFrame,
+    *,
+    key: str = "isin",
+    label: str = "frame",
+) -> pd.DataFrame:
+    """Left-join :data:`EXPORT_IDENTITY_COLUMNS` onto a per-ISIN frame.
+
+    Joined **by key, never by position**. The panel frame and an exported frame
+    do not share a row order -- `run_screen` returns its result sorted by
+    `expected_upside` while `panel.frame` stays in universe order -- and a
+    positional attach would give every name someone else's sector and country
+    while every row count still matched. That is the same failure the risk
+    columns already shipped once, when `pooled_returns` was joined positionally.
+
+    Columns already present on ``frame`` are **kept, not overwritten**. A frame
+    that computed its own `market_cap` keeps it, and the two cannot silently
+    diverge from each other mid-export.
+
+    Parameters
+    ----------
+    frame
+        The frame to enrich. Returned unchanged if it has no ``key`` column.
+    source
+        Frame carrying the identity columns, normally ``panel.frame``. Columns it
+        does not have are skipped with a warning -- a missing source column is a
+        catalogue problem to report, not a reason to abort an export.
+    key
+        Join key. ``isin`` throughout.
+    label
+        Frame name, for the log line only.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A copy with the identity block leading, then the frame's own columns in
+        their original order.
+    """
+    if key not in frame.columns:
+        logger.debug("%s has no %r column; identity block not attached", label, key)
+        return frame
+    if source is None or key not in getattr(source, "columns", []):
+        logger.warning(
+            "identity source frame has no %r column; %s exported without the "
+            "identity block",
+            key,
+            label,
+        )
+        return frame
+
+    wanted = [c for c in EXPORT_IDENTITY_NAMES if c != key]
+    have = [c for c in wanted if c in source.columns]
+    absent = [c for c in wanted if c not in source.columns]
+    if absent:
+        logger.warning(
+            "identity columns absent from the source frame and omitted from %s: %s",
+            label,
+            ", ".join(absent),
+        )
+    # Only bring in what the frame does not already own.
+    new = [c for c in have if c not in frame.columns]
+
+    out = frame.copy()
+    if new:
+        lookup = (
+            source[[key] + new]
+            .drop_duplicates(subset=[key], keep="first")
+            .set_index(key)
+        )
+        joined = out[[key]].join(lookup, on=key)
+        for col in new:
+            out[col] = joined[col].to_numpy()
+
+    out = _coerce_identity_dtypes(out)
+
+    # Identity first, then whatever the frame already ordered.
+    lead = [c for c in EXPORT_IDENTITY_NAMES if c in out.columns]
+    rest = [c for c in out.columns if c not in lead]
+    out = out[lead + rest]
+    logger.debug(
+        "%s: identity block attached (%d joined, %d already present)",
+        label,
+        len(new),
+        len(lead) - len(new),
+    )
+    return out
+
+
+#: Columns dropped from every exported frame as byte-identical duplicates of a
+#: column that is already there under a better name.
+#:
+#: ``p_upside_pos`` is ``P(expected upside > 0)`` computed from the same posterior
+#: draws as the screen's ``prob_pos``, so the two are equal by construction and
+#: ``export_duplicate_content`` flags them on every run. Keeping the shorter of
+#: two names for one quantity would be merely untidy; keeping THIS one is
+#: hazardous. ``prob_pos`` is pinned at exactly 1.0 for ~60 % of the universe and
+#: is reported-not-ranked, while ``p_upside_pos_cond`` -- one suffix away -- is
+#: the primary ranking column. A dashboard reader picking ``p_upside_pos`` gets
+#: the degenerate column under a name that reads like the good one.
+#:
+#: Dropped at EXPORT, not at source: ``compute_cvar_aware_book`` still computes
+#: it and still needs it as the fallback for ``p_upside_pos_cond`` when the
+#: workflow does not supply one. This removes a name from the published surface,
+#: not a quantity from the calculation.
+EXPORT_REDUNDANT_COLUMNS: tuple[str, ...] = ("p_upside_pos",)
+
+
+def drop_redundant_export_columns(
+    frame: pd.DataFrame, *, label: str = "frame"
+) -> pd.DataFrame:
+    """Drop :data:`EXPORT_REDUNDANT_COLUMNS`, warning if one is NOT a duplicate.
+
+    The warning matters more than the drop. These columns are removed because
+    they duplicate another column; if that ever stops being true the right
+    response is to look, not to silently discard a quantity nothing else carries.
+    """
+    present = [c for c in EXPORT_REDUNDANT_COLUMNS if c in frame.columns]
+    if not present:
+        return frame
+    twin = {"p_upside_pos": "prob_pos"}
+    for col in present:
+        mate = twin.get(col)
+        if mate and mate in frame.columns:
+            a = pd.to_numeric(frame[col], errors="coerce")
+            b = pd.to_numeric(frame[mate], errors="coerce")
+            if not a.equals(b):
+                logger.warning(
+                    "%s: %r is NOT identical to %r any more (max abs diff %.3g); "
+                    "dropping it as configured, but the assumption behind "
+                    "EXPORT_REDUNDANT_COLUMNS no longer holds",
+                    label,
+                    col,
+                    mate,
+                    float((a - b).abs().max()),
+                )
+        elif mate:
+            logger.warning(
+                "%s: dropping %r but its twin %r is absent, so the quantity "
+                "leaves this frame entirely",
+                label,
+                col,
+                mate,
+            )
+    return frame.drop(columns=present)
+
+
+def _attach_identity_frames(
+    frames: dict[str, pd.DataFrame], source: pd.DataFrame
+) -> dict[str, pd.DataFrame]:
+    """Apply :func:`attach_identity_columns` to every per-ISIN frame.
+
+    The three frames in :data:`EXPORT_NON_ISIN_FRAMES` are skipped by name and
+    the skip is logged, so a reader can tell "has no ISIN axis" from "the join
+    silently found nothing".
+    """
+    out: dict[str, pd.DataFrame] = {}
+    skipped: list[str] = []
+    for name, df in frames.items():
+        if name in EXPORT_NON_ISIN_FRAMES or not isinstance(df, pd.DataFrame):
+            out[name] = df
+            skipped.append(name)
+            continue
+        enriched = attach_identity_columns(df, source, label=name)
+        out[name] = drop_redundant_export_columns(enriched, label=name)
+    if skipped:
+        logger.info(
+            "identity block not applicable to %s (no ISIN axis: one row per "
+            "parameter / arm / gate)",
+            ", ".join(sorted(skipped)),
+        )
+    return out
+
+
+#: Repository paths whose contents can change what a fit computes. The scope of
+#: the ``source_dirty`` check in :func:`resolve_source_revision`.
+#:
+#: Deliberately EXCLUDES `sql_scripts/analytics/`, which this module regenerates
+#: on every export -- including it is what let a run dirty its own tree and then
+#: report itself unpinned -- along with data snapshots, IDE settings and logs.
+#: Deliberately INCLUDES the dashboard, because `dashboards/geib/charts/kelly.py`
+#: hand-mirrors `RiskBookModel`'s tail-risk constants and the two must move
+#: together; a book and a card disagreeing about a name's downside is exactly the
+#: kind of divergence a provenance flag should surface.
+_SOURCE_REVISION_PATHS: tuple[str, ...] = (
+    "probabilistic_ml_model/",
+    "pymc_kalman_filter_pt_v2.py",
+    "pymc_kalman_filter_pt.py",
+    "kalman_viz_v2.py",
+    # The replay workflow and its figure layer. A handoff is stamped with the SHA of
+    # the code that wrote it, and a book sized by kalman_portfolio.py off that handoff
+    # is only attributable if the scope covers the script that sized it.
+    "kalman_portfolio.py",
+    "kalman_portfolio_viz.py",
+    "scripts/",
+    "dashboards/geib/",
+    "pml_feature_catalogue.sql",
+    "pml_df_metadata.sql",
+    "pml_df_metadata_populate.sql",
+)
+
 PROVENANCE_COLUMNS: tuple[str, ...] = (
     "run_id",
     "exported_at",
@@ -270,8 +638,41 @@ def resolve_source_revision() -> tuple[Optional[str], Optional[bool]]:
             "NULL source_sha."
         )
         return None, None
-    status = _git("status", "--porcelain", "--untracked-files=no")
-    dirty = None if status is None else bool(status.strip())
+    # SCOPED to paths that can change a fit. The unscoped `git status --porcelain`
+    # this replaced reported the whole repository, so it read TRUE on a refreshed
+    # regional data CSV, on an .idea settings file, on a log -- and, worst,
+    # on `sql_scripts/analytics/*_v2.sql`, which THIS EXPORT REGENERATES. A run
+    # could dirty its own tree and then report itself unpinned.
+    #
+    # A flag that is TRUE on essentially every run carries no information, and it
+    # spends the reader's attention in the wrong place: it correctly prompted
+    # reading a diff on the run where the diff was in RiskBookModel.py, and
+    # prompted reading a diff that said nothing on the run after it.
+    #
+    # These are the paths whose contents determine what a fit computes. Adding a
+    # new module that can change a posterior means adding it here -- the cost of
+    # missing one is a `source_dirty=FALSE` on a run that was not reproducible,
+    # which is the failure direction that matters.
+    dirty: Optional[bool] = None
+    status = _git(
+        "status", "--porcelain", "--untracked-files=no", "--",
+        *_SOURCE_REVISION_PATHS,
+    )
+    if status is not None:
+        dirty = bool(status.strip())
+        if dirty:
+            # Record WHAT was dirty, not merely that something was. A later
+            # reader scoring this vintage will not have the working tree, and
+            # `source_dirty=TRUE` on its own tells them nothing they can act on.
+            changed = sorted(
+                line[3:].strip() for line in status.splitlines() if line.strip()
+            )
+            logger.warning(
+                "source_dirty=TRUE: %d fit-relevant file(s) differ from %s -- %s",
+                len(changed),
+                sha.strip()[:7],
+                ", ".join(changed[:12]) + (" ..." if len(changed) > 12 else ""),
+            )
     return sha.strip() or None, dirty
 
 
@@ -470,6 +871,25 @@ GATE_CATALOGUE: dict[str, str] = {
     "export_rowcount": (
         "Every curated frame is non-empty and agrees on row count. Catches the "
         "'table exists with zero rows' failure that passes a naive vintage check."
+    ),
+    "forecast_factor_effect": (
+        "How much wider an equal-weight book's forward dispersion becomes once the "
+        "§15 forecast's shared factors are applied, against the same book under "
+        "cross-sectionally independent shocks. REPORTED, NEVER GATED: "
+        "`forecast_factor_share` is a prior the panel cannot identify, so a "
+        "threshold here would test only that the prior was applied. It is recorded "
+        "because it is the size of the diversification that independent shocks give "
+        "away for free -- which is how a long book comes to report a positive "
+        "expected shortfall. Emitted only when `enable_forecast_layer` is on."
+    ),
+    "forecast_handoff_written": (
+        "The run persisted the four posterior quantities the forward simulation "
+        "reads, so the forecast and decision layers can be replayed off this fit in "
+        "seconds instead of a NUTS run. REPORTED, NEVER GATED: it is a convenience "
+        "artifact, and a run whose analytics exported correctly is not a failed run "
+        "because a replay file could not be written. The latent stored is the "
+        "SHRUNK one the screen reported -- storing the raw one would let a replay "
+        "describe a different model while every gate still passed."
     ),
 }
 
@@ -732,11 +1152,11 @@ class KalmanRunConfigV2:
     mc_rho: float = 0.85
     cvar_alpha: float = 0.05
     weight_cap: float = 0.10
-    k_book: int = 25
+    k_book: int = 50
     #: Baseline long-probability threshold. Scaled by the universe-average
     #: kalman_gain inside the risk book to give ``p_long_cond``, which is what
     #: ``p_upside_pos_cond`` is actually tested against.
-    p_long: float = 0.50
+    p_long: float = 0.67
     #: Market-cap pre-selection threshold for long-book eligibility: a name is
     #: eligible when ``mcap_global_r < mcap_global_r_max``.
     #:
@@ -749,7 +1169,53 @@ class KalmanRunConfigV2:
     #: driver), so the knob is what changes. :attr:`mcap_country_r_max` remains
     #: as a read-only alias for one release; ``replace(cfg, mcap_country_r_max=…)``
     #: raises rather than silently setting nothing.
-    mcap_global_r_max: float = 0.01
+    mcap_global_r_max: float = 0.03
+
+    # ---- forecast + decision layers (§15 / §15b) ----------------------------
+    #: Run the forward-return forecast layer (:mod:`…pymc_models.KalmanForecast`)
+    #: alongside the AR simulator. **Off by default, and this must stay off until
+    #: a vintage scores it.** With it off nothing about the export changes: the
+    #: screen, the risk book and every ``er_*`` column keep coming from
+    #: ``simulate_lagged_risk_adjusted_returns`` exactly as they do today. With it
+    #: on, §15 and §15b emit their own frames beside the existing ones and the
+    #: shipped columns are still untouched — the forecast is *reported*, not
+    #: substituted, so the two engines can be contrasted on one fit.
+    #:
+    #: A default here moves on measurement. Both ELPD arms that ran ranked an
+    #: alternative first and neither cleared its own standard error, and both
+    #: scored against the same analyst trail every gate scores against. A forecast
+    #: engine is exactly the kind of component that internal criteria cannot
+    #: adjudicate, so the evidence that would justify flipping this is a realised
+    #: return, not a better fit.
+    enable_forecast_layer: bool = True
+    #: ``native`` | ``pymc_forecast`` | ``statespace``. Only ``native`` is built;
+    #: the other two report their missing dependency. ``statespace`` needs
+    #: pymc-extras, which pins ``pymc<6.3`` / ``pytensor<3.3`` — below what is
+    #: installed — so enabling it would require downgrading the coupled pair.
+    forecast_backend: str = "native"
+    #: Forecast horizon in calendar days. 365 because the response is a ~12-month
+    #: analyst price target; the AR simulator's ``mc_horizon = 4`` is four
+    #: *unitless* periods, which is the mismatch the forecast layer exists to fix.
+    forecast_horizon_days: int = 365
+    #: Simulation step in days. 91 gives four steps, deliberately the same count as
+    #: :attr:`mc_horizon`, so the engine contrast is like-for-like.
+    forecast_step_days: int = 91
+    #: Joint scenarios drawn. Each fixes one posterior sample across every name.
+    forecast_scenarios: int = 2000
+    #: Share of each name's forward shock VARIANCE carried by shared factors.
+    #: **A prior, not an estimate** — the panel is a cross-section of price-target
+    #: trails and cannot identify a return factor structure. It is load-bearing:
+    #: at 0.0 the forward shocks are cross-sectionally independent, which is the
+    #: AR simulator's assumption and which makes portfolio diversification free.
+    #: Grid it and report the sensitivity, the way ``forecast_error_multiplier``
+    #: should be gridded, rather than quoting the point value.
+    forecast_factor_share: float = 0.35
+    #: Run the decision layer (:mod:`…pymc_models.PortfolioOptimizationModel`) on
+    #: the forecast draws. Requires :attr:`enable_forecast_layer`.
+    enable_portfolio_layer: bool = True
+    #: Kelly scaling reported by §15b. Half-Kelly guards against overbetting an
+    #: edge estimated from a non-stationary process under a prior-driven shrinkage.
+    portfolio_kelly_multiplier: float = 0.5
 
     # ---- model comparison (§9b) --------------------------------------------
     #: Run the ELPD comparison stage. **Off by default and deliberately not in
@@ -3871,6 +4337,285 @@ def run_risk_book(
         return None
 
 
+# ===========================================================================
+#  §15  Forecast layer + §15b decision layer
+# ===========================================================================
+
+
+def write_forecast_handoff(
+    idata: Any,
+    panel: KalmanPanelV2,
+    screen: pd.DataFrame,
+    draws: Optional["ScreenDraws"],
+    run_cfg: KalmanRunConfigV2,
+    run_id: str,
+    report: GateReport,
+) -> Optional[str]:
+    """Persist what the forward simulation needs, so it can be replayed off one fit.
+
+    The v2 workflow has never persisted its posterior. Every sensitivity the forecast
+    layer's two priors invite -- grid ``forecast_factor_share``, grid
+    ``forecast_error_multiplier``, contrast ranking rules -- therefore costs a full
+    NUTS run, which is why none of them has been run in eight releases. This writes
+    a compact NetCDF beside the other artifacts; ``kalman_portfolio.py`` replays the
+    forecast and decision layers off it in seconds.
+
+    Additive and defensive, on the same rule as the forecast layer itself: a failure
+    to write a convenience artifact must never cost a run the fit it has already paid
+    for.
+
+    Returns
+    -------
+    str or None
+        The written path, or ``None`` when the stage was skipped or failed.
+    """
+    if draws is None:
+        logger.warning(
+            "no ScreenDraws; skipping the forecast handoff rather than writing one "
+            "built from the UNSHRUNK latent"
+        )
+        return None
+    try:
+        from probabilistic_ml_model.pymc_models.KalmanForecast import (
+            save_forecast_handoff,
+        )
+
+        # ScreenDraws.eu is in RETURN space; the handoff stores the STANDARDISED
+        # latent, which is the scale `prepare_forecast_inputs` de-standardises from.
+        # Same conversion `run_forecast_layer` applies, in one place.
+        latent = (
+            np.log1p(np.asarray(draws.eu)) - panel.response_mean
+        ) / panel.response_std
+
+        sha, dirty = resolve_source_revision()
+        ident_cols = [c for c, _ in EXPORT_IDENTITY_COLUMNS if c in screen.columns]
+        identity = screen[["isin", *[c for c in ident_cols if c != "isin"]]] \
+            if "isin" in screen.columns else None
+
+        path = save_forecast_handoff(
+            run_cfg.results_path / _HANDOFF_STEM,
+            idata,
+            panel,
+            latent=latent,
+            n_samples=run_cfg.forecast_scenarios,
+            identity=identity,
+            provenance={
+                "run_id": run_id,
+                "exported_at": str(pd.Timestamp.now("UTC")),
+                "source_sha": sha or "",
+                "source_dirty": bool(dirty) if dirty is not None else False,
+            },
+            random_seed=run_cfg.random_seed,
+        )
+        report.add(
+            GateResult(
+                name="forecast_handoff_written",
+                passed=True,
+                value=f"{path.name}",
+                threshold="reported, not gated",
+                blocking=False,
+                detail=(
+                    f"{panel.n_isin} names thinned to {run_cfg.forecast_scenarios} "
+                    f"posterior samples; replay with "
+                    f"`python kalman_portfolio.py --handoff {path}`"
+                ),
+            )
+        )
+        return str(path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Forecast handoff failed: %s", exc, exc_info=True)
+        return None
+
+
+def run_forecast_layer(
+    idata: Any,
+    panel: KalmanPanelV2,
+    screen: pd.DataFrame,
+    run_cfg: KalmanRunConfigV2,
+    report: GateReport,
+    draws: Optional["ScreenDraws"] = None,
+) -> dict[str, Any]:
+    """Simulate joint forward returns and decide on them. Reports; never substitutes.
+
+    Off unless ``run_cfg.enable_forecast_layer``. When on, this stage runs
+    *alongside* the AR simulator rather than in place of it: the shipped
+    ``er_*`` / ``cvar05`` / ``starr`` columns and the sized risk book are
+    untouched, and §15 emits its own frames so the two engines can be contrasted
+    on one fit. Flipping the default is a decision for a realised-return vintage,
+    not for a stage that can only be scored against the trail it was fitted to.
+
+    Two contrasts are worth reading off the result:
+
+    ``forecast`` vs the shipped ``er_*``
+        The AR simulator's horizon is four unitless periods; this one's is 365
+        calendar days with the fitted OU kernel carrying the decay. The
+        ``er_sd`` columns are directly comparable because both pool per-step
+        marginals the same way.
+    ``factor_share`` at its configured value vs 0
+        At 0 the forward shocks are cross-sectionally independent, which is what
+        the AR simulator assumes. That assumption is why a *long* book can report
+        a positive expected shortfall: pooling 25 names averages their
+        idiosyncratic risk to nearly nothing. The gate below measures it.
+
+    Parameters
+    ----------
+    idata
+        The fitted posterior.
+    panel
+        The panel it was fitted on.
+    screen
+        The screen frame, used only for its identity columns.
+    run_cfg
+        Supplies every forecast and decision knob.
+    report
+        Gate report; this stage adds one non-blocking gate.
+    draws
+        ``ScreenDraws`` from §10. **Pass it.** Its ``eu`` carries the SHRUNK
+        latent the screen reported; re-resolving here would forecast from the
+        unshrunk one, so §15 would describe a different model from §10 while
+        every gate still passed. That is the failure ``ScreenDraws`` exists to
+        prevent, in a new place.
+
+    Returns
+    -------
+    dict[str, Any]
+        ``forecast_draws``, ``forecast_summary``, ``portfolio``, and the frames
+        to export. Empty when the stage is disabled or fails — a forecast is
+        additive, so it must never cost a run a fit already paid for.
+    """
+    if not run_cfg.enable_forecast_layer:
+        return {}
+
+    from dataclasses import replace as _replace
+
+    from probabilistic_ml_model.pymc_models.KalmanForecast import (
+        ForecastConfig,
+        forecast_from_posterior,
+        summarize_forecast,
+    )
+
+    out: dict[str, Any] = {}
+    try:
+        cfg = ForecastConfig(
+            horizon_days=run_cfg.forecast_horizon_days,
+            step_days=run_cfg.forecast_step_days,
+            n_scenarios=run_cfg.forecast_scenarios,
+            backend=run_cfg.forecast_backend,
+            factor_share=run_cfg.forecast_factor_share,
+            # The clip SSOT is this module's UPLIFT_CLIP_*; passing it in is what
+            # keeps the forecast layer from owning a second copy of it.
+            uplift_clip=(UPLIFT_CLIP_LO, UPLIFT_CLIP_HI),
+            random_seed=run_cfg.random_seed,
+        )
+        latent = draws.eu if draws is not None else None
+        if latent is None:
+            logger.warning(
+                "run_forecast_layer called without ScreenDraws: the latent will be "
+                "re-resolved UNSHRUNK and will disagree with the screen"
+            )
+        else:
+            # ScreenDraws.eu is in RETURN space; the forecast wants the latent on
+            # the STANDARDISED scale it was resolved on, so undo the screen's
+            # de-standardisation rather than passing a differently-scaled array.
+            latent = (np.log1p(np.asarray(latent)) - panel.response_mean) / panel.response_std
+
+        fc = forecast_from_posterior(idata, panel, config=cfg, latent=latent)
+        out["forecast_draws"] = fc
+
+        summary = summarize_forecast(fc, terminal=False)
+        terminal = summarize_forecast(fc, terminal=True).rename(
+            columns=lambda c: c if c == "isin" else f"{c}_terminal"
+        )
+        summary = summary.merge(terminal, on="isin", how="left")
+        summary["backend"] = fc.backend
+        summary["factor_share"] = fc.factor_share
+        summary["horizon_days"] = fc.horizon_days
+        ident = [c for c in ("isin", "ticker", "name", "sector", "trading_region")
+                 if c in screen.columns]
+        summary = screen[ident].merge(summary, on="isin", how="right")
+        out["forecast_summary"] = summary
+
+        # How much diversification the shared factors removed. Reported, never
+        # gated: `factor_share` is a prior, so this measures the prior's
+        # consequence, and a gate on it would be a gate on an assumption.
+        independent = forecast_from_posterior(
+            idata, panel, config=_replace(cfg, factor_share=0.0), latent=latent
+        )
+        w = np.full(min(run_cfg.k_book, fc.n_isin), 1.0 / min(run_cfg.k_book, fc.n_isin))
+        rows = slice(0, len(w))
+        sd_joint = float((w @ fc.terminal[rows]).std())
+        sd_indep = float((w @ independent.terminal[rows]).std())
+        ratio = sd_joint / sd_indep if sd_indep > 0 else float("nan")
+        report.add(
+            GateResult(
+                name="forecast_factor_effect",
+                # Always passes: this reports the consequence of a PRIOR
+                # (`forecast_factor_share`), and a gate on an assumption would only
+                # be testing that the assumption was applied.
+                passed=True,
+                value=f"{ratio:.2f}x wider",
+                threshold="reported, not gated",
+                blocking=False,
+                detail=(
+                    f"equal-weight {len(w)}-name book sd {sd_joint:.4f} with shared "
+                    f"factors vs {sd_indep:.4f} with independent shocks"
+                ),
+            )
+        )
+        logger.info(
+            "factor structure widens an equal-weight %d-name book's sd by %.2fx "
+            "(%.4f -> %.4f); independent shocks make diversification free",
+            len(w),
+            ratio,
+            sd_indep,
+            sd_joint,
+        )
+
+        if run_cfg.enable_portfolio_layer:
+            from probabilistic_ml_model.pymc_models.PortfolioOptimizationModel import (
+                ergodicity_report,
+                optimize_portfolio,
+            )
+
+            eligible = None
+            if "mcap_global_r" in screen.columns:
+                mcap = (
+                    screen.set_index("isin")["mcap_global_r"]
+                    .reindex(fc.isins)
+                    .to_numpy(dtype="float64")
+                )
+                eligible = np.isfinite(mcap) & (mcap < run_cfg.mcap_global_r_max)
+
+            book = optimize_portfolio(fc.terminal, fc.isins, k_book=run_cfg.k_book, cap=run_cfg.weight_cap,
+                                      kelly_multiplier=run_cfg.portfolio_kelly_multiplier, eligible=eligible)
+            out["portfolio"] = book
+
+            decision = book.analytics.copy()
+            decision["backend"] = fc.backend
+            decision["factor_share"] = fc.factor_share
+            decision = screen[ident].merge(decision, on="isin", how="right")
+            out["decision_frame"] = decision
+
+            erg = ergodicity_report(fc.terminal)
+            out["ergodicity"] = erg
+            logger.info(
+                "decision layer: %d names, effective N %.1f, E[r] %.2f%%, "
+                "GVaR99 %.2f%%, GES %.2f%%, volatility drag %.2f%%",
+                int(book.summary["n_book"]),
+                book.summary["effective_n"],
+                100.0 * book.summary["port_expected"],
+                100.0 * book.summary["port_gvar"],
+                100.0 * book.summary["port_ges"],
+                100.0 * erg["volatility_drag"],
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        # Additive stage: a failure here must not cost a run its fit, for the same
+        # reason `run_risk_book` swallows its own.
+        logger.error("Forecast layer failed: %s", exc, exc_info=True)
+        return out
+    return out
+
+
 def apply_out_of_support(results: pd.DataFrame) -> pd.DataFrame:
     """Flag clip-pinned rows and NULL their ranking metrics.
 
@@ -4429,7 +5174,15 @@ def write_analytics_ddl_v2(
     }
     cols: list[str] = []
     for name, dtype in frame.dtypes.items():
-        sql_type = type_map.get(str(dtype), "TEXT")
+        # The DECLARED type wins over the inferred one for the identity block.
+        # Inference cannot recover what these columns are: a DATE round-tripped
+        # through `read_sql` is `datetime64[ns]` and would be declared TIMESTAMP,
+        # a nullable rank is `Int64` and would fall through to TEXT, and any
+        # all-NULL text column infers as `float64` -> DOUBLE PRECISION. Each is
+        # silent schema drift on a table nobody re-reads afterwards.
+        sql_type = EXPORT_IDENTITY_TYPES.get(
+            str(name), type_map.get(str(dtype), "TEXT")
+        )
         cols.append(f'    "{name}" {sql_type}')
 
     body = [_ANALYTICS_DDL_HEADER_V2.format(table=table)]
@@ -4708,8 +5461,26 @@ def main(
     result["screen"] = screen
     result["screen_draws"] = screen_draws
 
+    # The forecast handoff, written HERE and not earlier: `screen_draws.eu` is the
+    # SHRUNK decision latent, and a handoff carrying the raw one would replay a
+    # different model from the run that produced it while every gate still passed.
+    # Written before the forecast layer so a run that fails downstream still leaves
+    # behind the artifact that makes the failure reproducible in seconds.
+    result["handoff_path"] = write_forecast_handoff(
+        idata, panel, screen, screen_draws, run_cfg, run_id, report
+    )
+
     risk_book = run_risk_book(idata, panel, screen, run_cfg, draws=screen_draws)
     result["risk_book"] = risk_book
+
+    # §15 / §15b. Additive: with `enable_forecast_layer` off this is a no-op and the
+    # exported values are bit-for-bit what they were. With it on the stage emits its
+    # own frames and still does not touch the shipped columns -- the forecast is
+    # reported beside the AR simulator, not substituted for it.
+    forecast = run_forecast_layer(
+        idata, panel, screen, run_cfg, report, draws=screen_draws
+    )
+    result["forecast"] = forecast
 
     # The canonical frame: the risk book's analytics if we have it (it is the
     # screen plus the risk columns), otherwise the screen alone.
@@ -4777,6 +5548,25 @@ def main(
             risk_book.analytics.drop(columns=["expected_sharpe"], errors="ignore")
         )
         frames[_RISK_BOOK_KEY] = risk_book.book
+    # §15 frames sit BESIDE the shipped ones, never over them. `apply_out_of_support`
+    # is applied for the same reason the risk book applies it: a clip-pinned row is
+    # still informative, it just must not be ranked.
+    if isinstance(forecast.get("forecast_summary"), pd.DataFrame):
+        frames["15_forecast_summary_v2"] = apply_out_of_support(
+            forecast["forecast_summary"]
+        )
+    if isinstance(forecast.get("decision_frame"), pd.DataFrame):
+        frames["15b_decision_analytics_v2"] = apply_out_of_support(
+            forecast["decision_frame"]
+        )
+    # One identity block, one place, applied to every per-ISIN frame at the last
+    # moment before export. Doing it here rather than in each constructor is what
+    # makes the block uniform: `run_screen` owned nine of these columns and every
+    # downstream frame inherited a different subset of them, so what a reader got
+    # depended on which table they happened to open. The join is BY ISIN -- the
+    # screen is sorted by expected_upside while `panel.frame` is in universe
+    # order, so a positional attach would hand every name someone else's country.
+    frames = _attach_identity_frames(frames, panel.frame)
     result["export_counts"] = export_analytics(frames, run_cfg, report, run_id=run_id)
 
     summarise(
@@ -4834,6 +5624,42 @@ def _cli() -> int:
     parser.add_argument("--tune", type=int, default=None)
     parser.add_argument("--chains", type=int, default=None)
     parser.add_argument("--cores", type=int, default=None)
+    parser.add_argument(
+        "--forecast", action="store_true",
+        help=(
+            "run the §15 forward-return forecast layer beside the AR simulator. "
+            "Additive: the shipped er_*/cvar05/starr columns and the risk book are "
+            "unchanged, and two extra frames are emitted for the contrast."
+        ),
+    )
+    parser.add_argument(
+        "--forecast-backend", type=str, default=None,
+        choices=("native", "pymc_forecast", "statespace"),
+        help=(
+            "forecast engine (implies --forecast). Only 'native' is built; "
+            "'statespace' needs pymc-extras, which pins pymc<6.3/pytensor<3.3 and "
+            "would downgrade the installed pair."
+        ),
+    )
+    parser.add_argument(
+        "--forecast-horizon-days", type=int, default=None,
+        help="forecast horizon in calendar days (default 365, the price-target horizon)",
+    )
+    parser.add_argument(
+        "--forecast-factor-share", type=float, default=None,
+        help=(
+            "share of each name's forward shock VARIANCE carried by shared factors "
+            "(default 0.35). A PRIOR: at 0.0 the shocks are cross-sectionally "
+            "independent, which makes portfolio diversification free."
+        ),
+    )
+    parser.add_argument(
+        "--portfolio", action="store_true",
+        help=(
+            "run the §15b decision layer on the forecast draws (implies --forecast): "
+            "generative VaR/ES/tail risk, ergodicity, and a log-optimal sized book."
+        ),
+    )
     args = parser.parse_args()
 
     model_cfg = KalmanModelConfig()
@@ -4879,6 +5705,21 @@ def _cli() -> int:
             parser.error("--compare-fast needs at least two arms to contrast")
         overrides["enable_fast_comparison"] = True
         overrides["fast_comparison_arms"] = fast_arms
+
+    # Every forecast knob implies the stage, so passing one without --forecast does
+    # what the caller obviously meant rather than being silently ignored.
+    _forecast_opts = {
+        "forecast_backend": args.forecast_backend,
+        "forecast_horizon_days": args.forecast_horizon_days,
+        "forecast_factor_share": args.forecast_factor_share,
+    }
+    _forecast_set = {k: v for k, v in _forecast_opts.items() if v is not None}
+    if args.forecast or args.portfolio or _forecast_set:
+        overrides["enable_forecast_layer"] = True
+        overrides.update(_forecast_set)
+    if args.portfolio:
+        overrides["enable_portfolio_layer"] = True
+
     if overrides:
         run_cfg = replace(run_cfg, **overrides)
 

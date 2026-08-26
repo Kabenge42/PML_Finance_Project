@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 #: direct call to :func:`compute_cvar_aware_book` reproduces the workflow.
 DEFAULT_CVAR_ALPHA = 0.05
 DEFAULT_WEIGHT_CAP = 0.10
-DEFAULT_K_BOOK = 35
-DEFAULT_P_LONG = 0.50
+DEFAULT_K_BOOK = 50
+DEFAULT_P_LONG = 0.67
 DEFAULT_MCAP_R_MAX = 0.03
 
 #: Smallest dispersion accepted as a reward-to-risk DENOMINATOR, in decimal
