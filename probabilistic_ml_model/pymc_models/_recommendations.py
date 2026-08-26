@@ -121,6 +121,12 @@ def fmt_or_na(x: Any, nd: int = 1, suf: str = "") -> str:
         return "n/a"
 
 
+def _top_group_pct(summary: dict[str, Any]) -> float:
+    """Top group weight as a percent, or ``nan`` when no groups were supplied."""
+    value = summary.get("top_group_weight")
+    return float(value) * 100.0 if value is not None and np.isfinite(value) else float("nan")
+
+
 def display_label(row: Any) -> str:
     """Company display name, falling back to the ISIN."""
     name = row.get("name")
@@ -730,7 +736,7 @@ def render_recommendations(
             f"\n6. SIZED BOOK   rank_by={summary.get('rank_by', '?')}   "
             f"{len(book)} names   effective N="
             f"{fmt_or_na(summary.get('effective_n'), 1)}   "
-            f"top group={fmt_or_na((summary.get('top_group_weight') or float('nan')) * 100, 1, '%')}"
+            f"top group={fmt_or_na(_top_group_pct(summary), 1, '%')}"
         )
         wcol = next((c for c in ("weight", "book_weight") if c in book.columns), None)
         for _, r in book.head(max_rows).iterrows():

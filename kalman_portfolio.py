@@ -523,6 +523,16 @@ def run_decision_books(
         books[arm] = book
 
         frame = book.analytics.copy()
+        # Label columns attached HERE, by ISIN, rather than only at export: the
+        # figure layer reads the in-memory frame, and a sector panel that silently
+        # skips because the column arrives one step later is worse than no panel.
+        if groups is not None:
+            keyed_groups = pd.Series(groups, index=isins)
+            frame[cfg.sector_col] = keyed_groups.reindex(
+                frame["isin"].to_numpy()).to_numpy()
+        if screen is not None and "name" in screen.columns:
+            keyed = screen.drop_duplicates("isin").set_index("isin")["name"]
+            frame["name"] = keyed.reindex(frame["isin"].to_numpy()).to_numpy()
         frame["rank_by"] = arm
         # The precedence declaration, on the row rather than in a docstring.
         frame["book_role"] = "recommendation" if position == 0 else "contrast"
