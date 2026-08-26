@@ -183,6 +183,10 @@ _RANKING_RANGE_COLS: tuple[str, ...] = (
 #: the two models coexist and can be compared on one database. Promoting v2 is a
 #: deliberate edit here plus a dashboard deploy — never a side effect of a run.
 _ANALYTICS_TABLE_V2 = "kalman_filtered_price_targets_v2"
+
+#: Filename of the forecast handoff (§F1) inside ``KalmanRunConfigV2.results_path``.
+#: One name, one place: ``kalman_portfolio.py`` defaults to exactly this.
+_HANDOFF_STEM = "07_forecast_handoff_v2.nc"
 _RISK_BOOK_KEY = "10b_risk_book_v2"
 
 #: Where the run's own gate verdicts land. Written by :func:`export_analytics`
@@ -568,6 +572,11 @@ _SOURCE_REVISION_PATHS: tuple[str, ...] = (
     "pymc_kalman_filter_pt_v2.py",
     "pymc_kalman_filter_pt.py",
     "kalman_viz_v2.py",
+    # The replay workflow and its figure layer. A handoff is stamped with the SHA of
+    # the code that wrote it, and a book sized by kalman_portfolio.py off that handoff
+    # is only attributable if the scope covers the script that sized it.
+    "kalman_portfolio.py",
+    "kalman_portfolio_viz.py",
     "scripts/",
     "dashboards/geib/",
     "pml_feature_catalogue.sql",
@@ -872,6 +881,15 @@ GATE_CATALOGUE: dict[str, str] = {
         "because it is the size of the diversification that independent shocks give "
         "away for free -- which is how a long book comes to report a positive "
         "expected shortfall. Emitted only when `enable_forecast_layer` is on."
+    ),
+    "forecast_handoff_written": (
+        "The run persisted the four posterior quantities the forward simulation "
+        "reads, so the forecast and decision layers can be replayed off this fit in "
+        "seconds instead of a NUTS run. REPORTED, NEVER GATED: it is a convenience "
+        "artifact, and a run whose analytics exported correctly is not a failed run "
+        "because a replay file could not be written. The latent stored is the "
+        "SHRUNK one the screen reported -- storing the raw one would let a replay "
+        "describe a different model while every gate still passed."
     ),
 }
 
@@ -4324,6 +4342,91 @@ def run_risk_book(
 # ===========================================================================
 
 
+def write_forecast_handoff(
+    idata: Any,
+    panel: KalmanPanelV2,
+    screen: pd.DataFrame,
+    draws: Optional["ScreenDraws"],
+    run_cfg: KalmanRunConfigV2,
+    run_id: str,
+    report: GateReport,
+) -> Optional[str]:
+    """Persist what the forward simulation needs, so it can be replayed off one fit.
+
+    The v2 workflow has never persisted its posterior. Every sensitivity the forecast
+    layer's two priors invite -- grid ``forecast_factor_share``, grid
+    ``forecast_error_multiplier``, contrast ranking rules -- therefore costs a full
+    NUTS run, which is why none of them has been run in eight releases. This writes
+    a compact NetCDF beside the other artifacts; ``kalman_portfolio.py`` replays the
+    forecast and decision layers off it in seconds.
+
+    Additive and defensive, on the same rule as the forecast layer itself: a failure
+    to write a convenience artifact must never cost a run the fit it has already paid
+    for.
+
+    Returns
+    -------
+    str or None
+        The written path, or ``None`` when the stage was skipped or failed.
+    """
+    if draws is None:
+        logger.warning(
+            "no ScreenDraws; skipping the forecast handoff rather than writing one "
+            "built from the UNSHRUNK latent"
+        )
+        return None
+    try:
+        from probabilistic_ml_model.pymc_models.KalmanForecast import (
+            save_forecast_handoff,
+        )
+
+        # ScreenDraws.eu is in RETURN space; the handoff stores the STANDARDISED
+        # latent, which is the scale `prepare_forecast_inputs` de-standardises from.
+        # Same conversion `run_forecast_layer` applies, in one place.
+        latent = (
+            np.log1p(np.asarray(draws.eu)) - panel.response_mean
+        ) / panel.response_std
+
+        sha, dirty = resolve_source_revision()
+        ident_cols = [c for c, _ in EXPORT_IDENTITY_COLUMNS if c in screen.columns]
+        identity = screen[["isin", *[c for c in ident_cols if c != "isin"]]] \
+            if "isin" in screen.columns else None
+
+        path = save_forecast_handoff(
+            run_cfg.results_path / _HANDOFF_STEM,
+            idata,
+            panel,
+            latent=latent,
+            n_samples=run_cfg.forecast_scenarios,
+            identity=identity,
+            provenance={
+                "run_id": run_id,
+                "exported_at": str(pd.Timestamp.utcnow()),
+                "source_sha": sha or "",
+                "source_dirty": bool(dirty) if dirty is not None else False,
+            },
+            random_seed=run_cfg.random_seed,
+        )
+        report.add(
+            GateResult(
+                name="forecast_handoff_written",
+                passed=True,
+                value=f"{path.name}",
+                threshold="reported, not gated",
+                blocking=False,
+                detail=(
+                    f"{panel.n_isin} names thinned to {run_cfg.forecast_scenarios} "
+                    f"posterior samples; replay with "
+                    f"`python kalman_portfolio.py --handoff {path}`"
+                ),
+            )
+        )
+        return str(path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Forecast handoff failed: %s", exc, exc_info=True)
+        return None
+
+
 def run_forecast_layer(
     idata: Any,
     panel: KalmanPanelV2,
@@ -5357,6 +5460,15 @@ def main(
     screen, screen_draws = run_screen(idata, panel, run_cfg, report)
     result["screen"] = screen
     result["screen_draws"] = screen_draws
+
+    # The forecast handoff, written HERE and not earlier: `screen_draws.eu` is the
+    # SHRUNK decision latent, and a handoff carrying the raw one would replay a
+    # different model from the run that produced it while every gate still passed.
+    # Written before the forecast layer so a run that fails downstream still leaves
+    # behind the artifact that makes the failure reproducible in seconds.
+    result["handoff_path"] = write_forecast_handoff(
+        idata, panel, screen, screen_draws, run_cfg, run_id, report
+    )
 
     risk_book = run_risk_book(idata, panel, screen, run_cfg, draws=screen_draws)
     result["risk_book"] = risk_book
