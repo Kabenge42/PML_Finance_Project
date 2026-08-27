@@ -66,6 +66,14 @@ import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Sequence
 
+from probabilistic_ml_model.export_layout import (
+    DEFAULT_RESULTS_DIRNAME_V1,
+    EXPORT_DIR_ALIASES,
+    EXPORT_MISC_DIR,
+    EXPORT_SECTION_DIRS,
+    export_dir_for,
+)
+
 import matplotlib
 import matplotlib.figure
 
@@ -1293,7 +1301,7 @@ def _resolve_env_setting(key: str, env_file: str = 'environment_variables.txt',
 # abort the workflow (mirrors the ``_safe_show`` philosophy). The SQL sink
 # additionally falls back to CSV when the database is unreachable, so an
 # offline run never loses a frame.
-_DEFAULT_RESULTS_DIRNAME = 'pymc_kalman_filter_pt_results'
+_DEFAULT_RESULTS_DIRNAME = DEFAULT_RESULTS_DIRNAME_V1
 
 
 _DEFAULT_EXPORT_PNG_WIDTH = 1400
@@ -1311,42 +1319,27 @@ _DEFAULT_EXPORT_DPI = 150
 _EXPORT_SLUG_MAXLEN = 48
 
 
-# Results-tree subdirectories, matched against an artifact stem by longest
-# prefix. The ``export_section`` labels in :func:`main` and the hard-coded bulk
-# stems in :func:`export_all_artifacts` both key off this one tuple. Two entries
-# deliberately differ from their section label so the bulk stems land correctly:
-# ``04_panel`` catches ``04_panel_frame`` (exported outside any section) and
-# ``10b_risk`` catches ``10b_risk_analytics`` / ``_book`` / ``_summary``
-# alongside the ``10b_risk_book_NN_*`` section stems.
-_EXPORT_SECTION_DIRS: tuple[str, ...] = (
-    # `04b_audit` is v2's panel-information audit (`run_panel_diagnostics`), the
-    # stage v1 has no equivalent of. Safe beside `04_panel` because
-    # `_export_dir_for` resolves ties with `max(matches, key=len)`, so the longer
-    # prefix wins; without the entry every §4b artifact silently lands in
-    # `00_misc`, which is how the decay ladder would have gone missing.
-    '01_data', '02_eda', '03_features', '04_panel', '04b_audit',
-    '06_prior', '07_posterior',
-    '08_ppc', '09_diagnostics', '09b_comparison', '10_screen', '10b_risk',
-    '10c_analytics',
-    '10k_universe', '11_single_isin', '11b_single_sv', '12_mingled',
-    '12b_mingled_sv', '13_forest', '13b_further_views', '14_summary',
-    '14b_recommendations',
-    # `15_forecast` / `15b_decision` are the v2 forecast and decision layers
-    # (`KalmanForecast` / `PortfolioOptimizationModel`). They sit after §14 rather
-    # than beside §10b because they are a separate stage, not a variant of the risk
-    # book: §10b sizes on posterior upside draws, §15 simulates a forward horizon
-    # first and §15b decides on THOSE draws.
-    '15_forecast', '15b_decision', '00_misc',
-)
+# The tuple moved to `probabilistic_ml_model.export_layout` on 2026-08-27 so the
+# DATA paths could reach it. They could not before: this module imports
+# matplotlib, seaborn, arviz-plots and xarray at module level, and
+# `pymc_kalman_filter_pt_v2` imports its figure layer inside a `try` precisely so
+# a missing plotly never costs a run its analytics write. The result was that
+# every figure went into a section directory and every CSV went into the results
+# ROOT -- one tree, two conventions.
+#
+# Aliased rather than renamed: ~200 call sites in this module and both figure
+# suites read the private names, and a rename would be a large diff for no
+# behaviour. The SSOT is the import; these are views onto it.
+_EXPORT_SECTION_DIRS: tuple[str, ...] = EXPORT_SECTION_DIRS
 
 
-_EXPORT_MISC_DIR = '00_misc'
+_EXPORT_MISC_DIR = EXPORT_MISC_DIR
 
 
 # Bulk stems whose prefix does not match their section directory. ``10c`` is the
 # only genuine mismatch: the section is ``10c_analytics`` but its bulk artifact
 # is ``10c_kalman_results``, so a plain prefix scan would file it under 00_misc.
-_EXPORT_DIR_ALIASES: dict[str, str] = {'10c_kalman': '10c_analytics'}
+_EXPORT_DIR_ALIASES: dict[str, str] = EXPORT_DIR_ALIASES
 
 
 @dataclass
@@ -1409,8 +1402,9 @@ _export_state_instance: Optional[_ExportState] = None
 def get_export_state() -> _ExportState:
     """Return the lazy export-state singleton, resolving the output directory once.
 
-    Resolution order: :attr:`KalmanRunConfig.results_dir` (so ``main(config=…)``
-    actually redirects artifacts) → ``KALMAN_PT_RESULTS_DIR`` via
+    Resolution order: the config's resolved ``results_path`` (so
+    ``main(config=…)`` actually redirects artifacts, and so v2's tree is v2's),
+    then its raw ``results_dir``, then ``KALMAN_PT_RESULTS_DIR`` via
     :func:`_resolve_env_setting` (env → ``environment_variables.txt``) → the
     :data:`_DEFAULT_RESULTS_DIRNAME` default. A relative value is anchored at this
     script's directory, so the default lands at
@@ -1419,8 +1413,22 @@ def get_export_state() -> _ExportState:
     global _export_state_instance
     if _export_state_instance is None:
         raw: Optional[str] = None
+        cfg = None
         with contextlib.suppress(Exception):
-            raw = get_viz_config().results_dir
+            cfg = get_viz_config()
+        # The RESOLVED path first, the raw field second. `results_dir` is what the
+        # caller typed and is `None` on a default run; `results_path` is what the
+        # config decided, and v1 and v2 decide differently. Reading only the raw
+        # field is how a v2 run put its figures in v1's tree while its CSVs went
+        # somewhere else -- the figure layer and the data layer resolving the same
+        # question independently and disagreeing.
+        with contextlib.suppress(Exception):
+            resolved = getattr(cfg, 'results_path', None)
+            if resolved:
+                raw = str(resolved)
+        if not raw:
+            with contextlib.suppress(Exception):
+                raw = cfg.results_dir if cfg is not None else None
         if not raw:
             raw = _resolve_env_setting('KALMAN_PT_RESULTS_DIR',
                                        default=_DEFAULT_RESULTS_DIRNAME)
@@ -1522,13 +1530,7 @@ def _export_dir_for(stem: str) -> str:
         A member of :data:`_EXPORT_SECTION_DIRS`; :data:`_EXPORT_MISC_DIR` when
         no prefix matches.
     """
-    for prefix, directory in _EXPORT_DIR_ALIASES.items():
-        if stem == prefix or stem.startswith(f'{prefix}_'):
-            return directory
-    matches = [d for d in _EXPORT_SECTION_DIRS if stem == d or stem.startswith(f'{d}_')]
-    if not matches:
-        return _EXPORT_MISC_DIR
-    return max(matches, key=len)
+    return export_dir_for(stem)
 
 
 def _clean_section_dir(label: str) -> None:

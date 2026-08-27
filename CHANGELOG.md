@@ -5,6 +5,230 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - one results tree per model, and an infinity that never reached an export (2026-08-27)
+
+Two defects with one shape: a quantity encoded so that nothing downstream could
+read it, and a path convention enforced in a place half the code could not import.
+
+### Fixed
+
+- **`terminal_wealth_curve` returned `+inf`.** Run `486df52e7014`'s replay raised
+  `RuntimeWarning: overflow encountered in exp` from
+  `PortfolioOptimizationModel.py:519`, and the curve came back infinite for **63
+  of its 100 bet fractions**. Not an arithmetic slip: compounding 2,000 winning
+  bets at that growth rate gives terminal capital near `10**662`, and float64
+  stops at `~1.8e308`. The number is real; the column could not hold it.
+
+  The function's own docstring claimed that computing in log space meant a long
+  sequence "does not overflow" — true of `log_growth`, false of the column
+  anybody reads. It now returns **`log_terminal_wealth`** as well, which is finite
+  everywhere the curve is defined and has its peak at the same fraction, and
+  `terminal_wealth` is **NULL** where the exponential is unrepresentable, with a
+  **`terminal_wealth_overflow`** boolean beside it. Same encoding as
+  `kelly_unbounded`, and the same rule: no exported frame carries `±inf`.
+
+  Ruin is untouched and still reads as ruin — wealth `0.0`, growth `-inf`, flag
+  false. That is a path through zero, not a number too large to write down.
+
+- **v2 wrote its artifacts into v1's results tree.** `pymc_kalman_filter_pt_v2.py`
+  and `kalman_portfolio.py` both resolved `KALMAN_PT_RESULTS_DIR`, which
+  `set_env.ps1` points at `pymc_kalman_filter_pt_results`. Every v2 frame, its
+  gate report and its 107 MB forecast handoff therefore landed in v1's directories
+  under names one suffix from v1's own — two models' numbers in one tree, with
+  nothing in the tree to say which run wrote what.
+
+- **The data paths wrote flat while the figure layer wrote sectioned.** v2's nine
+  curated frames went to the top level of the results root; every panel went to a
+  section directory. One tree, two conventions, and a stray file indistinguishable
+  from a stage's output. The replay was a third convention again: all ten of its
+  frames in a single `15_portfolio` bucket — a forecast summary, two prior sweeps,
+  the sized books and three recommendation frames, which is four stages under one
+  name.
+
+- **The figure layer and the data layer resolved the artifact root independently.**
+  `get_export_state()` read the config's raw `results_dir`, which is `None` on a
+  default run, and then fell through to v1's environment variable — so a v2 run
+  could put its figures in one tree and its CSVs in another. It now reads the
+  config's **resolved** `results_path` first.
+
+### Added
+
+- **`probabilistic_ml_model/export_layout.py`** — the results tree as one
+  dependency-free SSOT: `EXPORT_SECTION_DIRS`, `EXPORT_DIR_ALIASES`,
+  `V2_ONLY_SECTION_DIRS`, `export_dir_for`, `section_path`, `resolve_results_root`.
+
+  Dependency-free is the point. The rule already existed, in
+  `visualizations/kalman_shared.py`, which imports matplotlib, seaborn,
+  arviz-plots and xarray at module level — and `pymc_kalman_filter_pt_v2.py`
+  imports its figure layer inside a `try` precisely so a missing plotly never
+  costs a run its analytics write. The data paths could not reach the rule, so
+  they did not follow it. `kalman_shared` now imports this module and keeps
+  `_EXPORT_SECTION_DIRS` / `_EXPORT_DIR_ALIASES` / `_export_dir_for` as aliases,
+  so its ~200 call sites and both figure suites are untouched.
+
+- **`KALMAN_V2_RESULTS_DIR`** — v2's own artifact root, defaulting to
+  `pymc_kalman_filter_pt_v2_results`. v1 keeps `KALMAN_PT_RESULTS_DIR`. Both are
+  set in `set_env.ps1` and `environment_variables.txt`, with the reason for the
+  split recorded beside them.
+
+- **Three new sections for the replay** — `15c_forecast`, `15d_sweeps`,
+  `15e_books` — kept separate from the v2 workflow's `15_forecast` / `15b_decision`
+  because the fit writes those once and the replay runs many times over one fit.
+  Its figures moved with its frames. Plus **`09_gates`**: the gate report is a
+  verdict on the run and the first artifact anybody opens after a failed export,
+  and it had been landing in the root.
+
+- **`python pymc_kalman_filter_pt_v2.py --migrate-layout [--apply]`** — re-files
+  flat artifacts into the section tree and moves v2's out of v1's. Dry-run by
+  default, because it rewrites a results tree and the first thing anyone should
+  see is the list. Ownership is decided rather than guessed: a file in v1's tree
+  moves only when its name carries the `_v2` suffix or its stem resolves to a
+  section v1 never writes, both read from the SSOT so a new section cannot leave
+  the migration behind. Idempotent, and it removes a legacy bucket only once
+  empty.
+
+- 38 tests: `tests/test_export_layout.py` (35, including a table of every stem the
+  two workflows and the replay write and where each must land) and three in
+  `tests/test_portfolio_optimization.py` for the overflow encoding.
+  `test_kalman_portfolio_workflow.py`'s export test now asserts the section
+  layout rather than the retired bucket.
+
+### Verification
+
+The 24 artifacts of run `486df52e7014` were migrated and the replay re-run against
+the moved tree: the handoff resolved from `07_posterior/`, the screen from
+`10_screen/`, all seven frames landed in their sections, and every gate reported
+the identical value to the pre-migration run — `0.220x`, `36.5% in Health Care`,
+`3 of 50`, `max pctile 0.125`. The layout changed where files live, not what they
+say. No `RuntimeWarning`, no non-finite cell in the exported book, and a second
+`--migrate-layout` reports nothing to do.
+
+## [Unreleased] - v2 export gates: one blocking failure, four wrong verdicts (2026-08-27)
+
+Run `6efb530d5881` fit cleanly — 0 divergences, R-hat 1.0023, min bulk ESS 1489,
+every PPC gate passing — and then had its analytics write refused. The blocking
+gate was right and the fit was fine; what failed was an **encoding**, and three
+other verdicts turned out to be measuring something other than what they claimed.
+
+Nothing here changes the likelihood, the posterior, or any exported value except
+the four columns listed under *Changed*. No refit is required: every fix was
+verified by replaying this run's own artifacts and its posterior handoff.
+
+### Fixed
+
+- **`export_finite` (BLOCKING) — `kelly_max_feasible` carried `+inf` for 626 of
+  6,513 names.** `_max_feasible_fraction` returns infinity when a name's draws
+  contain no losing scenario, and `kelly_report` documented that as "the honest
+  thing to report instead of a fraction". The argument stands; the encoding did
+  not. An infinity is not exportable — the gate blocks it, and a PostgreSQL
+  `float8 Infinity` poisons every downstream `AVG` and `ORDER BY`.
+
+  `kelly_max_feasible` is now **NULL** where no finite bound exists, with a new
+  **`kelly_unbounded`** boolean beside it. That is the same move `kelly_interior`
+  already makes for `kelly_fraction`: a companion flag rather than an in-band
+  value the reader has to decode. `_max_feasible_fraction` still returns `inf`
+  internally — it is a computation, and `kelly_fraction_from_draws` branches on
+  `np.isfinite` of it.
+
+- **`export_duplicate_content` — two manufactured copies in the decision frame.**
+  `rank_denominator` was a verbatim copy of `downside_dev`, recording *which*
+  column ranked as 6,513 duplicated rows rather than as one fact; it moves to
+  `Portfolio.summary['rank_denominator_col']`. `{denom}_admitted` held the
+  floor-masked denominator, which equals its own source wherever the floor does
+  not bind — the default — so `tail_risk_admitted` was byte-identical to
+  `tail_risk` with **0** cells masked. It becomes a boolean `{denom}_floored`,
+  carrying the only thing the float column ever added: which names the floor cut.
+
+- **`coverage_gradient` was graded on the wrong column.** The gate asks whether
+  the hierarchy prices information, and read
+  `er_sd if "er_sd" in cov.columns else expected_upside_sd` — a fallback that
+  silently became the primary when the 2026-08-20 change made `er_sd` the pooled
+  sd of the **forward-return** Monte Carlo. Measured on this run, the posterior
+  leg is **2.9–6.4% of `er_sd`'s variance**; the composite warned at 1.52× while
+  `expected_upside_sd` over the same buckets ran 0.0703 / 0.0652 / 0.0462 /
+  0.0313 — a **2.24×** spread that clears the 2× floor. The hierarchy was doing
+  exactly what the gate demands and the gate could not see it.
+
+  Now graded on `expected_upside_sd`, named explicitly rather than resolved by
+  availability. The forward-return gradient is reported beside it and never
+  graded: its steepness is set by `forecast_error_n_exponent`, a prior the panel
+  cannot identify, so a threshold would test only that the prior was applied —
+  the same reasoning `forecast_factor_effect` already carries. That knob's
+  docstring, which said "raise it to steepen `coverage_gradient`", is corrected:
+  doing so would now change every name's forward variance to satisfy a
+  measurement of a different quantity.
+
+- **`ppc_decay_residual` failed a test its own verdict printed as passing.**
+  `rho_inf obs 0.000 vs rep [0.000, 0.050]` against `lo <= obs <= hi` — which
+  can only evaluate False if the strings are rounded and `obs < lo`. Underneath,
+  `rho_inf` is bounded below at 0 and sits **on** that boundary once the mean has
+  absorbed the permanent structure (which `ppc_decay` passing at 0.411 confirms),
+  while replicate kernel fits of a boundary parameter scatter positive — so a
+  two-sided 94% interval of them structurally cannot contain the boundary from
+  below. Now printed to 4 decimals with the signed gap, and tested one-sided via
+  `GATE_DECAY_RESIDUAL_TOL`: below the interval is the conservative direction and
+  is tolerated to the margin; **above** it is the missing-permanent-structure
+  failure the diagnostic exists to catch and is reported at any margin.
+
+### Changed
+
+- **`expected_vol_kalman` and `exp_vol` leave the v2 export** as duplicates of
+  `er_sd`. They had been equal by construction since 2026-08-22 — that equality
+  *is* `compute_cvar_aware_book`'s ISIN-alignment self-check — and the `_kalman`
+  suffix stopped being true on 2026-08-20, when the column became a Monte-Carlo
+  forward-return statistic rather than a posterior one. `er_sd` survives because
+  it also names what `expected_sharpe_ratio` divides by. The self-check keeps
+  both names in memory; only the published surface loses one. **v1 and the live
+  GEIB dashboard are untouched** — they read
+  `analytics.kalman_filtered_price_targets`.
+- `EXPORT_REDUNDANT_COLUMNS` becomes a `{redundant: canonical}` mapping, absorbing
+  the hard-coded `twin` dict that lived inside `drop_redundant_export_columns`. It
+  was possible to add a name to the old tuple and have it dropped with no
+  verification at all.
+- `export_finite`'s verdict names the offending **column**, count and sign
+  (`15b_decision_analytics_v2.kelly_max_feasible: 626 x +inf`) instead of only the
+  frame.
+
+### Added
+
+- **`EXPORT_DECLARED_ALIASES`** — column pairs that are equal and stay equal, per
+  frame, each with its reason. Eight entries, all in `04_panel_frame_v2`: the five
+  `n_analysts_{lb}` / `price_target_num_{lb}_ago` pairs, equal **by construction**
+  because `mv_pymc_kalman_pt_v2` aliases the column while `SELECT b.*` already
+  emits it and the catalogue allows only one alias per `(column_name,
+  model_target)` — dropping either name yields `MISSING_FROM_CATALOGUE`, which
+  `pml_feature_catalogue.sql` has recorded as settled since the columns were
+  added; and three vendor pairs (`feat_one_day_return`/`feat_total_return_1d`,
+  `feat_total_return_1w`/`feat_total_return_5d`, `price_1w_ago`/`price_5d_ago`)
+  equal **empirically, not by definition**.
+
+  Declaring is not suppressing: every pair is **re-verified each run**, and one
+  that stops being equal is reported. For the three empirical pairs that is the
+  entire point — it is what will say so the day the vendor separates them. The
+  effect on this run's report is 5 frames / 13 pairs → **0 undeclared**, which is
+  what makes the warning worth reading again.
+- `.claude/skills/kalman-v2-postrun/` follows the gate change: its
+  `coverage_gradient` reconstruction moves to `expected_upside_sd` and it gains
+  `er_sd_gradient_x` for the forward reading. The skill reproduces the pipeline's
+  definitions exactly on purpose, and two numbers under one name is the failure it
+  exists to prevent.
+- `COMMENT ON COLUMN` documentation for `kelly_fraction`, `kelly_interior`,
+  `kelly_unbounded`, `kelly_max_feasible`, `downside_dev_floored`,
+  `tail_risk_floored` and `rank_denominator_pctile`.
+- 12 tests across `tests/test_portfolio_optimization.py` and
+  `tests/test_export_identity_block.py`.
+
+### Verification
+
+Replayed against run `6efb530d5881` without a refit. The decision layer was
+regenerated from its own posterior handoff
+(`kalman_portfolio.py --handoff 07_forecast_handoff_v2.nc`): **0** non-finite
+cells (was 626), **0** duplicate-content columns (was 2), 612 names flagged
+`kelly_unbounded` agreeing exactly with the NULLs. Feeding that frame plus the
+run's eight archived frames through the new export path passes all five export
+gates with `declared and re-verified: 8 pair(s)`. `coverage_gradient` scores
+**2.24×** on the same run's screen.
+
 ## [Unreleased] - v2 figures, frame reconciliation, catalogue gate (2026-08-25)
 
 Acts on the post-run analysis of run `0aa3397b1d01` ("The Second Moment"): its

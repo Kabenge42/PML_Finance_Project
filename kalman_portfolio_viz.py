@@ -657,7 +657,10 @@ def plot_denominator_sanity(decision: Optional[pd.DataFrame],
     """
     if decision is None or not len(decision) or _requires_plotly("denominator_sanity"):
         return None
-    col = next((c for c in ("rank_denominator", "downside_dev", "tail_risk")
+    # `rank_denominator` was a per-name copy of whichever column ranked and was
+    # retired on 2026-08-27 as a duplicate; the arm's own denominator is read
+    # directly. The order matches RANKING_RULES' default-first ordering.
+    col = next((c for c in ("downside_dev", "tail_risk")
                 if c in decision.columns), None)
     if col is None or "weight" not in decision.columns:
         logger.info("denominator_sanity found no denominator column; skipped")
@@ -997,13 +1000,21 @@ def render_replay(result: dict[str, Any], cfg: Any = None) -> None:
     shipped_share = getattr(cfg, "factor_share", 0.35)
     sector_cap = getattr(cfg, "sector_cap", None)
 
-    with section("15_forecast"):
+    # The REPLAY's own sections, not the fit's. `15_forecast` and `15b_decision`
+    # belong to the v2 workflow, which writes them once per fit; this script runs
+    # many times over one fit, so its panels landing there would overwrite the
+    # fit's own artifacts with a replay's -- and a reader browsing the tree could
+    # not tell which had produced what. The figures now sit beside the frames they
+    # were drawn from.
+    with section("15c_forecast"):
         _attempt("engine_contrast", plot_engine_contrast, forecast.get("engines"))
+
+    with section("15d_sweeps"):
         _attempt("factor_sweep", plot_factor_sweep, sweeps.get("factor_share"),
                  shipped_share)
         _attempt("multiplier_sweep", plot_multiplier_sweep, sweeps.get("multiplier"))
 
-    with section("15b_decision"):
+    with section("15e_books"):
         _attempt("two_books", plot_two_books, books)
         _attempt("sector_mix", plot_sector_mix, books, "sector", sector_cap)
         _attempt("kelly_pin", plot_kelly_pin, books)

@@ -164,14 +164,30 @@ def test_gates_are_documented(result):
         assert GATE_CATALOGUE.get(gate.name), f"{gate.name} has no rationale"
 
 
-def test_frames_are_exported_and_stamped(result, results_dir):
+def test_frames_are_exported_into_their_section_directories(result, results_dir):
+    """Every frame lands under the section its stem resolves to, not in a bucket.
+
+    The replay used to write all ten frames into one ``15_portfolio`` directory --
+    a forecast summary, two prior sweeps, the sized books and three recommendation
+    frames, which is four stages under one name. The stems already carried the
+    section numbers; only the directories were missing.
+    """
+    from probabilistic_ml_model.export_layout import export_dir_for
+
     counts = result["export_counts"]
     assert counts, "nothing was exported"
-    out = results_dir / "15_portfolio"
+    assert not (results_dir / "15_portfolio").exists(), "the legacy bucket is back"
     for stem in counts:
-        frame = pd.read_csv(out / f"{stem}.csv")
+        path = results_dir / export_dir_for(stem) / f"{stem}.csv"
+        assert path.exists(), f"{stem} is not under {export_dir_for(stem)}/"
+        frame = pd.read_csv(path)
         assert len(frame) == counts[stem]
         assert {"run_id", "exported_at", "source_sha"} <= set(frame.columns)
+    # And no EXPORTED frame was left loose in the root beside the tree. Scoped to
+    # the exports on purpose: this fixture writes the handoff and the screen flat,
+    # which is the pre-migration layout and is what exercises the read fallback.
+    assert not [stem for stem in counts
+                if (results_dir / f"{stem}.csv").exists()]
 
 
 def test_sweeps_report_the_priors_consequence_not_its_posterior(result):

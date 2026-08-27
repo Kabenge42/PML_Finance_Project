@@ -496,8 +496,37 @@ def terminal_wealth_curve(
     Returns
     -------
     pandas.DataFrame
-        ``fraction``, ``terminal_wealth``, ``log_growth`` (mean log growth per bet).
-        Computed in log space, so a thousand-bet sequence does not overflow.
+        ``fraction``, ``log_growth`` (mean log growth per bet),
+        ``log_terminal_wealth`` (natural log of the terminal capital),
+        ``terminal_wealth`` and ``terminal_wealth_overflow``.
+
+        ``log_growth`` and ``log_terminal_wealth`` are computed in log space and
+        are always finite. ``terminal_wealth`` is the exponential of the second,
+        and is **NaN where that has no float64 representation** -- with the flag
+        beside it saying which rows those are.
+
+    Notes
+    -----
+    The overflow is not an arithmetic slip, which is why the answer is not to
+    clamp it. Compounding ``n`` bets at a mean log growth of ``g`` gives terminal
+    capital ``exp(g*n)``, and on run ``486df52e7014`` the sized book's own draws
+    put ``g*n`` near 845: the number is genuinely about ``10**367``, and float64
+    stops at ``~1.8e308``. Every fraction past the point where the curve crosses
+    that ceiling used to return ``+inf`` -- 21 of the 100 default fractions --
+    which is not a wealth, and the ranking of two infinities is undefined.
+
+    This function's own docstring used to claim that computing in log space meant
+    a long sequence "does not overflow". That was true of the first column and
+    false of the one anybody reads. ``log_terminal_wealth`` makes it true of a
+    column that carries the whole answer: it is monotone in the same argument,
+    it is finite everywhere the curve is defined, and the peak -- which is the
+    point of the curve, and what :func:`kelly_fraction_from_draws` returns --
+    sits at the same fraction in both.
+
+    NaN rather than ``inf`` follows the project's export rule: an unrepresentable
+    or undefined quantity is NULL with a BOOLEAN beside it saying why, because an
+    infinity is neither exportable nor aggregatable. See ``kelly_unbounded`` in
+    :func:`kelly_report` for the first instance of the same move.
     """
     vals = _finite_1d(returns)
     if n_bets is not None:
@@ -506,19 +535,49 @@ def terminal_wealth_curve(
         fractions = np.arange(0.0, 1.0, 0.01)
     fracs = np.asarray(fractions, dtype="float64")
 
+    # log(largest finite float64). Past this the exponential is not representable,
+    # and the honest report is that the number is too large to write down -- not a
+    # sentinel that sorts above every real value.
+    log_max = float(np.log(np.finfo("float64").max))
+    log_start = float(np.log(start_capital)) if start_capital > 0.0 else float("-inf")
+
     rows = []
+    n_overflow = 0
     for f in fracs:
         growth = 1.0 + f * vals
         if np.any(growth <= 0.0):
             # Ruin: one bet takes the capital to zero or below, and nothing after it
             # can recover. Recorded as such rather than as a very small number.
-            rows.append((float(f), 0.0, float("-inf")))
+            rows.append((float(f), float("-inf"), float("-inf"), 0.0, False))
             continue
         mean_log = float(np.mean(np.log(growth)))
-        rows.append(
-            (float(f), float(start_capital * np.exp(mean_log * vals.size)), mean_log)
+        log_wealth = log_start + mean_log * vals.size
+        over = log_wealth > log_max
+        n_overflow += int(over)
+        rows.append((
+            float(f),
+            mean_log,
+            log_wealth,
+            float("nan") if over else float(np.exp(log_wealth)),
+            bool(over),
+        ))
+
+    if n_overflow:
+        logger.info(
+            "terminal wealth exceeds float64 for %d of %d fractions (log wealth up "
+            "to %.0f against a %.0f ceiling): compounding %d bets at this growth "
+            "rate is not a representable number. terminal_wealth is NaN there; read "
+            "log_terminal_wealth, which is finite and has its peak at the same "
+            "fraction.",
+            n_overflow, len(fracs),
+            max((r[2] for r in rows if np.isfinite(r[2])), default=float("nan")),
+            log_max, int(vals.size),
         )
-    return pd.DataFrame(rows, columns=["fraction", "terminal_wealth", "log_growth"])
+    return pd.DataFrame(
+        rows,
+        columns=["fraction", "log_growth", "log_terminal_wealth",
+                 "terminal_wealth", "terminal_wealth_overflow"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -677,14 +736,35 @@ def kelly_report(
         Positive means log growth was still RISING at the cap, which is the signature
         of a pin. Zero would be a genuine optimum sitting exactly there.
         ``kelly_max_feasible`` -- the largest ``f`` with ``1 + f*r > 0`` on every
-        draw. ``inf`` when no scenario loses money, which is the real binding
-        constraint in that case and the honest thing to report instead of a fraction.
+        draw, or ``nan`` when no scenario loses money and no finite bound exists.
+        ``kelly_unbounded`` -- 1.0 in exactly that case, which is the real binding
+        constraint there and the thing to report instead of a fraction.
+
+    Notes
+    -----
+    ``kelly_max_feasible`` USED to carry ``inf`` for the unbounded case, on the
+    argument that reporting the constraint honestly beat reporting a fraction that
+    did not exist. The argument stands; the encoding did not. An infinity cannot be
+    exported -- ``export_finite`` blocks it, and a PostgreSQL ``float8 Infinity``
+    poisons every downstream ``AVG`` and ``ORDER BY`` -- and on run ``6efb530d5881``
+    this single column, at ``+inf`` for 626 of 6,513 names, was the whole of a
+    blocking export failure on a fit that had passed every model gate.
+
+    NULL plus a boolean says the same thing and survives the boundary: "no finite
+    bound exists" is precisely what a NULL means, and ``kelly_unbounded`` says why.
+    It is the same move ``kelly_interior`` already makes for ``kelly_fraction`` --
+    a companion flag rather than an in-band value that has to be decoded.
+
+    ``_max_feasible_fraction`` still returns ``inf`` internally; it is a
+    computation, and :func:`kelly_fraction_from_draws` branches on
+    ``np.isfinite`` of it.
     """
     vals = _finite_1d(returns)
     if vals.size == 0:
         nan = float("nan")
         return {"kelly_fraction": nan, "kelly_interior": nan,
-                "kelly_endpoint_score": nan, "kelly_max_feasible": nan}
+                "kelly_endpoint_score": nan, "kelly_max_feasible": nan,
+                "kelly_unbounded": nan}
 
     f = kelly_fraction_from_draws(vals, multiplier=multiplier, max_fraction=max_fraction)
     feasible = _max_feasible_fraction(vals)
@@ -692,11 +772,14 @@ def kelly_report(
     with np.errstate(divide="ignore", invalid="ignore"):
         endpoint = float(np.mean(vals / (1.0 + cap_f * vals)))
     interior = bool(_EPS < f < max_fraction * (1.0 - 1e-9))
+    unbounded = not np.isfinite(feasible)
     return {
         "kelly_fraction": float(f),
         "kelly_interior": float(interior),
         "kelly_endpoint_score": endpoint,
-        "kelly_max_feasible": float(feasible),
+        # NULL, not inf -- see Notes. The flag beside it is what carries the case.
+        "kelly_max_feasible": float("nan") if unbounded else float(feasible),
+        "kelly_unbounded": float(unbounded),
     }
 
 
@@ -799,7 +882,17 @@ def _attach_ranking_columns(
         den, floor, _binds = _floor_denominator(
             out[denom_col].to_numpy(), eligible, relative_denominator_q, name
         )
-        out[f"{denom_col}_admitted"] = den
+        # A BOOLEAN, not the masked denominator. `{denom}_admitted` used to carry
+        # `den` itself, which is `{denom}` wherever the floor did not bind and NaN
+        # where it did -- so with the default `relative_denominator_q = 0.0` it was
+        # a byte-identical copy of its own source for most or all names, and
+        # `export_duplicate_content` flagged `tail_risk == tail_risk_admitted` on
+        # every run (0 of 6,513 cells masked on run `6efb530d5881`). The only
+        # information the float column ever added over `{denom}` was WHICH names the
+        # floor removed, which is exactly what this boolean is.
+        out[f"{denom_col}_floored"] = ~np.isfinite(den) & np.isfinite(
+            pd.to_numeric(out[denom_col], errors="coerce").to_numpy()
+        )
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = out["expected_return"].to_numpy() / den
         out[name] = np.where(np.isfinite(ratio), ratio, np.nan)
@@ -837,13 +930,19 @@ def _attach_ranking_columns(
 
     # Where each name's ranking denominator sits in the eligible universe. The column
     # that turns "selected on the absence of downside" from a diagnosis into a read.
+    #
+    # The percentile only. There used to be a `rank_denominator` column beside it,
+    # holding a verbatim copy of `downside_dev` so a reader could see which column
+    # ranked -- but WHICH column ranked is one fact about the run, not 6,513
+    # identical rows, and as data it was simply a duplicate the export gate flagged.
+    # It lives in `Portfolio.summary['rank_denominator_col']` instead, where one
+    # fact belongs.
     denom_col = {"reward_to_downside": "downside_dev",
                  "reward_to_cvar": "tail_risk"}.get(rank_by)
     if denom_col is not None:
         pool = out.loc[eligible, denom_col].to_numpy()
         pool = pool[np.isfinite(pool)]
         if pool.size:
-            out["rank_denominator"] = out[denom_col]
             out["rank_denominator_pctile"] = [
                 float(np.mean(pool <= v)) if np.isfinite(v) else np.nan
                 for v in out[denom_col].to_numpy()
@@ -851,7 +950,6 @@ def _attach_ranking_columns(
     else:
         # A bounded probability has no denominator to report, which is exactly why it
         # is the one candidate immune to this failure mode.
-        out["rank_denominator"] = np.nan
         out["rank_denominator_pctile"] = np.nan
     return out
 
@@ -927,9 +1025,26 @@ class Portfolio:
     weights
         ``isin -> weight``, summing to 1 over the held names, every weight ``<= cap``.
     analytics
-        Per-name frame: ``isin``, ``expected_return``, ``kelly_fraction``,
-        ``gvar``, ``ges``, ``gtr``, ``downside_dev``, ``reward_to_downside``,
-        ``weight``. Names outside the book carry weight 0 and keep their statistics.
+        Per-name frame: ``isin``, ``expected_return``, ``er_sd``, ``er_p05``,
+        ``er_p95``, ``kelly_fraction``, ``gvar``, ``ges``, ``gtr``,
+        ``downside_dev``, ``reward_to_downside``, ``weight``. Names outside the
+        book carry weight 0 and keep their statistics.
+
+        Four companion **booleans** travel with the quantities they qualify —
+        ``kelly_interior``, ``kelly_unbounded``, ``tail_risk_on_floor`` and
+        ``{denominator}_floored``. Each says something about a number that the
+        number itself cannot: whether the criterion chose it, whether a bound
+        exists at all, whether a floor took over. They are booleans on purpose —
+        that keeps them out of ``select_dtypes([np.number])``, so a flag can never
+        trip the finiteness or duplicate-content export gates, and it keeps them
+        SQL ``boolean`` rather than a 0.0/1.0 double a reader has to decode.
+
+        The ``er_*`` block is named as the rest of the pipeline names it, so a
+        consumer that reads a forward-return distribution off any frame --
+        ``apply_out_of_support`` is the one that matters -- finds the same
+        quantities here. ``er_mean`` is absent on purpose: ``expected_return``
+        already holds it, and two names for one quantity is what
+        ``export_duplicate_content`` flags.
     summary
         Portfolio-level quantities computed on the **portfolio return vector**
         ``w @ draws``, not aggregated from per-name figures: ``port_expected``,
@@ -1089,14 +1204,30 @@ def optimize_portfolio(
         # ten is unreadable as the pin it is. See `kelly_report`.
         "kelly_interior": np.array([k["kelly_interior"] for k in kelly]).astype(bool),
         "kelly_endpoint_score": np.array([k["kelly_endpoint_score"] for k in kelly]),
+        # NaN where no finite bound exists; `kelly_unbounded` says which those are.
+        # A bool, deliberately: booleans sit outside `select_dtypes([np.number])`,
+        # so a flag can never itself trip the finiteness or duplicate-content gates,
+        # and it lands as a SQL `boolean` rather than as a 0.0/1.0 double.
         "kelly_max_feasible": np.array([k["kelly_max_feasible"] for k in kelly]),
+        "kelly_unbounded": np.array([k["kelly_unbounded"] for k in kelly]).astype(bool),
         "gvar": np.array([generative_var(draws[i], prob=var_prob) for i in range(n_isin)]),
         "ges": np.array(
             [generative_expected_shortfall(draws[i], prob=var_prob) for i in range(n_isin)]
         ),
         "gtr": np.array([generative_tail_risk(draws[i]) for i in range(n_isin)]),
         "downside_dev": np.array([downside_deviation(draws[i]) for i in range(n_isin)]),
+        # Both tails, under the project's `er_*` names, from the same terminal
+        # draws `expected_return` and `er_sd` summarise. `er_p05` alone is not
+        # enough: `apply_out_of_support` tests the UPPER clip bound on the 5th
+        # percentile and the LOWER one on the 95th, so a frame carrying only the
+        # former gets the lower bound tested on a mean -- which matched zero
+        # affected names when it was last measured -- or, before 2026-08-27, on a
+        # column that did not exist at all (`KeyError: 'er_mean'` on the 15b
+        # decision frame). `er_mean` is deliberately NOT emitted: it would be
+        # byte-identical to `expected_return`, which is precisely what the
+        # `export_duplicate_content` gate exists to flag.
         "er_p05": np.quantile(draws, 0.05, axis=1),
+        "er_p95": np.quantile(draws, 0.95, axis=1),
     }
     analytics = pd.DataFrame(per_name)
 
@@ -1163,6 +1294,12 @@ def optimize_portfolio(
         "n_eligible": float(int(selectable.sum())),
         "n_book": float(len(chosen)),
         "rank_by": rank_by,
+        # WHICH column the ranking divided by, as one fact rather than as a
+        # per-name copy of that column. `p_upside_pos_cond` is a bounded
+        # probability and has no denominator, which is the whole reason it is the
+        # one arm immune to a vanishing one.
+        "rank_denominator_col": {"reward_to_downside": "downside_dev",
+                                 "reward_to_cvar": "tail_risk"}.get(rank_by, ""),
         "rank_tiebreak": ",".join(sort_cols[1:]),
         "rank_tie_span": float(tie_span),
         "sector_cap": float(sector_cap) if sector_cap is not None else float("nan"),

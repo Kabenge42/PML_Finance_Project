@@ -1462,6 +1462,13 @@ SELECT b.*,
        -- under their own names, and an alias row can only claim one name per
        -- (column_name, model_target), so aliasing would leave whichever name it
        -- did not claim MISSING_FROM_CATALOGUE.
+       --
+       -- The consequence is that the exported panel frame carries each of these
+       -- five quantities under two names, which the export_duplicate_content gate
+       -- correctly notices. It is declared there rather than "fixed" here --
+       -- EXPORT_DECLARED_ALIASES['04_panel_frame_v2'] in pymc_kalman_filter_pt_v2.py
+       -- cites this comment as the reason -- so the gate re-verifies the equality
+       -- every run instead of re-reporting a settled trade-off as a finding.
        b.price_target_num_1w_ago                                      AS n_analysts_1w,
        b.price_target_num_1m_ago                                      AS n_analysts_1m,
        b.price_target_num_3m_ago                                      AS n_analysts_3m,

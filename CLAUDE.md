@@ -64,7 +64,8 @@ Key environment variables (full list in `environment_variables.txt`):
 | `PML_STRICT_TRAIL_DAYS`                                 | `1` makes a failed `pml.vw_pymc_trail_days` lookup raise instead of falling back to the `DEFAULT_LOOKBACK_DAYS` literal |
 | `PML_ENABLE_PYTENSOR_C`                                 | `1` opts back into the PyTensor C backend (default: numba/py VM) |
 | `PML_FIG_WIDTH_PX`                                      | Target Plotly/mpl figure width (px) for the Kalman notebook panels |
-| `KALMAN_PT_RESULTS_DIR` / `KALMAN_PT_EXPORT_DRAWS`      | Kalman artifact-export root (per-section subdirectories; PNG/CSV/SQL/JSON/NetCDF) / `1` also exports raw eu/ept draws |
+| `KALMAN_PT_RESULTS_DIR` / `KALMAN_V2_RESULTS_DIR`       | Artifact-export root for **v1** / for **v2 and its replay** (per-section subdirectories; PNG/CSV/SQL/JSON/NetCDF). Separate roots since 2026-08-27 — see *Workflow Stage = Export Section* |
+| `KALMAN_PT_EXPORT_DRAWS`                                | `1` also exports raw eu/ept draws                                |
 | `KALMAN_PT_SQL_EXPORT` / `KALMAN_PT_CLEAN_RESULTS`      | `0` skips the analytics-schema write (DDL + CSV only) / `1` purges each section subdirectory on first entry |
 | `DB_ANALYTICS_OWNER`                                    | Owner emitted in generated analytics DDL (default `postgres`)     |
 
@@ -465,7 +466,7 @@ main(*, run_eda_section=True, write_analytics=True, robust=False,
 
 Workflow knobs (NUTS budget, screen/risk-book parameters, panel lookbacks, universe-query dates) live on the frozen
 `KalmanRunConfig` dataclass, passed via `main(config=…)`. **`from_env()` reads only five variables** —
-`RANDOM_SEED`, `KALMAN_PT_RESULTS_DIR`, `KALMAN_PT_EXPORT_DRAWS`, `PML_FIG_WIDTH_PX`, `LOG_LEVEL`. Everything else
+`RANDOM_SEED`, `KALMAN_PT_RESULTS_DIR` (v1; v2 reads `KALMAN_V2_RESULTS_DIR`), `KALMAN_PT_EXPORT_DRAWS`, `PML_FIG_WIDTH_PX`, `LOG_LEVEL`. Everything else
 keeps its dataclass default and is overridden programmatically:
 
 ```python
@@ -515,7 +516,7 @@ panel path.
 > `pymc_kalman_filter_pt.py:3500`. Import the preparer from the script, not the package. Consolidating the two sides
 > is a known follow-up; it was left alone here because the move drags four coupled symbols across the boundary.
 
-**Artifact export (since 0.9.9.13).** Artifacts go to `KALMAN_PT_RESULTS_DIR` in a **per-section subdirectory**
+**Artifact export (since 0.9.9.13).** v1's artifacts go to `KALMAN_PT_RESULTS_DIR` (v2's to `KALMAN_V2_RESULTS_DIR`) in a **per-section subdirectory**
 (`01_data/`, `02_eda/`, `03_features/`, `04_panel/`, `06_prior/`, `07_posterior/`, `08_ppc/`, `09_diagnostics/`,
 `09b_comparison/`,
 `10_screen/`, `10b_risk/`, `10c_analytics/`, `10k_universe/`, `11_single_isin/`, `11b_single_sv/`, `12_mingled/`,
@@ -586,8 +587,14 @@ PT convergence, and high-conviction picks.
 **Unit convention (since 0.9.9.7):** all persistent Kalman-pipeline frames
 (`screen.results`, `RiskBook.analytics` / `.book`, the `kalman_results` export)
 and `analytics.kalman_filtered_price_targets` store **raw decimal returns**
-(0.25 = +25%) — including `cvar_5pct_kalman` and `expected_vol_kalman`; percent
-scaling happens only at visualization / print boundaries. Per-column units are
+(0.25 = +25%) — including `cvar_5pct_kalman` and (on the **v1** table only)
+`expected_vol_kalman`; percent scaling happens only at visualization / print
+boundaries. **v2 retired `expected_vol_kalman` and `exp_vol` on 2026-08-27** as
+duplicates of `er_sd`, which they had equalled by construction since 2026-08-22 —
+that equality is `compute_cvar_aware_book`'s ISIN-alignment self-check, and the
+`_kalman` suffix stopped being true when the column became a Monte-Carlo
+forward-return statistic. The estimation-uncertainty view keeps its own accurate
+name, `expected_upside_sd`, and is what `coverage_gradient` grades. Per-column units are
 documented via `COMMENT ON COLUMN` in the analytics DDL.
 `expected_sharpe_ratio` = `er_mean / er_sd` (pooled std of the structural-TS
 Monte-Carlo forward-return draws; `er_sd` is itself an exported column). Unit or
@@ -1101,15 +1108,50 @@ are overridden programmatically with `dataclasses.replace(...)` rather than by m
 
 ### 7. Workflow Stage = Export Section
 
-The artifact tree is the workflow. Resolve every result path through `_export_dir_for` against the
-`_EXPORT_SECTION_DIRS` SSOT; scripts use `with export_section('08_ppc'):`, notebooks call
-`enable_artifact_export()` once then `set_export_section('<step>')` per cell. Never build a result path by hand.
+The artifact tree is the workflow. The SSOT is
+**`probabilistic_ml_model/export_layout.py`** — `EXPORT_SECTION_DIRS`, `EXPORT_DIR_ALIASES`,
+`export_dir_for`, `section_path`, `resolve_results_root`. Figure code reaches it through
+`kalman_shared`'s `_EXPORT_SECTION_DIRS` / `_export_dir_for`, which are now aliases onto it.
+
+**Import it from the data path, not `kalman_shared`.** That module imports matplotlib, seaborn,
+arviz-plots and xarray at module level, which is why the rule living there produced the state this
+replaced: every *figure* went into a section directory and every *CSV* went into the results root.
+`export_layout` is pathlib and typing only.
+
+**Two roots, and the separation is load-bearing.** v1 reads `KALMAN_PT_RESULTS_DIR`
+(→ `pymc_kalman_filter_pt_results`); v2 and `kalman_portfolio.py` read `KALMAN_V2_RESULTS_DIR`
+(→ `pymc_kalman_filter_pt_v2_results`). They shared the first variable until 2026-08-27, so a v2 run
+scattered its frames through v1's tree under names one suffix from v1's own — two models' numbers in
+one directory. Re-file an older tree with
+`python pymc_kalman_filter_pt_v2.py --migrate-layout [--apply]`; it is idempotent, it moves only files
+it can prove v2 owns (a `_v2` suffix, or a stem resolving to `V2_ONLY_SECTION_DIRS`), and it empties
+legacy buckets like the replay's old `15_portfolio`.
+
+Sections: `01_data` … `04b_audit`, `06_prior`, `07_posterior`, `08_ppc`, `09_diagnostics`,
+`09b_comparison`, **`09_gates`**, `10_screen`, `10b_risk`, `10c_analytics`, v1's `10k_universe` …
+`14_summary`, `14b_recommendations`, v2's `15_forecast` / `15b_decision`, the replay's
+**`15c_forecast` / `15d_sweeps` / `15e_books`**, and `00_misc`.
+
+Scripts use `with export_section('08_ppc'):`, notebooks call `enable_artifact_export()` once then
+`set_export_section('<step>')` per cell, and **data paths call `section_path(root, stem)`**. Never
+build a result path by hand — a stem written to the root is indistinguishable from a stray file.
 
 ### 8. Diagnostics as Code Gates
 
 Fit quality is *self-reported*, never scraped from console output. `log_sample_diagnostics()` warns on divergences
 and on bulk-ESS below `MIN_ESS_GATE = 400`; `build_sample_kwargs()` warns when the effective chain count is `< 2`,
 because r-hat and between-chain ESS are undefined for a single chain and come back NaN.
+
+Three rules the v2 export gates enforce, each earned by a shipped failure:
+
+| Rule | Gate | Why |
+|------|------|-----|
+| **No exported frame may carry ±inf.** An unbounded or undefined quantity is NULL plus a **boolean** saying why — `kelly_max_feasible` / `kelly_unbounded` is the first instance. | `export_finite` (BLOCKING) | NaN is a SQL NULL and means "not applicable"; an infinity is neither representable nor aggregatable, and a `float8 Infinity` poisons every downstream `AVG`. Run `6efb530d5881` had its analytics write refused over one column at `+inf` on 9.6% of rows after a clean fit. |
+| **A gate is graded on the quantity its name claims.** Never resolve the measured column with an `if x in df.columns else y` fallback. | `coverage_gradient` | That fallback silently became the primary when `er_sd` changed meaning on 2026-08-20, and the gate spent a release measuring forward-simulation variance while claiming to measure posterior uncertainty. |
+| **One quantity, one name — or a written reason for two.** Reducible duplicates go in `EXPORT_REDUNDANT_COLUMNS` (dropped, with the equality verified on the way out); irreducible ones go in `EXPORT_DECLARED_ALIASES` (kept, re-verified every run). | `export_duplicate_content` (WARN) | A warning that fires every run on 13 known pairs is a warning nobody reads, and the next real duplicate arrives inside that noise. |
+
+Verdicts must name the **column**, not just the frame. A gate that can block an export and reports only
+`offending: ['<frame>']` costs its reader a forensic pass over a multi-megabyte artifact.
 
 ### 9. Layered Sample Kwargs
 

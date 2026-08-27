@@ -73,9 +73,17 @@ def test_relative_floor_excludes_rather_than_clamps(draws, isins):
     strict = optimize_portfolio(draws, isins, k_book=K_BOOK,
                                 relative_denominator_q=0.9)
     analytics = strict.analytics
-    admitted = analytics["downside_dev_admitted"]
+    # The floor is reported as a BOOLEAN since 2026-08-27. It used to be the
+    # masked denominator itself, `downside_dev_admitted`, which is `downside_dev`
+    # wherever the floor did not bind -- a byte-identical copy of its own source
+    # under the default `relative_denominator_q = 0.0`, and one of the two pairs
+    # `export_duplicate_content` flagged on run 6efb530d5881. The boolean carries
+    # the only thing the float ever added: WHICH names the floor cut.
+    floored = analytics["downside_dev_floored"]
+    assert floored.dtype == bool
+    assert floored.any(), "a 0.9 relative floor must exclude something"
     # Everything below the floor is masked out, so it cannot be ranked at all.
-    assert analytics.loc[admitted.isna(), "reward_to_downside"].isna().all()
+    assert analytics.loc[floored, "reward_to_downside"].isna().all()
     assert strict.summary["n_eligible"] < optimize_portfolio(
         draws, isins, k_book=K_BOOK).summary["n_eligible"]
 
@@ -101,7 +109,12 @@ def test_bounded_arm_has_no_denominator(draws, isins):
         rank_values=np.clip(rng.beta(6, 1.2, N_ISIN), 0, 1), rank_isins=isins,
     )
     assert np.isnan(book.summary["book_denominator_pctile_max"])
-    assert book.analytics["rank_denominator"].isna().all()
+    assert book.analytics["rank_denominator_pctile"].isna().all()
+    # Which column ranked is ONE fact about the run, recorded in the summary. It
+    # used to be a `rank_denominator` column holding a verbatim per-name copy of
+    # `downside_dev`, which is a duplicate rather than information.
+    assert book.summary["rank_denominator_col"] == ""
+    assert "rank_denominator" not in book.analytics.columns
 
 
 def test_external_arm_refuses_to_invent_its_column(draws, isins):

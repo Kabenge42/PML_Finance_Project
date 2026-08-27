@@ -70,6 +70,12 @@ from pymc_kalman_filter_pt_v2 import (  # noqa: E402
     resolve_source_revision,
     stamp_export_provenance,
 )
+from probabilistic_ml_model.export_layout import (  # noqa: E402
+    DEFAULT_RESULTS_DIRNAME_V2,
+    RESULTS_DIR_ENV_V2,
+    resolve_results_root,
+    section_path,
+)
 from probabilistic_ml_model.pymc_models import _recommendations as recs  # noqa: E402
 from probabilistic_ml_model.pymc_models.KalmanForecast import (  # noqa: E402
     ForecastConfig,
@@ -243,12 +249,36 @@ class KalmanPortfolioConfig:
 
     @property
     def results_path(self) -> Path:
-        return Path(self.results_dir or KalmanRunConfigV2().results_path)
+        """Root of the artifact tree — the same one the v2 workflow writes to."""
+        return resolve_results_root(
+            self.results_dir,
+            env_value=os.environ.get(RESULTS_DIR_ENV_V2),
+            default_dirname=DEFAULT_RESULTS_DIRNAME_V2,
+        )
 
     @property
     def handoff(self) -> Path:
-        return Path(self.handoff_path) if self.handoff_path \
-            else self.results_path / _HANDOFF_STEM
+        """The handoff to replay, resolved through the section tree.
+
+        Falls back to the results ROOT when the sectioned path is absent, so a
+        handoff written before the 2026-08-27 layout migration is still found
+        rather than reported missing.
+        """
+        if self.handoff_path:
+            return Path(self.handoff_path)
+        stem, suffix = Path(_HANDOFF_STEM).stem, Path(_HANDOFF_STEM).suffix
+        sectioned = section_path(self.results_path, stem, suffix=suffix)
+        if sectioned.exists():
+            return sectioned
+        legacy = self.results_path / _HANDOFF_STEM
+        if legacy.exists():
+            logger.info(
+                "reading the handoff from the pre-migration flat path %s; "
+                "`python pymc_kalman_filter_pt_v2.py --migrate-layout --apply` "
+                "moves it into %s", legacy, sectioned.parent,
+            )
+            return legacy
+        return sectioned
 
     def forecast_config(self, **overrides: Any) -> ForecastConfig:
         """A :class:`ForecastConfig` from these knobs, with optional overrides."""
@@ -272,7 +302,9 @@ class KalmanPortfolioConfig:
         shell.
         """
         return cls(
-            results_dir=os.environ.get("KALMAN_PT_RESULTS_DIR") or None,
+            # v2's variable, not v1's: a replay must land beside the run it
+            # replays, and `set_env.ps1` points KALMAN_PT_RESULTS_DIR at v1.
+            results_dir=os.environ.get(RESULTS_DIR_ENV_V2) or None,
             random_seed=int(os.environ.get("RANDOM_SEED", 42)),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )
@@ -862,8 +894,13 @@ def export_frames(
     the v2 tables are DROP-and-RECREATE, so a replay that wrote would destroy the
     export it was replaying.
     """
-    out_dir = cfg.results_path / "15_portfolio"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # One section directory per stem, resolved through the shared layout SSOT --
+    # not one `15_portfolio` bucket. The bucket was the whole replay in a single
+    # folder: a forecast summary, two prior sweeps, the sized books and three
+    # recommendation frames, which is four stages under one name. The stems
+    # already carried the section numbers; only the directories were missing.
+    root = cfg.results_path
+    root.mkdir(parents=True, exist_ok=True)
     stamped = pd.Timestamp.now('UTC')
     counts: dict[str, int] = {}
 
@@ -874,7 +911,7 @@ def export_frames(
         if identity is not None and "isin" in written.columns:
             written = attach_identity_columns(written, identity, label=stem)
         written = stamp_export_provenance(written, run_id, stamped)
-        path = out_dir / f"{stem}.csv"
+        path = section_path(root, stem)
         written.to_csv(path, index=False)
         counts[stem] = len(written)
         logger.info("wrote %s (%d rows)", path, len(written))
@@ -901,6 +938,35 @@ def _read_optional_csv(path: Path) -> Optional[pd.DataFrame]:
     except Exception as exc:  # pragma: no cover - defensive
         logger.info("could not read %s: %s", path, exc)
     return None
+
+
+def _read_v2_artifact(
+    cfg: KalmanPortfolioConfig, stem: str
+) -> Optional[pd.DataFrame]:
+    """Read one v2 export frame: section directory first, flat root second.
+
+    The flat path is where every v2 frame lived before the 2026-08-27 layout
+    migration. Keeping the fallback means a replay still works against a results
+    tree written by an older build, and the log line says which one it read --
+    a silent degradation here costs the replay its screen, and with it the sector
+    labels, the `p_upside_pos_cond` arm and the size-down watch.
+    """
+    sectioned = section_path(cfg.results_path, stem)
+    frame = _read_optional_csv(sectioned)
+    if frame is not None:
+        return frame
+    legacy = cfg.results_path / f"{stem}.csv"
+    frame = _read_optional_csv(legacy)
+    if frame is not None:
+        logger.info(
+            "read %s from the pre-migration flat path; run "
+            "`python pymc_kalman_filter_pt_v2.py --migrate-layout --apply` to move "
+            "it into %s", stem, sectioned.parent,
+        )
+    else:
+        logger.info("no %s under %s; stages needing it will be skipped",
+                    stem, cfg.results_path)
+    return frame
 
 
 def main(
@@ -935,9 +1001,15 @@ def main(
     report = GateReport()
     handoff = load_handoff(cfg, report)
 
-    screen = _read_optional_csv(cfg.results_path / "10_screen_results_v2.csv")
-    mc_summary = _read_optional_csv(cfg.results_path / "10_screen_mc_summary_v2.csv")
-    diagnostics = _read_optional_csv(cfg.results_path / "09_diagnostics_v2.csv")
+    # Resolved through the section tree, with a flat-path fallback: the v2 export
+    # moved into subdirectories on 2026-08-27 and these three reads are what give
+    # the replay its sector labels, its bounded ranking arm and its size-down
+    # watch. Reading only the new path would have degraded all three SILENTLY
+    # against an older results tree -- `_read_optional_csv` never fails, which is
+    # exactly why the fallback has to be explicit.
+    screen = _read_v2_artifact(cfg, "10_screen_results_v2")
+    mc_summary = _read_v2_artifact(cfg, "10_screen_mc_summary_v2")
+    diagnostics = _read_v2_artifact(cfg, "09_diagnostics_v2")
 
     forecast = run_forecast(handoff, cfg, report, mc_summary=mc_summary)
 
