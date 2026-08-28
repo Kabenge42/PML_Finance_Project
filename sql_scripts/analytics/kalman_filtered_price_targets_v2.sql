@@ -19,14 +19,47 @@ CREATE TABLE analytics."kalman_filtered_price_targets_v2"
     "isin" TEXT,
     "ticker" TEXT,
     "name" TEXT,
-    "sector" TEXT,
-    "industry" TEXT,
     "trading_region" TEXT,
+    "region" TEXT,
     "country" TEXT,
+    "country_name" TEXT,
+    "trading_country" TEXT,
+    "trading_country_name" TEXT,
+    "exchange" TEXT,
+    "exchange_name" TEXT,
+    "unit" TEXT,
+    "unit_name" TEXT,
     "style_class" TEXT,
     "size_class" TEXT,
-    "n_analysts" DOUBLE PRECISION,
+    "sector" TEXT,
+    "industry" TEXT,
+    "last_updated" DATE,
+    "income_statement_report_date" DATE,
+    "next_earnings" DATE,
+    "next_earnings_when" TEXT,
+    "next_earnings_status" TEXT,
+    "fy_end_date" DATE,
+    "next_fiscal_quarter" DATE,
+    "next_income_statement_report_date" DATE,
+    "next_fy_end_date" DATE,
+    "expected_report_date" DATE,
+    "days_to_next_earnings" INTEGER,
+    "days_since_last_report" INTEGER,
+    "days_to_next_fy_end" INTEGER,
+    "days_to_next_fiscal_quarter" INTEGER,
+    "days_to_next_report" INTEGER,
+    "days_to_expected_report" INTEGER,
+    "days_since_fy_end" INTEGER,
     "market_cap" DOUBLE PRECISION,
+    "enterprise_value" DOUBLE PRECISION,
+    "market_cap_global_r" INTEGER,
+    "market_cap_global_sec_r" INTEGER,
+    "market_cap_region_r" INTEGER,
+    "market_cap_region_sec_r" INTEGER,
+    "market_cap_country_r" INTEGER,
+    "market_cap_country_sec_r" INTEGER,
+    "n_analysts" DOUBLE PRECISION,
+    "feat_analyst_rating" DOUBLE PRECISION,
     "mcap_global_r" DOUBLE PRECISION,
     "mcap_country_r" DOUBLE PRECISION,
     "original_price" DOUBLE PRECISION,
@@ -48,10 +81,8 @@ CREATE TABLE analytics."kalman_filtered_price_targets_v2"
     "er_p95" DOUBLE PRECISION,
     "mc_prob_pos" DOUBLE PRECISION,
     "p_upside_pos_cond" DOUBLE PRECISION,
-    "p_upside_pos" DOUBLE PRECISION,
     "band_width" DOUBLE PRECISION,
     "cvar_5pct_kalman" DOUBLE PRECISION,
-    "expected_vol_kalman" DOUBLE PRECISION,
     "ret_vol_ratio" DOUBLE PRECISION,
     "expected_sharpe_ratio" DOUBLE PRECISION,
     "tail_risk" DOUBLE PRECISION,
@@ -67,9 +98,9 @@ CREATE TABLE analytics."kalman_filtered_price_targets_v2"
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."expected_return_kalman" IS
     'Posterior mean expected upside. Raw decimal (0.25 = +25%).';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."expected_upside_sd" IS
-    'Posterior sd of the per-name expected upside -- ESTIMATION uncertainty, not return risk. This is what expected_vol_kalman used to hold. Since 2026-08-20 it also carries the forecast-error term, so it is roughly an order of magnitude wider than the 0.47pp of run 49e84d7e9d59. Raw decimal.';
+    'Posterior sd of the per-name expected upside -- ESTIMATION uncertainty, not return risk. This is what the retired expected_vol_kalman held before 2026-08-20. Since then it also carries the forecast-error term, so it is roughly an order of magnitude wider than the 0.47pp of run 49e84d7e9d59. Raw decimal. The column coverage_gradient is graded on.';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."prob_pos" IS
-    'Share of the per-name posterior above zero. REPORTED, NOT RANKED -- rank on p_upside_pos_cond. Historically this saturated at 1.0 for most of the universe (87.4% on run 49e84d7e9d59) because the smoother is Rao-Blackwellised over the latent and the posterior sd collapsed to 0.47pp; the forecast-error term added 2026-08-20 widens it, and the prob_pos_degenerate gate warns if it re-pins.';
+    'NON-RANKING -- reported diagnostic. Share of the per-name posterior above zero. Do not rank, filter or size on it; rank on p_upside_pos_cond. It saturates: 59.4% of the universe sat at exactly 1.0 on run 0aa3397b1d01 and 87.4% on the pass-through 49e84d7e9d59, because the smoother is Rao-Blackwellised over the latent and the posterior sd collapsed to 0.47pp. The forecast-error term added 2026-08-20 widens it and the prob_pos_degenerate gate warns if it re-pins -- but that gate passes at 59.4% against a 60% ceiling, so it is reporting the threshold as much as the model. A column pinned for three names in five has almost no ordering to offer.';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."implied_upside" IS
     'Analyst consensus upside, original_target/original_price - 1. Raw decimal.';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."price_target_kalman" IS
@@ -77,7 +108,7 @@ COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."price_target_kal
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."shrink_gain" IS
     'Weight on the name''s own smoothed observation in the forecast-error update; 1 - shrink_gain is the weight on the pooled drift + hierarchy prediction. Low for thinly covered or widely dispersed consensus. This is the column kalman_gain was mistakenly believed to be.';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."kalman_gain" IS
-    'DEPRECATED NAME, changed meaning 2026-08-20. Now P(risk_adj_return > 0) over posterior draws -- a real tail probability. It was sigmoid(risk_adj_return), a sigmoid of a standardised log-uplift, which is not the probability of any event and correlated -0.004 with analyst count. It is NOT a Kalman gain and never was: for the shrinkage weight see shrink_gain.';
+    'NON-RANKING -- reported diagnostic, and a DEPRECATED NAME. Removed from the GEIB selectable-metric surface on 2026-08-24: 54.0% of the universe sat at exactly 0 or exactly 1 on run 0aa3397b1d01, up from 50.6%, so it orders barely half the names and is degenerate for the rest. Rank on p_upside_pos_cond instead. Definition, for the rows where it is not pinned: P(risk_adj_return > 0) over posterior draws -- a real tail probability since 2026-08-20. It was sigmoid(risk_adj_return), a sigmoid of a standardised log-uplift, which is not the probability of any event and correlated -0.004 with analyst count. It is NOT a Kalman gain and never was: for the shrinkage weight, which is the quantity this name has always suggested, see shrink_gain.';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."er_mean" IS
     'Mean forward return over the Monte-Carlo horizon. Raw decimal.';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."er_sd" IS
@@ -92,8 +123,6 @@ COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."p_upside_pos_con
     'THE PRIMARY PROBABILITY COLUMN -- rank on this one. P(risk-adjusted forward return > 0): the share of Monte-Carlo forward-return draws that are positive after the same risk / size / volume penalties the model applies to risk_adj_return. Changed 2026-08-20 from mc_prob_pos * kalman_gain, a probability times a sigmoid, whose ordering was usable but whose level was the probability of nothing. NULL when out_of_support.';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."cvar_5pct_kalman" IS
     '5% expected shortfall of the Monte-Carlo FORWARD-RETURN distribution: the mean of the worst 5% of simulated returns. Raw decimal, and genuinely negative for a name with downside. Changed 2026-08-20 -- it was previously the tail mean of the posterior EXPECTED-UPSIDE draws, i.e. estimation uncertainty about a point, which made it positive for 88.4% of names and correlated 0.9998 with expected_return_kalman. For the estimation-uncertainty view use expected_upside_sd.';
-COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."expected_vol_kalman" IS
-    'Standard deviation of the Monte-Carlo forward-return draws -- the same quantity as er_sd. Raw decimal. Changed 2026-08-20: it was previously the posterior dispersion of expected upside (median 0.47pp against a return sd of 19.03pp, a factor of 40), which is why the dashboard derived its own volatility rather than using this column.';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."expected_sharpe_ratio" IS
     'er_mean / er_sd over Monte-Carlo draws of log price-target uplift. A t-statistic on the distance from price to the smoothed target, NOT an investment Sharpe ratio -- the numerator is an uplift, not a realised excess return. Median ~1.05, which is exactly the range a reader mistakes for a Sharpe. NULL when out_of_support.';
 COMMENT ON COLUMN analytics."kalman_filtered_price_targets_v2"."reward_to_cvar" IS

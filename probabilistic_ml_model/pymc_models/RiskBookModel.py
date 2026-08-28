@@ -20,8 +20,9 @@ scaling happens only at visualization / print boundaries.
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,8 @@ import pandas as pd
 from probabilistic_ml_model.pymc_models._workflow import posterior_dataset
 
 logger = logging.getLogger(__name__)
+
+_EPS = 1e-12
 
 #: Defaults mirroring the ``KalmanRunConfig`` fields of the same name, so a
 #: direct call to :func:`compute_cvar_aware_book` reproduces the workflow.
@@ -87,6 +90,7 @@ __all__ = [
     "DEFAULT_P_LONG",
     "DEFAULT_WEIGHT_CAP",
     "MIN_RATIO_DENOMINATOR",
+    "normalise_group_caps",
     "RiskBook",
     "compute_cvar_aware_book",
 ]
@@ -165,6 +169,167 @@ def _cap_normalize_weights(w: np.ndarray, cap: float) -> np.ndarray:
     return w
 
 
+def normalise_group_caps(
+        groups: Optional[Any] = None,
+        group_cap: Optional[float] = None,
+        *,
+        group_labels: Optional[Mapping[str, Sequence[Any]]] = None,
+        group_caps: Optional[Mapping[str, float]] = None,
+        default_dimension: str = "sector",
+) -> tuple[dict[str, np.ndarray], dict[str, float]]:
+    """Fold the scalar ``(groups, group_cap)`` pair into the mapping form.
+
+    The single-dimension pair is the original API and stays supported verbatim,
+    because a sector cap is by far the common case and every existing caller and
+    test passes it. The mapping form exists because concentration is not
+    one-dimensional: run ``807df55e7158`` was 33.2 % in one SECTOR *and* 19.2 %
+    in one COUNTRY *and* 85.9 % small cap, and capping only the first leaves the
+    other two taken by omission.
+
+    Parameters
+    ----------
+    groups, group_cap
+        The scalar form: one label array and one cap, filed under
+        ``default_dimension``.
+    group_labels, group_caps
+        The mapping form: ``dimension -> labels`` and ``dimension -> cap``.
+        Merged over the scalar form, which it overrides on a name clash.
+    default_dimension
+        Dimension name the scalar pair is filed under.
+
+    Returns
+    -------
+    tuple[dict[str, numpy.ndarray], dict[str, float]]
+        Labels and caps for the dimensions that are actually constrained. A
+        dimension with no cap, a non-finite cap, or a cap outside ``(0, 1)`` is
+        dropped -- an infeasible or vacuous cap is not a constraint.
+    """
+    labels: dict[str, np.ndarray] = {}
+    caps: dict[str, float] = {}
+
+    if groups is not None:
+        labels[default_dimension] = np.asarray(groups)
+        if group_cap is not None:
+            caps[default_dimension] = float(group_cap)
+    for dim, vals in (group_labels or {}).items():
+        labels[dim] = np.asarray(vals)
+    for dim, value in (group_caps or {}).items():
+        if value is not None:
+            caps[dim] = float(value)
+
+    active: dict[str, float] = {}
+    for dim, value in caps.items():
+        if dim not in labels:
+            logger.warning(
+                "group cap %.0f%% given for %r but no labels for that dimension; "
+                "it cannot be applied.", 100.0 * value, dim,
+            )
+            continue
+        if not np.isfinite(value) or not (0.0 < value < 1.0):
+            continue
+        active[dim] = value
+    return {d: labels[d] for d in active}, active
+
+
+def _cap_normalize_with_groups(
+        w: np.ndarray,
+        cap: float,
+        *,
+        groups: Optional[np.ndarray] = None,
+        group_cap: Optional[float] = None,
+        group_labels: Optional[Mapping[str, Sequence[Any]]] = None,
+        group_caps: Optional[Mapping[str, float]] = None,
+        max_passes: int = 64,
+) -> np.ndarray:
+    """Project onto the capped simplex, then onto each group-capped one, and repeat.
+
+    The per-name cap is :func:`RiskBookModel._cap_normalize_weights` unchanged --
+    there is no second copy of it here. Each group pass scales any group over its
+    cap down to it and spills the remainder onto the groups below their cap,
+    proportionally. All the constraints interact, so the passes alternate until
+    every one holds or ``max_passes`` is spent.
+
+    A sector cap is a decision to take deliberately. Its absence is also a decision,
+    and on run ``448e7f055ef3`` that decision produced a book **60.9% in Information
+    Technology** -- taken by omission, which is the only way it should never be taken.
+
+    .. versionchanged:: 2026-08-28
+       Accepts several dimensions at once (``group_labels`` / ``group_caps``).
+       The scalar ``groups`` / ``group_cap`` pair still works and is folded into
+       the mapping by :func:`normalise_group_caps`.
+
+    Parameters
+    ----------
+    w
+        Non-negative scores per name.
+    cap
+        Maximum single-name weight.
+    groups, group_cap
+        Single-dimension form.
+    group_labels, group_caps
+        Multi-dimension form; see :func:`normalise_group_caps`.
+    max_passes
+        Alternating-projection budget. Exhausting it leaves the per-name cap
+        satisfied and any residual group breach visible in the concentration
+        columns, which is preferable to looping on an infeasible constraint.
+
+    Returns
+    -------
+    numpy.ndarray
+        Weights summing to 1.
+    """
+    out = _cap_normalize_weights(w, cap)
+    labels, caps = normalise_group_caps(
+        groups, group_cap, group_labels=group_labels, group_caps=group_caps
+    )
+    if not caps:
+        return out
+
+    for _ in range(max_passes):
+        breached = False
+        for dim, limit in caps.items():
+            codes = labels[dim]
+            uniques = np.unique(codes)
+            totals = {g: out[codes == g].sum() for g in uniques}
+            over = {g: t for g, t in totals.items() if t > limit + 1e-12}
+            if not over:
+                continue
+            breached = True
+            excess = 0.0
+            for g, total in over.items():
+                sel = codes == g
+                excess += total - limit
+                out[sel] *= limit / total
+            room = np.array([
+                max(limit - totals[g], 0.0) if g not in over else 0.0 for g in codes
+            ])
+            headroom = sum(
+                max(limit - totals[g], 0.0) for g in uniques if g not in over
+            )
+            if headroom <= _EPS:
+                # Nowhere to spill: the cap cannot be met at this book size.
+                # Normalise and let the caller see the breach in the exported
+                # concentration column rather than loop on an infeasible
+                # constraint.
+                logger.warning(
+                    "%s cap %.0f%% is infeasible for this book (%d groups); the "
+                    "weights are normalised without it",
+                    dim, 100.0 * limit, len(totals),
+                )
+                caps = {d: v for d, v in caps.items() if d != dim}
+                break
+            # Spill proportionally to each under-cap name's share of the headroom.
+            weight_room = np.where(room > 0, out + _EPS, 0.0)
+            if weight_room.sum() <= _EPS:
+                break
+            out = out + excess * weight_room / weight_room.sum()
+            out = _cap_normalize_weights(out, cap)
+        if not breached or not caps:
+            break
+    total = out.sum()
+    return out / total if total > 0 else out
+
+
 def compute_cvar_aware_book(
         idata: Any,
         eu: Any,
@@ -172,12 +337,16 @@ def compute_cvar_aware_book(
         *,
         alpha: float = DEFAULT_CVAR_ALPHA,
         cap: float = DEFAULT_WEIGHT_CAP,
-        k_book: int = DEFAULT_K_BOOK,
+        max_names: Optional[int] = None,
+        min_weight: float = 0.0,
         p_long: float = DEFAULT_P_LONG,
         mcap_r_max: float = DEFAULT_MCAP_R_MAX,
         return_draws: Optional[np.ndarray] = None,
         return_draws_isins: Optional[Sequence[str]] = None,
         tail_risk_vol_floor_k: float = DEFAULT_TAIL_RISK_VOL_FLOOR_K,
+        group_labels: Optional[Mapping[str, Sequence[Any]]] = None,
+        group_caps: Optional[Mapping[str, float]] = None,
+        k_book: Optional[int] = None,
 ) -> RiskBook:
     """Build the CVaR-aware long book and per-name risk analytics (SSOT).
 
@@ -256,8 +425,26 @@ def compute_cvar_aware_book(
         CVaR tail probability (default 0.05 = 5% expected shortfall).
     cap
         Maximum single-name weight after cap-and-spill normalisation.
+    max_names
+        Optional CEILING on the book's size, applied after the STARR sort.
+        ``None`` — the default since 2026-08-28 — lets every eligible name
+        through and leaves breadth to ``min_weight``.
+    min_weight
+        Weights below this are dropped and the remainder renormalised.
+        **Defaults to 0.0 here, unlike** :func:`optimize_portfolio`: this book is
+        sized by a closed-form cap-and-spill rather than by an optimiser, so
+        there is no re-solve to make truncation meaningful and dropping names
+        would just be a rounding rule. Set it to trim a long tail deliberately.
+    group_labels, group_caps
+        Per-dimension concentration limits, e.g. ``{"sector": 0.30}``, applied by
+        :func:`_cap_normalize_with_groups`.
+
+        **This book had no group cap at all until 2026-08-28**, which is how run
+        ``807df55e7158`` shipped a §10b book **34.6 % in Financials** — the
+        model's own strongest sector underweight (−6.39pp) — with nothing raising
+        a hand. Both default to ``None``, so v1 is untouched.
     k_book
-        Number of names in the sized long book.
+        **Deprecated.** Alias for ``max_names``.
     p_long
         Minimum *conditional* positive-upside probability for book eligibility.
         Compared against ``p_long * univ_gain`` so the gate scales with the
@@ -279,6 +466,19 @@ def compute_cvar_aware_book(
     Pure pandas/xarray — no sampling — so it is cheap to re-run with different
     sizing parameters against one fitted posterior.
     """
+    if k_book is not None:
+        warnings.warn(
+            "compute_cvar_aware_book(k_book=...) is deprecated: the book is no "
+            "longer a fixed top-k. The value is applied as `max_names`, a "
+            "CEILING after the STARR sort. Pass max_names= to keep a ceiling.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if max_names is None:
+            max_names = int(k_book)
+    if max_names is not None and int(max_names) < 1:
+        raise ValueError(f"max_names must be >= 1 or None, got {max_names!r}")
+
     nm = results.copy()
 
     # Posterior P(upside>0) and credible-band width (mirror the §5 name screen).
@@ -663,9 +863,22 @@ def compute_cvar_aware_book(
         _mcap_ok = np.ones(len(nm), dtype=bool)
 
     # Sized long book: STARR-ranked, cap-and-spill normalised to 100% gross.
+    _all_labels, _active_caps = normalise_group_caps(
+        group_labels=group_labels, group_caps=group_caps
+    )
+    for _dim, _vals in _all_labels.items():
+        if np.asarray(_vals).shape[0] != len(nm):
+            raise ValueError(
+                f'group labels for {_dim!r} have {np.asarray(_vals).shape[0]} '
+                f'entries for {len(nm)} screen rows'
+            )
     nm['book_weight'] = 0.0
     summary: dict[str, float] = {
-        'alpha': alpha, 'cap': cap, 'k_book': float(k_book), 'p_long': p_long,
+        'alpha': alpha, 'cap': cap, 'p_long': p_long,
+        'max_names': float(max_names) if max_names is not None else float('nan'),
+        'min_weight': float(min_weight),
+        'group_caps': ','.join(
+            f'{d}={v:.2f}' for d, v in sorted(_active_caps.items())),
         'p_long_cond': p_long_cond, 'univ_gain': univ_gain,
         'mcap_r_max': mcap_r_max, 'n_mcap_eligible': float(_mcap_ok.sum()),
         'n_book': 0.0, 'port_up': float('nan'), 'port_cvar': float('nan'),
@@ -675,8 +888,30 @@ def compute_cvar_aware_book(
     _book = nm[(nm['expected_upside'] > 0) & (nm['p_upside_pos_cond'] >= p_long_cond)
                & np.isfinite(nm['starr']) & _mcap_ok].copy()
     if len(_book):
-        _book = _book.sort_values('starr', ascending=False).head(k_book)
-        _w = _cap_normalize_weights(_book['starr'].to_numpy(), cap)
+        _book = _book.sort_values('starr', ascending=False)
+        if max_names is not None:
+            _book = _book.head(int(max_names))
+        # Group caps applied HERE, not after the fact. This book had none until
+        # 2026-08-28 and shipped 34.6% in Financials -- the model's own strongest
+        # underweight -- because no line was ever written to stop it.
+        _w = _cap_normalize_with_groups(
+            _book['starr'].to_numpy(), cap,
+            group_labels={d: np.asarray(v)[_book.index.to_numpy()]
+                          for d, v in _all_labels.items()},
+            group_caps=_active_caps,
+        )
+        if min_weight > 0.0:
+            _keep = _w >= float(min_weight)
+            if _keep.any() and not _keep.all():
+                # No re-solve: this is a closed-form cap-and-spill, so trimming
+                # and renormalising IS the answer to the smaller problem.
+                _book = _book.loc[_keep]
+                _w = _cap_normalize_with_groups(
+                    _book['starr'].to_numpy(), cap,
+                    group_labels={d: np.asarray(v)[_book.index.to_numpy()]
+                                  for d, v in _all_labels.items()},
+                    group_caps=_active_caps,
+                )
         # ``book_weight`` is the ONLY name for the sizing, on both frames.
         # ``_book`` is copied out of ``nm`` before the stamp-back below, so it
         # once carried an all-zero ``book_weight`` beside a populated ``weight``

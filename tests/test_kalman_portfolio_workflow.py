@@ -106,7 +106,7 @@ def cfg(results_dir):
         results_dir=str(results_dir),
         handoff_path=str(results_dir / "07_forecast_handoff_v2.nc"),
         rank_arms=tuple(RANKING_RULES),
-        k_book=20,
+        max_names=20,
         scenarios=200,
     )
 
@@ -135,9 +135,20 @@ def test_precedence_is_declared_on_the_row(result, cfg):
 
 
 def test_arms_disagree_and_the_disagreement_is_measured(result):
+    """Overlap is measured against each arm's OWN size, not against one nominal k.
+
+    Breadth is solved per arm since 2026-08-28, so the arms no longer hold the
+    same number of names. Comparing a shared ``k`` would make a small disciplined
+    book look like it disagreed with a large one when it may be a subset of it --
+    which is why ``containment`` ships beside ``jaccard``.
+    """
     agreement = result["decision"]["agreement"]
     assert len(agreement) == 3          # one row per unordered pair of three arms
-    assert (agreement["overlap"] <= agreement["k_book"]).all()
+    assert (agreement["overlap"] <= agreement[["n_a", "n_b"]].min(axis=1)).all()
+    assert ((agreement["jaccard"] >= 0) & (agreement["jaccard"] <= 1)).all()
+    assert ((agreement["containment"] >= 0) & (agreement["containment"] <= 1)).all()
+    # A ceiling was set on this fixture, so no arm may exceed it.
+    assert (agreement[["n_a", "n_b"]].max(axis=1) <= agreement["max_names"]).all()
 
 
 def test_identity_survives_the_join_by_isin(result, results_dir):
@@ -164,14 +175,30 @@ def test_gates_are_documented(result):
         assert GATE_CATALOGUE.get(gate.name), f"{gate.name} has no rationale"
 
 
-def test_frames_are_exported_and_stamped(result, results_dir):
+def test_frames_are_exported_into_their_section_directories(result, results_dir):
+    """Every frame lands under the section its stem resolves to, not in a bucket.
+
+    The replay used to write all ten frames into one ``15_portfolio`` directory --
+    a forecast summary, two prior sweeps, the sized books and three recommendation
+    frames, which is four stages under one name. The stems already carried the
+    section numbers; only the directories were missing.
+    """
+    from probabilistic_ml_model.export_layout import export_dir_for
+
     counts = result["export_counts"]
     assert counts, "nothing was exported"
-    out = results_dir / "15_portfolio"
+    assert not (results_dir / "15_portfolio").exists(), "the legacy bucket is back"
     for stem in counts:
-        frame = pd.read_csv(out / f"{stem}.csv")
+        path = results_dir / export_dir_for(stem) / f"{stem}.csv"
+        assert path.exists(), f"{stem} is not under {export_dir_for(stem)}/"
+        frame = pd.read_csv(path)
         assert len(frame) == counts[stem]
         assert {"run_id", "exported_at", "source_sha"} <= set(frame.columns)
+    # And no EXPORTED frame was left loose in the root beside the tree. Scoped to
+    # the exports on purpose: this fixture writes the handoff and the screen flat,
+    # which is the pre-migration layout and is what exercises the read fallback.
+    assert not [stem for stem in counts
+                if (results_dir / f"{stem}.csv").exists()]
 
 
 def test_sweeps_report_the_priors_consequence_not_its_posterior(result):

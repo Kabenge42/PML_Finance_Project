@@ -19,14 +19,47 @@ CREATE TABLE analytics."10b_risk_analytics_v2"
     "isin" TEXT,
     "ticker" TEXT,
     "name" TEXT,
-    "sector" TEXT,
-    "industry" TEXT,
     "trading_region" TEXT,
+    "region" TEXT,
     "country" TEXT,
+    "country_name" TEXT,
+    "trading_country" TEXT,
+    "trading_country_name" TEXT,
+    "exchange" TEXT,
+    "exchange_name" TEXT,
+    "unit" TEXT,
+    "unit_name" TEXT,
     "style_class" TEXT,
     "size_class" TEXT,
-    "n_analysts" DOUBLE PRECISION,
+    "sector" TEXT,
+    "industry" TEXT,
+    "last_updated" DATE,
+    "income_statement_report_date" DATE,
+    "next_earnings" DATE,
+    "next_earnings_when" TEXT,
+    "next_earnings_status" TEXT,
+    "fy_end_date" DATE,
+    "next_fiscal_quarter" DATE,
+    "next_income_statement_report_date" DATE,
+    "next_fy_end_date" DATE,
+    "expected_report_date" DATE,
+    "days_to_next_earnings" INTEGER,
+    "days_since_last_report" INTEGER,
+    "days_to_next_fy_end" INTEGER,
+    "days_to_next_fiscal_quarter" INTEGER,
+    "days_to_next_report" INTEGER,
+    "days_to_expected_report" INTEGER,
+    "days_since_fy_end" INTEGER,
     "market_cap" DOUBLE PRECISION,
+    "enterprise_value" DOUBLE PRECISION,
+    "market_cap_global_r" INTEGER,
+    "market_cap_global_sec_r" INTEGER,
+    "market_cap_region_r" INTEGER,
+    "market_cap_region_sec_r" INTEGER,
+    "market_cap_country_r" INTEGER,
+    "market_cap_country_sec_r" INTEGER,
+    "n_analysts" DOUBLE PRECISION,
+    "feat_analyst_rating" DOUBLE PRECISION,
     "mcap_global_r" DOUBLE PRECISION,
     "mcap_country_r" DOUBLE PRECISION,
     "last_price" DOUBLE PRECISION,
@@ -48,10 +81,8 @@ CREATE TABLE analytics."10b_risk_analytics_v2"
     "er_p95" DOUBLE PRECISION,
     "mc_prob_pos" DOUBLE PRECISION,
     "p_upside_pos_cond" DOUBLE PRECISION,
-    "p_upside_pos" DOUBLE PRECISION,
     "band_width" DOUBLE PRECISION,
     "cvar05" DOUBLE PRECISION,
-    "exp_vol" DOUBLE PRECISION,
     "ret_vol_ratio" DOUBLE PRECISION,
     "expected_sharpe_ratio" DOUBLE PRECISION,
     "tail_risk" DOUBLE PRECISION,
@@ -65,15 +96,15 @@ CREATE TABLE analytics."10b_risk_analytics_v2"
 );
 
 COMMENT ON COLUMN analytics."10b_risk_analytics_v2"."expected_upside_sd" IS
-    'Posterior sd of the per-name expected upside -- ESTIMATION uncertainty, not return risk. This is what expected_vol_kalman used to hold. Since 2026-08-20 it also carries the forecast-error term, so it is roughly an order of magnitude wider than the 0.47pp of run 49e84d7e9d59. Raw decimal.';
+    'Posterior sd of the per-name expected upside -- ESTIMATION uncertainty, not return risk. This is what the retired expected_vol_kalman held before 2026-08-20. Since then it also carries the forecast-error term, so it is roughly an order of magnitude wider than the 0.47pp of run 49e84d7e9d59. Raw decimal. The column coverage_gradient is graded on.';
 COMMENT ON COLUMN analytics."10b_risk_analytics_v2"."prob_pos" IS
-    'Share of the per-name posterior above zero. REPORTED, NOT RANKED -- rank on p_upside_pos_cond. Historically this saturated at 1.0 for most of the universe (87.4% on run 49e84d7e9d59) because the smoother is Rao-Blackwellised over the latent and the posterior sd collapsed to 0.47pp; the forecast-error term added 2026-08-20 widens it, and the prob_pos_degenerate gate warns if it re-pins.';
+    'NON-RANKING -- reported diagnostic. Share of the per-name posterior above zero. Do not rank, filter or size on it; rank on p_upside_pos_cond. It saturates: 59.4% of the universe sat at exactly 1.0 on run 0aa3397b1d01 and 87.4% on the pass-through 49e84d7e9d59, because the smoother is Rao-Blackwellised over the latent and the posterior sd collapsed to 0.47pp. The forecast-error term added 2026-08-20 widens it and the prob_pos_degenerate gate warns if it re-pins -- but that gate passes at 59.4% against a 60% ceiling, so it is reporting the threshold as much as the model. A column pinned for three names in five has almost no ordering to offer.';
 COMMENT ON COLUMN analytics."10b_risk_analytics_v2"."implied_upside" IS
     'Analyst consensus upside, original_target/original_price - 1. Raw decimal.';
 COMMENT ON COLUMN analytics."10b_risk_analytics_v2"."shrink_gain" IS
     'Weight on the name''s own smoothed observation in the forecast-error update; 1 - shrink_gain is the weight on the pooled drift + hierarchy prediction. Low for thinly covered or widely dispersed consensus. This is the column kalman_gain was mistakenly believed to be.';
 COMMENT ON COLUMN analytics."10b_risk_analytics_v2"."kalman_gain" IS
-    'DEPRECATED NAME, changed meaning 2026-08-20. Now P(risk_adj_return > 0) over posterior draws -- a real tail probability. It was sigmoid(risk_adj_return), a sigmoid of a standardised log-uplift, which is not the probability of any event and correlated -0.004 with analyst count. It is NOT a Kalman gain and never was: for the shrinkage weight see shrink_gain.';
+    'NON-RANKING -- reported diagnostic, and a DEPRECATED NAME. Removed from the GEIB selectable-metric surface on 2026-08-24: 54.0% of the universe sat at exactly 0 or exactly 1 on run 0aa3397b1d01, up from 50.6%, so it orders barely half the names and is degenerate for the rest. Rank on p_upside_pos_cond instead. Definition, for the rows where it is not pinned: P(risk_adj_return > 0) over posterior draws -- a real tail probability since 2026-08-20. It was sigmoid(risk_adj_return), a sigmoid of a standardised log-uplift, which is not the probability of any event and correlated -0.004 with analyst count. It is NOT a Kalman gain and never was: for the shrinkage weight, which is the quantity this name has always suggested, see shrink_gain.';
 COMMENT ON COLUMN analytics."10b_risk_analytics_v2"."er_mean" IS
     'Mean forward return over the Monte-Carlo horizon. Raw decimal.';
 COMMENT ON COLUMN analytics."10b_risk_analytics_v2"."er_sd" IS

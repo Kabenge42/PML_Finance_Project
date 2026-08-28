@@ -57,7 +57,7 @@ Usage
 -----
 .. code-block:: python
 
-    import kalman_portfolio_viz as pviz
+    from probabilistic_ml_model.visualizations import kalman_portfolio_viz as pviz
 
     pviz.install(cfg)
     pviz.render_replay(result)      # one call; every panel is a no-op without input
@@ -72,7 +72,7 @@ from typing import Any, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from probabilistic_ml_model.visualizations.kalman_shared import (
+from .kalman_shared import (
     C_ACCENT, C_FORECAST, C_HIGHLIGHT, C_MUTED, C_OBSERVED, C_POSTERIOR, C_REF,
     CS_DIV, CS_SEQ,
     _PPC_ECDF_GRID, _SCREEN_SCATTER_MAX_POINTS,
@@ -105,6 +105,8 @@ __all__ = [
     "plot_multiplier_sweep",
     "plot_two_books",
     "plot_sector_mix",
+    "plot_action_ladder",
+    "plot_consensus_gap",
     "plot_kelly_pin",
     "plot_risk_ladder",
     "plot_denominator_sanity",
@@ -657,7 +659,10 @@ def plot_denominator_sanity(decision: Optional[pd.DataFrame],
     """
     if decision is None or not len(decision) or _requires_plotly("denominator_sanity"):
         return None
-    col = next((c for c in ("rank_denominator", "downside_dev", "tail_risk")
+    # `rank_denominator` was a per-name copy of whichever column ranked and was
+    # retired on 2026-08-27 as a duplicate; the arm's own denominator is read
+    # directly. The order matches RANKING_RULES' default-first ordering.
+    col = next((c for c in ("downside_dev", "tail_risk")
                 if c in decision.columns), None)
     if col is None or "weight" not in decision.columns:
         logger.info("denominator_sanity found no denominator column; skipped")
@@ -721,11 +726,19 @@ def plot_denominator_sanity(decision: Optional[pd.DataFrame],
 
 
 def plot_rank_agreement(agreement: Optional[pd.DataFrame]) -> Optional[Any]:
-    """Pairwise top-k overlap between the ranking arms.
+    """Pairwise membership overlap between the ranking arms.
 
     *Job: magnitude on an ordered pair grid.* A **sequential single hue**, light to
     dark — never a rainbow, and never a diverging scale, because an overlap count has
     no meaningful midpoint.
+
+    The diagonal is each arm's OWN book size, read from ``n_a``/``n_b``, and the
+    headline is Jaccard rather than a raw count. Both follow from breadth becoming
+    an output on 2026-08-28: the arms no longer hold the same number of names, so
+    there is no single ``k`` to divide by, and a raw overlap makes a small
+    disciplined book look like it disagreed with a large one when it may be a
+    subset of it. This panel read a ``k_book`` column that ``_book_agreement``
+    stopped emitting at that change, and rendered "of None names".
     """
     if agreement is None or not len(agreement) or _requires_plotly("rank_agreement"):
         return None
@@ -733,28 +746,47 @@ def plot_rank_agreement(agreement: Optional[pd.DataFrame]) -> Optional[Any]:
     if not need <= set(agreement.columns):
         return None
     arms = sorted(set(agreement["arm_a"]) | set(agreement["arm_b"]))
-    k = int(agreement["k_book"].iloc[0]) if "k_book" in agreement.columns else None
+
+    # Each arm's book size, from whichever side of a pair it appears on.
+    sizes: dict[str, float] = {}
+    for col, n_col in (("arm_a", "n_a"), ("arm_b", "n_b")):
+        if n_col in agreement.columns:
+            for arm, n in zip(agreement[col], agreement[n_col]):
+                if pd.notna(n):
+                    sizes[str(arm)] = float(n)
+
     grid = pd.DataFrame(np.nan, index=arms, columns=arms, dtype="float64")
     for _, r in agreement.iterrows():
         grid.loc[r["arm_a"], r["arm_b"]] = r["overlap"]
         grid.loc[r["arm_b"], r["arm_a"]] = r["overlap"]
     for a in arms:
-        grid.loc[a, a] = k if k else np.nan
+        grid.loc[a, a] = sizes.get(a, np.nan)
 
+    zmax = float(np.nanmax(grid.to_numpy())) if np.isfinite(grid.to_numpy()).any() else 1.0
     fig = go.Figure(go.Heatmap(
         z=grid.to_numpy(), x=arms, y=arms, colorscale=CS_SEQ,
-        zmin=0, zmax=k if k else float(np.nanmax(grid.to_numpy())),
+        zmin=0, zmax=zmax,
         text=[[("" if np.isnan(v) else f"{int(v)}") for v in row]
               for row in grid.to_numpy()],
         texttemplate="%{text}", hovertemplate="%{y} vs %{x}: %{z} shared<extra></extra>",
         colorbar=dict(title="shared"),
     ))
-    worst = agreement.loc[agreement["overlap"].idxmin()]
+    # Worst pair by Jaccard where we have it — the size-invariant measure — and by
+    # raw overlap only as a fallback.
+    if "jaccard" in agreement.columns and agreement["jaccard"].notna().any():
+        worst = agreement.loc[agreement["jaccard"].idxmin()]
+        headline = (f"Jaccard as low as {float(worst['jaccard']):.2f} — "
+                    f"{int(worst['overlap'])} names shared of "
+                    f"{int(worst['n_a'])}/{int(worst['n_b'])}")
+    else:
+        worst = agreement.loc[agreement["overlap"].idxmin()]
+        headline = f"as few as {int(worst['overlap'])} names shared"
     _base_layout(
         fig,
-        f"Ranking-arm agreement — as few as {int(worst['overlap'])} of {k} names "
-        f"shared<br><sub>One posterior, {len(arms)} arms. A low overlap says the "
-        f"ranking choice is underdetermined, not that either arm is wrong.</sub>",
+        f"Ranking-arm agreement — {headline}"
+        f"<br><sub>One posterior, {len(arms)} arms; the diagonal is each arm's own "
+        f"book size. A low overlap says the ranking choice is underdetermined, not "
+        f"that either arm is wrong.</sub>",
         H_PANEL,
     )
     _safe_show(fig, label="rank_agreement")
@@ -960,6 +992,130 @@ def plot_size_down_overlap(watch: Optional[pd.DataFrame],
 # =========================================================================== #
 
 
+
+#: The action ladder, most bullish first, with the colour each rung takes.
+#: Ordered here rather than sorted at draw time so a rung that is EMPTY on a run
+#: still occupies its slot -- a five-point scale that silently renders as three
+#: bars is the same illegibility the wider vocabulary was meant to remove.
+_ACTION_LADDER: tuple[tuple[str, str], ...] = (
+    ("STRONG BUY", C_POSTERIOR),
+    ("BUY", C_FORECAST),
+    ("HOLD", C_MUTED),
+    ("SELL", C_OBSERVED),
+    ("STRONG SELL", C_HIGHLIGHT),
+)
+
+
+def plot_action_ladder(actions: Optional[pd.DataFrame]) -> Optional[Any]:
+    """The five-rung action distribution, and where its gates fall.
+
+    *Job: part-to-whole over an ORDERED category.* A single horizontal bar per
+    rung, in ladder order, on a diverging bull-to-bear ramp -- not a pie, which
+    cannot show order, and not a sorted bar chart, which would destroy it.
+
+    **What this panel is for.** The three-valued list it replaces returned 83.5 %
+    ``BUY`` on run ``807df55e7158`` and nothing said so; it took a human reading
+    a table. Five rungs do not fix that by themselves, because the gates are
+    scaled by the universe-mean confidence and a low mean pulls the STRONG
+    threshold down onto the ordinary one. So the gate positions are annotated on
+    the panel: a top rung holding most of the universe, with its gate sitting at
+    the 28th percentile of the probability distribution, is a statement about the
+    forward simulation's left tail rather than about conviction.
+    """
+    if actions is None or not len(actions) or _requires_plotly("action_ladder"):
+        return None
+    if "action" not in actions.columns:
+        logger.info("action_ladder needs 'action'; skipped")
+        return None
+
+    counts = actions["action"].value_counts()
+    total = int(len(actions))
+    labels = [a for a, _ in _ACTION_LADDER]
+    values = [int(counts.get(a, 0)) for a in labels]
+    colors = [c for _, c in _ACTION_LADDER]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=labels, x=values, orientation="h",
+        marker=dict(color=colors),
+        text=[f"{v:,} ({v / total:.1%})" for v in values],
+        textposition="outside",
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+    fig.update_yaxes(autorange="reversed")  # most bullish at the top
+
+    gate_bits = [
+        f"{c}={float(actions[c].iloc[0]):.3f}"
+        for c in ("gate_strong_hi", "gate_hi", "gate_lo", "gate_strong_lo")
+        if c in actions.columns and pd.notna(actions[c].iloc[0])
+    ]
+    subtitle = f"{total:,} names"
+    if gate_bits:
+        subtitle += "   ·   " + "  ".join(gate_bits)
+    if "consensus_gap" in actions.columns:
+        gap = pd.to_numeric(actions["consensus_gap"], errors="coerce")
+        if gap.notna().any():
+            subtitle += (f"   ·   median gap vs analyst consensus "
+                         f"{gap.median():+.2f} on the 1-5 scale")
+
+    _base_layout(
+        fig,
+        f"Name actions — {subtitle}",
+        height=340,
+    )
+    fig.update_xaxes(title_text="names")
+    _safe_show(fig, label="action_ladder")
+
+    table = pd.DataFrame({
+        "action": labels,
+        "n": values,
+        "share": [v / total for v in values],
+    })
+    write_table(table, "action_ladder")
+    return fig
+
+
+def plot_consensus_gap(actions: Optional[pd.DataFrame]) -> Optional[Any]:
+    """How far the model's action departs from the analyst panel's own rating.
+
+    *Job: distribution about a meaningful zero.* A binned density (never
+    ``go.Histogram`` — it ships every raw value into the notebook) with the
+    zero line marked as reference geometry.
+
+    Zero means "this model agrees with consensus". The screen reproduces the
+    consensus ORDERING at Spearman 0.992, so a gap distribution tightly centred
+    on zero says the extra structure is risk, not a different view of value —
+    which is the question §4 of the published analysis could not put a number on.
+    """
+    if actions is None or not len(actions) or _requires_plotly("consensus_gap"):
+        return None
+    if "consensus_gap" not in actions.columns:
+        logger.info(
+            "consensus_gap absent: the screen carries no analyst rating. "
+            "Re-export the screen, or run the replay with the panel frame present."
+        )
+        return None
+    gap = pd.to_numeric(actions["consensus_gap"], errors="coerce").dropna()
+    if not len(gap):
+        return None
+
+    fig = go.Figure()
+    _add_binned_density(fig, gap.to_numpy(), name="consensus gap",
+                        color=C_POSTERIOR, density=False)
+    _add_ref_line(fig, x=0.0, kind="zero",
+                  annotation_text="agrees with consensus")
+    _base_layout(
+        fig,
+        f"Model action minus analyst rating — median {gap.median():+.2f}, "
+        f"{float((gap > 0).mean()):.0%} more bullish than the panel",
+        height=380,
+    )
+    fig.update_xaxes(title_text="action_score − analyst_rating (1–5 scale)")
+    fig.update_yaxes(title_text="names")
+    _safe_show(fig, label="consensus_gap")
+    return fig
+
 def _attempt(label: str, fn, *args, **kwargs) -> None:
     """Run one panel, log a failure, and never re-raise."""
     try:
@@ -997,13 +1153,21 @@ def render_replay(result: dict[str, Any], cfg: Any = None) -> None:
     shipped_share = getattr(cfg, "factor_share", 0.35)
     sector_cap = getattr(cfg, "sector_cap", None)
 
-    with section("15_forecast"):
+    # The REPLAY's own sections, not the fit's. `15_forecast` and `15b_decision`
+    # belong to the v2 workflow, which writes them once per fit; this script runs
+    # many times over one fit, so its panels landing there would overwrite the
+    # fit's own artifacts with a replay's -- and a reader browsing the tree could
+    # not tell which had produced what. The figures now sit beside the frames they
+    # were drawn from.
+    with section("15c_forecast"):
         _attempt("engine_contrast", plot_engine_contrast, forecast.get("engines"))
+
+    with section("15d_sweeps"):
         _attempt("factor_sweep", plot_factor_sweep, sweeps.get("factor_share"),
                  shipped_share)
         _attempt("multiplier_sweep", plot_multiplier_sweep, sweeps.get("multiplier"))
 
-    with section("15b_decision"):
+    with section("15e_books"):
         _attempt("two_books", plot_two_books, books)
         _attempt("sector_mix", plot_sector_mix, books, "sector", sector_cap)
         _attempt("kelly_pin", plot_kelly_pin, books)
@@ -1018,5 +1182,8 @@ def render_replay(result: dict[str, Any], cfg: Any = None) -> None:
         _attempt("shrinkage_contrast", plot_shrinkage_contrast, signals)
         _attempt("size_down_overlap", plot_size_down_overlap,
                  recommendations.get("watch"), books)
+        actions = recommendations.get("actions")
+        _attempt("action_ladder", plot_action_ladder, actions)
+        _attempt("consensus_gap", plot_consensus_gap, actions)
 
     logger.info("figures written under %s", get_export_state().root)

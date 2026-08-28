@@ -104,9 +104,16 @@ What the reader needs from it:
   reporting tail risk.
 
 Column names differ between frames — `expected_upside` / `expected_return_kalman`,
-`cvar05` / `cvar_5pct_kalman`, `exp_vol` / `expected_vol_kalman`, `starr` /
-`reward_to_cvar`. The script maps them; quote the analytics-table names, since
-those are what a dashboard reader sees.
+`cvar05` / `cvar_5pct_kalman`, `starr` / `reward_to_cvar`. The script maps them;
+quote the analytics-table names, since those are what a dashboard reader sees.
+`exp_vol` / `expected_vol_kalman` is no longer among them: both names were dropped
+from the export on 2026-08-27 as duplicates of `er_sd`, which they had equalled by
+construction since 2026-08-22.
+
+`coverage_gradient` is graded on `expected_upside_sd`, the posterior sd — not on
+`er_sd`, which is ~95% forward-simulation variance and reads ~1.5x where the
+posterior sd reads ~2.2x. `er_sd_gradient_x` carries the forward reading; report
+it, never grade it.
 
 ### (c) Recommendations
 

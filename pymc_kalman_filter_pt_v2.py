@@ -69,6 +69,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import math
@@ -87,9 +88,23 @@ import pandas as pd
 
 # PyTensor backend guard MUST precede the first pymc/pytensor import.
 from probabilistic_ml_model import _pytensor_env  # noqa: F401  (side effect)
+from probabilistic_ml_model.export_layout import (
+    DEFAULT_RESULTS_DIRNAME_V1,
+    DEFAULT_RESULTS_DIRNAME_V2,
+    EXPORT_SECTION_DIRS,
+    V2_ONLY_SECTION_DIRS,
+    RESULTS_DIR_ENV_V2,
+    export_dir_for,
+    resolve_results_root,
+    section_path,
+)
 
 from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
     GROUP_EFFECTS_FINE,
+    GROUP_EFFECTS_GEO_CROSSED,
+    GROUP_EFFECTS_NESTED_FULL,
+    GROUP_EFFECTS_NESTED_GEO,
+    GROUP_EFFECTS_STYLED,
     KALMAN_V2_SCREEN_LATENT,
     KalmanModelConfig,
     KalmanPanelV2,
@@ -99,7 +114,14 @@ from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
     effective_sample_size_of_panel,
     fit_trail_correlation_kernel,
     orthogonalise_family,
+    resolve_group_parents,
     resolve_screen_latent_v2,
+)
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    UNKNOWN_LABEL,
+    attach_derived_group_labels,
+    build_hierarchy_indices,
+    order_levels,
 )
 from probabilistic_ml_model.pymc_models._workflow import (
     MIN_ESS_GATE,
@@ -150,6 +172,27 @@ UPLIFT_CLIP_LO, UPLIFT_CLIP_HI = -0.95, 5.0
 LOG_UPLIFT_CLIP_LO = float(np.log1p(UPLIFT_CLIP_LO))  # ~= -3.00
 LOG_UPLIFT_CLIP_HI = float(np.log1p(UPLIFT_CLIP_HI))  # ~= +1.79
 
+#: One-sided tolerance for :func:`run_posterior_predictive`'s residual decay
+#: check, in ``rho_inf`` units.
+#:
+#: ``rho_inf`` is a correlation asymptote bounded BELOW at 0, and once the mean
+#: has absorbed the permanent structure -- which is the healthy state, and what
+#: ``ppc_decay`` passing confirms -- the observed residual value sits ON that
+#: boundary. Replicate kernel fits of a boundary parameter scatter to small
+#: POSITIVE values, so a two-sided 94 % interval of them structurally cannot
+#: contain the boundary from below. Run ``6efb530d5881`` warned on exactly that:
+#: ``obs 0.000 vs rep [0.000, 0.050]``, a verdict whose own printed values read as
+#: satisfied because both were rounded to three decimals.
+#:
+#: The two directions are not the same finding, which is why the tolerance is
+#: one-sided. Observed BELOW the interval means the model's replicates carry more
+#: permanent residual correlation than the data does -- an over-statement of
+#: persistence, the conservative direction, and bounded here by this tolerance.
+#: Observed ABOVE means the data has permanent structure the model does not
+#: reproduce, which is the failure this diagnostic exists to catch, and it is
+#: reported at any margin.
+GATE_DECAY_RESIDUAL_TOL: float = 0.05
+
 #: Ranking columns NULLed for an out-of-support row. Identity, price targets and
 #: the raw ``er_*`` distribution are deliberately retained — the row is still
 #: informative, it just must not be *ranked*.
@@ -163,6 +206,27 @@ _RANKING_COLS: tuple[str, ...] = (
     # universe, carries no ordering, and is retained as a reported diagnostic.
     "p_upside_pos_cond",
 )
+
+#: Candidate columns for the out-of-support test at each clip bound, in
+#: preference order. **Resolved per end, independently**, because the frames this
+#: runs over do not all carry the same summary block: ``run_screen`` and
+#: ``summarize_forecast`` emit the full ``er_mean`` / ``er_p05`` / ``er_p95``
+#: trio, while ``optimize_portfolio``'s per-name analytics emits the forward
+#: distribution under its own names and carried no upper-tail quantile at all
+#: until 2026-08-27. A single shared fallback of ``er_mean`` is what crashed the
+#: 15b decision frame with ``KeyError: 'er_mean'``: the upper leg resolved to the
+#: ``er_p05`` that frame does have, so the one guard that existed passed, and the
+#: lower leg then indexed a column nothing had.
+#:
+#: The percentile is preferred at both ends for the reason the docstring below
+#: gives — a mean-based test matched **zero** affected names on the 2026-08-15
+#: export. The mean columns are a degraded fallback, not an equivalent; a frame
+#: that resolves to one is logged as such. ``expected_return`` is listed because
+#: it is ``optimize_portfolio``'s name for exactly the quantity ``er_mean``
+#: holds, and it is NOT re-exported under the ``er_mean`` name: the two would be
+#: byte-identical and ``export_duplicate_content`` exists to catch that.
+_OOS_HI_KEYS: tuple[str, ...] = ("er_p05", "er_mean", "expected_return")
+_OOS_LO_KEYS: tuple[str, ...] = ("er_p95", "er_mean", "expected_return")
 
 #: Columns the ``export_ranking_range`` gate bounds. Both the exported names and
 #: the intermediate risk-book names, because v1 guards only the former -- which
@@ -488,7 +552,110 @@ def attach_identity_columns(
 #: it and still needs it as the fallback for ``p_upside_pos_cond`` when the
 #: workflow does not supply one. This removes a name from the published surface,
 #: not a quantity from the calculation.
-EXPORT_REDUNDANT_COLUMNS: tuple[str, ...] = ("p_upside_pos",)
+#:
+#: ``exp_vol`` and its exported rename ``expected_vol_kalman`` join it for the same
+#: reason and with the same caveat. Both are the pooled sd of the forward-return
+#: Monte-Carlo draws -- which is what ``er_sd`` is, exactly, and deliberately: the
+#: identity ``exp_vol == er_sd`` IS ``compute_cvar_aware_book``'s ISIN-alignment
+#: self-check (``RiskBookModel.py:461-476``), added after a positional join
+#: attributed every risk column to the wrong name. The self-check needs both names
+#: in memory. The published table does not need both, and carrying them made
+#: ``export_duplicate_content`` fire on three frames every run.
+#:
+#: ``er_sd`` is the survivor rather than ``expected_vol_kalman`` because the
+#: ``_kalman`` suffix is no longer true: since 2026-08-20 this is a Monte-Carlo
+#: forward-return statistic, not a Kalman posterior one -- the same staleness
+#: CLAUDE.md records for ``cvar_5pct_kalman``. ``er_sd`` also names the quantity
+#: ``expected_sharpe_ratio`` divides by, so the ratio and its denominator now read
+#: as the pair they are. The estimation-uncertainty view kept its own accurate name
+#: (``expected_upside_sd``) in 2026-08-22 and is untouched by this.
+#:
+#: The v2 tables only. The live GEIB dashboard reads the v1 table.
+EXPORT_REDUNDANT_COLUMNS: dict[str, str] = {
+    "p_upside_pos": "prob_pos",
+    "exp_vol": "er_sd",
+    "expected_vol_kalman": "er_sd",
+}
+
+
+#: Column pairs that are EQUAL and stay equal, per frame, with the reason.
+#: ``frame key -> ((col_a, col_b, why), ...)``.
+#:
+#: The difference between this and :data:`EXPORT_REDUNDANT_COLUMNS` is whether one
+#: of the names can be dropped. There, one can, so it is. Here it cannot, and the
+#: choice is between a warning that fires forever and a declaration that says why.
+#:
+#: A warning that always fires is not a warning. Run ``6efb530d5881`` reported five
+#: frames and thirteen pairs, eleven of which had a settled reason recorded
+#: somewhere else in the tree -- and a genuinely new duplicate would have arrived
+#: in the middle of that list and been read as more of the same. Declaring is what
+#: makes the undeclared list short enough to act on.
+#:
+#: Declaring is NOT suppressing: every pair here is RE-VERIFIED on each run, and
+#: one that stops being equal is reported. That matters most for the three pairs
+#: below marked *empirical* -- distinct ``pml_df`` vendor columns that happen to
+#: carry identical data. They are not equal by definition, so the day the vendor
+#: diverges, this is what says so.
+EXPORT_DECLARED_ALIASES: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "04_panel_frame_v2": (
+        # BY CONSTRUCTION. `mv_pymc_kalman_pt_v2` emits `b.price_target_num_{lb}_ago
+        # AS n_analysts_{lb}` while `SELECT b.*` already emits the source column
+        # under its own name. `pml_feature_catalogue.sql` (see the comment above
+        # those five SELECT lines) records why neither name can go: an alias row can
+        # claim only one name per (column_name, model_target), so dropping either
+        # leaves the other MISSING_FROM_CATALOGUE -- the failure class CLAUDE.md
+        # calls "the dangerous one", because the model then reindexes the column to
+        # 0.0 rather than raising.
+        *(
+            (f"n_analysts_{lb}", f"price_target_num_{lb}_ago",
+             "MV alias of the same column; neither name can be dropped without "
+             "MISSING_FROM_CATALOGUE (pml_feature_catalogue.sql)")
+            for lb in ("1w", "1m", "3m", "6m", "1y")
+        ),
+        # EMPIRICAL, not definitional: separate `pml_df` vendor columns whose data
+        # happens to coincide. None of the six enters the drift design matrix --
+        # `feat_one_day_return` is named in DRIFT_EXCLUSIONS and the whole
+        # `feat_total_return_` family is prefix-barred -- so this is export surface
+        # only, and re-verification is the entire point of listing them.
+        ("feat_one_day_return", "feat_total_return_1d",
+         "empirical: distinct pml_df vendor columns, identical data"),
+        ("feat_total_return_1w", "feat_total_return_5d",
+         "empirical: one trading week is five trading days for this vendor"),
+        ("price_1w_ago", "price_5d_ago",
+         "empirical: one trading week is five trading days for this vendor"),
+    ),
+}
+
+
+def _declared_alias_pairs(key: str) -> dict[frozenset[str], str]:
+    """Declared pairs for one frame, keyed by the unordered pair."""
+    return {
+        frozenset((a, b)): why for a, b, why in EXPORT_DECLARED_ALIASES.get(key, ())
+    }
+
+
+def _nonfinite_columns(frame: pd.DataFrame) -> list[str]:
+    """Numeric columns carrying an infinity, rendered as ``name: N x +inf``.
+
+    Matches :func:`export_analytics`'s finiteness gate exactly, NaN-as-zero
+    included -- NaN is a legitimate "not applicable" and becomes a SQL NULL, while
+    an infinity is neither representable nor aggregatable downstream.
+
+    This exists because the gate's verdict used to name only the FRAME. Run
+    ``6efb530d5881`` reported ``offending: ['15b_decision_analytics_v2']`` for a
+    single column at ``+inf`` on 9.6 % of rows, and finding it meant a forensic
+    pass over a 5 MB CSV. A gate that can block an export has to say what blocked
+    it.
+    """
+    out: list[str] = []
+    num = frame.select_dtypes(include=[np.number])
+    for col in num.columns:
+        vals = pd.to_numeric(num[col], errors="coerce").to_numpy(dtype="float64")
+        pos, neg = int(np.isposinf(vals).sum()), int(np.isneginf(vals).sum())
+        if pos or neg:
+            parts = [f"{n} x {sign}inf" for n, sign in ((pos, "+"), (neg, "-")) if n]
+            out.append(f"{col}: {', '.join(parts)}")
+    return out
 
 
 def drop_redundant_export_columns(
@@ -499,13 +666,22 @@ def drop_redundant_export_columns(
     The warning matters more than the drop. These columns are removed because
     they duplicate another column; if that ever stops being true the right
     response is to look, not to silently discard a quantity nothing else carries.
+
+    That is why the canonical twin lives in :data:`EXPORT_REDUNDANT_COLUMNS`
+    itself rather than in a second dict here. It used to be both -- a tuple of
+    names beside a hard-coded ``twin`` map inside this function -- so a name could
+    be added to the tuple and silently get no verification at all, dropping a
+    column nobody had checked was a duplicate. One mapping, one place.
+
+    For ``exp_vol``/``er_sd`` the check earns its keep twice over: that pair's
+    equality is ``compute_cvar_aware_book``'s ISIN-alignment self-check, so a
+    warning here is the same finding it raises, caught at the export boundary.
     """
     present = [c for c in EXPORT_REDUNDANT_COLUMNS if c in frame.columns]
     if not present:
         return frame
-    twin = {"p_upside_pos": "prob_pos"}
     for col in present:
-        mate = twin.get(col)
+        mate = EXPORT_REDUNDANT_COLUMNS.get(col)
         if mate and mate in frame.columns:
             a = pd.to_numeric(frame[col], errors="coerce")
             b = pd.to_numeric(frame[mate], errors="coerce")
@@ -571,12 +747,13 @@ _SOURCE_REVISION_PATHS: tuple[str, ...] = (
     "probabilistic_ml_model/",
     "pymc_kalman_filter_pt_v2.py",
     "pymc_kalman_filter_pt.py",
-    "kalman_viz_v2.py",
-    # The replay workflow and its figure layer. A handoff is stamped with the SHA of
-    # the code that wrote it, and a book sized by kalman_portfolio.py off that handoff
-    # is only attributable if the scope covers the script that sized it.
+    # The replay workflow. A handoff is stamped with the SHA of the code that wrote
+    # it, and a book sized by kalman_portfolio.py off that handoff is only
+    # attributable if the scope covers the script that sized it. Both figure layers
+    # (`kalman_viz_v2`, `kalman_portfolio_viz`) moved into
+    # `probabilistic_ml_model/visualizations/` and are covered by the prefix above --
+    # listing them again here would be a path that silently stops matching.
     "kalman_portfolio.py",
-    "kalman_portfolio_viz.py",
     "scripts/",
     "dashboards/geib/",
     "pml_feature_catalogue.sql",
@@ -804,7 +981,14 @@ GATE_CATALOGUE: dict[str, str] = {
         "names. The sibling of export_unique_columns, which checks names and "
         "therefore passes on `weight` beside a byte-identical `book_weight`. "
         "Not blocking: an all-zero column legitimately equals another all-zero "
-        "column, and a warning must never cost a run a fit already paid for."
+        "column, and a warning must never cost a run a fit already paid for. "
+        "Pairs with a written reason they cannot be reduced to one name live in "
+        "EXPORT_DECLARED_ALIASES and are reported as declared -- and RE-VERIFIED, "
+        "since three of them are equal empirically rather than by definition. "
+        "That split is what keeps the undeclared list short enough to act on: "
+        "run 6efb530d5881 reported five frames and thirteen pairs, eleven with a "
+        "settled reason, and a genuinely new duplicate would have arrived in the "
+        "middle of that list."
     ),
     "export_unique_columns": (
         "BLOCKING: no exported frame may carry the same column name twice. A "
@@ -841,7 +1025,14 @@ GATE_CATALOGUE: dict[str, str] = {
         "NEW, reported not gated: ppc_decay with the posterior-mean mean removed "
         "from both sides. A mean that is constant in time contributes the same "
         "constant at every gap, so it reads as a permanent level and hides "
-        "whether a decay failure is in the mean or in the covariance."
+        "whether a decay failure is in the mean or in the covariance. The "
+        "containment test is ONE-SIDED (GATE_DECAY_RESIDUAL_TOL): rho_inf is "
+        "bounded below at 0 and sits ON that boundary once the mean has absorbed "
+        "the permanent structure, while replicate fits of a boundary parameter "
+        "scatter positive -- so a two-sided interval of them cannot contain the "
+        "boundary from below. Observed BELOW is the conservative direction and is "
+        "tolerated to the margin; observed ABOVE is the missing-permanent-"
+        "structure failure and is reported at any margin."
     ),
     "shrinkage_slope": (
         "NEW: regressing expected upside on analyst-implied upside must give a "
@@ -852,7 +1043,16 @@ GATE_CATALOGUE: dict[str, str] = {
     "coverage_gradient": (
         "NEW: posterior uncertainty must decrease monotonically with analyst "
         "coverage. A flat or inverted gradient means the hierarchy is not pricing "
-        "information."
+        "information. Graded on `expected_upside_sd`, the ESTIMATE's own sd, "
+        "which is the quantity that claim is about. It read `er_sd` until "
+        "2026-08-27 via an `in cov.columns` fallback that silently became the "
+        "primary when the 2026-08-20 change made `er_sd` the forward-return sd: "
+        "on run 6efb530d5881 the posterior leg was 2.9-6.4% of that column's "
+        "variance and the composite warned at 1.52x while the posterior sd ran "
+        "2.24x. The forward-return gradient is now reported beside it and never "
+        "graded -- its steepness is set by `forecast_error_n_exponent`, a prior "
+        "the panel cannot identify, so a threshold would test only that the "
+        "prior was applied."
     ),
     "runtime_estimate": (
         "NEW: measured gradient cost x the NUTS budget must fit the runtime "
@@ -865,8 +1065,14 @@ GATE_CATALOGUE: dict[str, str] = {
         "used instead."
     ),
     "export_finite": (
-        "Every exported ranking metric is finite and in range, and clip-pinned "
-        "rows are flagged."
+        "BLOCKING: no exported frame may carry +/-inf. A quantity that is "
+        "genuinely unbounded or undefined is exported as NULL with a BOOLEAN "
+        "beside it saying why -- `kelly_max_feasible` / `kelly_unbounded` is the "
+        "first instance. NaN is fine and always was: it is a SQL NULL, which is "
+        "what 'not applicable' means. An infinity is neither representable nor "
+        "aggregatable, and a float8 Infinity poisons every downstream AVG. The "
+        "verdict names the COLUMN and the count: run 6efb530d5881 failed on one "
+        "column at +inf for 626 of 6,513 names and reported only the frame."
     ),
     "export_rowcount": (
         "Every curated frame is non-empty and agrees on row count. Catches the "
@@ -1137,9 +1343,17 @@ class KalmanRunConfigV2:
     #: choice, so the two criteria agree.
     forecast_error_multiplier: float = 1.0
     #: Exponent on the analyst count in that standard error. 0.5 is the textbook
-    #: standard error of the mean; raise it to steepen ``coverage_gradient``.
-    #: **Do not pre-tune** — measure the gate first, since the shrinkage gain
-    #: already inherits a coverage gradient at 0.5.
+    #: standard error of the mean.
+    #:
+    #: **This no longer steepens ``coverage_gradient``, and must not be raised to
+    #: make that gate pass.** It used to say so, back when the gate read ``er_sd``
+    #: — the forward-return sd this exponent helps shape. Since 2026-08-27 the
+    #: gate is graded on ``expected_upside_sd``, the posterior sd, which is the
+    #: quantity its claim about the hierarchy is actually about; raising this knob
+    #: would change every name's forward variance to satisfy a measurement of a
+    #: different quantity. The forward-return gradient is still reported beside the
+    #: gate, and is deliberately not graded: this is a prior the panel cannot
+    #: identify, so a threshold on it would only confirm the prior was applied.
     forecast_error_n_exponent: float = 0.5
     #: Floor on ``tail_risk`` as a fraction of the name's own Monte-Carlo return
     #: sd. The absolute 1pp floor in :mod:`RiskBookModel` binds for 13.4 % of the
@@ -1152,7 +1366,21 @@ class KalmanRunConfigV2:
     mc_rho: float = 0.85
     cvar_alpha: float = 0.05
     weight_cap: float = 0.10
+    #: Ceiling on the number of positions. **No longer the book size**: since
+    #: 2026-08-28 breadth is solved and this only bounds it, so a run may ship
+    #: fewer names. Kept at 50 so an existing run's ceiling is unchanged.
     k_book: int = 50
+    #: Weights below this are dropped. The rule that makes breadth an OUTPUT --
+    #: run ``807df55e7158`` published fifty names of which thirty-eight held
+    #: 1.17 % between them and the smallest held 0.0002 %.
+    book_min_weight: float = 0.005
+    #: ``dimension -> maximum weight`` for the sized books, e.g.
+    #: ``{"sector": 0.30}``. **Empty by default, and that is a decision**: the
+    #: v2 export's own gate exists because a concentration nobody capped is one
+    #: taken by omission, and turning a cap on here changes the published book.
+    #: ``kalman_portfolio.py`` sets a sector cap for the replay; this stays off
+    #: so the fit path's book does not move underneath an unrelated change.
+    group_caps: dict[str, float] = field(default_factory=dict)
     #: Baseline long-probability threshold. Scaled by the universe-average
     #: kalman_gain inside the risk book to give ``p_long_cond``, which is what
     #: ``p_upside_pos_cond`` is actually tested against.
@@ -1261,7 +1489,7 @@ class KalmanRunConfigV2:
 
     #: Target figure width in px, matching v1's ``PML_FIG_WIDTH_PX`` knob so one
     #: environment variable sizes both workflows. Read by the shared figure layer
-    #: through the resolver ``kalman_viz_v2.install`` hands it.
+    #: through the resolver ``visualizations.kalman_viz_v2.install`` hands it.
     fig_width_px: int = 1150
     write_analytics: bool = True
     log_level: str = "INFO"
@@ -1348,7 +1576,11 @@ class KalmanRunConfigV2:
 
         return cls(
             random_seed=_int("RANDOM_SEED", 42),
-            results_dir=os.environ.get("KALMAN_PT_RESULTS_DIR") or None,
+            # RESULTS_DIR_ENV_V2, not v1's. `set_env.ps1` points
+            # KALMAN_PT_RESULTS_DIR at the v1 tree, so reading it here put every
+            # v2 frame inside v1's sectioned directories under names one
+            # character apart from v1's own -- two models' numbers in one tree.
+            results_dir=os.environ.get(RESULTS_DIR_ENV_V2) or None,
             write_analytics=os.environ.get("KALMAN_PT_SQL_EXPORT", "1") != "0",
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
             fig_width_px=_int("PML_FIG_WIDTH_PX", 1150),
@@ -1356,8 +1588,17 @@ class KalmanRunConfigV2:
 
     @property
     def results_path(self) -> Path:
-        """Root of the artifact tree."""
-        return Path(self.results_dir or "pymc_kalman_filter_pt_v2_results")
+        """Root of the artifact tree — v2's own, never v1's.
+
+        Resolved through :func:`resolve_results_root`, so a relative value is
+        anchored at the PROJECT root rather than the working directory: a run
+        launched from a notebook, an IDE and a shell all write to one tree.
+        """
+        return resolve_results_root(
+            self.results_dir,
+            env_value=os.environ.get(RESULTS_DIR_ENV_V2),
+            default_dirname=DEFAULT_RESULTS_DIRNAME_V2,
+        )
 
 
 # =========================================================================== #
@@ -2078,13 +2319,59 @@ def prepare_panel(
         np.log1p(cv) + vol_level_z - np.log(np.sqrt(trail_avg_n))
     )
 
-    coord_cols = [c for c in model_cfg.group_effects if c in frame.columns]
+    # Derived group labels (`oecd_bloc`, `style_box`) and the missing-sentinel
+    # normalisation, both from the hierarchy SSOT. The normalisation is the half
+    # that matters even on the shipped four: `import_pml_data` COALESCEs a blank
+    # vendor field to the literal 'n/a' and only `size_class` is filtered for it
+    # at query time, so without this pass a blank `trading_region` reaches
+    # `pd.factorize` as a real string and becomes a fitted group level.
+    frame = attach_derived_group_labels(frame)
+
+    coord_cols = order_levels(
+        [c for c in model_cfg.group_effects if c in frame.columns]
+    )
     coord_uniques: dict[str, np.ndarray] = {}
     coord_idx: dict[str, np.ndarray] = {}
     for col in coord_cols:
         codes, uniques = pd.factorize(frame[col].astype(str), sort=True)
         coord_uniques[col] = np.asarray(uniques)
         coord_idx[col] = codes.astype("int32")
+
+    # Child level index -> parent level index, for the nested arms. Built from
+    # the SSOT rather than locally: `build_hierarchy_indices` already resolves
+    # the nearest MATERIALISED ancestor, so a config naming `country` without
+    # `oecd_bloc` still links country to whatever coarser level it did ask for
+    # instead of silently going flat.
+    coord_parent_of: dict[str, np.ndarray] = {}
+    parents = resolve_group_parents(model_cfg, coord_cols)
+    if parents:
+        meta = build_hierarchy_indices(
+            frame.set_index(frame["isin"].astype(str))[coord_cols],
+            frame["isin"].astype(str).to_numpy(),
+            levels=coord_cols,
+        )
+        for col, parent in parents.items():
+            entry = meta.get(col, {})
+            if entry.get("parent_label") != parent or entry.get("parent_of") is None:
+                raise ValueError(
+                    f"cannot nest {col!r} under {parent!r}: build_hierarchy_indices "
+                    f"resolved {entry.get('parent_label')!r}. Check PARENT_MAP and "
+                    "the level ordering."
+                )
+            # `build_hierarchy_indices` factorises with np.unique and this loop
+            # with pd.factorize(sort=True); both give lexicographic order, so the
+            # index spaces agree. Assert it rather than assume -- a mismatch here
+            # attributes every child to the wrong parent and nothing downstream
+            # can see it.
+            if not np.array_equal(
+                np.asarray(entry["labels"]).astype(str), coord_uniques[col].astype(str)
+            ):
+                raise ValueError(
+                    f"label order for {col!r} disagrees between the hierarchy "
+                    "helper and the panel factorisation; the parent map would be "
+                    "misaligned."
+                )
+            coord_parent_of[col] = np.asarray(entry["parent_of"], dtype="int32")
 
     panel = KalmanPanelV2(
         frame=frame,
@@ -2105,6 +2392,7 @@ def prepare_panel(
         volume_ratio=_standardise(_col("feat_rel_volume", 1.0)),
         coord_uniques=coord_uniques,
         coord_idx=coord_idx,
+        coord_parent_of=coord_parent_of,
         response_mean=mu,
         response_std=sd,
         orthogonal_rotation=rotation,
@@ -2856,26 +3144,44 @@ def run_posterior_predictive(
         resid_decay = _decay_interval(obs - centre, rep - centre, mask, panel.time_days)
         if resid_decay is not None:
             out["decay_residual"] = resid_decay
+            _obs = resid_decay["observed_rho_inf"]
+            _lo, _hi = resid_decay["replicated_lo"], resid_decay["replicated_hi"]
+            # One-sided, boundary-aware -- see GATE_DECAY_RESIDUAL_TOL. Below the
+            # interval is tolerated up to the stated margin (the model slightly
+            # over-states persistence, and rho_inf is pinned at its 0 boundary in
+            # the healthy case); above it is reported at any margin.
+            _gap = _lo - _obs if _obs < _lo else (_obs - _hi if _obs > _hi else 0.0)
+            _passed = bool(_obs <= _hi and _obs >= _lo - GATE_DECAY_RESIDUAL_TOL)
+            # FOUR decimals, deliberately. At three, run `6efb530d5881` printed
+            # "obs 0.000 vs rep [0.000, 0.050]" for a test it had just failed --
+            # a verdict that cannot be reconciled with its own pass/fail is a
+            # verdict nobody can act on.
             report.add(
                 GateResult(
                     name="ppc_decay_residual",
-                    passed=bool(
-                        resid_decay["replicated_lo"]
-                        <= resid_decay["observed_rho_inf"]
-                        <= resid_decay["replicated_hi"]
-                    ),
+                    passed=_passed,
                     value=(
-                        f"rho_inf obs {resid_decay['observed_rho_inf']:.3f} vs rep "
-                        f"[{resid_decay['replicated_lo']:.3f}, "
-                        f"{resid_decay['replicated_hi']:.3f}]"
+                        f"rho_inf obs {_obs:.4f} vs rep [{_lo:.4f}, {_hi:.4f}]"
+                        + (
+                            f", {'below' if _obs < _lo else 'above'} by {_gap:.4f}"
+                            if _gap > 0 else ""
+                        )
                     ),
-                    threshold="observed inside the replicated 94% interval",
+                    threshold=(
+                        "observed <= replicated hi, and >= replicated lo - "
+                        f"{GATE_DECAY_RESIDUAL_TOL} (one-sided; see "
+                        "GATE_DECAY_RESIDUAL_TOL)"
+                    ),
                     blocking=False,
                     detail=(
                         "Same statistic as ppc_decay with the posterior-mean mean "
                         "removed from both sides. Failing here too points at the "
                         "covariance; passing here while ppc_decay fails points at "
-                        "the mean, so read mean_spread next."
+                        "the mean, so read mean_spread next. BELOW the interval "
+                        "the model over-states permanent residual correlation "
+                        "(conservative, tolerated to the stated margin); ABOVE it "
+                        "the data carries permanent structure the model does not "
+                        "reproduce, which is the failure this exists to catch."
                     ),
                 )
             )
@@ -2941,7 +3247,14 @@ def free_global_summary(idata: Any, *, ci_prob: float = 0.89) -> pd.DataFrame:
         warnings.filterwarnings(
             "ignore", message="invalid value encountered", category=RuntimeWarning
         )
-        summary = az.summary(idata, var_names=globals_, ci_prob=ci_prob)
+        # `round_to="none"` is REQUIRED, not cosmetic. ArviZ 1.2 formats the
+        # summary to significant figures and returns `mean`/`sd`/`r_hat`/`mcse_*`
+        # as STRINGS, so every numeric comparison below -- the `sd > _EPS` pinned
+        # filter and the r_hat / ESS gates -- raises TypeError against a str
+        # dtype. The gates are the whole point of this frame; they must be read
+        # off numbers.
+        summary = az.summary(idata, var_names=globals_, ci_prob=ci_prob,
+                             round_to="none")
     return summary.loc[summary["sd"] > _EPS]
 
 
@@ -2983,7 +3296,14 @@ def run_diagnostics(
         warnings.filterwarnings(
             "ignore", message="invalid value encountered", category=RuntimeWarning
         )
-        summary = az.summary(idata, var_names=globals_, ci_prob=0.89)
+        # `round_to="none"` is REQUIRED, not cosmetic. ArviZ 1.2 formats the
+        # summary to significant figures and returns `mean`/`sd`/`r_hat`/`mcse_*`
+        # as STRINGS, so every numeric comparison below -- the `sd > _EPS` pinned
+        # filter and the r_hat / ESS gates -- raises TypeError against a str
+        # dtype. The gates are the whole point of this frame; they must be read
+        # off numbers.
+        summary = az.summary(idata, var_names=globals_, ci_prob=0.89,
+                             round_to="none")
     free = free_global_summary(idata)
     n_pinned = len(summary) - len(free)
     if n_pinned:
@@ -3134,6 +3454,29 @@ def run_diagnostics(
 #:     Adds ``country`` and ``industry`` to the crossed group effects. **The
 #:     rec-02 question.** See :data:`GROUP_EFFECTS_FINE` for the OLS evidence and
 #:     the ESS watch.
+#: ``hierarchy_nested``
+#:     The domicile geography chain ``region -> oecd_bloc -> country``, NESTED,
+#:     replacing the crossed ``trading_region``. **The follow-up to
+#:     ``hierarchy_fine``'s declined verdict.** That arm added ``country`` flat
+#:     and lost at 1.4x dse; the recorded objection was that a fixed-scale
+#:     ``ZeroSumNormal`` shrinks a sparse country level toward zero, so it costs
+#:     a parameter and returns nothing. Here a country level is a deviation from
+#:     its OECD bloc, so the 24 countries carrying fewer than 5 names inherit an
+#:     estimate instead of being erased. Mean structure only, so it is screenable.
+#: ``hierarchy_nested_full``
+#:     ``hierarchy_nested`` plus the ``sector -> industry`` chain. Run BESIDE the
+#:     geography arm rather than instead of it, so the ELPD gain is attributable
+#:     to one of the two additions.
+#: ``hierarchy_geo``
+#:     ``oecd_bloc`` added CROSSED to the shipped four. The control for
+#:     ``hierarchy_nested``, which changes both the level set and the
+#:     parameterisation: this one changes only the level set, so the difference
+#:     between them is the price of nesting.
+#: ``hierarchy_styled``
+#:     The shipped four plus the nested 9-cell ``style_box``. Asks whether size
+#:     and style interact at all. Cheap and low-risk -- no level holds fewer than
+#:     a few hundred names -- so a null result here is informative rather than
+#:     underpowered.
 #: ``drift_strict``
 #:     The drift matrix as :func:`select_drift_features_v2` now selects it,
 #:     against the pre-2026-08-21 list that also carried
@@ -3145,6 +3488,21 @@ COMPARISON_ARMS: dict[str, Callable[[KalmanModelConfig], KalmanModelConfig]] = {
     "baseline": lambda cfg: cfg,
     "level_off": lambda cfg: replace(cfg, enable_isin_level=False),
     "hierarchy_fine": lambda cfg: replace(cfg, group_effects=GROUP_EFFECTS_FINE),
+    # `group_parents={}` selects NESTED and lets `resolve_group_parents` fill the
+    # chain from the hierarchy SSOT's PARENT_MAP. An explicit dict here would be
+    # a second source of truth for the same tree.
+    "hierarchy_nested": lambda cfg: replace(
+        cfg, group_effects=GROUP_EFFECTS_NESTED_GEO, group_parents={}
+    ),
+    "hierarchy_nested_full": lambda cfg: replace(
+        cfg, group_effects=GROUP_EFFECTS_NESTED_FULL, group_parents={}
+    ),
+    "hierarchy_geo": lambda cfg: replace(
+        cfg, group_effects=GROUP_EFFECTS_GEO_CROSSED
+    ),
+    "hierarchy_styled": lambda cfg: replace(
+        cfg, group_effects=GROUP_EFFECTS_STYLED, group_parents={}
+    ),
     "drift_strict": lambda cfg: cfg,
 }
 
@@ -3161,6 +3519,11 @@ _PANEL_NON_ISIN_FIELDS: frozenset[str] = frozenset(
         "time_days",
         "drift_names",
         "coord_uniques",
+        # Indexed by LEVEL, not by ISIN. Slicing it would leave a subsampled
+        # comparison run with a parent map addressing rows that are gone --
+        # silently, since the shapes only have to agree with the coord, not with
+        # the panel.
+        "coord_parent_of",
         "response_mean",
         "response_std",
         "orthogonal_rotation",
@@ -4040,6 +4403,15 @@ def run_screen(
             "style_class": frame.get("style_class"),
             "size_class": frame.get("size_class"),
             "n_analysts": pd.to_numeric(frame.get("n_analysts"), errors="coerce"),
+            # The analyst panel's own 1-5 consensus (5 = Strong Buy). Carried so
+            # `name_action_list` can emit `consensus_gap` -- the model's action
+            # score minus the panel's rating, on one scale. Without it the whole
+            # reason the action ladder borrows the analyst vocabulary is
+            # unavailable at the point of use, and the screen that reproduces
+            # consensus at Spearman 0.992 has no column saying where it differs.
+            "feat_analyst_rating": pd.to_numeric(
+                frame.get("feat_analyst_rating"), errors="coerce"
+            ),
             "market_cap": pd.to_numeric(frame.get("market_cap"), errors="coerce"),
             "mcap_global_r": pd.to_numeric(frame.get("feat_mcap_global_r"), errors="coerce"),
             "mcap_country_r": pd.to_numeric(frame.get("feat_mcap_country_r"), errors="coerce"),
@@ -4192,20 +4564,62 @@ def run_screen(
         cov["bucket"] = pd.cut(
             cov["n_analysts"], [0, 3, 8, 20, np.inf], labels=["1-3", "4-8", "9-20", "21+"]
         )
-        col = "er_sd" if "er_sd" in cov.columns else "expected_upside_sd"
-        grad = cov.groupby("bucket", observed=True)[col].mean()
-        monotone = bool(grad.is_monotonic_decreasing)
-        spread = float(grad.max() / max(grad.min(), _EPS))
-        report.add(
-            GateResult(
-                name="coverage_gradient",
-                passed=monotone and spread >= 2.0,
-                value=f"{'monotone' if monotone else 'NOT monotone'}, spread {spread:.2f}x",
-                threshold="monotone decreasing, spread >= 2x",
-                blocking=False,
-                detail=f"mean {col} by bucket: {grad.round(4).to_dict()}",
+        # GRADE THE POSTERIOR SD. This gate asks whether the hierarchy prices
+        # information -- whether a name covered by 30 analysts gets a tighter
+        # ESTIMATE than one covered by 2 -- so it has to be measured on the
+        # estimate's own uncertainty.
+        #
+        # It used to read `er_sd if "er_sd" in cov.columns else expected_upside_sd`,
+        # and the fallback silently became the primary when the 2026-08-20 change
+        # made `er_sd` the pooled sd of the FORWARD-RETURN Monte Carlo. That is a
+        # different quantity: on run `6efb530d5881` the posterior leg was 2.9-6.4 %
+        # of `er_sd`'s VARIANCE, the rest being forward-simulation and
+        # forecast-error dispersion whose own gradient is 1.49x. The composite came
+        # out at 1.52x and the gate warned -- while `expected_upside_sd` over the
+        # same buckets ran 0.0703 / 0.0652 / 0.0462 / 0.0313, a 2.24x spread that
+        # clears the 2x floor. The hierarchy was doing exactly what the gate
+        # demands; the gate could not see it.
+        #
+        # Named explicitly rather than resolved by `in cov.columns`, because a
+        # column-availability fallback is precisely how the measured quantity
+        # changed underneath the threshold without anything failing.
+        col = "expected_upside_sd"
+        if col not in cov.columns:
+            logger.warning(
+                "%s absent from the screen; the coverage gradient cannot be "
+                "measured on the posterior sd this run", col,
             )
-        )
+        else:
+            grad = cov.groupby("bucket", observed=True)[col].mean()
+            monotone = bool(grad.is_monotonic_decreasing)
+            spread = float(grad.max() / max(grad.min(), _EPS))
+            # The forward-return gradient, REPORTED and never graded. `er_sd`
+            # carries the forecast-error term, whose steepness is set by
+            # `forecast_error_n_exponent` -- a prior the panel cannot identify, so
+            # a threshold on it would test only that the prior was applied. Same
+            # reasoning, and the same treatment, as `forecast_factor_effect`.
+            fwd = ""
+            if "er_sd" in cov.columns:
+                g2 = cov.groupby("bucket", observed=True)["er_sd"].mean()
+                fwd = (
+                    f"; forward-return er_sd {g2.round(4).to_dict()} "
+                    f"(spread {float(g2.max() / max(g2.min(), _EPS)):.2f}x, "
+                    "reported not gated: its steepness is set by "
+                    "forecast_error_n_exponent, a prior)"
+                )
+            report.add(
+                GateResult(
+                    name="coverage_gradient",
+                    passed=monotone and spread >= 2.0,
+                    value=(
+                        f"{'monotone' if monotone else 'NOT monotone'}, "
+                        f"spread {spread:.2f}x"
+                    ),
+                    threshold="monotone decreasing, spread >= 2x (posterior sd)",
+                    blocking=False,
+                    detail=f"mean {col} by bucket: {grad.round(4).to_dict()}{fwd}",
+                )
+            )
 
     # ---- prob_pos degeneracy (item 8) --------------------------------------
     pinned = float((screen["prob_pos"] >= 0.99995).mean())
@@ -4246,6 +4660,60 @@ def run_screen(
 # =========================================================================== #
 # §10b  Risk book                                                             #
 # =========================================================================== #
+
+
+def _book_group_labels(
+    screen: pd.DataFrame,
+    run_cfg: "KalmanRunConfigV2",
+    *,
+    isins: Optional[np.ndarray] = None,
+) -> dict[str, np.ndarray]:
+    """Per-name labels for each capped dimension, aligned BY KEY.
+
+    Only the dimensions that carry a cap are resolved: a label array the sizer
+    cannot use is a per-name string column carried through the whole book for
+    nothing.
+
+    Alignment is by ISIN, never by position. ``run_screen`` returns the screen
+    sorted by ``expected_upside`` while the forecast draws stay in
+    ``panel.isins`` order, and attributing a sector to the wrong name is the
+    permutation this project has already shipped once -- a length check passes it.
+
+    Parameters
+    ----------
+    screen
+        Screen frame carrying ``isin`` and the classification columns.
+    run_cfg
+        Supplies ``group_caps``, whose keys name the dimensions.
+    isins
+        Order to align to. ``None`` keeps the screen's own order.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Labels per dimension; unresolvable dimensions are skipped with a warning,
+        because a cap silently not applied is worse than a cap not set.
+    """
+    caps = getattr(run_cfg, "group_caps", None) or {}
+    if not caps or screen is None or "isin" not in getattr(screen, "columns", []):
+        return {}
+    keyed = screen.drop_duplicates("isin").copy()
+    keyed.index = keyed["isin"].astype(str)
+    order = (np.asarray(isins).astype(str) if isins is not None
+             else screen["isin"].astype(str).to_numpy())
+    out: dict[str, np.ndarray] = {}
+    for dim in caps:
+        if dim not in keyed.columns:
+            logger.warning(
+                "group cap set for %r but the screen has no such column, so the "
+                "cap CANNOT be applied. Available: %s",
+                dim, sorted(c for c in keyed.columns if keyed[c].dtype == object)[:12],
+            )
+            continue
+        out[dim] = (
+            keyed[dim].reindex(order).fillna(UNKNOWN_LABEL).astype(str).to_numpy()
+        )
+    return out
 
 
 def run_risk_book(
@@ -4317,7 +4785,12 @@ def run_risk_book(
             screen,
             alpha=run_cfg.cvar_alpha,
             cap=run_cfg.weight_cap,
-            k_book=run_cfg.k_book,
+            # A CEILING since 2026-08-28, not the book size. `min_weight` on the
+            # config decides breadth; this only bounds it.
+            max_names=run_cfg.k_book,
+            min_weight=run_cfg.book_min_weight,
+            group_labels=_book_group_labels(screen, run_cfg),
+            group_caps=run_cfg.group_caps,
             p_long=run_cfg.p_long,
             mcap_r_max=run_cfg.mcap_global_r_max,
             return_draws=return_draws,
@@ -4392,8 +4865,12 @@ def write_forecast_handoff(
         identity = screen[["isin", *[c for c in ident_cols if c != "isin"]]] \
             if "isin" in screen.columns else None
 
+        # Into `07_posterior/` -- the handoff IS a persisted posterior (the four
+        # quantities the forward simulation reads), not an output of the §15
+        # stage that consumes it. `EXPORT_DIR_ALIASES` carries that mapping.
         path = save_forecast_handoff(
-            run_cfg.results_path / _HANDOFF_STEM,
+            section_path(run_cfg.results_path, Path(_HANDOFF_STEM).stem,
+                         suffix=Path(_HANDOFF_STEM).suffix),
             idata,
             panel,
             latent=latent,
@@ -4586,8 +5063,16 @@ def run_forecast_layer(
                 )
                 eligible = np.isfinite(mcap) & (mcap < run_cfg.mcap_global_r_max)
 
-            book = optimize_portfolio(fc.terminal, fc.isins, k_book=run_cfg.k_book, cap=run_cfg.weight_cap,
-                                      kelly_multiplier=run_cfg.portfolio_kelly_multiplier, eligible=eligible)
+            book = optimize_portfolio(
+                fc.terminal, fc.isins,
+                max_names=run_cfg.k_book,
+                min_weight=run_cfg.book_min_weight,
+                cap=run_cfg.weight_cap,
+                group_labels=_book_group_labels(screen, run_cfg, isins=fc.isins),
+                group_caps=run_cfg.group_caps,
+                kelly_multiplier=run_cfg.portfolio_kelly_multiplier,
+                eligible=eligible,
+            )
             out["portfolio"] = book
 
             decision = book.analytics.copy()
@@ -4645,19 +5130,57 @@ def apply_out_of_support(results: pd.DataFrame) -> pd.DataFrame:
     at exactly 500. ``cvar_5pct_kalman`` is the Kalman distribution's lower-tail
     statistic, so it plays the role ``er_p05`` plays for the Monte Carlo: at the
     upper bound exactly when every draw has reached it.
+
+    **Each end resolves its own column.** The frames this runs over do not carry
+    a uniform summary block, so the two ends are resolved independently against
+    :data:`_OOS_HI_KEYS` / :data:`_OOS_LO_KEYS` and an end whose column is absent
+    is simply not tested. Sharing one fallback across both ends is what crashed
+    the 15b decision frame: the upper leg found the ``er_p05``
+    ``optimize_portfolio`` emits, so the single guard passed, and the lower leg
+    then indexed an ``er_mean`` that frame has never had.
     """
     out = results.copy()
-    hi_key = "er_p05" if "er_p05" in out.columns else "er_mean"
-    lo_key = "er_p95" if "er_p95" in out.columns else "er_mean"
-    if hi_key not in out.columns:
-        out["out_of_support"] = False
-        return out
 
     def _num(col: str) -> pd.Series:
         return pd.to_numeric(out[col], errors="coerce")
 
-    pinned_hi = (_num(hi_key) >= UPLIFT_CLIP_HI - 1e-6).fillna(False)
-    pinned_lo = (_num(lo_key) <= UPLIFT_CLIP_LO + 1e-6).fillna(False)
+    def _resolve(candidates: tuple[str, ...], end: str) -> Optional[str]:
+        """First present candidate, logging when the test degrades to a mean."""
+        for col in candidates:
+            if col in out.columns:
+                if col != candidates[0]:
+                    logger.info(
+                        "out_of_support: the %s test falls back to %r; %r is absent "
+                        "from this frame. A mean-based test detects far fewer pinned "
+                        "rows than the percentile one it replaces.",
+                        end, col, candidates[0],
+                    )
+                return col
+        return None
+
+    hi_key = _resolve(_OOS_HI_KEYS, "upper-bound")
+    lo_key = _resolve(_OOS_LO_KEYS, "lower-bound")
+    if hi_key is None and lo_key is None:
+        # Nothing to test on. Not an error: a frame with no forward-return
+        # distribution has no clip to be pinned against, and this stage must not
+        # cost a run a fit already paid for.
+        logger.info(
+            "out_of_support: no column of %s is present; the frame is passed "
+            "through with out_of_support = False",
+            sorted(set(_OOS_HI_KEYS) | set(_OOS_LO_KEYS)),
+        )
+        out["out_of_support"] = False
+        return out
+
+    zeros = pd.Series(False, index=out.index)
+    # Each end is tested only if its own column resolved. A missing end is a
+    # weaker test, never a crash and never a silent pass on the other end.
+    pinned_hi = (
+        (_num(hi_key) >= UPLIFT_CLIP_HI - 1e-6).fillna(False) if hi_key else zeros.copy()
+    )
+    pinned_lo = (
+        (_num(lo_key) <= UPLIFT_CLIP_LO + 1e-6).fillna(False) if lo_key else zeros.copy()
+    )
 
     # The Kalman upside posterior, tested the same way on its own tails.
     #
@@ -4772,20 +5295,34 @@ def export_analytics(
     )
 
     # ---- gate: finiteness ---------------------------------------------------
-    bad: list[str] = []
+    # The verdict names the COLUMN, not just the frame. Run `6efb530d5881` failed
+    # this gate on one column -- `kelly_max_feasible` at +inf for 626 of 6,513
+    # names -- and reported only `offending: ['15b_decision_analytics_v2']`, which
+    # is a verdict you cannot act on without opening the artifact.
+    #
+    # The rule the gate enforces, stated once: NO EXPORTED FRAME MAY CARRY +/-inf.
+    # A quantity that is genuinely unbounded or undefined is exported as NULL with
+    # a BOOLEAN beside it saying why -- `kelly_unbounded` is the first instance.
+    # NaN is fine and always was (note the `na_value=0.0` below): it is a SQL NULL,
+    # which is what "not applicable" means. An infinity is neither representable
+    # nor aggregatable -- a `float8 Infinity` poisons every downstream AVG.
+    bad: dict[str, list[str]] = {}
     for key, df in frames.items():
         if df is None or df.empty:
             continue
         num = df.select_dtypes(include=[np.number])
         if num.size and not np.isfinite(num.to_numpy(dtype="float64", na_value=0.0)).all():
-            bad.append(key)
+            bad[key] = _nonfinite_columns(df)
     report.add(
         GateResult(
             name="export_finite",
             passed=not bad,
             value=f"{len(bad)} frame(s) with non-finite values",
             threshold="all numeric cells finite",
-            detail=f"offending: {bad}" if bad else "",
+            detail=(
+                "; ".join(f"{k}.{c}" for k, cols in bad.items() for c in cols)
+                if bad else ""
+            ),
         )
     )
 
@@ -4834,6 +5371,7 @@ def export_analytics(
     # for. The verdict names the PAIRS, so the next reader gets the list rather
     # than a count and can tell a real alias from a coincidence.
     content_dupes: dict[str, list[str]] = {}
+    declared_seen: dict[str, list[str]] = {}
     for key, df in frames.items():
         if df is None or df.empty or len(df.columns) < 2:
             continue
@@ -4857,20 +5395,68 @@ def export_analytics(
                 numeric[col].fillna(0.0).to_numpy().tolist()
             )
             groups.setdefault(sig, []).append(str(col))
-        pairs = [" == ".join(sorted(g)) for g in groups.values() if len(g) > 1]
-        if pairs:
-            content_dupes[key] = sorted(pairs)
+        # Split the groups against EXPORT_DECLARED_ALIASES. A declared pair has a
+        # written reason it cannot be reduced to one name; an undeclared one is the
+        # finding. A group of three or more is never treated as declared -- the
+        # declaration is pairwise, and a third name joining a known pair is new.
+        declared_here = _declared_alias_pairs(key)
+        for g in groups.values():
+            if len(g) < 2:
+                continue
+            names = sorted(g)
+            reason = declared_here.get(frozenset(names)) if len(names) == 2 else None
+            if reason is None:
+                content_dupes.setdefault(key, []).append(" == ".join(names))
+            else:
+                declared_seen.setdefault(key, []).append(" == ".join(names))
+        if key in content_dupes:
+            content_dupes[key] = sorted(content_dupes[key])
+
+    # Re-verify every declared pair, including the ones that did NOT show up above.
+    # A declaration is a claim about the data, so the run that stops satisfying it
+    # is the run that has to say so -- three of the declared pairs are equal
+    # empirically rather than by definition, and this is what catches the vendor
+    # refresh that separates them.
+    broken: list[str] = []
+    for key, entries in EXPORT_DECLARED_ALIASES.items():
+        df = frames.get(key)
+        if df is None or df.empty:
+            continue
+        for col_a, col_b, why in entries:
+            if col_a not in df.columns or col_b not in df.columns:
+                continue
+            a = pd.to_numeric(df[col_a], errors="coerce")
+            b = pd.to_numeric(df[col_b], errors="coerce")
+            if not a.equals(b):
+                broken.append(f"{key}: {col_a} != {col_b} ({why})")
+    if broken:
+        logger.warning(
+            "Declared-equal columns are no longer equal: %s. EXPORT_DECLARED_ALIASES "
+            "says these carry one quantity under two names; that is now false, so "
+            "either the declaration is stale or something upstream changed.",
+            "; ".join(broken),
+        )
+
+    n_declared = sum(len(v) for v in declared_seen.values())
     report.add(
         GateResult(
             name="export_duplicate_content",
-            passed=not content_dupes,
+            passed=not content_dupes and not broken,
             blocking=False,
-            value=f"{len(content_dupes)} frame(s) with duplicated content",
-            threshold="one column per quantity in every frame",
+            value=(
+                f"{len(content_dupes)} frame(s) with undeclared duplicated content"
+                + (f"; {len(broken)} declared pair(s) no longer equal" if broken else "")
+            ),
+            threshold="one column per quantity, or a declared reason for two",
             detail=(
-                "; ".join(f"{k}: {', '.join(v)}" for k, v in content_dupes.items())
-                if content_dupes
-                else ""
+                "; ".join(
+                    part for part in (
+                        "; ".join(f"{k}: {', '.join(v)}" for k, v in content_dupes.items()),
+                        "; ".join(broken),
+                        (f"declared and re-verified: {n_declared} pair(s) across "
+                         f"{len(declared_seen)} frame(s)") if declared_seen else "",
+                    ) if part
+                )
             ),
         )
     )
@@ -4879,7 +5465,9 @@ def export_analytics(
             "Frames carry the same quantity under two names: %s. Pick one name "
             "per quantity at the SOURCE (compute_cvar_aware_book), not with a "
             "drop here -- a drop applied to one frame and not another is what "
-            "produced this.",
+            "produced this. If neither name can go, declare the pair with its "
+            "reason in EXPORT_DECLARED_ALIASES so this list stays short enough "
+            "to read.",
             content_dupes,
         )
 
@@ -4922,6 +5510,10 @@ def export_analytics(
             ", ".join(r.name for r in report.blocking_failures),
         )
 
+    # The ROOT only. Each frame resolves its own section directory through
+    # `section_path` below -- these nine used to land flat here beside the
+    # section tree the figure layer was writing into, so a reader could not tell
+    # a stage's output from a stray file.
     out_dir = run_cfg.results_path
     out_dir.mkdir(parents=True, exist_ok=True)
     engine = None
@@ -4980,7 +5572,9 @@ def export_analytics(
                 logger.error("SQL export failed for %s (%s); CSV from here on", key, exc)
                 sql_ok = False
         if not wrote_table:
-            stamped_df.to_csv(out_dir / f"{key}.csv", index=False)
+            path = section_path(out_dir, key)
+            stamped_df.to_csv(path, index=False)
+            logger.info("wrote %s (%d rows)", path, len(stamped_df))
 
     # ---- gate: single vintage ----------------------------------------------
     if engine is not None and counts:
@@ -5039,18 +5633,56 @@ _ANALYTICS_COLUMN_COMMENTS_V2: dict[str, str] = {
         "excess return. Median ~1.05, which is exactly the range a reader "
         "mistakes for a Sharpe. NULL when out_of_support."
     ),
-    "expected_vol_kalman": (
-        "Standard deviation of the Monte-Carlo forward-return draws -- the same "
-        "quantity as er_sd. Raw decimal. Changed 2026-08-20: it was previously "
-        "the posterior dispersion of expected upside (median 0.47pp against a "
-        "return sd of 19.03pp, a factor of 40), which is why the dashboard "
-        "derived its own volatility rather than using this column."
-    ),
+    # (No entry for `expected_vol_kalman`: the column was retired on 2026-08-27.
+    #  It held "the same quantity as er_sd" -- its own comment said so -- and the
+    #  `_kalman` suffix had been wrong since 2026-08-20, when it became a
+    #  Monte-Carlo forward-return statistic rather than a posterior one. `er_sd`
+    #  carries it, and names what `expected_sharpe_ratio` divides by. The
+    #  estimation-uncertainty view it ORIGINALLY held lives on under an accurate
+    #  name, immediately below.)
     "expected_upside_sd": (
         "Posterior sd of the per-name expected upside -- ESTIMATION uncertainty, "
-        "not return risk. This is what expected_vol_kalman used to hold. Since "
-        "2026-08-20 it also carries the forecast-error term, so it is roughly an "
-        "order of magnitude wider than the 0.47pp of run 49e84d7e9d59. Raw decimal."
+        "not return risk. This is what the retired expected_vol_kalman held before "
+        "2026-08-20. Since then it also carries the forecast-error term, so it is "
+        "roughly an order of magnitude wider than the 0.47pp of run 49e84d7e9d59. "
+        "Raw decimal. The column coverage_gradient is graded on."
+    ),
+    "kelly_fraction": (
+        "Log-optimal position size solved on the forward-return draws by "
+        "bisection on E[r / (1 + f*r)]. Read it WITH kelly_interior and "
+        "kelly_unbounded: the bare column reads 1.000 both when the criterion "
+        "chose the cap and when it had nothing to solve."
+    ),
+    "kelly_interior": (
+        "TRUE when the Kelly solution lies strictly inside (0, max_fraction), "
+        "i.e. the criterion actually chose it rather than being pinned at a "
+        "bound. FALSE for 89.3% of the universe on run 448e7f055ef3."
+    ),
+    "kelly_unbounded": (
+        "TRUE when the name's draws contain no losing scenario, so no finite "
+        "feasible fraction exists and kelly_max_feasible is NULL. That is a "
+        "statement about the simulation, not about the opportunity. 626 of 6,513 "
+        "names on run 6efb530d5881."
+    ),
+    "kelly_max_feasible": (
+        "Largest f with 1 + f*r > 0 on every draw. NULL where no finite bound "
+        "exists -- see kelly_unbounded. Carried +inf until 2026-08-27, which is "
+        "not exportable: it blocked export_finite and a float8 Infinity poisons "
+        "every downstream aggregate."
+    ),
+    "downside_dev_floored": (
+        "TRUE when the ranking denominator floor excluded this name from the "
+        "reward_to_downside arm -- its modelled downside sat below the floor, so "
+        "the ratio would have ranked it on the ABSENCE of modelled risk."
+    ),
+    "tail_risk_floored": (
+        "As downside_dev_floored, for the reward_to_cvar arm."
+    ),
+    "rank_denominator_pctile": (
+        "Where this name's ranking denominator sits in the eligible universe's "
+        "distribution of the same. The column that makes 'selected on the absence "
+        "of modelled downside' a read rather than a diagnosis: every name of the "
+        "run 448e7f055ef3 book sat in its bottom ~2%."
     ),
     "shrink_gain": (
         "Weight on the name's own smoothed observation in the forecast-error "
@@ -5313,8 +5945,8 @@ def summarise(
         try:
             frame = report.to_frame()
             if not frame.empty:
-                results_path.mkdir(parents=True, exist_ok=True)
-                frame.to_csv(results_path / f"{_GATE_REPORT_KEY}.csv", index=False)
+                frame.to_csv(section_path(results_path, _GATE_REPORT_KEY),
+                             index=False)
         except Exception as exc:  # pragma: no cover - never lose a run to this
             logger.warning("Could not persist the gate report: %s", exc)
 
@@ -5326,7 +5958,7 @@ def _render_figures(result: dict[str, Any], panel: KalmanPanelV2,
     Called LAST on every terminating path -- after ``export_analytics`` and after
     ``summarise`` -- so the analytics tables and the gate report are already on
     disk before a plotting library gets a chance to fail. The import is deferred
-    for the same reason the panels are: ``kalman_viz_v2`` pulls in plotly,
+    for the same reason the panels are: ``visualizations.kalman_viz_v2`` pulls in plotly,
     matplotlib and seaborn, and a workflow that only wants the tables should not
     pay for them, nor fail to run if they are missing.
 
@@ -5338,7 +5970,7 @@ def _render_figures(result: dict[str, Any], panel: KalmanPanelV2,
         logger.info("figures disabled (--no-figures)")
         return
     try:
-        import kalman_viz_v2 as viz
+        from probabilistic_ml_model.visualizations import kalman_viz_v2 as viz
     except Exception as exc:  # pragma: no cover - optional plotting stack
         logger.warning(
             "figures skipped: kalman_viz_v2 is unavailable (%s). The analytics "
@@ -5500,7 +6132,13 @@ def main(
         columns={
             "starr": "reward_to_cvar",
             "cvar05": "cvar_5pct_kalman",
-            "exp_vol": "expected_vol_kalman",
+            # `exp_vol -> expected_vol_kalman` was here until 2026-08-27. Renaming
+            # a column only to drop it as a duplicate of `er_sd` two steps later is
+            # a round trip; `exp_vol` now keeps its own name until
+            # EXPORT_REDUNDANT_COLUMNS removes it. Both names stay in that mapping,
+            # so a stale RiskBookModel or a re-added rename cannot smuggle either
+            # back onto the published surface -- the same one-release guard the
+            # `expected_sharpe` drop above exists to be.
             "book_weight": "cvar_book_weight",
             "expected_upside": "expected_return_kalman",
             "expected_pt": "price_target_kalman",
@@ -5585,12 +6223,137 @@ def main(
     return result
 
 
+def migrate_results_layout(
+    root: "Optional[str]" = None,
+    *,
+    from_root: "Optional[str]" = None,
+    dry_run: bool = True,
+) -> "dict[str, str]":
+    """Re-file flat artifacts into the section tree, and v2's out of v1's.
+
+    Two migrations, because two things went wrong and they compound.
+
+    **Flat to sectioned.** Every v2 frame used to be written to the top level of
+    the results root while the figure layer wrote into section directories, so
+    one tree carried two conventions and a stray file was indistinguishable from
+    a stage's output.
+
+    **v1's tree to v2's.** Both workflows resolved ``KALMAN_PT_RESULTS_DIR``,
+    which ``set_env.ps1`` points at v1's tree. A v2 run therefore scattered its
+    frames, its gate report and its handoff through v1's directories, under names
+    one suffix away from v1's own.
+
+    Ownership is decided, never guessed: a file in ``from_root`` moves only when
+    its name carries the ``_v2`` suffix or its stem resolves to a section v1 never
+    writes (:data:`V2_ONLY_SECTION_DIRS`). Everything else stays exactly where it
+    is. Both rules come from the layout SSOT, so a new section cannot leave this
+    behind.
+
+    Idempotent: a file already at its resolved path is left alone, and a second
+    invocation reports nothing to do.
+
+    Parameters
+    ----------
+    root
+        Destination tree. Defaults to :attr:`KalmanRunConfigV2.results_path`.
+    from_root
+        Optional second source to sweep, e.g. v1's tree.
+    dry_run
+        Report the moves without making them. **The default**, because this
+        rewrites a results tree and the first thing anyone should see is the list.
+
+    Returns
+    -------
+    dict[str, str]
+        ``source -> destination`` for every move planned or made.
+    """
+    import shutil
+
+    dest_root = Path(root) if root else KalmanRunConfigV2.from_env().results_path
+    dest_root.mkdir(parents=True, exist_ok=True)
+    moves: "dict[str, str]" = {}
+    legacy_dirs: "list[Path]" = []
+
+    def _plan(path: Path, *, foreign: bool) -> None:
+        stem = path.stem
+        if foreign and not (
+            stem.endswith("_v2") or export_dir_for(stem) in V2_ONLY_SECTION_DIRS
+        ):
+            return
+        target = section_path(dest_root, stem, suffix=path.suffix)
+        if target.resolve() == path.resolve():
+            return
+        moves[str(path)] = str(target)
+        if not dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(target))
+
+    for entry in sorted(dest_root.iterdir()):
+        if entry.is_file():
+            _plan(entry, foreign=False)
+        elif entry.is_dir() and entry.name not in EXPORT_SECTION_DIRS:
+            # A LEGACY BUCKET, e.g. the replay's old `15_portfolio`, which held a
+            # forecast summary, two prior sweeps, the sized books and three
+            # recommendation frames -- four stages under one directory name. Its
+            # files carry the section numbers already; only the folder was wrong.
+            for nested in sorted(entry.rglob("*")):
+                if nested.is_file():
+                    _plan(nested, foreign=False)
+            legacy_dirs.append(entry)
+
+    if from_root:
+        src_root = Path(from_root)
+        if src_root.is_dir() and src_root.resolve() != dest_root.resolve():
+            # Recursive, not root-only. A v2 frame written while
+            # KALMAN_PT_RESULTS_DIR pointed at v1 landed flat, but the FIGURES
+            # landed INSIDE v1's section directories -- which is the half a
+            # root-only sweep would leave behind.
+            for entry in sorted(src_root.rglob("*")):
+                if entry.is_file():
+                    _plan(entry, foreign=True)
+
+    if not dry_run:
+        # Only when empty. A directory still holding something is a directory
+        # holding something this migration could not place, and removing it would
+        # destroy exactly the file that most needs looking at.
+        for directory in legacy_dirs:
+            with contextlib.suppress(OSError):
+                directory.rmdir()
+                logger.info("removed the now-empty legacy bucket %s", directory)
+
+    verb = "would move" if dry_run else "moved"
+    if moves:
+        logger.info("%s %d artifact(s) into %s", verb, len(moves), dest_root)
+        for src, dst in sorted(moves.items()):
+            logger.info("  %s %s -> %s", verb, src, dst)
+        if dry_run:
+            logger.info("dry run: re-run with --apply to make these moves")
+    else:
+        logger.info("results layout is already current under %s", dest_root)
+    return moves
+
+
 def _cli() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--dry-run", action="store_true", help="stages 1-4b only")
     parser.add_argument("--benchmark", action="store_true",
                         help="build the model, time the gradient, project wall clock, stop")
     parser.add_argument("--write", action="store_true", help="write the analytics tables")
+    parser.add_argument(
+        "--migrate-layout", action="store_true",
+        help=("re-file flat artifacts into the section tree and move v2 artifacts "
+              "out of v1's results directory. Reports the moves and exits; add "
+              "--apply to make them"),
+    )
+    parser.add_argument(
+        "--apply", action="store_true",
+        help="with --migrate-layout, perform the moves instead of listing them",
+    )
+    parser.add_argument(
+        "--migrate-from", type=str, default=None,
+        help=("second tree to sweep for stray v2 artifacts (default: v1's, since "
+              "that is where KALMAN_PT_RESULTS_DIR sent them)"),
+    )
     parser.add_argument(
         "--no-figures", action="store_true",
         help=(
@@ -5661,6 +6424,23 @@ def _cli() -> int:
         ),
     )
     args = parser.parse_args()
+
+    if args.migrate_layout:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        )
+        migrate_results_layout(
+            from_root=args.migrate_from or str(
+                resolve_results_root(
+                    None,
+                    env_value=os.environ.get("KALMAN_PT_RESULTS_DIR"),
+                    default_dirname=DEFAULT_RESULTS_DIRNAME_V1,
+                )
+            ),
+            dry_run=not args.apply,
+        )
+        return 0
 
     model_cfg = KalmanModelConfig()
     if args.lookbacks is not None:

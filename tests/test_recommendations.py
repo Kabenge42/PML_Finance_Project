@@ -21,6 +21,10 @@ from probabilistic_ml_model.pymc_models._recommendations import (
     VERDICTS,
     demotion_list,
     group_allocation_signals,
+    ACTION_SCORES,
+    ACTIONS,
+    BUY_ACTIONS,
+    SELL_ACTIONS,
     name_action_list,
     reliability_posture,
     render_recommendations,
@@ -138,13 +142,126 @@ def test_action_gates_scale_with_the_confidence_they_are_compared_against(analyt
     ends up with no high-conviction names and no explanation."""
     scaled = name_action_list(analytics, confidence_scale=0.5)
     assert scaled["gate_hi"].iloc[0] == pytest.approx(0.375)
-    assert set(scaled["action"]) <= {"BUY", "HOLD", "AVOID"}
+    assert scaled["gate_strong_hi"].iloc[0] == pytest.approx(0.45)
+    assert set(scaled["action"]) <= set(ACTIONS)
     assert len(scaled) == len(analytics)
 
 
 def test_action_list_needs_its_columns(analytics):
     with pytest.raises(KeyError):
         name_action_list(analytics.drop(columns="p_upside_pos_cond"))
+
+
+# --------------------------------------------------------------------------- #
+# The five-point ladder                                                       #
+# --------------------------------------------------------------------------- #
+def test_action_is_monotone_in_the_probability():
+    """A name cannot become LESS bullish as its probability rises.
+
+    The nested `np.where` is evaluated outermost-first; get that order wrong and
+    a name clearing `strong_hi` falls through to BUY, which is invisible in any
+    aggregate.
+    """
+    probs = np.linspace(0.0, 1.0, 101)
+    frame = pd.DataFrame({
+        "isin": [f"P{i:03d}" for i in range(len(probs))],
+        "p_upside_pos_cond": probs,
+        "expected_upside": np.full(len(probs), 0.20),   # all positive
+    })
+    out = name_action_list(frame).set_index("isin")
+    scores = out.loc[[f"P{i:03d}" for i in range(len(probs))], "action_score"]
+    assert (np.diff(scores.to_numpy()) >= 0).all()
+
+    frame["expected_upside"] = -0.20                    # all negative
+    out = name_action_list(frame).set_index("isin")
+    scores = out.loc[[f"P{i:03d}" for i in range(len(probs))], "action_score"]
+    # Falling probability must make a losing name MORE bearish, never less.
+    assert (np.diff(scores.to_numpy()) >= 0).all()
+
+
+def test_every_rung_is_reachable_and_scored_on_the_analyst_scale():
+    frame = pd.DataFrame({
+        "isin": list("ABCDE"),
+        "p_upside_pos_cond": [0.99, 0.80, 0.50, 0.20, 0.02],
+        "expected_upside": [0.5, 0.3, 0.1, -0.1, -0.3],
+    })
+    out = name_action_list(frame).set_index("isin")
+    assert list(out.loc[list("ABCDE"), "action"]) == list(ACTIONS)
+    assert list(out.loc[list("ABCDE"), "action_score"]) == [5.0, 4.0, 3.0, 2.0, 1.0]
+    assert set(ACTION_SCORES) == set(ACTIONS)
+
+
+def test_avoid_is_retired():
+    frame = pd.DataFrame({
+        "isin": ["A", "B"],
+        "p_upside_pos_cond": [0.05, 0.95],
+        "expected_upside": [-0.4, 0.4],
+    })
+    assert "AVOID" not in set(name_action_list(frame)["action"])
+
+
+def test_sort_is_strongest_long_first_strongest_short_last():
+    frame = pd.DataFrame({
+        "isin": list("ABCDE"),
+        "p_upside_pos_cond": [0.02, 0.50, 0.99, 0.20, 0.80],
+        "expected_upside": [-0.3, 0.1, 0.5, -0.1, 0.3],
+    })
+    out = name_action_list(frame)
+    assert out["action"].iloc[0] == "STRONG BUY"
+    assert out["action"].iloc[-1] == "STRONG SELL"
+
+
+def test_consensus_gap_is_the_model_minus_the_panel():
+    """The reason the action scale is the analyst scale."""
+    frame = pd.DataFrame({
+        "isin": ["A", "B", "C"],
+        "p_upside_pos_cond": [0.99, 0.50, 0.02],
+        "expected_upside": [0.5, 0.1, -0.3],
+        # panel says Buy / Strong Buy / Hold
+        "feat_analyst_rating": [4.0, 5.0, 3.0],
+    })
+    out = name_action_list(frame).set_index("isin")
+    assert out.loc["A", "consensus_gap"] == pytest.approx(1.0)    # 5 - 4, more bullish
+    assert out.loc["B", "consensus_gap"] == pytest.approx(-2.0)   # 3 - 5, less bullish
+    assert out.loc["C", "consensus_gap"] == pytest.approx(-2.0)   # 1 - 3
+
+
+def test_consensus_gap_is_omitted_rather_than_faked():
+    frame = pd.DataFrame({
+        "isin": ["A"], "p_upside_pos_cond": [0.9], "expected_upside": [0.2],
+    })
+    assert "consensus_gap" not in name_action_list(frame).columns
+
+
+def test_out_of_order_gates_are_refused():
+    """An inverted pair empties a bucket instead of raising, which reads as a
+    finding rather than as a configuration error."""
+    frame = pd.DataFrame({
+        "isin": ["A"], "p_upside_pos_cond": [0.9], "expected_upside": [0.2],
+    })
+    with pytest.raises(ValueError, match="must be ordered"):
+        name_action_list(frame, hi=0.5, strong_hi=0.4)
+    with pytest.raises(ValueError, match="must be ordered"):
+        name_action_list(frame, lo=0.05, strong_lo=0.2)
+
+
+def test_non_finite_inputs_land_in_hold():
+    """HOLD is the only bucket that asserts nothing, so it is where a name with
+    no usable probability or return belongs."""
+    frame = pd.DataFrame({
+        "isin": ["A", "B"],
+        "p_upside_pos_cond": [np.nan, 0.99],
+        "expected_upside": [0.2, np.nan],
+    })
+    assert set(name_action_list(frame)["action"]) == {"HOLD"}
+
+
+def test_buy_actions_covers_both_long_rungs():
+    """A consumer testing `== "BUY"` silently drops the strongest names."""
+    assert BUY_ACTIONS == {"STRONG BUY", "BUY"}
+    assert SELL_ACTIONS == {"SELL", "STRONG SELL"}
+    assert not BUY_ACTIONS & SELL_ACTIONS
+    assert (BUY_ACTIONS | SELL_ACTIONS | {"HOLD"}) == set(ACTIONS)
 
 
 def test_watch_flags_both_legs_and_records_which_ran(analytics):

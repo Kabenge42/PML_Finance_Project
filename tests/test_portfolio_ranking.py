@@ -53,11 +53,50 @@ def _legacy_selection(draws, isins, k):
     return set(frame.sort_values("r", ascending=False).head(k)["isin"])
 
 
-def test_default_arm_reproduces_the_shipped_selection(draws, isins):
-    """No default moved. If this fails, the refactor changed the book."""
-    book = optimize_portfolio(draws, isins, k_book=K_BOOK, cap=0.10)
+def test_default_arm_still_ranks_the_way_it_always_did(draws, isins):
+    """The RANKING is unchanged. Only the sizing rule moved.
+
+    Breadth became an output on 2026-08-28, so the book is no longer literally
+    the top ``k``. What must not have changed is the ordering that decides which
+    names are even considered -- so this pins the candidate pool (``min_weight=0``
+    disables the truncation, ``max_names`` restores the ceiling) against the
+    pre-change rule, reimplemented independently in ``_legacy_selection``.
+    """
+    book = optimize_portfolio(
+        draws, isins, max_names=K_BOOK, min_weight=0.0, cap=0.10
+    )
     assert book.summary["rank_by"] == DEFAULT_RANKING_RULE == "reward_to_downside"
     assert set(book.weights.index) == _legacy_selection(draws, isins, K_BOOK)
+
+
+def test_breadth_is_an_output_not_the_k_that_was_asked_for(draws, isins):
+    """The change itself, stated as a test.
+
+    Run 807df55e7158 published fifty names of which thirty-eight held 1.17 %
+    between them and the smallest held 0.0002 %. A weight of two ten-thousandths
+    of a per cent is not a position; it is a number that survived a sort.
+    """
+    book = optimize_portfolio(draws, isins, max_names=K_BOOK, cap=0.10)
+    assert len(book.weights) <= K_BOOK
+    assert book.summary["n_book"] == float(len(book.weights))
+    # Nothing below the floor ships.
+    assert (book.weights >= book.summary["min_weight"] - 1e-12).all()
+    # ...and dropping the floor genuinely widens the book, so the floor is the
+    # thing deciding breadth rather than the ranking running out of names.
+    wide = optimize_portfolio(
+        draws, isins, max_names=K_BOOK, min_weight=0.0, cap=0.10
+    )
+    assert len(wide.weights) >= len(book.weights)
+
+
+def test_k_book_is_accepted_as_a_deprecated_ceiling(draws, isins):
+    """It was the selection rule for the life of this function and is still in
+    saved commands, so it must keep working -- while saying that it now bounds
+    the book rather than deciding it."""
+    with pytest.warns(DeprecationWarning, match="max_names"):
+        book = optimize_portfolio(draws, isins, k_book=K_BOOK, cap=0.10)
+    assert book.summary["max_names"] == float(K_BOOK)
+    assert len(book.weights) <= K_BOOK
 
 
 def test_relative_floor_is_off_by_default(draws, isins):
@@ -73,9 +112,17 @@ def test_relative_floor_excludes_rather_than_clamps(draws, isins):
     strict = optimize_portfolio(draws, isins, k_book=K_BOOK,
                                 relative_denominator_q=0.9)
     analytics = strict.analytics
-    admitted = analytics["downside_dev_admitted"]
+    # The floor is reported as a BOOLEAN since 2026-08-27. It used to be the
+    # masked denominator itself, `downside_dev_admitted`, which is `downside_dev`
+    # wherever the floor did not bind -- a byte-identical copy of its own source
+    # under the default `relative_denominator_q = 0.0`, and one of the two pairs
+    # `export_duplicate_content` flagged on run 6efb530d5881. The boolean carries
+    # the only thing the float ever added: WHICH names the floor cut.
+    floored = analytics["downside_dev_floored"]
+    assert floored.dtype == bool
+    assert floored.any(), "a 0.9 relative floor must exclude something"
     # Everything below the floor is masked out, so it cannot be ranked at all.
-    assert analytics.loc[admitted.isna(), "reward_to_downside"].isna().all()
+    assert analytics.loc[floored, "reward_to_downside"].isna().all()
     assert strict.summary["n_eligible"] < optimize_portfolio(
         draws, isins, k_book=K_BOOK).summary["n_eligible"]
 
@@ -101,7 +148,12 @@ def test_bounded_arm_has_no_denominator(draws, isins):
         rank_values=np.clip(rng.beta(6, 1.2, N_ISIN), 0, 1), rank_isins=isins,
     )
     assert np.isnan(book.summary["book_denominator_pctile_max"])
-    assert book.analytics["rank_denominator"].isna().all()
+    assert book.analytics["rank_denominator_pctile"].isna().all()
+    # Which column ranked is ONE fact about the run, recorded in the summary. It
+    # used to be a `rank_denominator` column holding a verbatim per-name copy of
+    # `downside_dev`, which is a duplicate rather than information.
+    assert book.summary["rank_denominator_col"] == ""
+    assert "rank_denominator" not in book.analytics.columns
 
 
 def test_external_arm_refuses_to_invent_its_column(draws, isins):

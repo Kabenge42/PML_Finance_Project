@@ -61,6 +61,10 @@ __all__ = [
     "HDI_LO",
     "HDI_HI",
     "VERDICTS",
+    "ACTIONS",
+    "ACTION_SCORES",
+    "BUY_ACTIONS",
+    "SELL_ACTIONS",
     "group_allocation_signals",
     "name_action_list",
     "size_down_watch",
@@ -102,6 +106,36 @@ HDI_HI: float = 0.96
 
 #: The three postures. Ordered strong-to-weak so a sort is meaningful.
 VERDICTS: tuple[str, ...] = ("OVERWEIGHT", "NEUTRAL", "UNDERWEIGHT")
+
+#: The per-name action ladder, most bullish first.
+#:
+#: Deliberately the vendor's own vocabulary. ``pml_df.analyst_rating`` is a
+#: numeric 1-5 consensus (5 = Strong Buy, direction pinned by its
+#: ``(x - 1) * 25`` normalisation and by ``r(bullish, rating) = +0.909``), and
+#: the six raw count buckets behind it are ``# Strong Buys`` / ``# Buys`` /
+#: ``# Hold`` / ``# Sell`` / ``# Strong Sell`` / ``# No Opinion``. Scoring the
+#: model's action on that same scale is what makes ``consensus_gap`` a
+#: subtraction rather than a mapping exercise.
+ACTIONS: tuple[str, ...] = ("STRONG BUY", "BUY", "HOLD", "SELL", "STRONG SELL")
+
+#: Action -> the 1-5 analyst-scale score. Numeric so a book, a sector or the
+#: whole universe can be averaged and compared against its analyst consensus
+#: directly; a categorical action cannot be.
+ACTION_SCORES: dict[str, float] = {
+    "STRONG BUY": 5.0,
+    "BUY": 4.0,
+    "HOLD": 3.0,
+    "SELL": 2.0,
+    "STRONG SELL": 1.0,
+}
+
+#: The actions that constitute a long recommendation. Consumers reporting a
+#: "share buy" must use this rather than testing ``== "BUY"``, which silently
+#: excludes the strongest names.
+BUY_ACTIONS: frozenset[str] = frozenset({"STRONG BUY", "BUY"})
+
+#: The actions that constitute a short / exit recommendation.
+SELL_ACTIONS: frozenset[str] = frozenset({"SELL", "STRONG SELL"})
 
 _EPS = 1e-12
 
@@ -341,23 +375,67 @@ def name_action_list(
         analytics: pd.DataFrame,
         *,
         confidence_scale: float = 1.0,
+        strong_hi: float = 0.90,
         hi: float = 0.75,
         lo: float = 0.25,
+        strong_lo: float = 0.10,
         prob_col: str = "p_upside_pos_cond",
         return_col: str = "expected_upside",
+        rating_col: str = "feat_analyst_rating",
 ) -> pd.DataFrame:
-    """Per-name BUY / AVOID / HOLD, on the conditional probability scale.
+    """Per-name action on the five-point analyst scale, from the conditional
+    probability and the sign of the expected return.
 
-    The gates are the nominal ``hi`` / ``lo`` rescaled by ``confidence_scale``, which
-    must be the same universe-mean confidence ``prob_col`` was itself conditioned on.
-    Comparing an unconditional gate against a conditional column is how a screen ends
-    up with no high-conviction names and no explanation.
+    The ladder is :data:`ACTIONS` -- ``STRONG BUY`` through ``STRONG SELL`` --
+    scored 5 to 1 in :data:`ACTION_SCORES`, deliberately the same scale and
+    direction as the vendor's ``analyst_rating`` consensus (5 = Strong Buy,
+    pinned by its ``(x - 1) * 25`` normalisation).
+
+    **Why five, and why this scale.** The previous three-valued vocabulary
+    returned 83.5 % of the universe as ``BUY`` on run ``807df55e7158``, including
+    all fifty book names -- a forward simulation in which half the universe
+    cannot lose money will produce an action list that rarely says no, and three
+    buckets have nowhere to put the difference between a name at ``p = 0.76`` and
+    one at ``p = 0.99``. Sharing the analyst scale then buys something the three
+    values could not express at all: ``consensus_gap``, the per-name statement of
+    *where this model disagrees with the panel*, on one axis.
+
+    ``AVOID`` is retired in favour of ``SELL`` / ``STRONG SELL``. It named an
+    instruction ("do not hold") rather than a position on a scale, so it could
+    not be graded or compared against anything.
+
+    Gates are the nominal thresholds rescaled by ``confidence_scale``, which must
+    be the same universe-mean confidence ``prob_col`` was itself conditioned on.
+    Comparing an unconditional gate against a conditional column is how a screen
+    ends up with no high-conviction names and no explanation.
+
+    Parameters
+    ----------
+    analytics
+        Screen frame; must carry ``prob_col`` and ``return_col``.
+    confidence_scale
+        Universe-mean confidence the probability column is conditioned on.
+    strong_hi, hi, lo, strong_lo
+        Nominal probability gates, before scaling. Must be non-increasing.
+    prob_col, return_col
+        Probability and expected-return columns.
+    rating_col
+        Analyst consensus column. When present, ``consensus_gap`` is emitted.
 
     Returns
     -------
     pandas.DataFrame
-        The input plus ``action`` and the two gate values, sorted with the strongest
-        longs first and the strongest avoids last.
+        The input plus ``action``, ``action_score``, the four gate values and --
+        where ``rating_col`` is available -- ``consensus_gap``. Sorted strongest
+        long first, strongest short last.
+
+    Raises
+    ------
+    KeyError
+        If ``prob_col`` or ``return_col`` is absent.
+    ValueError
+        If the gates are not ordered ``strong_lo <= lo <= hi <= strong_hi``. An
+        out-of-order gate silently empties a bucket rather than failing.
     """
     out = analytics.copy()
     for col in (prob_col, return_col):
@@ -365,27 +443,64 @@ def name_action_list(
             raise KeyError(
                 f"name_action_list needs {col!r}; got {sorted(out.columns)[:12]}..."
             )
-    hi_gate, lo_gate = hi * confidence_scale, lo * confidence_scale
+    if not (strong_lo <= lo <= hi <= strong_hi):
+        raise ValueError(
+            f"action gates must be ordered strong_lo <= lo <= hi <= strong_hi; "
+            f"got {strong_lo}, {lo}, {hi}, {strong_hi}. An inverted pair empties "
+            "a bucket instead of raising, which reads as a finding."
+        )
+
+    c = float(confidence_scale)
+    strong_hi_gate, hi_gate = strong_hi * c, hi * c
+    lo_gate, strong_lo_gate = lo * c, strong_lo * c
     prob = pd.to_numeric(out[prob_col], errors="coerce")
     ret = pd.to_numeric(out[return_col], errors="coerce")
 
+    # Evaluated outermost-first, so a name clearing `strong_hi` never falls
+    # through to `BUY`. A non-finite probability or return lands in HOLD, which
+    # is the only bucket that asserts nothing.
     action = np.where(
-        (ret > 0) & (prob >= hi_gate), "BUY",
-        np.where((ret < 0) & (prob <= lo_gate), "AVOID", "HOLD"),
+        (ret > 0) & (prob >= strong_hi_gate), "STRONG BUY",
+        np.where(
+            (ret > 0) & (prob >= hi_gate), "BUY",
+            np.where(
+                (ret < 0) & (prob <= strong_lo_gate), "STRONG SELL",
+                np.where((ret < 0) & (prob <= lo_gate), "SELL", "HOLD"),
+            ),
+        ),
     )
     out["action"] = action
+    out["action_score"] = pd.Series(action, index=out.index).map(
+        ACTION_SCORES
+    ).astype("float64")
+    out["gate_strong_hi"] = strong_hi_gate
     out["gate_hi"] = hi_gate
     out["gate_lo"] = lo_gate
-    order = pd.Categorical(out["action"], categories=["BUY", "HOLD", "AVOID"],
-                           ordered=True)
+    out["gate_strong_lo"] = strong_lo_gate
+
+    # The point of borrowing the analyst scale. Positive = this model is more
+    # bullish than the panel. Emitted only where the panel's own rating is
+    # present, because a gap against a missing consensus is not a gap.
+    if rating_col in out.columns:
+        rating = pd.to_numeric(out[rating_col], errors="coerce")
+        out["consensus_gap"] = out["action_score"] - rating
+    else:
+        logger.info(
+            "%r absent, so consensus_gap is not emitted. It is the column that "
+            "says where this model DISAGREES with the analyst panel, which is "
+            "the reason the action scale is the analyst scale.", rating_col,
+        )
+
+    order = pd.Categorical(out["action"], categories=list(ACTIONS), ordered=True)
     out = out.assign(_o=order).sort_values(
         ["_o", prob_col, return_col], ascending=[True, False, False]
     ).drop(columns="_o")
+
+    counts = out["action"].value_counts()
     logger.info(
-        "name actions: %d BUY, %d AVOID, %d HOLD (gates %.2f/%.2f at confidence "
-        "scale %.3f)",
-        int((out.action == "BUY").sum()), int((out.action == "AVOID").sum()),
-        int((out.action == "HOLD").sum()), hi_gate, lo_gate, confidence_scale,
+        "name actions: %s (gates %.2f/%.2f/%.2f/%.2f at confidence scale %.3f)",
+        ", ".join(f"{int(counts.get(a, 0))} {a}" for a in ACTIONS),
+        strong_hi_gate, hi_gate, lo_gate, strong_lo_gate, c,
     )
     return out.reset_index(drop=True)
 
@@ -695,16 +810,39 @@ def render_recommendations(
                 printer(f"   ... {len(block) - max_rows} mid-ranked groups omitted ...")
 
     if actions is not None and len(actions):
-        for label, key in (("High-conviction LONGS", "BUY"), ("AVOID candidates", "AVOID")):
+        counts = actions["action"].value_counts()
+        ladder = "  ".join(
+            f"{int(counts.get(a, 0))} {a}" for a in ACTIONS if counts.get(a, 0)
+        )
+        printer(f"\n3. NAME ACTIONS: {ladder or 'none'}")
+        # The whole ladder is printed, not just its ends. Reporting only the
+        # extremes is how "83.5 % of the universe is a BUY" went unnoticed for a
+        # release: the shape of the distribution IS the finding.
+        if "consensus_gap" in actions.columns:
+            gap = pd.to_numeric(actions["consensus_gap"], errors="coerce")
+            if gap.notna().any():
+                printer(
+                    f"   vs analyst consensus: median gap "
+                    f"{gap.median():+.2f} on the 1-5 scale, "
+                    f"{float((gap > 0).mean()):.0%} of names more bullish than "
+                    f"the panel. A gap near zero means this model is reproducing "
+                    f"consensus, not disagreeing with it."
+                )
+        for key in ACTIONS:
             block = actions[actions["action"] == key]
-            printer(f"\n3. {label}: {len(block)} names")
+            if not len(block) or key == "HOLD":
+                continue
+            printer(f"\n   {key} ({len(block)} names)")
             for _, r in block.head(max_rows).iterrows():
                 printer(
-                    f"   {key:<6s} {display_label(r):<20.20s}  "
+                    f"   {key:<11s} {display_label(r):<20.20s}  "
                     f"return={r.get('expected_upside', float('nan')) * 100:6.2f}%  "
                     f"P={r.get('p_upside_pos_cond', float('nan')):4.0%}  "
+                    f"gap={fmt_or_na(r.get('consensus_gap'), 2)}  "
                     f"n_analysts={fmt_or_na(r.get('n_analysts'), 0)}"
                 )
+            if len(block) > max_rows:
+                printer(f"   ... {len(block) - max_rows} more omitted ...")
 
     if watch is not None and len(watch):
         printer(f"\n4. SIZE-DOWN WATCH: {len(watch)} names "

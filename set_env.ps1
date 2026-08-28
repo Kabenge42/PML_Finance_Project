@@ -26,6 +26,16 @@ $env:OUTPUT_DIR = "outputs"
 # instead of CSV. Anchored at this script's directory so the path is absolute
 # regardless of CWD.
 $env:KALMAN_PT_RESULTS_DIR = Join-Path $PSScriptRoot "pymc_kalman_filter_pt_results"
+# v2's artifact root -- SEPARATE from v1's, and that separation is the point.
+# pymc_kalman_filter_pt_v2.py and kalman_portfolio.py used to resolve
+# KALMAN_PT_RESULTS_DIR too, so every v2 frame landed inside v1's sectioned tree
+# under a name one suffix away from v1's own: two models' numbers in one
+# directory, with no way to tell from the tree which run wrote what. Same
+# per-section layout (01_data/ ... 15e_books/, 00_misc/), its own root.
+# Migrate an older tree with:
+#   python pymc_kalman_filter_pt_v2.py --migrate-layout          # list the moves
+#   python pymc_kalman_filter_pt_v2.py --migrate-layout --apply  # make them
+$env:KALMAN_V2_RESULTS_DIR = Join-Path $PSScriptRoot "pymc_kalman_filter_pt_v2_results"
 # 0 -> emit DDL + CSV without writing to the analytics schema (same fallback
 #      happens automatically when the database is unreachable).
 $env:KALMAN_PT_SQL_EXPORT = "1"
@@ -148,6 +158,7 @@ Write-Host "NO_COLOR: $env:NO_COLOR"
 Write-Host "DATA_DIR: $env:DATA_DIR"
 Write-Host "OUTPUT_DIR: $env:OUTPUT_DIR"
 Write-Host "KALMAN_PT_RESULTS_DIR: $env:KALMAN_PT_RESULTS_DIR"
+Write-Host "KALMAN_V2_RESULTS_DIR: $env:KALMAN_V2_RESULTS_DIR"
 Write-Host "KALMAN_PT_SQL_EXPORT: $env:KALMAN_PT_SQL_EXPORT  KALMAN_PT_CLEAN_RESULTS: $env:KALMAN_PT_CLEAN_RESULTS"
 Write-Host "MODEL_DIR: $env:MODEL_DIR"
 Write-Host "RANDOM_SEED: $env:RANDOM_SEED"

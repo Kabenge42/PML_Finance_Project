@@ -10,6 +10,15 @@ Submodules
 - ``quality_risk`` — Piotroski F-Score, Altman Z-Score, anomaly dashboards
 - ``valuation`` — Valuation multiples, distribution, relative matrix
 - ``growth_analysis`` — Growth waterfall, consistency, acceleration charts
+
+Lazy submodules (bound on first attribute access, never by the eager registry
+below — they pull in plotly/matplotlib/seaborn/arviz-plots and the Kalman
+workflows import them only when they are about to draw):
+
+- ``kalman_shared`` — the SSOT for Kalman figure theming, payload budget,
+  reference geometry and artifact filing
+- ``kalman_viz_v2`` — panels for the Kalman v2 fit workflow
+- ``kalman_portfolio_viz`` — panels for the forecast + decision replay
 """
 
 from __future__ import annotations
@@ -183,4 +192,39 @@ for _module_path, _names in _IMPORT_REGISTRY:
     except (ImportError, AttributeError):
         continue
 
-__all__ = _shared_exports + _dynamic_exports
+# ---------------------------------------------------------------------------
+# Lazy submodules
+# ---------------------------------------------------------------------------
+# Deliberately NOT entries in ``_IMPORT_REGISTRY``. That loop is eager, so
+# registering them would drag plotly, matplotlib, seaborn and arviz-plots into
+# every ``import probabilistic_ml_model.visualizations`` — defeating the whole
+# point of the deferred import in ``pymc_kalman_filter_pt_v2._render_figures``,
+# where a missing plotting stack must cost a completed run nothing.
+#
+# The loop also does a FLAT ``setattr`` into this namespace, and the two Kalman
+# figure modules each export ``install``, ``section`` and ``write_table``. Under
+# the registry whichever entry ran last would silently win and ``__all__`` would
+# carry each name twice. Callers bind the MODULE, not the function:
+#
+#     from probabilistic_ml_model.visualizations import kalman_viz_v2 as viz
+_LAZY_SUBMODULES: dict[str, str] = {
+    "kalman_shared": ".kalman_shared",
+    "kalman_viz_v2": ".kalman_viz_v2",
+    "kalman_portfolio_viz": ".kalman_portfolio_viz",
+}
+
+
+def __getattr__(name: str) -> object:
+    """Import a heavy figure submodule on first access, then cache it."""
+    if name in _LAZY_SUBMODULES:
+        module = importlib.import_module(_LAZY_SUBMODULES[name], __name__)
+        globals()[name] = module  # cache after first access
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_SUBMODULES))
+
+
+__all__ = _shared_exports + _dynamic_exports + list(_LAZY_SUBMODULES)

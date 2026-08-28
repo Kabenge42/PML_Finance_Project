@@ -10,9 +10,13 @@ Two runs compared on subtly different definitions is worse than no comparison,
 and that is the failure mode of re-deriving the statistics by hand each time.
 This file owns *extraction*; the skill that calls it owns *judgement*. In
 particular the gate reconstructions below reproduce the pipeline's own
-definitions exactly — the coverage gradient is the MEAN of ``er_sd`` over the
-buckets ``[0,3,8,20,inf]``, not a median over quintiles, because that is what
-``run_screen`` grades.
+definitions exactly — the coverage gradient is the MEAN of ``expected_upside_sd``
+over the buckets ``[0,3,8,20,inf]``, not a median over quintiles, because that is
+what ``run_screen`` grades. It was ``er_sd`` until 2026-08-27, on both sides; the
+pipeline moved to the posterior sd because that is the quantity the gate's claim
+about the hierarchy is about, and this file moved with it. Two numbers under one
+name is the failure this file exists to prevent, and it applies to the pipeline
+and its analysis just as much as to two runs.
 
 The database holds exactly ONE run: the v2 analytics tables are DROP-and-RECREATE
 and the previous run is gone the moment a new one exports. That is why the
@@ -113,9 +117,14 @@ UNAVAILABLE_WITHOUT_GATE_TABLE: tuple[str, ...] = (
 COLUMN_ALIASES = {
     "expected_upside": "expected_return_kalman",
     "cvar05": "cvar_5pct_kalman",
-    "exp_vol": "expected_vol_kalman",
     "starr": "reward_to_cvar",
 }
+# `exp_vol`/`expected_vol_kalman` left this map on 2026-08-27: both names were
+# dropped from the export as duplicates of `er_sd`, which is what they had been
+# equal to by construction since 2026-08-22 (the equality is
+# `compute_cvar_aware_book`'s ISIN-alignment self-check). One quantity, one name,
+# nothing left to map -- which is the resolution this comment used to be waiting
+# for, for this pair.
 
 #: Ladder reported in the artifact's return/risk comparison, in the order a
 #: reader walks it: consensus, then the model's point estimate, then the forward
@@ -316,13 +325,16 @@ def read_gates(eng, screen: pd.DataFrame, diag: pd.DataFrame) -> dict[str, Any]:
             }
         )
 
-    # coverage_gradient -- MEAN of er_sd over the pipeline's own buckets
+    # coverage_gradient -- MEAN of expected_upside_sd over the pipeline's own
+    # buckets. The POSTERIOR sd: the gate asks whether the hierarchy prices
+    # information, so it is graded on the estimate's own uncertainty, not on the
+    # forward-return sd that is ~95% forward-simulation variance.
     cov = screen.dropna(subset=["n_analysts"]).copy()
     if len(cov) >= 500:
         cov["bucket"] = pd.cut(
             cov["n_analysts"], [0, 3, 8, 20, np.inf], labels=["1-3", "4-8", "9-20", "21+"]
         )
-        col = "er_sd" if "er_sd" in cov.columns else "expected_upside_sd"
+        col = "expected_upside_sd"
         grad = cov.groupby("bucket", observed=True)[col].mean()
         monotone = bool(grad.is_monotonic_decreasing)
         spread = _f(grad.max() / max(grad.min(), 1e-12))
@@ -444,7 +456,11 @@ def read_screen(a: pd.DataFrame) -> dict[str, Any]:
     cov["bucket"] = pd.cut(
         cov["n_analysts"], [0, 3, 8, 20, np.inf], labels=["1-3", "4-8", "9-20", "21+"]
     )
-    grad = cov.groupby("bucket", observed=True)["er_sd"].mean()
+    # Matches the gate: the posterior sd. `er_sd_gradient_x` below keeps the
+    # forward-return reading, which is worth watching but is a consequence of
+    # `forecast_error_n_exponent` -- a prior -- and so is reported, never graded.
+    grad = cov.groupby("bucket", observed=True)["expected_upside_sd"].mean()
+    grad_fwd = cov.groupby("bucket", observed=True)["er_sd"].mean()
 
     return {
         "n_names": int(len(a)),
@@ -466,6 +482,7 @@ def read_screen(a: pd.DataFrame) -> dict[str, Any]:
         "p_upside_interior_pct": _f(a["p_upside_pos_cond"].between(0.02, 0.98).mean() * 100),
         "coverage_gradient_x": _f(grad.max() / max(grad.min(), 1e-12)),
         "coverage_gradient_monotone": bool(grad.is_monotonic_decreasing),
+        "er_sd_gradient_x": _f(grad_fwd.max() / max(grad_fwd.min(), 1e-12)),
         # The two risk-normalised ranking columns should not be one ordering
         # under two names. When ``tail_risk`` sits on its volatility floor the
         # STARR numerator and a Sharpe share a denominator up to a constant, so
