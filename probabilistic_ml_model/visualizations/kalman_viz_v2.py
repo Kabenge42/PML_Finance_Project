@@ -51,7 +51,7 @@ Usage
 -----
 .. code-block:: python
 
-    import kalman_viz_v2 as viz
+    from probabilistic_ml_model.visualizations import kalman_viz_v2 as viz
 
     viz.install(run_cfg)                      # once, before any panel
     with viz.section('08_ppc'):
@@ -72,7 +72,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from probabilistic_ml_model.visualizations.kalman_shared import (
+from .kalman_shared import (
     C_ACCENT, C_FORECAST, C_MUTED, C_OBSERVED, C_POSTERIOR, C_REF,
     CS_DIV, CS_SEQ,
     _PPC_ECDF_GRID, _SCREEN_SCATTER_MAX_POINTS,

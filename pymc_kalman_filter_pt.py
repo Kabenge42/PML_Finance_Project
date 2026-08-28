@@ -109,7 +109,8 @@ except ImportError:  # pragma: no cover - optional dependency
 
 # --- Figure primitives, moved out on 2026-08-24 -------------------------------
 # These were defined in this file. They now live in one shared module so v2
-# (`kalman_viz_v2.py`) renders through the SAME theming, payload budget and
+# (`probabilistic_ml_model/visualizations/kalman_viz_v2.py`) renders through the
+# SAME theming, payload budget and
 # reference geometry rather than a second copy that drifts -- the split that
 # CLAUDE.md calls out as "applied in exactly one place".
 #

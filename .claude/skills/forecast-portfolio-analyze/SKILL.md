@@ -140,7 +140,7 @@ capture is the only item that can settle any of it and it is not a flag.
 
 ## Charts
 
-`kalman_portfolio_viz.py` is the reference for what each panel is *for* and how it
+`probabilistic_ml_model/visualizations/kalman_portfolio_viz.py` is the reference for what each panel is *for* and how it
 must be coloured — read its module docstring before designing a new one. The
 constraints that carry over to hand-authored figures in the artifact:
 
@@ -178,7 +178,7 @@ other theme's ink.
 
 - `kalman_portfolio.py` — the replay itself; `RANKING_RULES` and the gate
   catalogue explain what each arm and gate is *for*.
-- `kalman_portfolio_viz.py` — panel intents, the colour argument, the payload
+- `probabilistic_ml_model/visualizations/kalman_portfolio_viz.py` — panel intents, the colour argument, the payload
   budget.
 - `probabilistic_ml_model/pymc_models/RiskBookModel.py` — `MIN_RATIO_DENOMINATOR`,
   `MIN_TAIL_RISK`, and why `tail_risk` lost its `expected_upside` leg on the

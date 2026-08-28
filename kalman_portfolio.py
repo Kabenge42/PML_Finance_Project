@@ -249,6 +249,14 @@ class KalmanPortfolioConfig:
     results_dir: Optional[str] = None
     random_seed: int = 42
     log_level: str = "INFO"
+    #: Target figure width in px. Required by the figure layer's resolver
+    #: contract, not decoration: ``set_viz_config_resolver`` promises an object
+    #: carrying this attribute and ``_display_width_px`` reads it BARE, so a
+    #: config without it turns every arviz-plots / matplotlib panel into an
+    #: ``AttributeError`` the moment ``kalman_portfolio_viz.install`` re-points
+    #: the resolver. Matches ``KalmanRunConfigV2.fig_width_px`` so one
+    #: ``PML_FIG_WIDTH_PX`` sizes the fit and its replay identically.
+    fig_width_px: int = 1150
 
     horizon_days: int = 365
     step_days: int = 91

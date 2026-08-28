@@ -1,10 +1,11 @@
 """Shared figure primitives for the Kalman price-target workflows.
 
 The single source of truth for how a Kalman figure is themed, budgeted, drawn
-and filed. Both ``pymc_kalman_filter_pt.py`` (v1) and ``kalman_viz_v2.py`` (v2)
-render through the helpers here, so a panel cannot look one way in one workflow
-and another way in the other, and a payload rule cannot be honoured in one and
-forgotten in the next.
+and filed. ``pymc_kalman_filter_pt.py`` (v1), ``kalman_viz_v2`` (v2) and
+``kalman_portfolio_viz`` (the forecast + decision replay) -- the latter two now
+beside this module in the same package -- render through the helpers here, so a
+panel cannot look one way in one workflow and another way in the other, and a
+payload rule cannot be honoured in one and forgotten in the next.
 
 Extracted from v1 on 2026-08-24 as a **move**, not a rewrite: every definition
 below is the v1 definition, and v1 imports them straight back under the same

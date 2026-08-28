@@ -747,12 +747,13 @@ _SOURCE_REVISION_PATHS: tuple[str, ...] = (
     "probabilistic_ml_model/",
     "pymc_kalman_filter_pt_v2.py",
     "pymc_kalman_filter_pt.py",
-    "kalman_viz_v2.py",
-    # The replay workflow and its figure layer. A handoff is stamped with the SHA of
-    # the code that wrote it, and a book sized by kalman_portfolio.py off that handoff
-    # is only attributable if the scope covers the script that sized it.
+    # The replay workflow. A handoff is stamped with the SHA of the code that wrote
+    # it, and a book sized by kalman_portfolio.py off that handoff is only
+    # attributable if the scope covers the script that sized it. Both figure layers
+    # (`kalman_viz_v2`, `kalman_portfolio_viz`) moved into
+    # `probabilistic_ml_model/visualizations/` and are covered by the prefix above --
+    # listing them again here would be a path that silently stops matching.
     "kalman_portfolio.py",
-    "kalman_portfolio_viz.py",
     "scripts/",
     "dashboards/geib/",
     "pml_feature_catalogue.sql",
@@ -1488,7 +1489,7 @@ class KalmanRunConfigV2:
 
     #: Target figure width in px, matching v1's ``PML_FIG_WIDTH_PX`` knob so one
     #: environment variable sizes both workflows. Read by the shared figure layer
-    #: through the resolver ``kalman_viz_v2.install`` hands it.
+    #: through the resolver ``visualizations.kalman_viz_v2.install`` hands it.
     fig_width_px: int = 1150
     write_analytics: bool = True
     log_level: str = "INFO"
@@ -3246,7 +3247,14 @@ def free_global_summary(idata: Any, *, ci_prob: float = 0.89) -> pd.DataFrame:
         warnings.filterwarnings(
             "ignore", message="invalid value encountered", category=RuntimeWarning
         )
-        summary = az.summary(idata, var_names=globals_, ci_prob=ci_prob)
+        # `round_to="none"` is REQUIRED, not cosmetic. ArviZ 1.2 formats the
+        # summary to significant figures and returns `mean`/`sd`/`r_hat`/`mcse_*`
+        # as STRINGS, so every numeric comparison below -- the `sd > _EPS` pinned
+        # filter and the r_hat / ESS gates -- raises TypeError against a str
+        # dtype. The gates are the whole point of this frame; they must be read
+        # off numbers.
+        summary = az.summary(idata, var_names=globals_, ci_prob=ci_prob,
+                             round_to="none")
     return summary.loc[summary["sd"] > _EPS]
 
 
@@ -3288,7 +3296,14 @@ def run_diagnostics(
         warnings.filterwarnings(
             "ignore", message="invalid value encountered", category=RuntimeWarning
         )
-        summary = az.summary(idata, var_names=globals_, ci_prob=0.89)
+        # `round_to="none"` is REQUIRED, not cosmetic. ArviZ 1.2 formats the
+        # summary to significant figures and returns `mean`/`sd`/`r_hat`/`mcse_*`
+        # as STRINGS, so every numeric comparison below -- the `sd > _EPS` pinned
+        # filter and the r_hat / ESS gates -- raises TypeError against a str
+        # dtype. The gates are the whole point of this frame; they must be read
+        # off numbers.
+        summary = az.summary(idata, var_names=globals_, ci_prob=0.89,
+                             round_to="none")
     free = free_global_summary(idata)
     n_pinned = len(summary) - len(free)
     if n_pinned:
@@ -5943,7 +5958,7 @@ def _render_figures(result: dict[str, Any], panel: KalmanPanelV2,
     Called LAST on every terminating path -- after ``export_analytics`` and after
     ``summarise`` -- so the analytics tables and the gate report are already on
     disk before a plotting library gets a chance to fail. The import is deferred
-    for the same reason the panels are: ``kalman_viz_v2`` pulls in plotly,
+    for the same reason the panels are: ``visualizations.kalman_viz_v2`` pulls in plotly,
     matplotlib and seaborn, and a workflow that only wants the tables should not
     pay for them, nor fail to run if they are missing.
 
@@ -5955,7 +5970,7 @@ def _render_figures(result: dict[str, Any], panel: KalmanPanelV2,
         logger.info("figures disabled (--no-figures)")
         return
     try:
-        import kalman_viz_v2 as viz
+        from probabilistic_ml_model.visualizations import kalman_viz_v2 as viz
     except Exception as exc:  # pragma: no cover - optional plotting stack
         logger.warning(
             "figures skipped: kalman_viz_v2 is unavailable (%s). The analytics "

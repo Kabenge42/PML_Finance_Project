@@ -57,7 +57,7 @@ Usage
 -----
 .. code-block:: python
 
-    import kalman_portfolio_viz as pviz
+    from probabilistic_ml_model.visualizations import kalman_portfolio_viz as pviz
 
     pviz.install(cfg)
     pviz.render_replay(result)      # one call; every panel is a no-op without input
@@ -72,7 +72,7 @@ from typing import Any, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from probabilistic_ml_model.visualizations.kalman_shared import (
+from .kalman_shared import (
     C_ACCENT, C_FORECAST, C_HIGHLIGHT, C_MUTED, C_OBSERVED, C_POSTERIOR, C_REF,
     CS_DIV, CS_SEQ,
     _PPC_ECDF_GRID, _SCREEN_SCATTER_MAX_POINTS,
@@ -726,11 +726,19 @@ def plot_denominator_sanity(decision: Optional[pd.DataFrame],
 
 
 def plot_rank_agreement(agreement: Optional[pd.DataFrame]) -> Optional[Any]:
-    """Pairwise top-k overlap between the ranking arms.
+    """Pairwise membership overlap between the ranking arms.
 
     *Job: magnitude on an ordered pair grid.* A **sequential single hue**, light to
     dark — never a rainbow, and never a diverging scale, because an overlap count has
     no meaningful midpoint.
+
+    The diagonal is each arm's OWN book size, read from ``n_a``/``n_b``, and the
+    headline is Jaccard rather than a raw count. Both follow from breadth becoming
+    an output on 2026-08-28: the arms no longer hold the same number of names, so
+    there is no single ``k`` to divide by, and a raw overlap makes a small
+    disciplined book look like it disagreed with a large one when it may be a
+    subset of it. This panel read a ``k_book`` column that ``_book_agreement``
+    stopped emitting at that change, and rendered "of None names".
     """
     if agreement is None or not len(agreement) or _requires_plotly("rank_agreement"):
         return None
@@ -738,28 +746,47 @@ def plot_rank_agreement(agreement: Optional[pd.DataFrame]) -> Optional[Any]:
     if not need <= set(agreement.columns):
         return None
     arms = sorted(set(agreement["arm_a"]) | set(agreement["arm_b"]))
-    k = int(agreement["k_book"].iloc[0]) if "k_book" in agreement.columns else None
+
+    # Each arm's book size, from whichever side of a pair it appears on.
+    sizes: dict[str, float] = {}
+    for col, n_col in (("arm_a", "n_a"), ("arm_b", "n_b")):
+        if n_col in agreement.columns:
+            for arm, n in zip(agreement[col], agreement[n_col]):
+                if pd.notna(n):
+                    sizes[str(arm)] = float(n)
+
     grid = pd.DataFrame(np.nan, index=arms, columns=arms, dtype="float64")
     for _, r in agreement.iterrows():
         grid.loc[r["arm_a"], r["arm_b"]] = r["overlap"]
         grid.loc[r["arm_b"], r["arm_a"]] = r["overlap"]
     for a in arms:
-        grid.loc[a, a] = k if k else np.nan
+        grid.loc[a, a] = sizes.get(a, np.nan)
 
+    zmax = float(np.nanmax(grid.to_numpy())) if np.isfinite(grid.to_numpy()).any() else 1.0
     fig = go.Figure(go.Heatmap(
         z=grid.to_numpy(), x=arms, y=arms, colorscale=CS_SEQ,
-        zmin=0, zmax=k if k else float(np.nanmax(grid.to_numpy())),
+        zmin=0, zmax=zmax,
         text=[[("" if np.isnan(v) else f"{int(v)}") for v in row]
               for row in grid.to_numpy()],
         texttemplate="%{text}", hovertemplate="%{y} vs %{x}: %{z} shared<extra></extra>",
         colorbar=dict(title="shared"),
     ))
-    worst = agreement.loc[agreement["overlap"].idxmin()]
+    # Worst pair by Jaccard where we have it — the size-invariant measure — and by
+    # raw overlap only as a fallback.
+    if "jaccard" in agreement.columns and agreement["jaccard"].notna().any():
+        worst = agreement.loc[agreement["jaccard"].idxmin()]
+        headline = (f"Jaccard as low as {float(worst['jaccard']):.2f} — "
+                    f"{int(worst['overlap'])} names shared of "
+                    f"{int(worst['n_a'])}/{int(worst['n_b'])}")
+    else:
+        worst = agreement.loc[agreement["overlap"].idxmin()]
+        headline = f"as few as {int(worst['overlap'])} names shared"
     _base_layout(
         fig,
-        f"Ranking-arm agreement — as few as {int(worst['overlap'])} of {k} names "
-        f"shared<br><sub>One posterior, {len(arms)} arms. A low overlap says the "
-        f"ranking choice is underdetermined, not that either arm is wrong.</sub>",
+        f"Ranking-arm agreement — {headline}"
+        f"<br><sub>One posterior, {len(arms)} arms; the diagonal is each arm's own "
+        f"book size. A low overlap says the ranking choice is underdetermined, not "
+        f"that either arm is wrong.</sub>",
         H_PANEL,
     )
     _safe_show(fig, label="rank_agreement")
