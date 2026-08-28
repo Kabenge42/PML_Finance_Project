@@ -105,6 +105,8 @@ __all__ = [
     "plot_multiplier_sweep",
     "plot_two_books",
     "plot_sector_mix",
+    "plot_action_ladder",
+    "plot_consensus_gap",
     "plot_kelly_pin",
     "plot_risk_ladder",
     "plot_denominator_sanity",
@@ -963,6 +965,130 @@ def plot_size_down_overlap(watch: Optional[pd.DataFrame],
 # =========================================================================== #
 
 
+
+#: The action ladder, most bullish first, with the colour each rung takes.
+#: Ordered here rather than sorted at draw time so a rung that is EMPTY on a run
+#: still occupies its slot -- a five-point scale that silently renders as three
+#: bars is the same illegibility the wider vocabulary was meant to remove.
+_ACTION_LADDER: tuple[tuple[str, str], ...] = (
+    ("STRONG BUY", C_POSTERIOR),
+    ("BUY", C_FORECAST),
+    ("HOLD", C_MUTED),
+    ("SELL", C_OBSERVED),
+    ("STRONG SELL", C_HIGHLIGHT),
+)
+
+
+def plot_action_ladder(actions: Optional[pd.DataFrame]) -> Optional[Any]:
+    """The five-rung action distribution, and where its gates fall.
+
+    *Job: part-to-whole over an ORDERED category.* A single horizontal bar per
+    rung, in ladder order, on a diverging bull-to-bear ramp -- not a pie, which
+    cannot show order, and not a sorted bar chart, which would destroy it.
+
+    **What this panel is for.** The three-valued list it replaces returned 83.5 %
+    ``BUY`` on run ``807df55e7158`` and nothing said so; it took a human reading
+    a table. Five rungs do not fix that by themselves, because the gates are
+    scaled by the universe-mean confidence and a low mean pulls the STRONG
+    threshold down onto the ordinary one. So the gate positions are annotated on
+    the panel: a top rung holding most of the universe, with its gate sitting at
+    the 28th percentile of the probability distribution, is a statement about the
+    forward simulation's left tail rather than about conviction.
+    """
+    if actions is None or not len(actions) or _requires_plotly("action_ladder"):
+        return None
+    if "action" not in actions.columns:
+        logger.info("action_ladder needs 'action'; skipped")
+        return None
+
+    counts = actions["action"].value_counts()
+    total = int(len(actions))
+    labels = [a for a, _ in _ACTION_LADDER]
+    values = [int(counts.get(a, 0)) for a in labels]
+    colors = [c for _, c in _ACTION_LADDER]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=labels, x=values, orientation="h",
+        marker=dict(color=colors),
+        text=[f"{v:,} ({v / total:.1%})" for v in values],
+        textposition="outside",
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+    fig.update_yaxes(autorange="reversed")  # most bullish at the top
+
+    gate_bits = [
+        f"{c}={float(actions[c].iloc[0]):.3f}"
+        for c in ("gate_strong_hi", "gate_hi", "gate_lo", "gate_strong_lo")
+        if c in actions.columns and pd.notna(actions[c].iloc[0])
+    ]
+    subtitle = f"{total:,} names"
+    if gate_bits:
+        subtitle += "   ·   " + "  ".join(gate_bits)
+    if "consensus_gap" in actions.columns:
+        gap = pd.to_numeric(actions["consensus_gap"], errors="coerce")
+        if gap.notna().any():
+            subtitle += (f"   ·   median gap vs analyst consensus "
+                         f"{gap.median():+.2f} on the 1-5 scale")
+
+    _base_layout(
+        fig,
+        f"Name actions — {subtitle}",
+        height=340,
+    )
+    fig.update_xaxes(title_text="names")
+    _safe_show(fig, label="action_ladder")
+
+    table = pd.DataFrame({
+        "action": labels,
+        "n": values,
+        "share": [v / total for v in values],
+    })
+    write_table(table, "action_ladder")
+    return fig
+
+
+def plot_consensus_gap(actions: Optional[pd.DataFrame]) -> Optional[Any]:
+    """How far the model's action departs from the analyst panel's own rating.
+
+    *Job: distribution about a meaningful zero.* A binned density (never
+    ``go.Histogram`` — it ships every raw value into the notebook) with the
+    zero line marked as reference geometry.
+
+    Zero means "this model agrees with consensus". The screen reproduces the
+    consensus ORDERING at Spearman 0.992, so a gap distribution tightly centred
+    on zero says the extra structure is risk, not a different view of value —
+    which is the question §4 of the published analysis could not put a number on.
+    """
+    if actions is None or not len(actions) or _requires_plotly("consensus_gap"):
+        return None
+    if "consensus_gap" not in actions.columns:
+        logger.info(
+            "consensus_gap absent: the screen carries no analyst rating. "
+            "Re-export the screen, or run the replay with the panel frame present."
+        )
+        return None
+    gap = pd.to_numeric(actions["consensus_gap"], errors="coerce").dropna()
+    if not len(gap):
+        return None
+
+    fig = go.Figure()
+    _add_binned_density(fig, gap.to_numpy(), name="consensus gap",
+                        color=C_POSTERIOR, density=False)
+    _add_ref_line(fig, x=0.0, kind="zero",
+                  annotation_text="agrees with consensus")
+    _base_layout(
+        fig,
+        f"Model action minus analyst rating — median {gap.median():+.2f}, "
+        f"{float((gap > 0).mean()):.0%} more bullish than the panel",
+        height=380,
+    )
+    fig.update_xaxes(title_text="action_score − analyst_rating (1–5 scale)")
+    fig.update_yaxes(title_text="names")
+    _safe_show(fig, label="consensus_gap")
+    return fig
+
 def _attempt(label: str, fn, *args, **kwargs) -> None:
     """Run one panel, log a failure, and never re-raise."""
     try:
@@ -1029,5 +1155,8 @@ def render_replay(result: dict[str, Any], cfg: Any = None) -> None:
         _attempt("shrinkage_contrast", plot_shrinkage_contrast, signals)
         _attempt("size_down_overlap", plot_size_down_overlap,
                  recommendations.get("watch"), books)
+        actions = recommendations.get("actions")
+        _attempt("action_ladder", plot_action_ladder, actions)
+        _attempt("consensus_gap", plot_consensus_gap, actions)
 
     logger.info("figures written under %s", get_export_state().root)

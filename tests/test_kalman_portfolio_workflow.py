@@ -106,7 +106,7 @@ def cfg(results_dir):
         results_dir=str(results_dir),
         handoff_path=str(results_dir / "07_forecast_handoff_v2.nc"),
         rank_arms=tuple(RANKING_RULES),
-        k_book=20,
+        max_names=20,
         scenarios=200,
     )
 
@@ -135,9 +135,20 @@ def test_precedence_is_declared_on_the_row(result, cfg):
 
 
 def test_arms_disagree_and_the_disagreement_is_measured(result):
+    """Overlap is measured against each arm's OWN size, not against one nominal k.
+
+    Breadth is solved per arm since 2026-08-28, so the arms no longer hold the
+    same number of names. Comparing a shared ``k`` would make a small disciplined
+    book look like it disagreed with a large one when it may be a subset of it --
+    which is why ``containment`` ships beside ``jaccard``.
+    """
     agreement = result["decision"]["agreement"]
     assert len(agreement) == 3          # one row per unordered pair of three arms
-    assert (agreement["overlap"] <= agreement["k_book"]).all()
+    assert (agreement["overlap"] <= agreement[["n_a", "n_b"]].min(axis=1)).all()
+    assert ((agreement["jaccard"] >= 0) & (agreement["jaccard"] <= 1)).all()
+    assert ((agreement["containment"] >= 0) & (agreement["containment"] <= 1)).all()
+    # A ceiling was set on this fixture, so no arm may exceed it.
+    assert (agreement[["n_a", "n_b"]].max(axis=1) <= agreement["max_names"]).all()
 
 
 def test_identity_survives_the_join_by_isin(result, results_dir):

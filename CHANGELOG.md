@@ -5,6 +5,266 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - a hierarchy that can nest, and a book that solves its own size (2026-08-28)
+
+Run `807df55e7158` cleared all twenty-six export gates and then handed the
+decision layer a portfolio that, read as investment output, was eight positions
+at the cap and forty-two rounding errors. Three changes, each aimed at one of the
+reasons why — and **none of them moves the fitted model's defaults**.
+
+### Added
+
+- **Nested group effects, as comparison arms.** `KalmanModelConfig.group_parents`
+  turns a crossed `ZeroSumNormal` into a deviation from its parent's effect.
+  `None` — the default — reproduces the shipped crossed model with the same
+  random variables, the same names and the same creation order, and that identity
+  is what makes a nested arm a one-change contrast rather than a rewrite.
+
+  This is the untested half of `hierarchy_fine`'s verdict. That arm added
+  `country` **flat** and lost at ≈1.4 dse with 4 k̂ > 0.70 and 66 extra effective
+  parameters; the recorded objection was not that country mixes badly — it held
+  ESS at 1,951 against baseline's 1,531 — but that a fixed-scale `ZeroSumNormal`
+  shrinks a 1-name country level toward **zero**, so it costs a parameter and
+  returns nothing. Nested, that level is a deviation from its OECD bloc: the 24
+  countries carrying fewer than 5 names inherit an estimate instead of being
+  erased. If the nested arm *also* fails to clear the bar, the conclusion is about
+  country granularity itself rather than about the parameterisation, which is a
+  materially different thing to have learned.
+
+  Four new arms: `hierarchy_nested` (the geography chain), `hierarchy_nested_full`
+  (+ `sector → industry`, run beside it so the gain is attributable to one of the
+  two additions), `hierarchy_geo` (the OECD label **crossed**, the control that
+  separates the new level from the new parameterisation) and `hierarchy_styled`
+  (the 9-cell size×style box). `group_effects` is **unchanged**; the default moves
+  on evidence or not at all.
+
+- **Two derived group levels**, in the hierarchy SSOT. `oecd_bloc` —
+  `{OECD|NON_OECD}_{region slug}` — fills the 5-region → 82-country sparsity gap
+  the vendor leaves. Only membership is data: the region slug is part of the
+  label, so every bloc lies wholly inside one `region` **by construction**, and
+  `region → oecd_bloc → country` is a genuine tree. Defining it from an external
+  OECD region table instead would let `OECD_AMERICAS` straddle *United States and
+  Canada* and *Latin America*, and the chain would quietly stop being one.
+  `style_box` is the size×style interaction the two crossed marginals cannot
+  express. `region` (domicile) is modelled for the first time; only
+  `trading_region`, the listing venue, ever was.
+
+- **A solved mean-variance frontier.** `efficient_frontier` runs one constrained
+  SLSQP solve per target return and `tangency_portfolio` gives the max-Sharpe
+  portfolio and its capital market line. `mean_variance_frontier`'s Dirichlet
+  cloud stays — it is the right thing to *plot* — but it is no longer the thing to
+  quote: a cloud's envelope is bounded by the best of what was sampled, so it sits
+  strictly inside the true frontier by an amount nobody tracks. Measured on the
+  same draws: solved tangency Sharpe **4.35** against the cloud's **0.69**.
+
+  No annualisation. The draws are one NTM-horizon return, so the textbook `* 252`
+  would invent a frequency they do not have.
+
+- **`portfolio_solver_breadth` and `portfolio_action_ladder`** gates, both
+  non-blocking. The first reports how many names the optimiser wanted against how
+  many were eligible, and the effective N beside the position count. Run
+  `807df55e7158` published fifty names of which thirty-eight held 1.17 % between
+  them and the smallest held 0.0002 % — an effective N of 11.7 — and **nothing
+  reported it**; it took a human reading a bar chart.
+
+### Changed
+
+- **Book breadth is an output, not a parameter.** `k_book` no longer selects.
+  `optimize_portfolio` solves weights over the whole eligible set, drops anything
+  below `min_weight` (0.005), and **re-solves on the survivors** — iterating,
+  because the re-solve redistributes the dropped names' capital and a survivor can
+  fall back under the floor. One pass ships exactly the sub-floor position the
+  floor exists to exclude; that was measured, not hypothesised.
+
+  On the existing fit the solved book is **12–14 names at effective N ≈ 11**,
+  against the fifty it used to print. The artifact's reading was right: the book
+  always *was* twelve names.
+
+  `k_book=` still works everywhere and maps to `max_names` — a *ceiling*, not the
+  rule — with a `DeprecationWarning` that says which. `RiskBookModel` takes the
+  same pair; its `min_weight` defaults to `0.0` because its sizing is a
+  closed-form cap-and-spill with no re-solve to make truncation meaningful.
+
+- **Five actions instead of three**, on the analyst panel's own scale.
+  `STRONG BUY / BUY / HOLD / SELL / STRONG SELL`, scored 5–1 to match
+  `analyst_rating` (a numeric 1–5 consensus, direction pinned by its `(x-1)*25`
+  normalisation and `r(bullish, rating) = +0.909`). `AVOID` is retired: it named
+  an instruction rather than a position on a scale, so it could not be compared
+  against anything.
+
+  Sharing the scale buys **`consensus_gap`** — action score minus analyst rating,
+  per name. The screen reproduces the consensus *ordering* at Spearman 0.992, and
+  until now nothing said where it differs. The v2 screen frame carries
+  `feat_analyst_rating` for it; a replay against an older export reads it from the
+  panel frame rather than losing the column.
+
+  **This did not fix the "says yes" problem, and the ladder now says so.** The
+  three-valued list returned 83.5 % `BUY`; the five-valued one returns 72 %
+  `STRONG BUY`. The gates are scaled by the universe-mean confidence (0.833), so
+  the nominal 0.90 threshold lands at **0.75**, which 72 % of the universe clears
+  — the top rung inherits the old bucket under a stronger name. That is a property
+  of a forward simulation with no credible left tail, not of the vocabulary, and
+  no relabelling reaches it. `portfolio_action_ladder` records the distribution
+  and where the gate fell, so the next reader does not have to rediscover it.
+
+- **Concentration caps on more than one dimension.** `_cap_normalize_with_groups`
+  takes `group_labels` × `group_caps` and alternates the projections until every
+  constraint holds. The scalar `groups` / `sector_cap` pair is the
+  single-dimension form and still works unchanged.
+
+  `RiskBookModel.compute_cvar_aware_book` **had no group cap at all**, which is
+  how the §10b book shipped 34.6 % in Financials — the model's own strongest
+  sector underweight, at −6.39pp — with nothing raising a hand. It has one now,
+  off by default so the fit path's book does not move underneath an unrelated
+  change.
+
+  `kalman_portfolio.py` sets `sector_cap = 0.30` by default. **This moves the
+  replayed book**, deliberately: 33.2 % in Health Care, 30 % of it in three
+  small-cap therapeutics with binary clinical readouts nothing in the pipeline
+  models, endorsed by a group signal clearing its band by 0.04pp. The gate exists
+  so that no cap is a choice someone made rather than a line nobody wrote, and
+  leaving it at `None` was taking that choice by omission. `--group-cap
+  sector=0.30,country=0.35` sets more; `--sector-cap` alone still works.
+
+- **`portfolio_book_agreement` reports Jaccard and containment**, not a raw count
+  against one nominal `k`. The arms no longer hold the same number of names, so a
+  small disciplined book would otherwise read as disagreeing with a large one when
+  it may be a subset of it.
+
+### Fixed
+
+- **The `'n/a'` sentinel could become a fitted group level.**
+  `import_pml_data.sql` COALESCEs a blank vendor field to the literal `'n/a'` and
+  only `size_class <> 'n/a'` is filtered at query time, so a blank
+  `trading_region`, `sector` or `style_class` reached `pd.factorize` as a real
+  string. `attach_derived_group_labels` normalises every category column through
+  one `UNKNOWN_LABEL`. The sentinel set is deliberately narrow — `"NA"` is
+  Namibia's ISO-2 code and a common abbreviation for North America, and treating
+  it as missing merges a real category into the unknown bucket.
+
+- **`build_hierarchy_indices` walks up to the nearest materialised ancestor.**
+  Inserting `oecd_bloc` between `region` and `country` would otherwise have
+  silently demoted `country` to a flat level for the six other models that call
+  `levels=["region", "country"]`. It also orders levels through `order_levels`
+  first: a child materialised before its parent cannot be linked to it.
+
+- **`test_canonical_columns_match_statistical_models` asserted a hierarchy the
+  code abandoned long ago** (`exchange → country`, `sector → exchange`,
+  `size_class → style_class`). Three of its seven parent-map assertions were
+  already failing for reasons unrelated to what the test protected. It now pins
+  the shipped chain, and a new `test_parent_map_is_a_forest_over_the_canonical_columns`
+  checks the structural invariants the ancestor walk depends on.
+
+### Measured — the arms, screened and then adjudicated
+
+Both harnesses were run. They disagree, and the disagreement is the useful part.
+
+**Max-and-Smooth screen** (run `afa0637b388f`, 6 arms, one baseline covariance,
+~4.5 min for all six):
+
+| arm | `elpd_diff` | `dse` | eff. params | k̂ > 0.70 | weight | levels |
+|---|---|---|---|---|---|---|
+| `hierarchy_fine` | 0.0 | — | 143.9 | 4 | 0.70 | 169 |
+| `hierarchy_nested_full` | −10.0 | 5.4 | 144.0 | 5 | 0.07 | 178 |
+| `hierarchy_nested` | −70.0 | 17.0 | 101.5 | 3 | 0.18 | 113 |
+| `hierarchy_geo` | −250.0 | 28.0 | 37.4 | 12 | 0.01 | 31 |
+| `baseline` | −290.0 | 29.0 | 33.0 | — | 0.01 | 22 |
+| `hierarchy_styled` | −290.0 | 29.0 | 36.7 | — | 0.02 | 31 |
+
+**Exact comparison** (run `9c7057904cbb`, 3 arms, a production refit and a
+pointwise `log_likelihood` each):
+
+| arm | `elpd_diff` | `dse` | ratio | eff. params | k̂ > 0.70 | weight | divergences | min ESS | max R̂ | levels |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `hierarchy_nested_full` | 0.0 | — | — | **108.3** | 2 | **0.61** | 0 | 1,308 `region_effect[Europe]` | 1.0045 `oecd_bloc_dev[OECD_NORTH_AMERICA]` | 178 |
+| `hierarchy_fine` | −4.0 | 2.6 | 1.54 | 109.3 | 1 | **0.00** | 0 | 1,731 `sigma_state` | 1.0026 | 169 |
+| `baseline` | −10.0 | 9.7 | 1.03 | 49.8 | — | 0.39 | 0 | 1,418 `log_sigma_total` | 1.0024 | 22 |
+
+**The screen got the order wrong.** It ranked `hierarchy_fine` first and
+`hierarchy_nested_full` second at −10 ± 5.4; the exact harness reverses them. That
+is the documented limit of the method rather than a defect in it — the screen
+scores Gaussian pseudo-observations of `mu_reg` against a *frozen* covariance, and
+its `elpd` lives on a different scale entirely (≈ −2,600 against ≈ −1,900). It
+ranks; it does not adjudicate. Recorded here because "screen and exact agreed" was
+the tacit assumption, and on this contrast they did not.
+
+**Nesting regularises, and that is the clean result.** `hierarchy_nested_full`
+carries **178 group levels for 108.3 effective parameters** against
+`hierarchy_fine`'s **169 for 109.3** — more levels, *fewer* effective parameters.
+That is what pooling toward a parent is for and what a flat `ZeroSumNormal` cannot
+do. It is the direct answer to the objection that killed `hierarchy_fine`: its
+sparse country levels cost parameters and returned nothing, and nested they cost
+less and rank higher. `hierarchy_fine` now takes stacking weight **0.00** — ranked
+second and assigned nothing, i.e. redundant given the other two.
+
+**`style_box` is a clean null.** `hierarchy_styled` reproduces baseline's
+`elpd_diff` and `dse` to the digit (−290.0 / 29.0) for 9 extra levels. No level is
+thin, so this is a real absence of interaction rather than an underpowered test.
+
+**Still not promoted.** The rule is *win **and** hold ESS*. It holds ESS
+decisively — 0 divergences, min ESS 1,308 against a 400 gate, max R̂ 1.0045, and
+its two weakest parameters are both new nested ones. It does not win: 1.54× dse
+over `hierarchy_fine` and 1.03× over `baseline`, both under the 2× bar.
+`group_effects` is unchanged.
+
+Read the margin with the estimator's own spread in mind: these contrasts subsample
+the ISIN axis to `comparison_max_isins = 800`, and `hierarchy_fine` moved from
+ranking first over baseline at +15.8 (2026-08-25) to second at −4.0 here. A 4.0 ±
+2.6 gap is inside the range that has already moved between runs of one
+specification.
+
+### Open — settle the hierarchy on a vintage, not on ELPD
+
+**This is the next task for the hierarchy, and it should not be another ELPD run.**
+
+Every contrast above scores the arms against *the analyst trail they were fitted
+to*. A finer hierarchy that predicts that trail better has been shown to predict
+the trail better, which is not the question anybody is asking. The question is
+whether shrinking a sparse country toward its OECD bloc produces a better
+**forward** estimate, and no in-sample criterion can reach it — the same reason
+nineteen of twenty-one gates cleared for a pass-through screen.
+
+Three runs of one specification have now produced `hierarchy_fine` at +15.8, then
+−4.0, against dse 11 and 2.6. Continuing to re-run ELPD is sampling that spread,
+not resolving it.
+
+The instrument that would resolve it already exists:
+
+1. `scripts/capture_panel_vintage.py` — append a vintage for **both**
+   `baseline` and `hierarchy_nested_full`, stamped with `run_id` / `source_sha`
+   so a later scoring is attributable to the code that produced it. Append-only,
+   because the price/target trails are unversioned and the pipeline tables are
+   DROP-and-RECREATE.
+2. Wait one quarter. This is the cost, and there is no way to pay it faster.
+3. `scripts/score_panel_vintages.py` — score both against realised returns.
+
+What that measures and ELPD cannot: whether the 24 countries carrying fewer than
+five names contribute a real forward signal once pooled, or whether the ELPD gain
+is the mean absorbing analyst-trail idiosyncrasy that does not recur. Those two
+are indistinguishable in sample and are the whole disagreement.
+
+Until a vintage exists, the honest position on the hierarchy is the one recorded
+above: nesting is better-behaved than the flat alternative on every diagnostic
+that can be measured now, and not decisively better on the only criterion
+currently available.
+
+### Notes
+
+- Not addressed, and worth stating: `analytics/screening.py:1383` (duplicated at
+  `statistical_functions/screening.py:1432`) applies `min_analyst_rating` as
+  `df["analyst_rating"] <= min_analyst_rating` with the comment *"lower = more
+  bullish"*. Against the `(x-1)*25` normalisation and `r(bullish, rating) =
+  +0.909` that sign is **inverted** — it keeps the least bullish names.
+
+- CLAUDE.md described `PortfolioOptimizationModel.py` as a *"0-byte stub,
+  unimplemented since 2025-07-02"*. It is ~1.7k lines and is the decision layer's
+  sizer.
+
+- Every gate here still scores the model against the analyst trail it was fitted
+  to. A book whose modelled 1-in-20 is a **gain** is not one any internal check
+  can approve or reject, and neither a finer hierarchy nor a solved book reaches
+  that. `scripts/capture_panel_vintage.py` remains the top open item.
+
 ## [Unreleased] - one results tree per model, and an infinity that never reached an export (2026-08-27)
 
 Two defects with one shape: a quantity encoded so that nothing downstream could

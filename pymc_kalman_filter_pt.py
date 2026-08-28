@@ -5060,7 +5060,9 @@ def compute_cvar_aware_book(
         results,
         alpha=cfg.cvar_alpha if alpha is None else alpha,
         cap=cfg.weight_cap if cap is None else cap,
-        k_book=cfg.k_book if k_book is None else k_book,
+        # v1 keeps a fixed top-k book: its sizing is unchanged, so the
+        # value goes in as the CEILING, which reproduces it exactly.
+        max_names=cfg.k_book if k_book is None else k_book,
         p_long=cfg.p_long if p_long is None else p_long,
         mcap_r_max=cfg.mcap_country_r_max if mcap_r_max is None else mcap_r_max,
     )

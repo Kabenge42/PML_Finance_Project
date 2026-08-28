@@ -148,6 +148,10 @@ if TYPE_CHECKING:  # pragma: no cover
     import pymc as pm_typing
 
 from probabilistic_ml_model._pymc_arviz_compat import InferenceLike  # noqa: F401
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    UNKNOWN_LABEL,
+    resolve_parent as _resolve_parent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,12 +160,20 @@ __all__ = [
     "KalmanPanelV2",
     "GROUP_EFFECT_SCALE",
     "GROUP_EFFECTS_FINE",
+    "GROUP_EFFECTS_GEO_CROSSED",
+    "GROUP_EFFECTS_NESTED_FULL",
+    "GROUP_EFFECTS_NESTED_GEO",
+    "GROUP_EFFECTS_STYLED",
     "KALMAN_V2_SCREEN_LATENT",
     "KALMAN_V2_SCREEN_LATENT_SD",
     "DEFAULT_LOOKBACK_DAYS",
     "load_trail_days_map",
     "PT_HISTORY_FAMILY",
+    "build_group_effect_terms",
     "build_kalman_pt_model_v2",
+    "group_effect_leaves",
+    "group_effect_order",
+    "resolve_group_parents",
     "orthogonalise_family",
     "effective_sample_size_of_panel",
     "partition_covariance_groups",
@@ -235,6 +247,84 @@ GROUP_EFFECTS_FINE: tuple[str, ...] = (
     "size_class",
     "country",
     "industry",
+)
+
+#: Geography chain arm: the domicile hierarchy ``region -> oecd_bloc ->
+#: country``, nested, replacing the single crossed ``trading_region``.
+#:
+#: **What it asks.** ``hierarchy_fine`` added ``country`` as a FLAT crossed
+#: level and was declined: it ranked first on ELPD by 15.8 against a dse of 11
+#: (1.4x, under the project's 2x bar), with 4 Pareto k-hat > 0.70 and 66 extra
+#: effective parameters. The recorded objection was not that country mixes badly
+#: -- it holds ESS -- but that a fixed-scale ``ZeroSumNormal`` shrinks a 1-name
+#: country level toward ZERO, which costs a parameter and returns nothing.
+#:
+#: Nesting is the untested half of that objection. A nested country level is a
+#: DEVIATION from its bloc, so a country with one name contributes its bloc's
+#: estimate rather than a shrunk-to-zero own estimate, and the parameter buys
+#: pooling instead of noise. If this arm also fails to clear the bar, the
+#: conclusion is about country granularity itself rather than about the
+#: parameterisation, which is a materially different thing to have learned.
+#:
+#: ``region`` (domicile) has never been modelled -- only ``trading_region``, the
+#: listing venue. It is on the panel frame already.
+GROUP_EFFECTS_NESTED_GEO: tuple[str, ...] = (
+    "region",
+    "oecd_bloc",
+    "country",
+    "sector",
+    "style_class",
+    "size_class",
+)
+
+#: As :data:`GROUP_EFFECTS_NESTED_GEO`, plus the ``sector -> industry`` chain.
+#:
+#: ``industry`` is the safe half of the C5 evidence: 65 levels, smallest 11
+#: names, none under 5 -- so it is the level least likely to need nesting to earn
+#: its keep, and running it beside the geography chain says which of the two
+#: additions the ELPD gain actually comes from. Kept as a SEPARATE arm for that
+#: reason: an arm that changes two things answers neither question.
+GROUP_EFFECTS_NESTED_FULL: tuple[str, ...] = (
+    "region",
+    "oecd_bloc",
+    "country",
+    "sector",
+    "industry",
+    "style_class",
+    "size_class",
+)
+
+#: The shipped four with ``oecd_bloc`` added CROSSED, not nested.
+#:
+#: The control for :data:`GROUP_EFFECTS_NESTED_GEO`. That arm changes two things
+#: at once -- a new geography level AND a nested parameterisation -- so on its
+#: own it cannot say which one paid. This arm adds the label alone. If it
+#: captures most of the nested arm's gain then the value is in the OECD split
+#: and the nesting is decoration; if it captures little, the pooling is doing the
+#: work.
+GROUP_EFFECTS_GEO_CROSSED: tuple[str, ...] = (
+    "trading_region",
+    "oecd_bloc",
+    "sector",
+    "style_class",
+    "size_class",
+)
+
+#: The shipped four plus the nested 9-cell ``style_box``.
+#:
+#: The cheapest arm here: at most 9 levels, each holding hundreds of names, so
+#: there is no sparsity question to answer. It asks only whether size and style
+#: INTERACT -- whether a small-cap value name behaves unlike a large-cap value
+#: name in a way the two marginals cannot express. On run 37e6d8966250 these are
+#: the two weakest fitted scales in the model (0.0249 and 0.0127 against
+#: sigma_trading_region 0.1525), so a null result here is genuinely informative
+#: rather than merely underpowered.
+GROUP_EFFECTS_STYLED: tuple[str, ...] = (
+    "trading_region",
+    "sector",
+    "style_class",
+    "size_class",
+    "style_box",
 )
 
 #: The single decision latent. Every downstream consumer (screen, price-target
@@ -613,6 +703,33 @@ class KalmanModelConfig:
         "style_class",
         "size_class",
     )
+    #: Map ``level -> parent level`` turning a CROSSED group effect into a
+    #: NESTED one: the child is sampled as a deviation from its parent's effect
+    #: rather than from zero.
+    #:
+    #: ``None`` (the default) reproduces the shipped crossed model exactly --
+    #: same random variables, same names, same graph. Set it only through a
+    #: comparison arm.
+    #:
+    #: **Why this exists.** A crossed ``ZeroSumNormal`` shrinks every level
+    #: toward zero at a fixed scale, which is the right prior when levels are
+    #: exchangeable and a poor one when they nest. 24 of the 82 countries carry
+    #: fewer than 5 names; shrunk toward zero those levels are noise with a
+    #: parameter attached, which is precisely the objection that kept
+    #: ``hierarchy_fine`` out of the default. Shrunk toward their OECD bloc they
+    #: inherit an estimate built from hundreds of names.
+    #:
+    #: **Only the LEAF of each chain enters the mean.** An intermediate level
+    #: contributes through its children, so listing ``region``, ``oecd_bloc`` and
+    #: ``country`` adds ONE term per name, not three. Adding a parent's own term
+    #: as well would count it once per level of depth -- see
+    #: :func:`build_kalman_pt_model_v2`, which asserts this rather than trusting
+    #: it.
+    #:
+    #: Resolved against :data:`~probabilistic_ml_model.pymc_models._hierarchy.PARENT_MAP`
+    #: at panel-prep time, so a parent that is not itself in ``group_effects``
+    #: falls back to the nearest ancestor that is.
+    group_parents: Optional[dict[str, str]] = None
     #: Learn the crossed group-effect scale instead of pinning it at
     #: :data:`GROUP_EFFECT_SCALE`.
     #:
@@ -824,6 +941,13 @@ class KalmanPanelV2:
     # ---- hierarchy ---------------------------------------------------------
     coord_uniques: dict[str, np.ndarray] = field(default_factory=dict)
     coord_idx: dict[str, np.ndarray] = field(default_factory=dict)
+    #: ``level -> (n_level,) int32`` mapping each level index to its PARENT's
+    #: level index, for the nested group effects. Empty on the crossed default.
+    #:
+    #: Indexed by LEVEL, not by ISIN -- so unlike ``coord_idx`` it must survive
+    #: :func:`subsample_panel_v2` unsliced, or a subsampled comparison run gets
+    #: a parent map addressing rows that are no longer there.
+    coord_parent_of: dict[str, np.ndarray] = field(default_factory=dict)
 
     # ---- de-standardisation ------------------------------------------------
     response_mean: float = 0.0
@@ -1347,6 +1471,238 @@ def partition_covariance_groups(
     return groups
 
 
+
+def resolve_group_parents(
+    cfg: "KalmanModelConfig", levels: Sequence[str]
+) -> dict[str, str]:
+    """Resolve ``level -> parent`` for the levels this model actually indexes.
+
+    ``cfg.group_parents`` wins where it is set; otherwise
+    :data:`~probabilistic_ml_model.pymc_models._hierarchy.PARENT_MAP` supplies
+    the canonical chain, walked upward so a level whose direct parent was not
+    requested links to the nearest ancestor that was.
+
+    ``None`` for ``cfg.group_parents`` means "crossed" and returns an empty map,
+    which is what makes the shipped model bit-identical.
+
+    Parameters
+    ----------
+    cfg
+        Model configuration.
+    levels
+        Levels the panel actually carries an index for.
+
+    Returns
+    -------
+    dict[str, str]
+        Only the levels that have a resolvable parent among ``levels``.
+    """
+    if cfg.group_parents is None:
+        return {}
+    present = set(levels)
+    out: dict[str, str] = {}
+    for level in levels:
+        explicit = cfg.group_parents.get(level)
+        if explicit is not None:
+            if explicit not in present:
+                logger.warning(
+                    "group_parents names %r as the parent of %r, but %r is not "
+                    "among the indexed levels %s. %r is built CROSSED.",
+                    explicit, level, explicit, sorted(present), level,
+                )
+                continue
+            out[level] = explicit
+            continue
+        inferred = _resolve_parent(level, present)
+        if inferred is not None:
+            out[level] = inferred
+    return out
+
+
+def group_effect_order(
+    levels: Sequence[str], parents: dict[str, str]
+) -> list[str]:
+    """Order ``levels`` so every parent precedes its children.
+
+    A stable topological sort seeded by the given order, so with no parents the
+    input order is returned unchanged -- which is what keeps the crossed model's
+    random-variable creation order, and therefore its sampling, identical.
+
+    Parameters
+    ----------
+    levels
+        Levels in their natural (config) order.
+    parents
+        ``level -> parent`` from :func:`resolve_group_parents`.
+
+    Returns
+    -------
+    list[str]
+
+    Raises
+    ------
+    ValueError
+        If ``parents`` contains a cycle.
+    """
+    ordered: list[str] = []
+    placed: set[str] = set()
+
+    def place(level: str, seen: frozenset[str]) -> None:
+        if level in placed:
+            return
+        if level in seen:
+            raise ValueError(
+                f"group_parents contains a cycle through {level!r}: "
+                f"{sorted(seen)}. A hierarchy must be a forest."
+            )
+        parent = parents.get(level)
+        if parent is not None:
+            place(parent, seen | {level})
+        ordered.append(level)
+        placed.add(level)
+
+    for level in levels:
+        place(level, frozenset())
+    return ordered
+
+
+def group_effect_leaves(
+    levels: Sequence[str], parents: dict[str, str]
+) -> list[str]:
+    """The levels whose effect enters the mean, in ``levels`` order.
+
+    A level that is some other level's parent contributes THROUGH that child --
+    a nested child is ``parent[parent_of] + deviation``, so it already carries
+    its whole ancestry. Adding an intermediate level's own term as well would
+    count it once per level of depth below it.
+
+    Parameters
+    ----------
+    levels, parents
+        As :func:`group_effect_order`.
+
+    Returns
+    -------
+    list[str]
+    """
+    internal = set(parents.values())
+    return [lv for lv in levels if lv not in internal]
+
+
+
+def build_group_effect_terms(
+    cfg: "KalmanModelConfig",
+    idx_data: dict[str, Any],
+    coord_parent_of: dict[str, np.ndarray],
+) -> tuple[dict[str, Any], list[str]]:
+    """Create the crossed / nested group effects inside an open ``pm.Model``.
+
+    The **single** definition of the group-effect mean structure. Both the full
+    model (:func:`build_kalman_pt_model_v2`) and the Max-and-Smooth screen
+    (``_max_and_smooth.build_pseudo_model``) call it, so an arm cannot be
+    screened as one model and fitted as another -- which is the exact failure
+    mode the fast screener's ``extra_group_cols`` contract already guards
+    against in its other half.
+
+    ``cfg.group_parents is None`` yields an empty parent map, the config order
+    and all-leaves, so the crossed model is reproduced with the same random
+    variables, the same names and the same creation order.
+
+    Parameters
+    ----------
+    cfg
+        Model configuration; supplies ``group_parents`` and
+        ``learn_group_effect_scale``.
+    idx_data
+        ``level -> per-ISIN index`` (a ``pm.Data`` container or a bare array).
+    coord_parent_of
+        ``level -> (n_level,) int`` child-index to parent-index map. Required
+        for every level that nests.
+
+    Returns
+    -------
+    tuple[dict[str, Any], list[str]]
+        The per-level effect vectors, and the LEAF levels whose effects should
+        be added to the mean. A non-leaf contributes through its children and
+        must not be added again.
+
+    Raises
+    ------
+    ValueError
+        If a level is configured to nest but no parent map was supplied --
+        building it crossed instead would silently reduce the arm to a coarser
+        one and report "no difference".
+    AssertionError
+        If the resolved hierarchy is not a forest.
+    """
+    import pymc as pm  # local: this runs inside a model context
+
+    levels = list(idx_data)
+    parents = resolve_group_parents(cfg, levels)
+    order = group_effect_order(levels, parents)
+    leaves = group_effect_leaves(levels, parents)
+
+    level_effect: dict[str, Any] = {}
+    for col in order:
+        parent = parents.get(col)
+        parent_of = coord_parent_of.get(col) if parent else None
+        if parent is not None and parent_of is None:
+            raise ValueError(
+                f"{col!r} is configured to nest under {parent!r} but no "
+                f"coord_parent_of[{col!r}] was supplied. Rebuild the panel (or "
+                "pass the map through the Max step) -- falling back to a crossed "
+                "effect would make this arm indistinguishable from a coarser one."
+            )
+
+        if cfg.learn_group_effect_scale:
+            # Non-centred: the scale multiplies a unit-scale ZeroSumNormal rather
+            # than parameterising it, which is what kept v1's centred attempt at
+            # R-hat 1.5-4.5. The half-normal is centred on the old fixed value, so
+            # `learn_group_effect_scale = False` is the same model with the scale
+            # pinned at the prior's mode.
+            scale = pm.HalfNormal(f"{col}_effect_scale", sigma=GROUP_EFFECT_SCALE)
+            deviation = scale * pm.ZeroSumNormal(
+                f"{col}_effect_raw", sigma=1.0, dims=col
+            )
+        elif parent is not None:
+            # A nested level is a DEVIATION from its parent, so a level holding
+            # one name contributes its parent's estimate plus a hard-shrunk
+            # correction -- rather than an own estimate pulled to zero, which is
+            # what a crossed level does with the same data and what left
+            # `hierarchy_fine` paying for parameters that carry nothing.
+            deviation = pm.ZeroSumNormal(
+                f"{col}_dev", sigma=GROUP_EFFECT_SCALE, dims=col
+            )
+        else:
+            deviation = pm.ZeroSumNormal(
+                f"{col}_effect", sigma=GROUP_EFFECT_SCALE, dims=col
+            )
+
+        if parent is not None:
+            group_effect = pm.Deterministic(
+                f"{col}_effect", level_effect[parent][parent_of] + deviation, dims=col
+            )
+        elif cfg.learn_group_effect_scale:
+            group_effect = pm.Deterministic(f"{col}_effect", deviation, dims=col)
+        else:
+            group_effect = deviation
+
+        pm.Deterministic(f"sigma_{col}", group_effect.std())
+        level_effect[col] = group_effect
+
+    # In a forest the leaf count equals the root count. Cheap, and the failure it
+    # catches is silent: the model still samples, the mean is just wrong by a
+    # multiple of the coarse effects.
+    n_roots = sum(1 for col in levels if col not in parents)
+    if len(leaves) != n_roots:
+        raise AssertionError(
+            f"group hierarchy is not a forest: {len(leaves)} leaves {leaves} "
+            f"against {n_roots} roots. Every name must receive exactly one "
+            "effect per chain."
+        )
+    return level_effect, leaves
+
+
 def build_kalman_pt_model_v2(
     panel: KalmanPanelV2,
     config: Optional[KalmanModelConfig] = None,
@@ -1599,25 +1955,15 @@ def build_kalman_pt_model_v2(
         )
         eta = pt.dot(X_drift, beta)
 
-        # ---- mean structure: crossed group effects --------------------------
-        for col, idx in idx_data.items():
-            if cfg.learn_group_effect_scale:
-                # Non-centred: the scale multiplies a unit-scale ZeroSumNormal
-                # rather than parameterising it, which is what kept v1's centred
-                # attempt at R-hat 1.5-4.5. The half-normal is centred on the old
-                # fixed value, so `learn_group_effect_scale = False` is the same
-                # model with the scale pinned at the prior's mode.
-                scale = pm.HalfNormal(f"{col}_effect_scale", sigma=GROUP_EFFECT_SCALE)
-                raw = pm.ZeroSumNormal(f"{col}_effect_raw", sigma=1.0, dims=col)
-                group_effect = pm.Deterministic(
-                    f"{col}_effect", scale * raw, dims=col
-                )
-            else:
-                group_effect = pm.ZeroSumNormal(
-                    f"{col}_effect", sigma=GROUP_EFFECT_SCALE, dims=col
-                )
-            pm.Deterministic(f"sigma_{col}", group_effect.std())
-            eta = eta + group_effect[idx]
+        # ---- mean structure: crossed / nested group effects ------------------
+        # One definition, shared with the Max-and-Smooth screen, so an arm is
+        # screened as the same model it would be fitted as.
+        level_effect, group_leaves = build_group_effect_terms(
+            cfg, idx_data, panel.coord_parent_of
+        )
+        # ONLY THE LEAVES: a nested child already carries its whole ancestry.
+        for col in group_leaves:
+            eta = eta + level_effect[col][idx_data[col]]
 
         mu_reg = pm.Deterministic("mu_reg", eta, dims="isin")
 

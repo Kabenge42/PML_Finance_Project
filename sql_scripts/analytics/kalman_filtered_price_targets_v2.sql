@@ -59,6 +59,7 @@ CREATE TABLE analytics."kalman_filtered_price_targets_v2"
     "market_cap_country_r" INTEGER,
     "market_cap_country_sec_r" INTEGER,
     "n_analysts" DOUBLE PRECISION,
+    "feat_analyst_rating" DOUBLE PRECISION,
     "mcap_global_r" DOUBLE PRECISION,
     "mcap_country_r" DOUBLE PRECISION,
     "original_price" DOUBLE PRECISION,

@@ -87,11 +87,15 @@ from probabilistic_ml_model.pymc_models.KalmanForecast import (  # noqa: E402
     sweep_factor_share,
 )
 from probabilistic_ml_model.pymc_models.PortfolioOptimizationModel import (  # noqa: E402
+    DEFAULT_OBJECTIVE,
     DEFAULT_RANKING_RULE,
+    PORTFOLIO_OBJECTIVES,
     RANKING_RULES,
     RANKING_RULES_EXTERNAL,
+    efficient_frontier,
     ergodicity_report,
     optimize_portfolio,
+    tangency_portfolio,
     terminal_wealth_curve,
 )
 
@@ -150,6 +154,24 @@ PORTFOLIO_GATES: dict[str, str] = {
         "books from one fit that share under a third of their names is a statement "
         "about how underdetermined the ranking choice is, not about either book."
     ),
+    "portfolio_solver_breadth": (
+        "How many names the optimiser actually wanted, against how many were "
+        "eligible -- and how far that is from the nominal position count. Run "
+        "807df55e7158 published FIFTY names of which thirty-eight held 1.17% "
+        "between them and the smallest held 0.0002%, an effective N of 11.7. "
+        "Nothing reported that; it took a human reading a bar chart. Breadth is "
+        "now solved rather than chosen, and this is the gate that says so."
+    ),
+    "portfolio_action_ladder": (
+        "How the universe distributes over STRONG BUY / BUY / HOLD / SELL / "
+        "STRONG SELL, and where the top gate sits in the probability "
+        "distribution. A ladder whose top rung holds most of the universe has "
+        "not expressed conviction, it has relabelled the old single BUY bucket "
+        "-- and since the gates are scaled by the universe-mean confidence, a "
+        "low mean confidence pulls the STRONG gate down onto the ordinary one. "
+        "Reported because the three-valued version returned 83.5% BUY for a "
+        "release without anything saying so."
+    ),
     "portfolio_sector_concentration": (
         "Largest single-group weight per book. Reported whether or not a sector cap "
         "is set, because the absence of a cap is also a decision and the only way it "
@@ -205,8 +227,11 @@ class KalmanPortfolioConfig:
     rank_arms
         Ranking arms to size a book on. The first is the *recommendation*; the rest are
         contrasts, and the export says which is which.
-    k_book, weight_cap, sector_cap, kelly_multiplier
-        Sizing knobs. ``sector_cap=None`` reproduces today's unconstrained book.
+    max_names, min_weight, objective, weight_cap, sector_cap, group_caps,
+    kelly_multiplier
+        Sizing knobs. Breadth is an OUTPUT: ``max_names`` only bounds the
+        book and ``min_weight`` decides it. ``sector_cap`` now defaults to
+        0.30; ``None`` reproduces the pre-2026-08-28 unconstrained book.
     apply_size_down_veto
         Feed the size-down watch into ``optimize_portfolio``'s ``eligible`` mask.
         **Off by default**: applying it changes which names a book holds, and whether
@@ -236,10 +261,30 @@ class KalmanPortfolioConfig:
     multiplier_grid: tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0)
 
     rank_arms: tuple[str, ...] = (DEFAULT_RANKING_RULE,)
-    k_book: int = 50
+    #: Ceiling on the number of positions, or ``None`` for no ceiling. **Not the
+    #: book size** — see :data:`min_weight`.
+    max_names: Optional[int] = None
+    #: Weights below this are dropped and the problem re-solved on the survivors.
+    #: This is what makes breadth an output.
+    min_weight: float = 0.005
+    #: Weighting objective; a key of ``PORTFOLIO_OBJECTIVES``.
+    objective: str = DEFAULT_OBJECTIVE
     weight_cap: float = 0.10
-    sector_cap: Optional[float] = None
+    #: Maximum weight in any one sector. **0.30 by default since 2026-08-28.**
+    #: This MOVES the shipped book, deliberately: run ``807df55e7158`` put 33.2 %
+    #: in Health Care — 30 % of it in three small-cap therapeutics with binary
+    #: clinical readouts nothing in the pipeline models — endorsed by a group
+    #: signal clearing its band by 0.04pp. The gate that reports it exists so no
+    #: cap is a choice someone made rather than a line nobody wrote; leaving it
+    #: at ``None`` was taking that choice by omission. ``None`` restores the
+    #: uncapped book, and the uncapped arm is worth exporting as a contrast.
+    sector_cap: Optional[float] = 0.30
     sector_col: str = "sector"
+    #: Further ``dimension -> cap`` limits, merged over ``sector_cap``.
+    #: Concentration is not one-dimensional — the same run was also 19.2 % in one
+    #: country and 85.9 % small cap — but only the sector cap is defaulted on,
+    #: because each additional cap moves the book again.
+    group_caps: dict[str, float] = field(default_factory=dict)
     kelly_multiplier: float = 0.5
     apply_size_down_veto: bool = False
     relative_denominator_q: float = 0.0
@@ -411,7 +456,7 @@ def run_prior_sweeps(
             cfg.factor_share_grid,
             config=cfg.forecast_config(),
             baseline_share=cfg.factor_share,
-            k_book=cfg.k_book,
+            k_book=cfg.max_names or 50,
             rank_values=rank_values,
         )
         out["factor_share"] = frame
@@ -420,7 +465,7 @@ def run_prior_sweeps(
         report.add(GateResult(
             name="portfolio_factor_sensitivity",
             passed=True,
-            value=f"book sd spans {span:.2f}x, min top-{cfg.k_book} overlap {overlap}",
+            value=f"book sd spans {span:.2f}x, min top-{cfg.max_names or 50} overlap {overlap}",
             threshold="reported, not gated",
             blocking=False,
             detail=(
@@ -509,6 +554,21 @@ def run_decision_books(
     isins = np.asarray(fc.isins)
 
     groups = _group_labels(handoff, screen, cfg.sector_col, isins)
+    # Labels for every FURTHER capped dimension. `groups` / `sector_cap` stay the
+    # sector pair so the existing gate and the figure layer keep reading what
+    # they always read; anything else the caller caps is resolved here.
+    label_map: dict[str, np.ndarray] = {}
+    for dim in cfg.group_caps:
+        if dim == cfg.sector_col:
+            continue
+        labels = _group_labels(handoff, screen, dim, isins)
+        if labels is None:
+            logger.warning(
+                "group cap set for %r but no labels are resolvable from the "
+                "screen or the handoff, so the cap CANNOT be applied.", dim,
+            )
+            continue
+        label_map[dim] = labels
     eligible = None
     veto_names: set[str] = set()
     if screen is not None:
@@ -541,13 +601,17 @@ def run_decision_books(
             )
         book = optimize_portfolio(
             fc.terminal, isins,
-            k_book=cfg.k_book,
+            max_names=cfg.max_names,
+            min_weight=cfg.min_weight,
+            objective=cfg.objective,
             cap=cfg.weight_cap,
             kelly_multiplier=cfg.kelly_multiplier,
             eligible=eligible,
             rank_by=arm,
             groups=groups,
             sector_cap=cfg.sector_cap,
+            group_labels=label_map,
+            group_caps=cfg.group_caps,
             relative_denominator_q=cfg.relative_denominator_q,
             random_seed=cfg.random_seed,
             **kwargs,
@@ -580,7 +644,7 @@ def run_decision_books(
     if frames:
         out["decision_frame"] = pd.concat(frames, ignore_index=True)
     if len(books) > 1:
-        out["agreement"] = _book_agreement(books, cfg.k_book, report)
+        out["agreement"] = _book_agreement(books, cfg.max_names, report)
     if books:
         first = books[cfg.rank_arms[0]] if cfg.rank_arms[0] in books else next(iter(books.values()))
         out["ergodicity"] = ergodicity_report(fc.terminal)
@@ -588,7 +652,67 @@ def run_decision_books(
         if held:
             w = first.weights.reindex(isins[held]).to_numpy()
             out["wealth_curve"] = terminal_wealth_curve(w @ fc.terminal[held])
+            # The mean-variance CONTRAST, over the recommendation's own holdings.
+            # Not over the universe: the quadratic objectives need a covariance
+            # and cannot take 6,500 names, and the interesting question is what a
+            # different objective does with the SAME candidates rather than what
+            # it picks from a pool this book never saw.
+            out["frontier"], out["tangency"] = _frontier_contrast(
+                fc.terminal[held], isins[held], first, cfg
+            )
     return out
+
+
+def _frontier_contrast(
+    draws: np.ndarray,
+    isins: np.ndarray,
+    book: Any,
+    cfg: "KalmanPortfolioConfig",
+) -> tuple[Optional[pd.DataFrame], Optional[dict[str, Any]]]:
+    """Solved frontier and tangency point over the recommendation's holdings.
+
+    A labelled contrast, never the recommendation. Mean-variance treats
+    volatility as total risk -- symmetric, so it charges a name for its upside --
+    optimises one period, and is famously unstable in the return estimates, which
+    here are posterior means of a latent that moves between refreshes. The book
+    ships on expected log growth; this says what the single-period answer would
+    have been on the same draws.
+
+    Returns ``(None, None)`` when the contrast cannot be drawn, with the reason
+    logged: a silently absent panel reads as a frontier that was not worth
+    drawing.
+    """
+    if len(isins) < 3:
+        logger.info("frontier contrast skipped: %d holdings", len(isins))
+        return None, None
+    try:
+        frontier = efficient_frontier(
+            draws, isins, n_points=30, cap=cfg.weight_cap,
+            group_caps=cfg.group_caps or None,
+        )
+        tangency = tangency_portfolio(
+            draws, isins, cap=cfg.weight_cap, group_caps=cfg.group_caps or None,
+        )
+    except Exception as exc:
+        logger.info("frontier contrast skipped: %s", exc)
+        return None, None
+
+    frontier = frontier.assign(
+        objective="target_return",
+        book_objective=cfg.objective,
+        book_log_growth=float(book.summary.get("log_growth", float("nan"))),
+        book_return=float(book.summary.get("port_expected", float("nan"))),
+        book_vol=float(book.summary.get("port_vol", float("nan"))),
+        tangency_sharpe=float(tangency["sharpe"]),
+        tangency_n_holdings=float(tangency["n_holdings"]),
+    )
+    logger.info(
+        "frontier contrast over %d holdings: tangency Sharpe %.3f on %d names "
+        "against the shipped book's %.3f return / %.3f vol",
+        len(isins), tangency["sharpe"], tangency["n_holdings"],
+        frontier["book_return"].iloc[0], frontier["book_vol"].iloc[0],
+    )
+    return frontier, tangency
 
 
 def _group_labels(
@@ -620,6 +744,28 @@ def _report_book_gates(
     """The four per-book findings, each recorded rather than thresholded."""
     summary = book.summary
     held = set(book.weights.index.astype(str))
+
+    n_book = float(summary.get("n_book", float("nan")))
+    n_elig = float(summary.get("n_eligible", float("nan")))
+    eff_n = float(summary.get("effective_n", float("nan")))
+    report.add(GateResult(
+        name="portfolio_solver_breadth",
+        passed=True,
+        value=f"{int(n_book) if np.isfinite(n_book) else '?'} of "
+              f"{int(n_elig) if np.isfinite(n_elig) else '?'} eligible, "
+              f"effective N {eff_n:.1f}",
+        threshold=(f"ceiling {int(summary['max_names'])}"
+                   if np.isfinite(summary.get("max_names", float("nan")))
+                   else "no ceiling set"),
+        blocking=False,
+        detail=(
+            f"[{arm}] objective {summary.get('objective', '?')}, minimum weight "
+            f"{summary.get('min_weight', float('nan')):.2%}"
+            f"{', CEILING BINDING' if summary.get('breadth_binding') else ''}. "
+            f"Effective N is the Herfindahl reciprocal: the gap between it and "
+            f"the position count is how much of the book is rounding error."
+        ),
+    ))
 
     report.add(GateResult(
         name="portfolio_kelly_interior",
@@ -696,8 +842,16 @@ def _report_book_gates(
         ))
 
 
-def _book_agreement(books: dict[str, Any], k: int, report: GateReport) -> pd.DataFrame:
-    """Pairwise top-k overlap between the arms, and the gate that reports the worst."""
+def _book_agreement(
+    books: dict[str, Any], max_names: Optional[int], report: GateReport
+) -> pd.DataFrame:
+    """Pairwise membership overlap between the arms, and a gate on the worst.
+
+    Jaccard, not a raw count over a shared ``k``: the arms no longer hold the
+    same number of names, because breadth is solved per arm. Comparing
+    ``overlap`` against one nominal ``k`` would make a small disciplined book
+    look like it disagreed with a large one when it may be a subset of it.
+    """
     rows: list[dict[str, Any]] = []
     names = list(books)
     for i, a in enumerate(names):
@@ -709,15 +863,23 @@ def _book_agreement(books: dict[str, Any], k: int, report: GateReport) -> pd.Dat
                 "arm_a": a, "arm_b": b,
                 "overlap": len(sa & sb),
                 "jaccard": len(sa & sb) / union if union else float("nan"),
-                "k_book": k,
+                "n_a": len(sa), "n_b": len(sb),
+                # Of the SMALLER book, how much the larger one contains. A subset
+                # relationship and a genuine disagreement have very different
+                # Jaccards at unequal sizes, and only this separates them.
+                "containment": (len(sa & sb) / min(len(sa), len(sb))
+                                if min(len(sa), len(sb)) else float("nan")),
+                "max_names": float(max_names) if max_names is not None else float("nan"),
             })
     frame = pd.DataFrame(rows)
     if len(frame):
-        worst = frame.loc[frame["overlap"].idxmin()]
+        worst = frame.loc[frame["jaccard"].idxmin()]
         report.add(GateResult(
             name="portfolio_book_agreement",
             passed=True,
-            value=f"{int(worst['overlap'])}/{k} ({worst['arm_a']} vs {worst['arm_b']})",
+            value=f"Jaccard {worst['jaccard']:.2f}, {int(worst['overlap'])} shared "
+                  f"of {int(worst['n_a'])}/{int(worst['n_b'])} "
+                  f"({worst['arm_a']} vs {worst['arm_b']})",
             threshold="reported, not gated",
             blocking=False,
             detail=(
@@ -803,6 +965,8 @@ def run_recommendations_v2(
     *,
     screen: Optional[pd.DataFrame] = None,
     diagnostics: Optional[pd.DataFrame] = None,
+    panel_frame: Optional[pd.DataFrame] = None,
+    report: Optional[GateReport] = None,
     render: bool = True,
 ) -> dict[str, Any]:
     """Turn the ranked frames into a posture: groups, actions, vetoes, reliability.
@@ -836,10 +1000,33 @@ def run_recommendations_v2(
 
     if screen is not None:
         conf_scale = float(np.nanmean(confidence)) if confidence is not None else 1.0
+        # The analyst consensus reached the screen frame only from 2026-08-28, so
+        # a replay against an older export would silently lose `consensus_gap` --
+        # the one column that says where this model DIFFERS from the panel it
+        # reproduces at Spearman 0.992. The panel frame has always carried it.
+        actions_input = screen
+        if "feat_analyst_rating" not in screen.columns and panel_frame is not None:
+            if {"isin", "feat_analyst_rating"} <= set(panel_frame.columns):
+                rating = (panel_frame.drop_duplicates("isin")
+                          .set_index("isin")["feat_analyst_rating"])
+                actions_input = screen.assign(
+                    feat_analyst_rating=pd.to_numeric(
+                        rating.reindex(screen["isin"].astype(str)).to_numpy(),
+                        errors="coerce",
+                    )
+                )
+                logger.info(
+                    "analyst consensus read from the panel frame; re-export the "
+                    "screen to carry it directly."
+                )
         try:
-            out["actions"] = recs.name_action_list(screen, confidence_scale=conf_scale)
+            out["actions"] = recs.name_action_list(
+                actions_input, confidence_scale=conf_scale
+            )
         except KeyError as exc:
             logger.info("name actions skipped: %s", exc)
+        if report is not None and out.get("actions") is not None:
+            _report_action_ladder(out["actions"], conf_scale, report)
         out["watch"] = recs.size_down_watch(screen)
         out["demoted"] = recs.demotion_list(screen)
 
@@ -860,6 +1047,48 @@ def run_recommendations_v2(
     return out
 
 
+
+def _report_action_ladder(
+    actions: pd.DataFrame, confidence_scale: float, report: GateReport
+) -> None:
+    """Record how the universe distributes over the five rungs.
+
+    The finding this exists to prevent going unnoticed: the previous
+    three-valued list returned 83.5 % BUY on run 807df55e7158 and nothing said
+    so. Five rungs do not fix that on their own -- the gates are scaled by the
+    universe-mean confidence, so a low mean pulls the STRONG threshold down onto
+    what used to be the ordinary one, and the top rung inherits the same
+    population under a stronger name.
+    """
+    counts = actions["action"].value_counts()
+    total = float(len(actions)) or float("nan")
+    top = float(counts.get("STRONG BUY", 0)) / total
+    gap = (pd.to_numeric(actions["consensus_gap"], errors="coerce")
+           if "consensus_gap" in actions.columns else None)
+    report.add(GateResult(
+        name="portfolio_action_ladder",
+        passed=True,
+        value=" / ".join(
+            f"{int(counts.get(a, 0))} {a}" for a in recs.ACTIONS
+        ),
+        threshold="reported, not gated",
+        blocking=False,
+        detail=(
+            f"{top:.1%} of the universe on the top rung; gates scaled by "
+            f"confidence {confidence_scale:.3f}, so STRONG BUY sits at "
+            f"p >= {float(actions['gate_strong_hi'].iloc[0]):.3f} rather than at "
+            f"its nominal 0.90. A top rung holding most of the universe is a "
+            f"statement about the forward simulation's left tail, not about "
+            f"conviction."
+            + (f" Median consensus_gap {gap.median():+.2f} on the 1-5 analyst "
+               f"scale, {float((gap > 0).mean()):.0%} more bullish than the panel."
+               if gap is not None and gap.notna().any() else
+               " consensus_gap unavailable: no analyst rating on the screen or "
+               "panel frame.")
+        ),
+    ))
+
+
 # =========================================================================== #
 # §P6  Export                                                                 #
 # =========================================================================== #
@@ -872,9 +1101,13 @@ PORTFOLIO_FRAMES: dict[str, str] = {
     "15d_factor_share_sweep": "book dispersion and membership across the factor_share grid",
     "15d_multiplier_sweep": "cross-sectional spread across the forecast-error grid",
     "15e_decision_books": "one row per (isin, rank_by); book_role names the recommendation",
-    "15e_book_agreement": "pairwise top-k overlap between the ranking arms",
+    "15e_book_agreement": "pairwise membership overlap between the ranking arms",
+    "15e_frontier": ("the solved mean-variance frontier over the book's "
+                     "holdings, with the tangency point -- a labelled "
+                     "CONTRAST, not the recommendation"),
     "14b_group_signals": "shrunk over/underweight postures by coordinate",
-    "14b_name_actions": "per-name BUY / HOLD / AVOID on the conditional scale",
+    "14b_name_actions": ("per-name action on the five-point analyst scale, "
+                         "scored 5-1 and gapped against analyst consensus"),
     "14b_size_down_watch": "the veto list: wide posterior or thin analyst coverage",
     "09_gate_report_portfolio": "every gate this replay recorded",
 }
@@ -1010,6 +1243,9 @@ def main(
     screen = _read_v2_artifact(cfg, "10_screen_results_v2")
     mc_summary = _read_v2_artifact(cfg, "10_screen_mc_summary_v2")
     diagnostics = _read_v2_artifact(cfg, "09_diagnostics_v2")
+    # Read only for the analyst consensus the older screens lack; a
+    # missing panel frame costs `consensus_gap` and nothing else.
+    panel_frame = _read_v2_artifact(cfg, "04_panel_frame_v2")
 
     forecast = run_forecast(handoff, cfg, report, mc_summary=mc_summary)
 
@@ -1031,7 +1267,8 @@ def main(
 
     recommendations = run_recommendations_v2(
         forecast, handoff, decision, cfg,
-        screen=screen, diagnostics=diagnostics, render=render,
+        screen=screen, diagnostics=diagnostics, panel_frame=panel_frame,
+        report=report, render=render,
     )
 
     frames: dict[str, pd.DataFrame] = {
@@ -1041,6 +1278,7 @@ def main(
         "15d_multiplier_sweep": sweep_frames.get("multiplier"),
         "15e_decision_books": decision.get("decision_frame"),
         "15e_book_agreement": decision.get("agreement"),
+        "15e_frontier": decision.get("frontier"),
         "14b_group_signals": recommendations.get("group_signals"),
         "14b_name_actions": recommendations.get("actions"),
         "14b_size_down_watch": recommendations.get("watch"),
@@ -1077,7 +1315,16 @@ def _cli() -> int:
                         help="comma-separated: factor_share, multiplier")
     parser.add_argument("--arms", default="",
                         help="mean-model arms to contrast (needs a live panel)")
-    parser.add_argument("--k-book", type=int, default=None)
+    parser.add_argument("--max-names", type=int, default=None,
+                        help="ceiling on positions; breadth is otherwise solved")
+    parser.add_argument("--min-weight", type=float, default=None,
+                        help="drop weights below this and re-solve (default 0.005)")
+    parser.add_argument("--objective", default=None,
+                        help=f"weighting objective: {', '.join(PORTFOLIO_OBJECTIVES)}")
+    parser.add_argument("--group-cap", default="",
+                        help="comma-separated dim=cap, e.g. sector=0.30,country=0.35")
+    parser.add_argument("--k-book", type=int, default=None,
+                        help="deprecated alias for --max-names")
     parser.add_argument("--cap", type=float, default=None, help="per-name weight cap")
     parser.add_argument("--sector-cap", type=float, default=None,
                         help="max weight in any one sector; unset means no cap")
@@ -1099,7 +1346,40 @@ def _cli() -> int:
     if args.results_dir:
         overrides["results_dir"] = args.results_dir
     if args.k_book is not None:
-        overrides["k_book"] = args.k_book
+        logger.warning(
+            "--k-book is deprecated: breadth is solved, not chosen. Applying it "
+            "as --max-names, a CEILING."
+        )
+        overrides["max_names"] = args.k_book
+    if args.max_names is not None:
+        overrides["max_names"] = args.max_names
+    if args.min_weight is not None:
+        overrides["min_weight"] = args.min_weight
+    if args.objective is not None:
+        if args.objective not in PORTFOLIO_OBJECTIVES:
+            parser.error(
+                f"unknown --objective {args.objective!r}; "
+                f"valid: {sorted(PORTFOLIO_OBJECTIVES)}"
+            )
+        overrides["objective"] = args.objective
+    if args.group_cap.strip():
+        caps: dict[str, float] = {}
+        for token in args.group_cap.split(","):
+            if not token.strip():
+                continue
+            dim, _, value = token.partition("=")
+            if not _:
+                parser.error(f"--group-cap expects dim=cap, got {token!r}")
+            try:
+                caps[dim.strip()] = float(value)
+            except ValueError:
+                parser.error(f"--group-cap value {value!r} is not a number")
+        # `sector` goes to the dedicated field, which the concentration gate and
+        # the figure layer already read; anything else joins `group_caps`.
+        if "sector" in caps:
+            overrides["sector_cap"] = caps.pop("sector")
+        if caps:
+            overrides["group_caps"] = caps
     if args.cap is not None:
         overrides["weight_cap"] = args.cap
     if args.sector_cap is not None:

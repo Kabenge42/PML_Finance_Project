@@ -101,6 +101,10 @@ from probabilistic_ml_model.export_layout import (
 
 from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
     GROUP_EFFECTS_FINE,
+    GROUP_EFFECTS_GEO_CROSSED,
+    GROUP_EFFECTS_NESTED_FULL,
+    GROUP_EFFECTS_NESTED_GEO,
+    GROUP_EFFECTS_STYLED,
     KALMAN_V2_SCREEN_LATENT,
     KalmanModelConfig,
     KalmanPanelV2,
@@ -110,7 +114,14 @@ from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
     effective_sample_size_of_panel,
     fit_trail_correlation_kernel,
     orthogonalise_family,
+    resolve_group_parents,
     resolve_screen_latent_v2,
+)
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    UNKNOWN_LABEL,
+    attach_derived_group_labels,
+    build_hierarchy_indices,
+    order_levels,
 )
 from probabilistic_ml_model.pymc_models._workflow import (
     MIN_ESS_GATE,
@@ -1354,7 +1365,21 @@ class KalmanRunConfigV2:
     mc_rho: float = 0.85
     cvar_alpha: float = 0.05
     weight_cap: float = 0.10
+    #: Ceiling on the number of positions. **No longer the book size**: since
+    #: 2026-08-28 breadth is solved and this only bounds it, so a run may ship
+    #: fewer names. Kept at 50 so an existing run's ceiling is unchanged.
     k_book: int = 50
+    #: Weights below this are dropped. The rule that makes breadth an OUTPUT --
+    #: run ``807df55e7158`` published fifty names of which thirty-eight held
+    #: 1.17 % between them and the smallest held 0.0002 %.
+    book_min_weight: float = 0.005
+    #: ``dimension -> maximum weight`` for the sized books, e.g.
+    #: ``{"sector": 0.30}``. **Empty by default, and that is a decision**: the
+    #: v2 export's own gate exists because a concentration nobody capped is one
+    #: taken by omission, and turning a cap on here changes the published book.
+    #: ``kalman_portfolio.py`` sets a sector cap for the replay; this stays off
+    #: so the fit path's book does not move underneath an unrelated change.
+    group_caps: dict[str, float] = field(default_factory=dict)
     #: Baseline long-probability threshold. Scaled by the universe-average
     #: kalman_gain inside the risk book to give ``p_long_cond``, which is what
     #: ``p_upside_pos_cond`` is actually tested against.
@@ -2293,13 +2318,59 @@ def prepare_panel(
         np.log1p(cv) + vol_level_z - np.log(np.sqrt(trail_avg_n))
     )
 
-    coord_cols = [c for c in model_cfg.group_effects if c in frame.columns]
+    # Derived group labels (`oecd_bloc`, `style_box`) and the missing-sentinel
+    # normalisation, both from the hierarchy SSOT. The normalisation is the half
+    # that matters even on the shipped four: `import_pml_data` COALESCEs a blank
+    # vendor field to the literal 'n/a' and only `size_class` is filtered for it
+    # at query time, so without this pass a blank `trading_region` reaches
+    # `pd.factorize` as a real string and becomes a fitted group level.
+    frame = attach_derived_group_labels(frame)
+
+    coord_cols = order_levels(
+        [c for c in model_cfg.group_effects if c in frame.columns]
+    )
     coord_uniques: dict[str, np.ndarray] = {}
     coord_idx: dict[str, np.ndarray] = {}
     for col in coord_cols:
         codes, uniques = pd.factorize(frame[col].astype(str), sort=True)
         coord_uniques[col] = np.asarray(uniques)
         coord_idx[col] = codes.astype("int32")
+
+    # Child level index -> parent level index, for the nested arms. Built from
+    # the SSOT rather than locally: `build_hierarchy_indices` already resolves
+    # the nearest MATERIALISED ancestor, so a config naming `country` without
+    # `oecd_bloc` still links country to whatever coarser level it did ask for
+    # instead of silently going flat.
+    coord_parent_of: dict[str, np.ndarray] = {}
+    parents = resolve_group_parents(model_cfg, coord_cols)
+    if parents:
+        meta = build_hierarchy_indices(
+            frame.set_index(frame["isin"].astype(str))[coord_cols],
+            frame["isin"].astype(str).to_numpy(),
+            levels=coord_cols,
+        )
+        for col, parent in parents.items():
+            entry = meta.get(col, {})
+            if entry.get("parent_label") != parent or entry.get("parent_of") is None:
+                raise ValueError(
+                    f"cannot nest {col!r} under {parent!r}: build_hierarchy_indices "
+                    f"resolved {entry.get('parent_label')!r}. Check PARENT_MAP and "
+                    "the level ordering."
+                )
+            # `build_hierarchy_indices` factorises with np.unique and this loop
+            # with pd.factorize(sort=True); both give lexicographic order, so the
+            # index spaces agree. Assert it rather than assume -- a mismatch here
+            # attributes every child to the wrong parent and nothing downstream
+            # can see it.
+            if not np.array_equal(
+                np.asarray(entry["labels"]).astype(str), coord_uniques[col].astype(str)
+            ):
+                raise ValueError(
+                    f"label order for {col!r} disagrees between the hierarchy "
+                    "helper and the panel factorisation; the parent map would be "
+                    "misaligned."
+                )
+            coord_parent_of[col] = np.asarray(entry["parent_of"], dtype="int32")
 
     panel = KalmanPanelV2(
         frame=frame,
@@ -2320,6 +2391,7 @@ def prepare_panel(
         volume_ratio=_standardise(_col("feat_rel_volume", 1.0)),
         coord_uniques=coord_uniques,
         coord_idx=coord_idx,
+        coord_parent_of=coord_parent_of,
         response_mean=mu,
         response_std=sd,
         orthogonal_rotation=rotation,
@@ -3367,6 +3439,29 @@ def run_diagnostics(
 #:     Adds ``country`` and ``industry`` to the crossed group effects. **The
 #:     rec-02 question.** See :data:`GROUP_EFFECTS_FINE` for the OLS evidence and
 #:     the ESS watch.
+#: ``hierarchy_nested``
+#:     The domicile geography chain ``region -> oecd_bloc -> country``, NESTED,
+#:     replacing the crossed ``trading_region``. **The follow-up to
+#:     ``hierarchy_fine``'s declined verdict.** That arm added ``country`` flat
+#:     and lost at 1.4x dse; the recorded objection was that a fixed-scale
+#:     ``ZeroSumNormal`` shrinks a sparse country level toward zero, so it costs
+#:     a parameter and returns nothing. Here a country level is a deviation from
+#:     its OECD bloc, so the 24 countries carrying fewer than 5 names inherit an
+#:     estimate instead of being erased. Mean structure only, so it is screenable.
+#: ``hierarchy_nested_full``
+#:     ``hierarchy_nested`` plus the ``sector -> industry`` chain. Run BESIDE the
+#:     geography arm rather than instead of it, so the ELPD gain is attributable
+#:     to one of the two additions.
+#: ``hierarchy_geo``
+#:     ``oecd_bloc`` added CROSSED to the shipped four. The control for
+#:     ``hierarchy_nested``, which changes both the level set and the
+#:     parameterisation: this one changes only the level set, so the difference
+#:     between them is the price of nesting.
+#: ``hierarchy_styled``
+#:     The shipped four plus the nested 9-cell ``style_box``. Asks whether size
+#:     and style interact at all. Cheap and low-risk -- no level holds fewer than
+#:     a few hundred names -- so a null result here is informative rather than
+#:     underpowered.
 #: ``drift_strict``
 #:     The drift matrix as :func:`select_drift_features_v2` now selects it,
 #:     against the pre-2026-08-21 list that also carried
@@ -3378,6 +3473,21 @@ COMPARISON_ARMS: dict[str, Callable[[KalmanModelConfig], KalmanModelConfig]] = {
     "baseline": lambda cfg: cfg,
     "level_off": lambda cfg: replace(cfg, enable_isin_level=False),
     "hierarchy_fine": lambda cfg: replace(cfg, group_effects=GROUP_EFFECTS_FINE),
+    # `group_parents={}` selects NESTED and lets `resolve_group_parents` fill the
+    # chain from the hierarchy SSOT's PARENT_MAP. An explicit dict here would be
+    # a second source of truth for the same tree.
+    "hierarchy_nested": lambda cfg: replace(
+        cfg, group_effects=GROUP_EFFECTS_NESTED_GEO, group_parents={}
+    ),
+    "hierarchy_nested_full": lambda cfg: replace(
+        cfg, group_effects=GROUP_EFFECTS_NESTED_FULL, group_parents={}
+    ),
+    "hierarchy_geo": lambda cfg: replace(
+        cfg, group_effects=GROUP_EFFECTS_GEO_CROSSED
+    ),
+    "hierarchy_styled": lambda cfg: replace(
+        cfg, group_effects=GROUP_EFFECTS_STYLED, group_parents={}
+    ),
     "drift_strict": lambda cfg: cfg,
 }
 
@@ -3394,6 +3504,11 @@ _PANEL_NON_ISIN_FIELDS: frozenset[str] = frozenset(
         "time_days",
         "drift_names",
         "coord_uniques",
+        # Indexed by LEVEL, not by ISIN. Slicing it would leave a subsampled
+        # comparison run with a parent map addressing rows that are gone --
+        # silently, since the shapes only have to agree with the coord, not with
+        # the panel.
+        "coord_parent_of",
         "response_mean",
         "response_std",
         "orthogonal_rotation",
@@ -4273,6 +4388,15 @@ def run_screen(
             "style_class": frame.get("style_class"),
             "size_class": frame.get("size_class"),
             "n_analysts": pd.to_numeric(frame.get("n_analysts"), errors="coerce"),
+            # The analyst panel's own 1-5 consensus (5 = Strong Buy). Carried so
+            # `name_action_list` can emit `consensus_gap` -- the model's action
+            # score minus the panel's rating, on one scale. Without it the whole
+            # reason the action ladder borrows the analyst vocabulary is
+            # unavailable at the point of use, and the screen that reproduces
+            # consensus at Spearman 0.992 has no column saying where it differs.
+            "feat_analyst_rating": pd.to_numeric(
+                frame.get("feat_analyst_rating"), errors="coerce"
+            ),
             "market_cap": pd.to_numeric(frame.get("market_cap"), errors="coerce"),
             "mcap_global_r": pd.to_numeric(frame.get("feat_mcap_global_r"), errors="coerce"),
             "mcap_country_r": pd.to_numeric(frame.get("feat_mcap_country_r"), errors="coerce"),
@@ -4523,6 +4647,60 @@ def run_screen(
 # =========================================================================== #
 
 
+def _book_group_labels(
+    screen: pd.DataFrame,
+    run_cfg: "KalmanRunConfigV2",
+    *,
+    isins: Optional[np.ndarray] = None,
+) -> dict[str, np.ndarray]:
+    """Per-name labels for each capped dimension, aligned BY KEY.
+
+    Only the dimensions that carry a cap are resolved: a label array the sizer
+    cannot use is a per-name string column carried through the whole book for
+    nothing.
+
+    Alignment is by ISIN, never by position. ``run_screen`` returns the screen
+    sorted by ``expected_upside`` while the forecast draws stay in
+    ``panel.isins`` order, and attributing a sector to the wrong name is the
+    permutation this project has already shipped once -- a length check passes it.
+
+    Parameters
+    ----------
+    screen
+        Screen frame carrying ``isin`` and the classification columns.
+    run_cfg
+        Supplies ``group_caps``, whose keys name the dimensions.
+    isins
+        Order to align to. ``None`` keeps the screen's own order.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Labels per dimension; unresolvable dimensions are skipped with a warning,
+        because a cap silently not applied is worse than a cap not set.
+    """
+    caps = getattr(run_cfg, "group_caps", None) or {}
+    if not caps or screen is None or "isin" not in getattr(screen, "columns", []):
+        return {}
+    keyed = screen.drop_duplicates("isin").copy()
+    keyed.index = keyed["isin"].astype(str)
+    order = (np.asarray(isins).astype(str) if isins is not None
+             else screen["isin"].astype(str).to_numpy())
+    out: dict[str, np.ndarray] = {}
+    for dim in caps:
+        if dim not in keyed.columns:
+            logger.warning(
+                "group cap set for %r but the screen has no such column, so the "
+                "cap CANNOT be applied. Available: %s",
+                dim, sorted(c for c in keyed.columns if keyed[c].dtype == object)[:12],
+            )
+            continue
+        out[dim] = (
+            keyed[dim].reindex(order).fillna(UNKNOWN_LABEL).astype(str).to_numpy()
+        )
+    return out
+
+
 def run_risk_book(
     idata: Any,
     panel: KalmanPanelV2,
@@ -4592,7 +4770,12 @@ def run_risk_book(
             screen,
             alpha=run_cfg.cvar_alpha,
             cap=run_cfg.weight_cap,
-            k_book=run_cfg.k_book,
+            # A CEILING since 2026-08-28, not the book size. `min_weight` on the
+            # config decides breadth; this only bounds it.
+            max_names=run_cfg.k_book,
+            min_weight=run_cfg.book_min_weight,
+            group_labels=_book_group_labels(screen, run_cfg),
+            group_caps=run_cfg.group_caps,
             p_long=run_cfg.p_long,
             mcap_r_max=run_cfg.mcap_global_r_max,
             return_draws=return_draws,
@@ -4865,8 +5048,16 @@ def run_forecast_layer(
                 )
                 eligible = np.isfinite(mcap) & (mcap < run_cfg.mcap_global_r_max)
 
-            book = optimize_portfolio(fc.terminal, fc.isins, k_book=run_cfg.k_book, cap=run_cfg.weight_cap,
-                                      kelly_multiplier=run_cfg.portfolio_kelly_multiplier, eligible=eligible)
+            book = optimize_portfolio(
+                fc.terminal, fc.isins,
+                max_names=run_cfg.k_book,
+                min_weight=run_cfg.book_min_weight,
+                cap=run_cfg.weight_cap,
+                group_labels=_book_group_labels(screen, run_cfg, isins=fc.isins),
+                group_caps=run_cfg.group_caps,
+                kelly_multiplier=run_cfg.portfolio_kelly_multiplier,
+                eligible=eligible,
+            )
             out["portfolio"] = book
 
             decision = book.analytics.copy()

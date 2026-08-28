@@ -39,7 +39,12 @@ from probabilistic_ml_model.pymc_models.PortfolioOptimizationModel import (
     generative_var,
     kelly_fraction_from_draws,
     kelly_report,
+    MAX_SOLVER_NAMES,
+    PORTFOLIO_OBJECTIVES,
+    efficient_frontier,
     mean_variance_frontier,
+    solve_portfolio_weights,
+    tangency_portfolio,
     minimize_expected_loss,
     optimize_portfolio,
     terminal_wealth_curve,
@@ -291,9 +296,12 @@ def test_fractional_kelly_scales_down_and_refuses_to_scale_up():
 def test_optimized_weights_are_a_capped_simplex():
     draws = _joint_draws(80, 4_000, rho=0.30)
     isins = np.array([f"TEST{i:08d}" for i in range(80)])
-    book = optimize_portfolio(draws, isins, k_book=25, cap=0.10)
+    book = optimize_portfolio(draws, isins, max_names=25, cap=0.10)
     w = book.weights
-    assert len(w) == 25
+    # `max_names` is a CEILING since 2026-08-28, not the book size: names below
+    # `min_weight` are dropped and the problem re-solved, so a smaller book is
+    # the optimiser answering rather than failing.
+    assert 0 < len(w) <= 25
     assert w.sum() == pytest.approx(1.0, rel=1e-9)
     assert (w >= 0).all()
     assert w.max() <= 0.10 + 1e-9
@@ -521,3 +529,134 @@ def test_ruin_is_still_recorded_as_ruin_not_as_an_overflow():
     assert ruined["terminal_wealth"] == 0.0
     assert ruined["log_growth"] == float("-inf")
     assert not bool(ruined["terminal_wealth_overflow"])
+
+
+# ---------------------------------------------------------------------------
+# G. Solved weights: breadth as an output, and the constrained frontier
+# ---------------------------------------------------------------------------
+
+
+def _factor_draws(n_isin=30, n_scen=3000, seed=SEED):
+    """Correlated draws with a genuine spread of means, so a frontier exists."""
+    rng = np.random.default_rng(seed)
+    f = rng.standard_normal(n_scen)
+    mu = rng.normal(0.15, 0.10, n_isin)
+    return mu[:, None] + 0.25 * f[None, :] + 0.20 * rng.standard_normal((n_isin, n_scen))
+
+
+def test_min_weight_decides_breadth_not_the_caller():
+    """Raising the floor must shrink the book, monotonically."""
+    draws = _joint_draws(60, 3_000, rho=0.30)
+    isins = np.array([f"B{i:04d}" for i in range(60)])
+    sizes = [
+        len(optimize_portfolio(draws, isins, min_weight=m, cap=0.10).weights)
+        for m in (0.0, 0.01, 0.05)
+    ]
+    assert sizes[0] >= sizes[1] >= sizes[2] > 0
+
+
+def test_no_shipped_position_is_below_the_floor():
+    """The truncation ITERATES.
+
+    Re-solving on the survivors redistributes the dropped names' capital, so a
+    name that cleared the floor only because the pool was wider can fall back
+    under it. A single pass ships exactly the sub-floor position the floor exists
+    to exclude.
+    """
+    draws = _joint_draws(200, 1_500, rho=0.25)
+    isins = np.array([f"C{i:04d}" for i in range(200)])
+    book = optimize_portfolio(draws, isins, min_weight=0.02, cap=0.10)
+    assert (book.weights >= 0.02 - 1e-12).all()
+    assert book.summary["n_book"] == float(len(book.weights))
+
+
+def test_breadth_is_reported_and_the_ceiling_is_flagged():
+    draws = _joint_draws(60, 2_000, rho=0.30)
+    isins = np.array([f"D{i:04d}" for i in range(60)])
+    capped = optimize_portfolio(draws, isins, max_names=10, cap=0.20)
+    assert capped.summary["breadth_binding"] is True
+    assert capped.summary["n_candidates"] == 10.0
+    assert len(capped.weights) <= 10
+
+    free = optimize_portfolio(draws, isins, cap=0.20)
+    assert free.summary["breadth_binding"] is False
+    assert np.isnan(free.summary["max_names"])
+
+
+def test_every_objective_returns_a_capped_simplex():
+    draws = _factor_draws()
+    for objective in PORTFOLIO_OBJECTIVES:
+        kwargs = {"target_return": float(draws.mean(axis=1).mean())} \
+            if objective == "target_return" else {}
+        w = solve_portfolio_weights(draws, objective=objective, cap=0.15, **kwargs)
+        assert w.sum() == pytest.approx(1.0, rel=1e-6), objective
+        assert (w >= -1e-9).all(), objective
+        assert w.max() <= 0.15 + 1e-6, objective
+
+
+def test_unknown_objective_is_refused():
+    with pytest.raises(ValueError, match="unknown objective"):
+        solve_portfolio_weights(_factor_draws(), objective="vibes")
+
+
+def test_quadratic_objectives_refuse_the_whole_universe():
+    """A 6,518-name covariance is 340 MB and SLSQP in 6,518 variables does not
+    converge. `log_growth` reads the draws directly and has no such limit, which
+    is why it is the default."""
+    draws = _joint_draws(MAX_SOLVER_NAMES + 5, 200, rho=0.2)
+    with pytest.raises(ValueError, match="log_growth"):
+        solve_portfolio_weights(draws, objective="min_variance")
+    # ...and the default sails through the same input.
+    w = solve_portfolio_weights(draws, objective="log_growth", cap=0.10)
+    assert w.sum() == pytest.approx(1.0, rel=1e-6)
+
+
+def test_min_variance_is_the_minimum_of_the_frontier():
+    """The frontier's inner solve and the standalone min-variance solve are the
+    same problem, so they must agree."""
+    draws = _factor_draws()
+    isins = np.array([f"N{i:03d}" for i in range(draws.shape[0])])
+    frontier = efficient_frontier(draws, isins, n_points=25)
+    ok = frontier[frontier["converged"]]
+    assert len(ok) >= 20
+    w = solve_portfolio_weights(draws, objective="min_variance")
+    assert float((w @ draws).std()) <= ok["port_vol"].min() + 1e-6
+
+
+def test_frontier_volatility_rises_above_its_minimum():
+    """The efficient branch. Below the minimum-variance point the curve turns
+    back on itself, which is why the CML construction drops that half."""
+    draws = _factor_draws()
+    isins = np.array([f"N{i:03d}" for i in range(draws.shape[0])])
+    ok = efficient_frontier(draws, isins, n_points=25)
+    ok = ok[ok["converged"]].reset_index(drop=True)
+    upper = ok.loc[ok["port_vol"].idxmin():, "port_vol"].to_numpy()
+    assert (np.diff(upper) >= -1e-6).all()
+    assert ok["port_return"].is_monotonic_increasing
+
+
+def test_solved_tangency_beats_the_random_cloud():
+    """The point of solving rather than sampling.
+
+    A cloud's envelope is bounded by the best of what was drawn, so it sits
+    strictly inside the true frontier by an amount nobody tracks.
+    """
+    draws = _factor_draws()
+    isins = np.array([f"N{i:03d}" for i in range(draws.shape[0])])
+    tangency = tangency_portfolio(draws, isins)
+    cloud = mean_variance_frontier(draws, isins, n_portfolios=4_000)
+    assert tangency["sharpe"] > cloud["max_sharpe"]
+    assert tangency["cml_slope"] == pytest.approx(tangency["sharpe"])
+    assert tangency["cml_intercept"] == 0.0
+    assert tangency["weights"].sum() == pytest.approx(1.0, rel=1e-6)
+
+
+def test_frontier_targets_stay_inside_the_capped_reach():
+    """Under a per-name cap the single best name is unreachable, so targeting its
+    mean makes every solve at the top of the range infeasible."""
+    draws = _factor_draws()
+    isins = np.array([f"N{i:03d}" for i in range(draws.shape[0])])
+    ok = efficient_frontier(draws, isins, n_points=15, cap=0.10)
+    assert ok["converged"].all()
+    assert ok["max_weight"].max() <= 0.10 + 1e-6
+    assert ok["target_return"].max() < draws.mean(axis=1).max()

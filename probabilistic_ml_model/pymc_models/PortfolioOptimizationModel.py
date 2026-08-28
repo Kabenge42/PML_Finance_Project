@@ -67,8 +67,9 @@ positive magnitude, because it is a dispersion.
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass
-from typing import Any, Optional, Protocol, Sequence
+from typing import Any, Mapping, Optional, Protocol, Sequence
 
 import numpy as np
 import pandas as pd
@@ -77,6 +78,8 @@ from probabilistic_ml_model.pymc_models.RiskBookModel import (
     MIN_RATIO_DENOMINATOR,
     MIN_TAIL_RISK,
     _cap_normalize_weights,
+    _cap_normalize_with_groups,
+    normalise_group_caps,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,7 +105,15 @@ __all__ = [
     "generative_tail_risk",
     "generative_var",
     "kelly_fraction_from_draws",
+    "efficient_frontier",
+    "tangency_portfolio",
     "mean_variance_frontier",
+    "DEFAULT_MIN_WEIGHT",
+    "DEFAULT_OBJECTIVE",
+    "MAX_SOLVER_NAMES",
+    "PORTFOLIO_OBJECTIVES",
+    "solve_portfolio_weights",
+    "normalise_group_caps",
     "minimize_expected_loss",
     "optimize_portfolio",
     "terminal_wealth_curve",
@@ -954,68 +965,6 @@ def _attach_ranking_columns(
     return out
 
 
-def _cap_normalize_with_groups(
-        w: np.ndarray,
-        cap: float,
-        *,
-        groups: Optional[np.ndarray] = None,
-        group_cap: Optional[float] = None,
-        max_passes: int = 64,
-) -> np.ndarray:
-    """Project onto the capped simplex, then onto the group-capped one, and repeat.
-
-    The per-name cap is :func:`RiskBookModel._cap_normalize_weights` unchanged --
-    there is no second copy of it here. The group pass scales any group over
-    ``group_cap`` down to it and spills the remainder onto the groups below their cap,
-    proportionally. The two constraints interact, so the passes alternate until both
-    hold or ``max_passes`` is spent.
-
-    A sector cap is a decision to take deliberately. Its absence is also a decision,
-    and on run ``448e7f055ef3`` that decision produced a book **60.9% in Information
-    Technology** -- taken by omission, which is the only way it should never be taken.
-    """
-    out = _cap_normalize_weights(w, cap)
-    if groups is None or group_cap is None or not (0.0 < group_cap < 1.0):
-        return out
-
-    codes = np.asarray(groups)
-    for _ in range(max_passes):
-        totals = {g: out[codes == g].sum() for g in np.unique(codes)}
-        over = {g: t for g, t in totals.items() if t > group_cap + 1e-12}
-        if not over:
-            break
-        excess = 0.0
-        for g, total in over.items():
-            sel = codes == g
-            scale = group_cap / total
-            excess += total - group_cap
-            out[sel] *= scale
-        room = np.array([
-            max(group_cap - totals[g], 0.0) if g not in over else 0.0 for g in codes
-        ])
-        headroom = np.array([
-            (max(group_cap - totals[g], 0.0) if g not in over else 0.0) for g in np.unique(codes)
-        ]).sum()
-        if headroom <= _EPS:
-            # Nowhere to spill: the cap cannot be met at this book size. Normalise and
-            # let the caller see the breach in the exported concentration column
-            # rather than looping forever on an infeasible constraint.
-            logger.warning(
-                "sector cap %.0f%% is infeasible for this book (%d groups); the "
-                "weights are normalised without it",
-                100.0 * group_cap, len(totals),
-            )
-            break
-        # Spill proportionally to each under-cap name's share of its group's headroom.
-        weight_room = np.where(room > 0, out + _EPS, 0.0)
-        if weight_room.sum() <= _EPS:
-            break
-        out = out + excess * weight_room / weight_room.sum()
-        out = _cap_normalize_weights(out, cap)
-    total = out.sum()
-    return out / total if total > 0 else out
-
-
 @dataclass(frozen=True, eq=False)
 class Portfolio:
     """A sized book plus the risk it carries, all measured on the joint draws.
@@ -1077,11 +1026,272 @@ def _log_growth(weights: np.ndarray, draws: np.ndarray) -> float:
     return float(np.mean(np.log(growth)))
 
 
+#: Weighting objectives -> what each one maximises (or minimises), for the
+#: ``summary['objective']`` stamp and for argument validation.
+#:
+#: ``log_growth`` is the default and the recommendation. The other three are
+#: single-period mean-variance and are here to be CONTRASTED with it: they treat
+#: volatility as total risk, which is symmetric and therefore charges a name for
+#: its upside; they say nothing about the multiplicative dynamics an investor
+#: actually experiences; and their weights are famously unstable in the return
+#: estimates, which here are posterior means of a latent that moves between
+#: refreshes. Every one of them is solved on the SAME joint draws, so the
+#: comparison is between objectives rather than between datasets.
+PORTFOLIO_OBJECTIVES: dict[str, str] = {
+    "log_growth": "maximise E[log(1 + w @ r)] over the joint draws",
+    "max_sharpe": "maximise (w @ mu - rf) / sqrt(w' S w)",
+    "min_variance": "minimise sqrt(w' S w)",
+    "target_return": "minimise sqrt(w' S w) subject to w @ mu == target_return",
+}
+
+DEFAULT_OBJECTIVE: str = "log_growth"
+
+#: Weights below this are dropped and the problem re-solved on the survivors.
+#:
+#: **This is what makes book breadth an OUTPUT.** The previous rule took a fixed
+#: ``k_book = 50`` off the top of a rank sort, and run ``807df55e7158`` showed
+#: what that reports: eight names at the position cap holding 80 % of capital,
+#: thirty-eight sharing 1.17 %, the smallest at 0.0002 % -- an effective N of
+#: 11.7 presented as a fifty-name portfolio. A weight of two ten-thousandths of a
+#: per cent is not a position; it is a number that survived a sort. Truncating
+#: and re-solving reports the twelve names the optimiser actually wanted.
+DEFAULT_MIN_WEIGHT: float = 0.005
+
+#: Largest eligible set the QUADRATIC objectives will accept.
+#:
+#: They need a full covariance: at the 6,518-name universe that is a 340 MB dense
+#: matrix and an SLSQP problem with 6,518 variables, which does not converge in
+#: any useful time. ``log_growth`` needs no covariance -- it reads the draws
+#: directly -- so it has no such limit and is the default for that reason too.
+MAX_SOLVER_NAMES: int = 400
+
+
+def _eg_ascent(
+        held: np.ndarray,
+        project: Any,
+        *,
+        w0: Optional[np.ndarray] = None,
+        max_iter: int = 500,
+        learning_rate: float = 0.05,
+) -> np.ndarray:
+    """Exponentiated gradient ascent on ``E[log(1 + w @ r)]``.
+
+    Multiplicative updates keep the weights non-negative without a projection;
+    ``project`` is what puts them back on the capped simplex. The best iterate is
+    kept rather than the last, so a step that overshoots cannot degrade the
+    answer.
+    """
+    k = held.shape[0]
+    w = project(np.ones(k) if w0 is None else np.clip(np.asarray(w0, dtype="float64"), 0.0, None))
+    best_w, best_obj = w.copy(), _log_growth(w, held)
+    for _ in range(int(max_iter)):
+        port = w @ held
+        growth = 1.0 + port
+        if np.any(growth <= 0.0):
+            break
+        grad = (held / growth).mean(axis=1)
+        scale = np.max(np.abs(grad))
+        if not np.isfinite(scale) or scale <= _EPS:
+            break
+        w_new = project(w * np.exp(learning_rate * grad / scale))
+        obj = _log_growth(w_new, held)
+        if not np.isfinite(obj):
+            break
+        if obj > best_obj:
+            best_w, best_obj = w_new.copy(), obj
+        if np.max(np.abs(w_new - w)) < 1e-10:
+            break
+        w = w_new
+    return best_w
+
+
+def _quadratic_solve(
+        held: np.ndarray,
+        *,
+        objective: str,
+        cap: float,
+        group_labels: dict[str, np.ndarray],
+        group_caps: dict[str, float],
+        risk_free_rate: float,
+        target_return: Optional[float],
+        w0: Optional[np.ndarray],
+) -> np.ndarray:
+    """SLSQP on the mean-variance objectives, over the joint draws.
+
+    Adapted from the standard Markowitz treatment, with two deliberate
+    departures. There is **no annualisation**: this pipeline works on a single
+    NTM-horizon return, so multiplying by 252 would be inventing a frequency the
+    draws do not have. And the bounds are ``(0, cap)`` rather than ``(0, 1)``, so
+    the per-name cap is a CONSTRAINT the solver respects rather than a projection
+    applied to its answer -- which is what lets the group caps be constraints too.
+    """
+    from scipy import optimize as sco
+
+    n = held.shape[0]
+    mu = held.mean(axis=1)
+    cov = np.cov(held)
+    if cov.ndim == 0:  # pragma: no cover - single name
+        cov = cov.reshape(1, 1)
+
+    def port_ret(w: np.ndarray) -> float:
+        return float(w @ mu)
+
+    def port_vol(w: np.ndarray) -> float:
+        return float(np.sqrt(max(w @ cov @ w, 0.0)))
+
+    def neg_sharpe(w: np.ndarray) -> float:
+        vol = port_vol(w)
+        if vol < MIN_RATIO_DENOMINATOR:
+            return 0.0
+        return -(port_ret(w) - risk_free_rate) / vol
+
+    constraints: list[dict[str, Any]] = [
+        {"type": "eq", "fun": lambda w: float(w.sum() - 1.0)}
+    ]
+    for dim, limit in group_caps.items():
+        codes = group_labels[dim]
+        for g in np.unique(codes):
+            sel = np.asarray(codes == g)
+            # Bound the closure's free variables NOW. The textbook frontier loop
+            # leaks `tret` through the enclosing scope and works only because it
+            # is rebound before each solve; the same pattern over `sel` here would
+            # apply the last group's mask to every constraint.
+            constraints.append(
+                {"type": "ineq",
+                 "fun": (lambda w, _s=sel, _l=limit: float(_l - w[_s].sum()))}
+            )
+    if objective == "target_return":
+        if target_return is None:
+            raise ValueError("objective='target_return' needs target_return=")
+        constraints.append(
+            {"type": "eq",
+             "fun": (lambda w, _t=float(target_return): float(w @ mu - _t))}
+        )
+
+    bounds = tuple((0.0, float(cap)) for _ in range(n))
+    start = np.full(n, 1.0 / n) if w0 is None else np.clip(np.asarray(w0, "float64"), 0.0, cap)
+    if start.sum() <= 0:
+        start = np.full(n, 1.0 / n)
+    start = start / start.sum()
+
+    fun = {"max_sharpe": neg_sharpe,
+           "min_variance": port_vol,
+           "target_return": port_vol}[objective]
+    res = sco.minimize(fun, start, method="SLSQP",
+                       bounds=bounds, constraints=constraints)
+    if not res.success:
+        logger.warning(
+            "SLSQP did not converge for objective %r (%s); returning its last "
+            "iterate, which still satisfies the bounds but may breach a cap.",
+            objective, res.message,
+        )
+    w = np.clip(np.asarray(res.x, dtype="float64"), 0.0, None)
+    total = w.sum()
+    return w / total if total > 0 else np.full(n, 1.0 / n)
+
+
+def solve_portfolio_weights(
+        returns: np.ndarray,
+        *,
+        objective: str = DEFAULT_OBJECTIVE,
+        cap: float = 0.10,
+        groups: Optional[Sequence[Any]] = None,
+        sector_cap: Optional[float] = None,
+        group_labels: Optional[Mapping[str, Sequence[Any]]] = None,
+        group_caps: Optional[Mapping[str, float]] = None,
+        w0: Optional[np.ndarray] = None,
+        max_iter: int = 500,
+        learning_rate: float = 0.05,
+        risk_free_rate: float = 0.0,
+        target_return: Optional[float] = None,
+        max_solver_names: int = MAX_SOLVER_NAMES,
+) -> np.ndarray:
+    """Weights for one candidate set, under one objective and the caps.
+
+    The single weighting primitive: :func:`optimize_portfolio` calls it, the
+    frontier calls it, and the sparsity re-solve calls it again on the survivors.
+
+    Parameters
+    ----------
+    returns
+        ``(n, n_scenarios)`` joint draws for the candidate names.
+    objective
+        A key of :data:`PORTFOLIO_OBJECTIVES`.
+    cap
+        Maximum single-name weight.
+    groups, sector_cap, group_labels, group_caps
+        Concentration limits; see :func:`normalise_group_caps`. On the
+        ``log_growth`` path they are enforced by alternating projection, on the
+        quadratic paths as explicit SLSQP constraints.
+    w0
+        Starting point. Supplying the ranking scores makes the solve a refinement
+        of the ranking rather than a search from uniform, which matters at
+        universe scale.
+    max_iter, learning_rate
+        Ascent budget for ``log_growth``.
+    risk_free_rate
+        Subtracted in the Sharpe numerator.
+    target_return
+        Required for ``objective='target_return'``.
+    max_solver_names
+        Refusal threshold for the quadratic objectives.
+
+    Returns
+    -------
+    numpy.ndarray
+        Non-negative weights summing to 1.
+
+    Raises
+    ------
+    ValueError
+        On an unknown objective, or a quadratic objective over more than
+        ``max_solver_names`` candidates -- tighten ``eligible`` instead, or use
+        ``log_growth``, which needs no covariance.
+    """
+    if objective not in PORTFOLIO_OBJECTIVES:
+        raise ValueError(
+            f"unknown objective {objective!r}; valid: {sorted(PORTFOLIO_OBJECTIVES)}"
+        )
+    held = np.asarray(returns, dtype="float64")
+    if held.ndim != 2:
+        raise ValueError(f"returns must be 2-D, got {held.shape}")
+    n = held.shape[0]
+    if n == 0:
+        return np.zeros(0)
+
+    labels, caps = normalise_group_caps(
+        groups, sector_cap, group_labels=group_labels, group_caps=group_caps
+    )
+
+    if objective == "log_growth":
+        def project(vec: np.ndarray) -> np.ndarray:
+            return _cap_normalize_with_groups(
+                vec, cap, group_labels=labels, group_caps=caps
+            )
+
+        return _eg_ascent(held, project, w0=w0, max_iter=max_iter,
+                          learning_rate=learning_rate)
+
+    if n > int(max_solver_names):
+        raise ValueError(
+            f"objective {objective!r} needs a {n}x{n} covariance and an SLSQP "
+            f"problem in {n} variables, over the {max_solver_names}-name limit. "
+            "Tighten `eligible` to a candidate pool, or use objective="
+            "'log_growth', which reads the draws directly and needs no covariance."
+        )
+    return _quadratic_solve(
+        held, objective=objective, cap=cap, group_labels=labels, group_caps=caps,
+        risk_free_rate=risk_free_rate, target_return=target_return, w0=w0,
+    )
+
+
 def optimize_portfolio(
         returns: np.ndarray,
         isins: Sequence[str],
         *,
-        k_book: int = 50,
+        max_names: Optional[int] = None,
+        min_weight: float = DEFAULT_MIN_WEIGHT,
+        objective: str = DEFAULT_OBJECTIVE,
         cap: float = 0.10,
         kelly_multiplier: float = DEFAULT_KELLY_MULTIPLIER,
         var_prob: float = DEFAULT_VAR_PROB,
@@ -1093,17 +1303,32 @@ def optimize_portfolio(
         relative_denominator_q: float = RELATIVE_DENOMINATOR_Q,
         groups: Optional[Sequence[Any]] = None,
         sector_cap: Optional[float] = None,
+        group_labels: Optional[Mapping[str, Sequence[Any]]] = None,
+        group_caps: Optional[Mapping[str, float]] = None,
+        risk_free_rate: float = 0.0,
+        target_return: Optional[float] = None,
+        max_solver_names: int = MAX_SOLVER_NAMES,
         max_iter: int = 500,
         learning_rate: float = 0.05,
         random_seed: int = 42,
+        k_book: Optional[int] = None,
 ) -> Portfolio:
-    """Size a long book by maximising joint expected log growth.
+    """Size a long book by solving for its weights over the eligible universe.
 
-    Selection ranks candidates on reward-to-downside-deviation — the ratio
-    recommendation 03 asks for — takes the top ``k_book``, then optimises weights
-    over the **joint** draws by exponentiated gradient ascent on
-    ``E[log(1 + w @ r)]``, projecting onto the capped simplex each iteration with
-    ``RiskBookModel._cap_normalize_weights``.
+    The ranking still orders candidates and still seeds the solve, but it no
+    longer *selects*: weights are solved over every eligible name, names below
+    ``min_weight`` are dropped, and the problem is re-solved on the survivors. So
+    **book breadth is an output** — ``summary['n_book']`` reports what the
+    optimiser wanted rather than repeating a number the caller chose.
+
+    .. versionchanged:: 2026-08-28
+       ``k_book`` is replaced by ``max_names`` (an optional *ceiling*, default
+       ``None``) plus ``min_weight``. The old rule took a fixed fifty off the top
+       of the rank sort; run ``807df55e7158`` shows what that reports — eight
+       names at the position cap holding 80 % of capital, thirty-eight sharing
+       1.17 %, the smallest at 0.0002 %, an effective N of 11.7 published as a
+       fifty-name portfolio. Passing ``k_book=`` still works and maps to
+       ``max_names`` with a ``DeprecationWarning``.
 
     Optimising on the joint draws rather than on per-name summaries is the whole
     point: correlation enters through the scenarios, so two names that fall together
@@ -1123,13 +1348,32 @@ def optimize_portfolio(
         ``(n_isin,)`` labels aligned to axis 0. **Required**, not optional: aligning
         risk columns by position rather than by key is the failure this project has
         already shipped once.
+    max_names
+        Optional hard ceiling on the number of positions, applied to the rank
+        order *before* the solve. ``None`` — the default — lets the eligible set
+        through and leaves breadth entirely to ``min_weight``. Set it when an
+        operational limit (turnover, custody, mandate) genuinely binds, not to
+        express a view: a ceiling that binds is reported in
+        ``summary['breadth_binding']`` precisely so it cannot be mistaken for the
+        optimiser's own answer.
+    min_weight
+        Weights below this are dropped and the problem re-solved. See
+        :data:`DEFAULT_MIN_WEIGHT`.
+    objective
+        A key of :data:`PORTFOLIO_OBJECTIVES`. ``log_growth`` is the
+        recommendation; the mean-variance objectives are contrasts and are capped
+        at ``max_solver_names`` candidates.
+    group_labels, group_caps
+        Concentration limits on several dimensions at once, e.g.
+        ``{"sector": 0.30, "country": 0.35}``. The scalar ``groups`` /
+        ``sector_cap`` pair is the single-dimension form and still works.
+    risk_free_rate, target_return
+        Only for the ``max_sharpe`` and ``target_return`` objectives.
+    max_solver_names
+        Refusal threshold for the quadratic objectives; see
+        :data:`MAX_SOLVER_NAMES`.
     k_book
-        Number of names in the book. Taken from the caller rather than defaulted to
-        ``RiskBookModel.DEFAULT_K_BOOK``. The two had disagreed; as of 2026-08-26 the
-        constant (50) and what ``KalmanRunConfigV2`` passes (50) agree, and the same
-        holds for ``DEFAULT_MCAP_R_MAX`` / ``mcap_global_r_max`` at 0.03 — verified,
-        not assumed. Deferring to the caller anyway is what stops the two drifting
-        apart again silently.
+        **Deprecated.** Alias for ``max_names``.
     cap
         Maximum single-name weight.
     kelly_multiplier
@@ -1192,6 +1436,29 @@ def optimize_portfolio(
         raise ValueError(
             f"Unknown rank_by {rank_by!r}. Valid arms: {sorted(RANKING_RULES)}"
         )
+    if objective not in PORTFOLIO_OBJECTIVES:
+        raise ValueError(
+            f"unknown objective {objective!r}; valid: {sorted(PORTFOLIO_OBJECTIVES)}"
+        )
+    if k_book is not None:
+        # Accepted, not silently ignored: `k_book` was the selection rule for the
+        # life of this function and is still in notebooks and saved commands.
+        # Mapping it to a CEILING changes what it means -- it no longer decides
+        # the book, it only bounds it -- so the warning says which.
+        warnings.warn(
+            "optimize_portfolio(k_book=...) is deprecated: book breadth is now "
+            "solved, not chosen. The value is applied as `max_names`, a CEILING "
+            "on the rank order, so the book may be smaller than it. Pass "
+            "max_names= to keep a ceiling, or omit it to let `min_weight` decide.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if max_names is None:
+            max_names = int(k_book)
+    if max_names is not None and int(max_names) < 1:
+        raise ValueError(f"max_names must be >= 1 or None, got {max_names!r}")
+    if not (0.0 <= min_weight < 1.0):
+        raise ValueError(f"min_weight must be in [0, 1), got {min_weight!r}")
 
     n_isin = draws.shape[0]
     kelly = [kelly_report(draws[i], max_fraction=MAX_KELLY_FRACTION) for i in range(n_isin)]
@@ -1266,33 +1533,55 @@ def optimize_portfolio(
         & np.isfinite(analytics[rank_col].to_numpy())
     )
 
+    # Resolve the concentration limits once, over the FULL universe, so the
+    # per-candidate slices below stay aligned to the names they describe.
+    _all_labels, _active_caps = normalise_group_caps(
+        groups, sector_cap, group_labels=group_labels, group_caps=group_caps
+    )
+    for _dim, _vals in _all_labels.items():
+        if _vals.shape[0] != n_isin:
+            raise ValueError(
+                f"group labels for {_dim!r} have {_vals.shape[0]} entries for "
+                f"{n_isin} names"
+            )
+
     analytics["weight"] = 0.0
     # Explicit tie-break. `p_upside_pos_cond` saturates at 1.0 for the majority of the
     # universe, so a top-k cut lands inside the tie and argsort's order would silently
     # become the selection rule. Descending on every key; missing keys are skipped.
     sort_cols = [rank_col] + [c for c in RANK_TIEBREAK
                               if c in analytics.columns and c != rank_col]
-    chosen = (
-        analytics.loc[selectable]
-        .sort_values(sort_cols, ascending=[False] * len(sort_cols), kind="mergesort")
-        .head(int(k_book))
+    candidates = analytics.loc[selectable].sort_values(
+        sort_cols, ascending=[False] * len(sort_cols), kind="mergesort"
     )
+    # `max_names` is a ceiling, not the rule. With it unset the whole eligible
+    # set reaches the solver and `min_weight` alone decides breadth.
+    breadth_binding = max_names is not None and len(candidates) > int(max_names)
+    if max_names is not None:
+        candidates = candidates.head(int(max_names))
     tie_span = int(
-        (analytics.loc[selectable, rank_col] == chosen[rank_col].min()).sum()
-    ) if len(chosen) else 0
-    if tie_span > 1 and len(chosen) >= int(k_book):
+        (analytics.loc[selectable, rank_col] == candidates[rank_col].min()).sum()
+    ) if len(candidates) else 0
+    if tie_span > 1 and breadth_binding:
         logger.info(
-            "the %s cut at rank %d fell among %d tied names; broken on %s",
-            rank_col, int(k_book), tie_span, list(sort_cols[1:]) or "nothing",
+            "the %s ceiling at %d fell among %d tied names; broken on %s",
+            rank_col, int(max_names), tie_span, list(sort_cols[1:]) or "nothing",
         )
 
     summary: dict[str, Any] = {
-        "k_book": float(k_book),
+        "objective": objective,
+        "max_names": float(max_names) if max_names is not None else float("nan"),
+        "min_weight": float(min_weight),
+        "breadth_binding": bool(breadth_binding),
+        "n_candidates": float(len(candidates)),
         "cap": float(cap),
         "var_prob": float(var_prob),
         "kelly_multiplier": float(kelly_multiplier),
         "n_eligible": float(int(selectable.sum())),
-        "n_book": float(len(chosen)),
+        # Filled in after the solve. Breadth is an OUTPUT: writing it here, from
+        # a number the caller passed, is exactly the confusion this change exists
+        # to remove.
+        "n_book": float("nan"),
         "rank_by": rank_by,
         # WHICH column the ranking divided by, as one fact rather than as a
         # per-name copy of that column. `p_upside_pos_cond` is a bounded
@@ -1303,13 +1592,18 @@ def optimize_portfolio(
         "rank_tiebreak": ",".join(sort_cols[1:]),
         "rank_tie_span": float(tie_span),
         "sector_cap": float(sector_cap) if sector_cap is not None else float("nan"),
+        # Every constrained dimension, as one readable fact. `sector_cap` above
+        # is kept for the single-dimension callers and stays the sector entry.
+        "group_caps": ",".join(
+            f"{d}={v:.2f}" for d, v in sorted(_active_caps.items())
+        ),
         "relative_denominator_q": float(relative_denominator_q),
         # The 89.3% finding, as a tracked number rather than an anecdote.
         "kelly_interior_share": float(analytics.loc[mask, "kelly_interior"].mean())
         if mask.any() else float("nan"),
     }
 
-    if chosen.empty:
+    if candidates.empty:
         logger.warning(
             "no name passed selection (%d eligible of %d); returning an empty book",
             int(selectable.sum()),
@@ -1320,6 +1614,7 @@ def optimize_portfolio(
             analytics=analytics,
             summary={
                 **summary,
+                "n_book": 0.0,
                 "port_expected": float("nan"),
                 "port_gvar": float("nan"),
                 "port_ges": float("nan"),
@@ -1332,56 +1627,83 @@ def optimize_portfolio(
             },
         )
 
-    rows = chosen.index.to_numpy()
-    held = draws[rows]
-    k = len(rows)
-
-    held_groups: Optional[np.ndarray] = None
-    if groups is not None and sector_cap is not None:
-        all_groups = np.asarray(groups)
-        if all_groups.shape[0] != n_isin:
-            raise ValueError(
-                f"groups has {all_groups.shape[0]} entries for {n_isin} names"
-            )
-        held_groups = all_groups[rows]
-
-    def _project(vec: np.ndarray) -> np.ndarray:
-        return _cap_normalize_with_groups(
-            vec, cap, groups=held_groups, group_cap=sector_cap
+    # ---- solve, truncate, re-solve --------------------------------------------
+    #
+    # Stage 1 solves over every candidate. Stage 2 drops the weights below
+    # `min_weight` and solves again on the survivors, so the answer is a genuine
+    # optimum of the smaller problem rather than stage 1's weights rescaled --
+    # rescaling would hand the dropped names' capital out in proportions nothing
+    # chose. Breadth falls out of stage 1 and is reported, never assumed.
+    def _solve(rows: np.ndarray, w0: Optional[np.ndarray]) -> np.ndarray:
+        return solve_portfolio_weights(
+            draws[rows],
+            objective=objective,
+            cap=cap,
+            group_labels={d: v[rows] for d, v in _all_labels.items()},
+            group_caps=_active_caps,
+            w0=w0,
+            max_iter=max_iter,
+            learning_rate=learning_rate,
+            risk_free_rate=risk_free_rate,
+            target_return=target_return,
+            max_solver_names=max_solver_names,
         )
 
-    # Exponentiated gradient ascent on E[log(1 + w @ r)]. Multiplicative updates keep
-    # the weights non-negative without a projection, and the cap-and-spill step is
-    # what puts them back on the capped simplex.
-    w = _project(np.ones(k))
-    best_w, best_obj = w.copy(), _log_growth(w, held)
-    for _ in range(int(max_iter)):
-        port = w @ held
-        growth = 1.0 + port
-        if np.any(growth <= 0.0):
-            break
-        grad = (held / growth).mean(axis=1)
-        scale = np.max(np.abs(grad))
-        if not np.isfinite(scale) or scale <= _EPS:
-            break
-        w_new = w * np.exp(learning_rate * grad / scale)
-        w_new = _project(w_new)
-        obj = _log_growth(w_new, held)
-        if not np.isfinite(obj):
-            break
-        if obj > best_obj:
-            best_w, best_obj = w_new.copy(), obj
-        if np.max(np.abs(w_new - w)) < 1e-10:
-            w = w_new
-            break
-        w = w_new
-    w = best_w
+    rows = candidates.index.to_numpy()
+    # Seed from the ranking. At universe scale a uniform start spends most of the
+    # ascent rediscovering an ordering the screen already computed; seeding makes
+    # the solve a refinement of it. Non-finite or non-positive scores fall back to
+    # uniform rather than to zero, which would pin a name out of the book before
+    # the objective had seen it.
+    seed = pd.to_numeric(candidates[rank_col], errors="coerce").to_numpy()
+    seed = np.where(np.isfinite(seed) & (seed > 0), seed, 0.0)
+    w = _solve(rows, seed if seed.sum() > 0 else None)
+    n_candidates = len(rows)
 
+    # ITERATE the truncation. One pass is not enough: re-solving on the survivors
+    # redistributes the dropped names' capital, and a name that cleared the floor
+    # only because the pool was wider can fall back under it. Stopping after one
+    # pass ships exactly the sub-floor position the floor exists to exclude --
+    # measured, not hypothesised.
+    for _ in range(16):
+        if min_weight <= 0.0:
+            break
+        kept = w >= float(min_weight)
+        if kept.all():
+            break
+        if not kept.any():
+            # The floor is infeasible at this breadth, not an empty book: a floor
+            # above 1/n can never bind. Keep the solved weights and say so.
+            logger.warning(
+                "no candidate reached the %.2f%% minimum weight across %d names; "
+                "keeping the unfiltered solution. Lower min_weight, or tighten "
+                "`eligible`.", 100.0 * min_weight, len(rows),
+            )
+            break
+        rows = rows[kept]
+        w = _solve(rows, w[kept])
+    else:  # pragma: no cover - defensive
+        logger.warning(
+            "the minimum-weight truncation did not settle in 16 passes; shipping "
+            "%d names, of which %d are below the %.2f%% floor.",
+            len(rows), int((w < float(min_weight)).sum()), 100.0 * min_weight,
+        )
+    if min_weight > 0.0 and len(rows) < n_candidates:
+        logger.info(
+            "breadth: %d of %d candidates cleared the %.2f%% minimum weight",
+            len(rows), n_candidates, 100.0 * min_weight,
+        )
+
+    # The BOOK, as rows of the analytics frame -- `candidates` is the
+    # pre-solve pool and no longer describes what is held.
+    book = analytics.loc[rows]
+    held_draws = draws[rows]
     analytics.loc[rows, "weight"] = w
     weights = pd.Series(w, index=analytics.loc[rows, "isin"].to_numpy(), name="weight")
+    summary["n_book"] = float(len(rows))
 
-    port_draws = w @ held
-    wavg_downside = float(np.nansum(w * chosen["downside_dev"].to_numpy()))
+    port_draws = w @ held_draws
+    wavg_downside = float(np.nansum(w * book["downside_dev"].to_numpy()))
     port_downside = downside_deviation(port_draws)
 
     if np.isfinite(port_downside) and port_downside < MIN_RATIO_DENOMINATOR:
@@ -1410,7 +1732,10 @@ def optimize_portfolio(
         # is priced. Not comparable with RiskBook.summary['port_vol'].
         port_vol=float(port_draws.std()),
         port_kelly=kelly_fraction_from_draws(port_draws, multiplier=kelly_multiplier),
-        log_growth=float(best_obj),
+        # Recomputed on the FINAL weights rather than carried out of the
+        # ascent: after the truncate-and-re-solve the reported growth has to
+        # be the growth of the book that shipped, not of the pool it came from.
+        log_growth=float(_log_growth(w, held_draws)),
         # > 1 means the book's downside is smaller than the weighted average of its
         # names', i.e. diversification was earned. == 1 means the draws move together.
         diversification_ratio=(
@@ -1427,22 +1752,34 @@ def optimize_portfolio(
         # distribution. On the shipped arm this is the measurement that says whether
         # the ranking chose low risk or merely unmodelled risk.
         book_denominator_pctile_max=(
-            float(chosen["rank_denominator_pctile"].max())
-            if "rank_denominator_pctile" in chosen else float("nan")
+            float(book["rank_denominator_pctile"].max())
+            if "rank_denominator_pctile" in book else float("nan")
         ),
-        book_kelly_interior_share=float(chosen["kelly_interior"].mean()),
+        book_kelly_interior_share=float(book["kelly_interior"].mean()),
     )
-    if held_groups is not None:
-        totals = pd.Series(w).groupby(pd.Series(held_groups).to_numpy()).sum()
-        summary["top_group_weight"] = float(totals.max())
-        summary["top_group"] = str(totals.idxmax())
-        summary["n_groups"] = float(totals.size)
-    elif groups is not None:
-        all_groups = np.asarray(groups)
-        totals = pd.Series(w).groupby(all_groups[rows]).sum()
-        summary["top_group_weight"] = float(totals.max())
-        summary["top_group"] = str(totals.idxmax())
-        summary["n_groups"] = float(totals.size)
+    # Concentration on every labelled dimension, capped or not. Reporting only the
+    # capped ones would make an uncapped dimension invisible, and the whole reason
+    # the sector gate exists is that a concentration nobody measured is a decision
+    # taken by omission.
+    _report_labels = dict(_all_labels)
+    if groups is not None and "sector" not in _report_labels:
+        _report_labels["sector"] = np.asarray(groups)
+    for _dim, _vals in _report_labels.items():
+        _totals = pd.Series(w).groupby(np.asarray(_vals)[rows]).sum()
+        if not len(_totals):
+            continue
+        summary[f"top_{_dim}_weight"] = float(_totals.max())
+        summary[f"top_{_dim}"] = str(_totals.idxmax())
+        summary[f"n_{_dim}_groups"] = float(_totals.size)
+    # The single-dimension names the gates and the dashboard already read. They
+    # follow `groups` when it is given, else the first labelled dimension.
+    _primary = ("sector" if "sector" in _report_labels
+                else (next(iter(_report_labels)) if _report_labels else None))
+    if _primary is not None:
+        summary["top_group_weight"] = summary[f"top_{_primary}_weight"]
+        summary["top_group"] = summary[f"top_{_primary}"]
+        summary["n_groups"] = summary[f"n_{_primary}_groups"]
+        summary["top_group_dimension"] = _primary
     logger.info(
         "book [%s]: %d names, effective N %.1f, E[r] %.2f%%, GVaR %.2f%%, growth "
         "%.5f, interior Kelly %.0f%% of book, top group %s",
@@ -1456,6 +1793,193 @@ def optimize_portfolio(
         f"{summary['top_group_weight']:.1%}" if "top_group_weight" in summary else "n/a",
     )
     return Portfolio(weights=weights, analytics=analytics, summary=summary)
+
+
+def efficient_frontier(
+        returns: np.ndarray,
+        isins: Sequence[str],
+        *,
+        n_points: int = 40,
+        cap: float = 1.0,
+        groups: Optional[Sequence[Any]] = None,
+        sector_cap: Optional[float] = None,
+        group_labels: Optional[Mapping[str, Sequence[Any]]] = None,
+        group_caps: Optional[Mapping[str, float]] = None,
+        risk_free_rate: float = 0.0,
+        max_solver_names: int = MAX_SOLVER_NAMES,
+) -> pd.DataFrame:
+    """The SOLVED mean-variance frontier: minimum variance per target return.
+
+    One constrained solve per target return, rather than the binned upper envelope
+    of a random-portfolio cloud. The distinction is not cosmetic: a cloud's
+    envelope is bounded by the best of what was sampled, so it sits strictly
+    inside the true frontier and by an amount that shrinks with the sample and the
+    dimension in a way nobody tracks. ``mean_variance_frontier`` keeps the cloud,
+    which is the right thing to *plot*; this is the right thing to quote.
+
+    No annualisation. The draws are one NTM-horizon return, so the textbook
+    ``* 252`` would invent a frequency they do not have.
+
+    Parameters
+    ----------
+    returns
+        ``(n_isin, n_scenarios)`` joint draws.
+    isins
+        Labels aligned to axis 0.
+    n_points
+        Target returns spanning the achievable range.
+    cap
+        Per-name weight cap. ``1.0`` reproduces the textbook long-only frontier.
+    groups, sector_cap, group_labels, group_caps
+        Concentration limits, applied as SLSQP constraints.
+    risk_free_rate
+        Carried through to the reported Sharpe ratio.
+    max_solver_names
+        Refusal threshold; see :data:`MAX_SOLVER_NAMES`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per target: ``target_return``, ``port_return``, ``port_vol``,
+        ``sharpe``, ``effective_n``, ``max_weight``, ``converged``, and the
+        weights as a JSON-free ``n_holdings`` count. Non-converged rows are kept
+        and flagged rather than dropped -- a frontier with silent holes reads as
+        a shorter frontier.
+    """
+    draws = np.asarray(returns, dtype="float64")
+    if draws.ndim != 2:
+        raise ValueError(f"returns must be 2-D, got {draws.shape}")
+    labels = np.asarray(isins)
+    if labels.shape[0] != draws.shape[0]:
+        raise ValueError(
+            f"isins has {labels.shape[0]} entries for {draws.shape[0]} rows"
+        )
+    n = draws.shape[0]
+    if n > int(max_solver_names):
+        raise ValueError(
+            f"the frontier needs a {n}x{n} covariance and one SLSQP solve per "
+            f"target, over the {max_solver_names}-name limit. Pass a candidate "
+            "pool rather than the universe."
+        )
+
+    mu = draws.mean(axis=1)
+    # The achievable span under the cap, not under unconstrained weights: with
+    # `cap` binding, the single best name is NOT reachable, and targeting it makes
+    # every solve at the top of the range infeasible.
+    k_min = int(np.ceil(1.0 / cap)) if cap < 1.0 else 1
+    hi = float(np.sort(mu)[::-1][:k_min].mean())
+    lo = float(np.sort(mu)[:k_min].mean())
+    if not np.isfinite(hi) or not np.isfinite(lo) or hi <= lo:
+        raise ValueError(
+            "the candidate expected returns span no range; a frontier over them "
+            "is a single point."
+        )
+
+    rows: list[dict[str, Any]] = []
+    w_prev: Optional[np.ndarray] = None
+    for target in np.linspace(lo, hi, int(n_points)):
+        try:
+            w = solve_portfolio_weights(
+                draws, objective="target_return", cap=cap,
+                groups=groups, sector_cap=sector_cap,
+                group_labels=group_labels, group_caps=group_caps,
+                risk_free_rate=risk_free_rate, target_return=float(target),
+                # Warm-start from the previous target: adjacent frontier points
+                # are close, and SLSQP from a uniform start rediscovers each one.
+                w0=w_prev, max_solver_names=max_solver_names,
+            )
+        except Exception as exc:  # pragma: no cover - solver-dependent
+            logger.info("frontier target %.4f did not solve: %s", target, exc)
+            rows.append({"target_return": float(target), "port_return": float("nan"),
+                         "port_vol": float("nan"), "sharpe": float("nan"),
+                         "effective_n": float("nan"), "max_weight": float("nan"),
+                         "n_holdings": 0.0, "converged": False})
+            continue
+        w_prev = w
+        port = w @ draws
+        vol = float(port.std())
+        rows.append({
+            "target_return": float(target),
+            "port_return": float(port.mean()),
+            "port_vol": vol,
+            "sharpe": ((float(port.mean()) - risk_free_rate) / vol
+                       if vol >= MIN_RATIO_DENOMINATOR else float("nan")),
+            "effective_n": float(1.0 / np.sum(w * w)) if np.sum(w * w) > 0 else 0.0,
+            "max_weight": float(w.max()),
+            "n_holdings": float(int((w > 1e-6).sum())),
+            "converged": True,
+        })
+    return pd.DataFrame(rows)
+
+
+def tangency_portfolio(
+        returns: np.ndarray,
+        isins: Sequence[str],
+        *,
+        risk_free_rate: float = 0.0,
+        cap: float = 1.0,
+        groups: Optional[Sequence[Any]] = None,
+        sector_cap: Optional[float] = None,
+        group_labels: Optional[Mapping[str, Sequence[Any]]] = None,
+        group_caps: Optional[Mapping[str, float]] = None,
+        max_solver_names: int = MAX_SOLVER_NAMES,
+) -> dict[str, Any]:
+    """The maximum-Sharpe portfolio and the capital market line through it.
+
+    Solved directly rather than by splining the frontier and root-finding the
+    tangency condition. The spline route needs a monotone, well-sampled efficient
+    branch; under a per-name cap the frontier can be short and slightly ragged,
+    and a spline through that produces a tangency point that is an artefact of the
+    knots. Maximising the Sharpe ratio under the same constraints gives the same
+    portfolio when both are well posed, and a defined answer when they are not.
+
+    The CML is then ``rf + sharpe * vol`` -- a line, reported by its two
+    coefficients, because that is all a capital market line is.
+
+    Parameters
+    ----------
+    returns, isins
+        Joint draws and their labels.
+    risk_free_rate
+        The line's intercept, and the Sharpe numerator's offset.
+    cap, groups, sector_cap, group_labels, group_caps, max_solver_names
+        As :func:`efficient_frontier`.
+
+    Returns
+    -------
+    dict[str, Any]
+        ``weights`` (a :class:`pandas.Series` over held names), ``port_return``,
+        ``port_vol``, ``sharpe``, ``cml_intercept``, ``cml_slope``,
+        ``effective_n``, ``n_holdings``.
+    """
+    draws = np.asarray(returns, dtype="float64")
+    labels = np.asarray(isins)
+    if labels.shape[0] != draws.shape[0]:
+        raise ValueError(
+            f"isins has {labels.shape[0]} entries for {draws.shape[0]} rows"
+        )
+    w = solve_portfolio_weights(
+        draws, objective="max_sharpe", cap=cap, groups=groups,
+        sector_cap=sector_cap, group_labels=group_labels, group_caps=group_caps,
+        risk_free_rate=risk_free_rate, max_solver_names=max_solver_names,
+    )
+    port = w @ draws
+    vol = float(port.std())
+    ret = float(port.mean())
+    sharpe = ((ret - risk_free_rate) / vol
+              if vol >= MIN_RATIO_DENOMINATOR else float("nan"))
+    held = w > 1e-6
+    return {
+        "weights": pd.Series(w[held], index=labels[held], name="weight"),
+        "port_return": ret,
+        "port_vol": vol,
+        "sharpe": sharpe,
+        # The capital market line, as the two numbers that define it.
+        "cml_intercept": float(risk_free_rate),
+        "cml_slope": sharpe,
+        "effective_n": float(1.0 / np.sum(w * w)) if np.sum(w * w) > 0 else 0.0,
+        "n_holdings": int(held.sum()),
+    }
 
 
 def mean_variance_frontier(

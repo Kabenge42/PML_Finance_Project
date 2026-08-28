@@ -214,6 +214,8 @@ CREATE TABLE analytics."04_panel_frame_v2"
     "feat_eps_signal_beat" DOUBLE PRECISION,
     "feat_eps_signal_coverage" DOUBLE PRECISION,
     "built_at" TEXT,
+    "oecd_bloc" TEXT,
+    "style_box" TEXT,
     "run_id" TEXT,
     "exported_at" TEXT,
     "source_sha" TEXT,

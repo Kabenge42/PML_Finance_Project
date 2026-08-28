@@ -153,17 +153,49 @@ Key data sources:
 
 ### 2. Hierarchical Shrinkage (pymc_models/_hierarchy.py)
 
-Canonical multi-level category hierarchy shared by all 7 PyMC models:
+Canonical multi-level category hierarchy shared by all 7 PyMC models, **and since 2026-08-28 by the Kalman v2
+nested arms**:
 
 ```python
 from probabilistic_ml_model import (
     HIERARCHICAL_CATEGORY_COLS,
-    PARENT_MAP,  # region → country → exchange → sector → industry
+    PARENT_MAP,
     build_hierarchy_indices,
+)
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    OECD_MEMBERS, UNKNOWN_LABEL, attach_derived_group_labels, order_levels, resolve_parent,
 )
 
 idata, _ = model.fit(data, categories_df=df_categories, hierarchy_levels=["exchange", "sector", "industry"])
 ```
+
+**Four independent roots, not one tree.** Domicile geography, listing geography, industry classification and style
+are crossed views of a name:
+
+| Chain | Levels |
+|---|---|
+| Domicile | `region` → `oecd_bloc` → `country` |
+| Listing | `trading_region` → `trading_country` → `exchange` → `unit` |
+| Classification | `sector` → `industry` |
+| Style | `style_class` · `size_class` → `style_box` |
+
+Two derived levels, built by `attach_derived_group_labels` and registered in `DERIVED_GROUP_BUILDERS`:
+
+- **`oecd_bloc`** — `{OECD|NON_OECD}_{region slug}`, e.g. `OECD_EUROPE`, `NON_OECD_ASIA_PACIFIC`. Only membership
+  is data; **the nesting is structural** — the region slug is part of the label, so every bloc lies wholly inside
+  one `region` by construction. Defining it from an external OECD region table instead would let `OECD_AMERICAS`
+  straddle *United States and Canada* and *Latin America*, and the chain would quietly stop being a tree. It fills
+  the 5-region → 82-country sparsity gap, which is where a flat group effect stops carrying information.
+- **`style_box`** — the 9-cell `size × style` grid. The two marginals already carry size and style; the box is the
+  **interaction** they cannot express.
+
+Three rules the helpers enforce, each earned:
+
+| Rule | Why |
+|---|---|
+| `HIERARCHICAL_CATEGORY_COLS` is an **order**, parents first | `build_hierarchy_indices` links a child only if its parent was materialised first. Pass an explicit level list through `order_levels` — a config's `group_effects` is ordered for readability, not by depth. |
+| A missing parent resolves to the nearest **ancestor** (`resolve_parent`) | Six other models call `levels=["region","country"]`. Inserting `oecd_bloc` between them would otherwise silently demote `country` to a flat level. |
+| One spelling of "unknown" (`UNKNOWN_LABEL`) | `import_pml_data` COALESCEs a blank vendor field to the literal `'n/a'` and only `size_class` is filtered for it at query time, so without the normalisation a blank `trading_region` becomes a **fitted group level**. The sentinel set is deliberately narrow — `"NA"` is Namibia and an abbreviation for North America, so treating it as missing merges a real category into the unknown bucket. |
 
 ### 3. Feature Alignment & ArviZ (pymc_models/_feature_alignment.py)
 
@@ -216,7 +248,7 @@ Also in this package, but **not** `fit()`-style models:
 | `MonteCarloSimulation.py`          | Module-level `fit()` + `MonteCarloReturnSimulation`                     |
 | `ProbabilisticLinearRegressionModel.py` | Bayesian linear regression                                         |
 | `BaselineProbabilityModel.py`      | **Not a PyMC model** — a `PipelineConfig` dataclass + `main()` orchestrator |
-| `PortfolioOptimizationModel.py`    | 0-byte stub, unimplemented since 2025-07-02                             |
+| `PortfolioOptimizationModel.py`    | Decision analysis — the replay's sizer (§11b below). ~1.7k lines; the "0-byte stub" note it carried until 2026-08-28 was years stale |
 
 ### 5. Pipeline Runner (pipeline_runners.py)
 
@@ -278,7 +310,8 @@ from probabilistic_ml_model.pymc_models._price_target_mc import (
 ```python
 from probabilistic_ml_model.pymc_models.RiskBookModel import RiskBook, compute_cvar_aware_book
 
-rb = compute_cvar_aware_book(idata, screen.eu, results, alpha=0.05, cap=0.08, k_book=25)
+rb = compute_cvar_aware_book(idata, screen.eu, results, alpha=0.05, cap=0.08,
+                             max_names=25, group_caps={"sector": 0.30})
 rb.analytics   # per-name risk columns incl. cvar05, exp_vol, starr, book_weight
 rb.book        # STARR-ranked, cap-and-spill sized long book (weights sum to 1)
 rb.summary     # port_up, port_cvar, wavg_cvar, starr_book, div, n_book, sizing params
@@ -286,6 +319,38 @@ rb.summary     # port_up, port_cvar, wavg_cvar, starr_book, div, n_book, sizing 
 
 `pymc_kalman_filter_pt.compute_cvar_aware_book(idata, panel, screen, results, config=…)` is a thin wrapper that
 resolves the sizing knobs from `KalmanRunConfig` and delegates here. All columns are raw decimals.
+
+`k_book=` still works and maps to `max_names` with a `DeprecationWarning`. `normalise_group_caps` /
+`_cap_normalize_with_groups` live **here**, beside `_cap_normalize_weights` — this module is the sole
+weight-construction primitive and `PortfolioOptimizationModel` imports them from it, never the reverse.
+
+### 11b. Portfolio Optimization (pymc_models/PortfolioOptimizationModel.py)
+
+The replay's sizer. **Breadth is an output, not a parameter** (since 2026-08-28):
+
+```python
+from probabilistic_ml_model.pymc_models.PortfolioOptimizationModel import (
+    optimize_portfolio, solve_portfolio_weights, efficient_frontier, tangency_portfolio,
+)
+
+book = optimize_portfolio(
+    fc.terminal, fc.isins,
+    objective="log_growth",            # PORTFOLIO_OBJECTIVES; the recommendation
+    max_names=None,                    # optional CEILING, not the book size
+    min_weight=0.005,                  # what actually decides breadth
+    cap=0.10, group_caps={"sector": 0.30},
+)
+book.summary["n_book"]                 # REPORTED, never chosen
+```
+
+| Concept | Rule |
+|---|---|
+| Selection | The ranking orders candidates and seeds the solve; it no longer cuts at `k`. |
+| Breadth | Solve over the eligible set → drop `< min_weight` → **re-solve** → repeat until the floor holds. One pass is not enough: the re-solve redistributes capital and a survivor can fall back under. |
+| `k_book=` | Deprecated; maps to `max_names` with a warning. It now *bounds* the book instead of deciding it. |
+| Objectives | `log_growth` (exponentiated-gradient ascent on `E[log(1+w·r)]`, no covariance, no size limit) is the default. `max_sharpe` / `min_variance` / `target_return` are SLSQP **contrasts** and refuse above `MAX_SOLVER_NAMES = 400` — a 6.5k-name covariance is 340 MB and will not converge. |
+| Frontier | `efficient_frontier` solves one constrained problem per target return; `mean_variance_frontier` keeps the Dirichlet cloud for *plotting*. The cloud's envelope sits strictly inside the true frontier — measured: solved tangency Sharpe 4.35 against the cloud's 0.69 on the same draws. |
+| No annualisation | The draws are one NTM-horizon return. The textbook `* 252` would invent a frequency they do not have. |
 
 ### 6. Data Loading (data_utils.py)
 
@@ -1069,6 +1134,27 @@ The other ~45 files there are hand-written screen/analysis scripts unmanaged by 
   and the export carries a `backend` column. The partition puts `w_L` on the *latent* side, which is the only
   reason `level_off` is screenable at all. `COVARIANCE_FIELDS` + `assert_arm_is_screenable` refuse any arm that
   touches what the Max step froze; `drift_strict` is refused too (it changes the design matrix).
+  **The Smooth step builds its group effects through `build_group_effect_terms`, the same function the full model
+  uses** — so a nested arm is *screened* as the model it would be *fitted* as. Building crossed effects there
+  regardless of `group_parents` would make `hierarchy_nested` screen identically to its crossed control, which is
+  the same false negative `extra_group_cols` already exists to prevent.
+- **Group effects: crossed by default, nested by arm.** `KalmanModelConfig.group_parents = None` builds the shipped
+  crossed model — same random variables, same names, same creation order — and that identity is what makes a nested
+  arm a one-change contrast. `build_group_effect_terms` in `KalmanFilterModel_v2.py` is the SSOT.
+
+  | Arm | Levels | The question |
+  |---|---|---|
+  | `hierarchy_fine` | + `country`, `industry`, crossed | Run and **declined**: ELPD +15.8 at dse ~11 (1.4×, under the 2× bar), 4 k̂ > 0.70, +66 effective parameters. It *held* ESS. |
+  | `hierarchy_nested` | `region → oecd_bloc → country`, nested | The untested half of that verdict. A flat `ZeroSumNormal` shrinks a 1-name country toward **zero**; nested, it shrinks toward its **bloc**, so the level inherits an estimate instead of being erased. |
+  | `hierarchy_nested_full` | + `sector → industry` | Run *beside* the geography arm so the gain is attributable to one of the two additions. |
+  | `hierarchy_geo` | + `oecd_bloc`, crossed | The control: `hierarchy_nested` changes the level set *and* the parameterisation, so on its own it cannot say which one paid. |
+  | `hierarchy_styled` | + `style_box`, nested | Do size and style interact at all? No level holds fewer than a few hundred names, so a null result is informative rather than underpowered. |
+
+  **Only the LEAF of each chain enters `eta`.** An intermediate level contributes through its children; adding its
+  own term as well counts it once per level of depth below it. The builder asserts leaf-count == root-count rather
+  than trusting it, because the failure is silent — the model still samples, the mean is just wrong.
+  `KalmanPanelV2.coord_parent_of` is indexed by **level, not ISIN**, so it is in `_PANEL_NON_ISIN_FIELDS` and
+  `subsample_panel_v2` must not slice it.
 - **Point-in-time vintages:** `analytics.panel_vintage_v2` +
   `scripts/{capture,score}_panel_vintage{,s}.py`. Every gate in the v2 workflow scores the model against the
   analyst trail it was fitted to, which is why a pass-through cleared 19 of 21 gates. Append-only, because the

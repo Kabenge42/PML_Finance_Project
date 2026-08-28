@@ -33,19 +33,61 @@ class TestHierarchyConstants:
 
         assert tuple(HIERARCHICAL_CATEGORY_COLS) == tuple(_HIERARCHICAL_CATEGORY_COLS)
 
-        # Parent-map invariants
+        # Parent-map invariants.
+        #
+        # These assert the SHIPPED chain. Three of them used to assert a much
+        # older one (`exchange -> country`, `sector -> exchange`,
+        # `size_class -> style_class`) that the code had already abandoned, so
+        # the test failed for reasons that had nothing to do with what it was
+        # protecting. The four roots are genuinely independent: domicile
+        # geography, listing geography, industry classification and style are
+        # crossed views of a name, not levels of one tree.
         assert PARENT_MAP["region"] is None
-        assert PARENT_MAP["country"] == "region"
-        assert PARENT_MAP["exchange"] == "country"
-        assert PARENT_MAP["sector"] == "exchange"
-        assert PARENT_MAP["industry"] == "sector"
+        assert PARENT_MAP["trading_region"] is None
+        assert PARENT_MAP["sector"] is None
         assert PARENT_MAP["style_class"] is None
-        assert PARENT_MAP["size_class"] == "style_class"
-        assert PARENT_MAP["unit"] is None
-        assert PARENT_MAP["trading_country"] is None
 
-        # Every column must be keyed in PARENT_MAP
+        # Domicile geography: region -> oecd_bloc -> country.
+        assert PARENT_MAP["oecd_bloc"] == "region"
+        assert PARENT_MAP["country"] == "oecd_bloc"
+
+        # Listing geography: trading_region -> trading_country -> exchange -> unit.
+        assert PARENT_MAP["trading_country"] == "trading_region"
+        assert PARENT_MAP["exchange"] == "trading_country"
+        assert PARENT_MAP["unit"] == "exchange"
+
+        # Classification and style.
+        assert PARENT_MAP["industry"] == "sector"
+        assert PARENT_MAP["size_class"] is None
+        assert PARENT_MAP["style_box"] == "size_class"
+
+    def test_parent_map_is_a_forest_over_the_canonical_columns(self):
+        """Every parent is a known level, and no chain cycles.
+
+        `build_hierarchy_indices` walks this map upward to find the nearest
+        materialised ancestor. A parent naming a level that is not in
+        `HIERARCHICAL_CATEGORY_COLS` would make that walk silently terminate,
+        and a cycle would make it loop.
+        """
+        from probabilistic_ml_model.pymc_models._hierarchy import (
+            HIERARCHICAL_CATEGORY_COLS,
+            PARENT_MAP,
+        )
+
         assert set(PARENT_MAP) == set(HIERARCHICAL_CATEGORY_COLS)
+
+        order = {lv: i for i, lv in enumerate(HIERARCHICAL_CATEGORY_COLS)}
+        for level, parent in PARENT_MAP.items():
+            if parent is None:
+                continue
+            assert parent in PARENT_MAP, f"{level!r} names unknown parent {parent!r}"
+            # A parent earlier in the canonical order is what guarantees both
+            # acyclicity and that `build_hierarchy_indices` materialises it
+            # first -- a child built before its parent loses the link.
+            assert order[parent] < order[level], (
+                f"{parent!r} must precede its child {level!r} in "
+                "HIERARCHICAL_CATEGORY_COLS"
+            )
 
 
 class TestBuildHierarchyIndices:

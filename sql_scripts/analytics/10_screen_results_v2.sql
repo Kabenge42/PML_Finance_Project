@@ -59,6 +59,7 @@ CREATE TABLE analytics."10_screen_results_v2"
     "market_cap_country_r" INTEGER,
     "market_cap_country_sec_r" INTEGER,
     "n_analysts" DOUBLE PRECISION,
+    "feat_analyst_rating" DOUBLE PRECISION,
     "mcap_global_r" DOUBLE PRECISION,
     "mcap_country_r" DOUBLE PRECISION,
     "last_price" DOUBLE PRECISION,

@@ -104,6 +104,11 @@ from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
     GROUP_EFFECT_SCALE,
     KalmanModelConfig,
     KalmanPanelV2,
+    build_group_effect_terms,
+)
+from probabilistic_ml_model.pymc_models._hierarchy import (
+    build_hierarchy_indices as _build_hierarchy_indices,
+    order_levels as _order_levels,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,7 +178,7 @@ class PseudoObservations:
     n_obs
         Observed cells per name, shape ``(n,)``. A name with one observation is
         carried but its ``var_obs`` is large; a name with none is dropped.
-    X_drift, drift_names, coord_idx, coord_uniques
+    X_drift, drift_names, coord_idx, coord_uniques, coord_parent_of
         Carried from the panel so Step 2 needs nothing else.
     diagnostics
         What the Max step conditioned on, for the record.
@@ -188,6 +193,11 @@ class PseudoObservations:
     drift_names: list[str]
     coord_idx: dict[str, np.ndarray]
     coord_uniques: dict[str, np.ndarray]
+    #: ``level -> (n_level,) int`` child-index to parent-index map, for the
+    #: nested arms. Indexed by LEVEL, so unlike ``coord_idx`` it is NOT sliced
+    #: to the kept names -- ``coord_uniques`` is not sliced either, and the two
+    #: index spaces have to agree.
+    coord_parent_of: dict[str, np.ndarray] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def __len__(self) -> int:
@@ -431,6 +441,42 @@ def gaussian_likelihood_approximation(
         logger.info("Max step factorised %d extra group column(s): %s",
                     len(wanted), ", ".join(wanted))
 
+    # Parent maps for every indexed level whose nearest indexed ancestor is also
+    # present. Built here rather than copied from the panel because the Max step
+    # may have factorised levels the panel never indexed -- and a nested arm
+    # screened without them would be screened as its CROSSED equivalent, which
+    # is the same class of false negative `extra_group_cols` exists to prevent.
+    coord_parent_of = {
+        k: np.asarray(v) for k, v in getattr(panel, "coord_parent_of", {}).items()
+    }
+    ordered_levels = _order_levels(list(coord_idx))
+    if len(ordered_levels) > 1:
+        import pandas as pd
+
+        ident = panel.frame["isin"].astype(str)
+        meta = _build_hierarchy_indices(
+            panel.frame.set_index(ident)[
+                [c for c in ordered_levels if c in panel.frame.columns]
+            ],
+            ident.to_numpy(),
+            levels=[c for c in ordered_levels if c in panel.frame.columns],
+        )
+        for col, entry in meta.items():
+            if entry.get("parent_of") is None:
+                continue
+            if not np.array_equal(
+                np.asarray(entry["labels"]).astype(str),
+                np.asarray(coord_uniques[col]).astype(str),
+            ):
+                logger.warning(
+                    "label order for %r disagrees between the hierarchy helper "
+                    "and the Max step's factorisation; not carrying its parent "
+                    "map, so any arm nesting %r will refuse rather than "
+                    "mis-attribute.", col, col,
+                )
+                continue
+            coord_parent_of[col] = np.asarray(entry["parent_of"], dtype="int32")
+
     return PseudoObservations(
         isins=np.asarray(panel.isins)[keep],
         m_hat=m_out,
@@ -441,6 +487,7 @@ def gaussian_likelihood_approximation(
         drift_names=list(panel.drift_names),
         coord_idx={k: v[keep] for k, v in coord_idx.items()},
         coord_uniques=coord_uniques,
+        coord_parent_of=coord_parent_of,
         diagnostics=diagnostics,
     )
 
@@ -492,7 +539,10 @@ def build_pseudo_model(
             f"extra_group_cols to gaussian_likelihood_approximation. Indexed: "
             f"{sorted(pseudo.coord_idx)}"
         )
-    groups = list(cfg.group_effects)
+    # Parents before children: `build_group_effect_terms` topologically
+    # sorts anyway, but the coords must be registered in an order the
+    # hierarchy helper agrees with.
+    groups = _order_levels(list(cfg.group_effects))
 
     coords: dict[str, Any] = {
         "isin": pseudo.isins,
@@ -509,10 +559,19 @@ def build_pseudo_model(
         beta = pm.Normal("beta", mu=0.0, sigma=cfg.beta_prior_scale, dims="drift_feature")
         eta = X @ beta
 
-        for g in groups:
-            idx = pm.Data(f"{g}_idx", pseudo.coord_idx[g].astype("int64"), dims="isin")
-            effect = pm.ZeroSumNormal(f"{g}_effect", sigma=GROUP_EFFECT_SCALE, dims=g)
-            eta = eta + effect[idx]
+        # Shared with the full model, so a nested arm is SCREENED as the model
+        # it would be FITTED as. Building crossed effects here regardless of
+        # `cfg.group_parents` would make `hierarchy_nested` screen identically to
+        # its crossed control and the contrast between them meaningless.
+        idx_data = {
+            g: pm.Data(f"{g}_idx", pseudo.coord_idx[g].astype("int64"), dims="isin")
+            for g in groups
+        }
+        level_effect, leaves = build_group_effect_terms(
+            cfg, idx_data, pseudo.coord_parent_of
+        )
+        for g in leaves:
+            eta = eta + level_effect[g][idx_data[g]]
 
         mu = pm.Deterministic("mu_reg", eta, dims="isin")
 
