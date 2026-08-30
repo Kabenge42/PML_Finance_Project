@@ -199,3 +199,83 @@ def scoped_filter(
         return options, fallback
     chosen = all_label if include_all else (available[0] if available else None)
     return options, chosen
+
+# --- categorical colour scope ----------------------------------------------
+
+#: Hue slots available to a categorical encoding. Matches the validated
+#: ``theme.COLORWAY`` length. One slot is reserved for the "Other" bucket, so a
+#: colour-encoded column may carry at most ``MAX_COLOR_CATEGORIES - 1`` named
+#: levels plus the bucket.
+MAX_COLOR_CATEGORIES = 8
+OTHER_LABEL = "Other"
+
+_SECTOR_RANK: Optional[list[str]] = None
+
+
+def _sector_rank() -> list[str]:
+    """Return sectors ordered by size in the FULL universe, most common first.
+
+    Computed once from the unfiltered frame and cached. That is the whole point:
+    ranking within the *filtered* frame would make a name's colour depend on the
+    current filter, so narrowing the board to one region could repaint every
+    surviving sector. Colour follows the entity, never its rank in the current
+    view.
+    """
+    global _SECTOR_RANK
+    if _SECTOR_RANK is None:
+        from ..data import get_data
+        try:
+            counts = get_data()["sector"].value_counts()
+            _SECTOR_RANK = [str(x) for x in counts.index]
+        except Exception:  # pragma: no cover - defensive, keeps the card rendering
+            _SECTOR_RANK = []
+    return _SECTOR_RANK
+
+
+def fold_categories(
+        values: pd.Series,
+        max_categories: int = MAX_COLOR_CATEGORIES,
+        order: Optional[list[str]] = None,
+) -> pd.Series:
+    """Fold *values* down to at most *max_categories* levels, tail -> ``Other``.
+
+    GICS has **eleven** sectors and the validated colourway has **eight** slots,
+    so colouring by raw sector hands at least three sectors a hue that already
+    means something else -- Plotly cycles the list without comment. This keeps
+    the ``max_categories - 1`` largest levels and buckets the rest.
+
+    Parameters
+    ----------
+    values
+        The categorical column to fold.
+    max_categories
+        Total levels to emit, counting ``Other``.
+    order
+        Global level ranking, most important first. Defaults to
+        :func:`_sector_rank`. Must NOT be derived from the caller's filtered
+        frame -- see that function for why.
+
+    Returns
+    -------
+    pandas.Series
+        Same index, with tail levels replaced by :data:`OTHER_LABEL`.
+    """
+    ranking = order if order is not None else _sector_rank()
+    if not ranking:
+        return values
+    keep = set(ranking[: max(max_categories - 1, 1)])
+    return values.where(values.isin(keep), OTHER_LABEL)
+
+
+def category_order(values: pd.Series, order: Optional[list[str]] = None) -> list[str]:
+    """Return the folded level order for a Plotly ``category_orders`` entry.
+
+    Keeps the global ranking's order so a level's hue is identical on every card
+    and under every filter, with ``Other`` last.
+    """
+    ranking = order if order is not None else _sector_rank()
+    present = set(values.dropna().astype(str))
+    levels = [c for c in ranking if c in present]
+    if OTHER_LABEL in present:
+        levels.append(OTHER_LABEL)
+    return levels

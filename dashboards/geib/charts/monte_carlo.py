@@ -56,6 +56,15 @@ companies_id = f"{component_id}_companies"
 
 # Max companies compared at once (spec: "Companies (Max 5)").
 _MAX_COMPANIES = 5
+# Series get a FIXED categorical slot, never a cycled one: `COLORWAY[i]`, not
+# `COLORWAY[i % len(COLORWAY)]`. The modulo never wrapped at 5 <= 8 slots, so it
+# was a latent hazard rather than a live defect -- but it made raising the cap a
+# silent recolouring, where two companies would share a hue with nothing to say
+# so. Raising it past the colourway now fails loudly here instead.
+assert _MAX_COMPANIES <= 8, (
+    "_MAX_COMPANIES exceeds the categorical colourway. Fold the tail into "
+    "'Other' or facet into small multiples -- do not cycle hues."
+)
 # Histogram bins per company (spec: 50 bins).
 _NUM_BINS = 50
 # Floor for a degenerate / missing return volatility so the normal draw always
@@ -230,7 +239,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
             fig_histogram.add_trace(go.Bar(
                 x=company["return_pct"], y=company["probability_density"],
                 name=item["name"], opacity=0.7,
-                marker_color=COLORWAY[i % len(COLORWAY)],
+                marker_color=COLORWAY[i],
             ))
         fig_histogram.update_layout(
             xaxis_title="Return (%)", yaxis_title="Probability Density",
@@ -251,7 +260,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
             fig_cdf.add_trace(go.Scatter(
                 x=company["return_pct"], y=company["cumulative_probability"],
                 mode="lines", name=item["name"],
-                line=dict(color=COLORWAY[i % len(COLORWAY)]),
+                line=dict(color=COLORWAY[i]),
                 hovertemplate="Return: %{x:.2f}%<br>Cumulative Prob: %{y:.2%}<extra></extra>",
             ))
         fig_cdf.update_layout(

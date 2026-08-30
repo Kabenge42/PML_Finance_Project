@@ -1,7 +1,7 @@
 """Sharpe Ratio & Risk-Adjusted Return Comparison.
 
-Two side-by-side charts: a horizontal Sharpe-by-stock bar and a Viridis
-risk-return scatter. Ported from ``feature_factory/sharpe_ratio.pyi``.
+Two side-by-side charts: a horizontal Sharpe-by-stock bar and a
+risk-return scatter on the theme's sequential ramp. Ported from ``feature_factory/sharpe_ratio.pyi``.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
-from ._common import coalesce, empty_figure, scoped_filter, sector_values
+from ._common import category_order, fold_categories, coalesce, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..components.probability_filter import (
     apply_probability_filter,
@@ -26,7 +26,7 @@ from ..components.probability_filter import (
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import annualized_return_pct, quantile_volatility_pct
-from ..theme import GRAPH_STYLE, control
+from ..theme import SEQUENTIAL_SCALE, GRAPH_STYLE, control
 from ..theme import card as theme_card
 
 component_id = "sharpe_ratio_risk_adjusted_return"
@@ -184,7 +184,10 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         return empty, empty
     logger.debug(tbl(df))
 
+    # See piotroski_fscore for the eleven-into-eight problem this solves.
+    df = df.assign(sector=fold_categories(df["sector"]))
     fig1 = px.bar(df, x="sharpe_ratio", y="name", color="sector", orientation="h",
+                  category_orders={"sector": category_order(df["sector"])},
                   title="Sharpe Ratio by Stock")
     fig1.update_layout(yaxis_title="Stock", xaxis_title="Sharpe Ratio",
                        height=max(400, len(df) * 20), hovermode="closest")
@@ -192,7 +195,15 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
 
     fig2 = px.scatter(df, x="annualized_volatility", y="annualized_return", size="market_cap",
                       color="sharpe_ratio", hover_name="name", title="Risk-Return Profile",
-                      color_continuous_scale="Viridis")
+                      # SEQUENTIAL, not diverging. Sharpe does have a meaningful
+                      # zero, but this card is a top-N-by-Sharpe cut (see the
+                      # sort + head above), so the displayed range never straddles
+                      # it -- a diverging ramp centred on 0 spent half its range
+                      # on empty negatives and squashed every visible point into
+                      # one orange. Within the cut this is a magnitude.
+                      # It replaces a hardcoded "Viridis", which ignored the
+                      # theme and shipped a hue the rest of the board never uses.
+                      color_continuous_scale=SEQUENTIAL_SCALE)
     fig2.update_layout(xaxis_title="Annualized Volatility (%)", yaxis_title="Annualized Return (%)",
                        hovermode="closest")
     fig2.update_traces(marker=dict(sizemin=6))

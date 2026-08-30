@@ -15,9 +15,11 @@ import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
 from ._common import (
+    category_order,
     coalesce,
     empty_figure,
     finite_cell,
+    fold_categories,
     scoped_filter,
     sector_values,
 )
@@ -296,8 +298,11 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     df["allocation_pct"] = (df["kelly_fraction_capped"] / total) * 100 if total > 0 else 0
     logger.debug(tbl(df))
 
+    # See piotroski_fscore for the eleven-into-eight problem this solves.
+    df = df.assign(sector=fold_categories(df["sector"]))
     fig = px.bar(
         df, x="name", y="allocation_pct", color="sector",
+        category_orders={"sector": category_order(df["sector"])},
         labels={"allocation_pct": "Allocation (%)", "name": "Stock", "sector": "Sector"},
         hover_data={"allocation_pct": ":.2f", "sector": True, "ticker": True},
     )

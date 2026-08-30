@@ -28,7 +28,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
-from ._common import coalesce, empty_figure, scoped_filter, sector_values
+from ._common import category_order, fold_categories, coalesce, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
@@ -276,9 +276,15 @@ def _rating_figure(df: pd.DataFrame) -> go.Figure:
 
     # px.scatter rejects NaN / negative sizes; clip so every name renders.
     df = df.assign(_size=df["market_cap"].fillna(0.0).clip(lower=0.0))
+    # Eleven GICS sectors against eight validated hues: Plotly would cycle the
+    # list and hand three sectors a colour that already means another one. Fold
+    # the tail on the FULL universe's ranking so a sector keeps its hue when the
+    # board is filtered.
+    df = df.assign(sector=fold_categories(df["sector"]))
     fig = px.scatter(
         df, x="fscore_change", y="analyst_rating", size="_size", color="sector",
         color_discrete_sequence=COLORWAY,
+        category_orders={"sector": category_order(df["sector"])},
         hover_data={
             "name": True,
             "fscore_change": ":.0f",

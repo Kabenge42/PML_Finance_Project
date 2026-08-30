@@ -31,7 +31,7 @@ from ..components.probability_filter import (
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import PRICE_TARGET_HORIZON_YEARS, quantile_return_volatility
-from ..theme import GOLD, RED, control
+from ..theme import SEQUENTIAL_SCALE, GOLD, RED, control
 from ..theme import card as theme_card
 
 component_id = "efficient_frontier_optimization"
@@ -287,7 +287,10 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=vol_pct, y=ret_pct, mode="markers", name="Random Portfolios",
-        marker=dict(size=5, color=sharpe, colorscale="Viridis", opacity=0.6,
+        # Theme ramp, not a hardcoded "Viridis": the cloud is a MAGNITUDE
+        # (Sharpe across sampled portfolios, all positive here) and the board
+        # should not carry a second continuous hue family nobody else uses.
+        marker=dict(size=5, color=sharpe, colorscale=SEQUENTIAL_SCALE, opacity=0.6,
                     line=dict(width=0.5, color="white"),
                     colorbar=dict(title="Sharpe Ratio")),
         hovertemplate="Return: %{y:.2f}%<br>Volatility: %{x:.2f}%<extra></extra>",

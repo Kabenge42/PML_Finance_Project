@@ -49,28 +49,62 @@ THEME: dict[str, object] = {
     "card_title_font_size": "18px",
     "card_description_text": "#CBD5E1",
     "card_description_font_size": "14px",
+    # Categorical slots, in FIXED assignment order -- never cycled, never
+    # generated past slot 8. Validated against the card surface (#1E293B) for
+    # the OKLCH dark lightness band, a chroma floor, adjacent-pair separation
+    # under protanopia/deuteranopia/tritanopia, and contrast.
+    #
+    # The previous list FAILED that check and it was visible rather than
+    # theoretical: slots 1-3 were "#0369A1", "#0891B2", "#06B6D4" -- three steps
+    # of one cyan hue. Adjacent normal-vision separation was dE 10.8 against a
+    # floor of 15, so a full-colour reader could not reliably tell series 2 from
+    # series 3, before any question of colour blindness. Three of the nine also
+    # sat outside the dark lightness band.
+    #
+    # Slot 6 ("#008300") carries a contrast WARN at 2.96:1 against the card. That
+    # is legal only because every chart using it also ships a legend or a data
+    # table, which is the required relief.
     "colorway": [
-        "#0369A1",  # cyan blue
-        "#0891B2",  # teal
-        "#06B6D4",  # light cyan
-        "#10B981",  # green
-        "#F59E0B",  # amber
-        "#EF4444",  # red
-        "#8B5CF6",  # purple
-        "#EC4899",  # pink
-        "#6366F1",  # indigo
+        "#3987e5",  # 1 blue
+        "#d95926",  # 2 orange
+        "#199e70",  # 3 aqua
+        "#c98500",  # 4 yellow
+        "#d55181",  # 5 magenta
+        "#008300",  # 6 green
+        "#9085e9",  # 7 violet
+        "#e66767",  # 8 red
     ],
+    # SEQUENTIAL: one hue, monotonic in lightness. For magnitude -- a quantity
+    # with a floor and no meaningful midpoint. Runs mid -> light because the
+    # board is dark: the darkest steps of a true light->dark ramp disappear into
+    # the #1E293B card.
     "colorscale": [
-        "#EF4444",  # red
-        "#F87171",  # light red
-        "#FCA5A5",  # lighter red
-        "#FECACA",  # very light red
-        "#FEE2E2",  # pale red
-        "#DBEAFE",  # pale blue
-        "#BFDBFE",  # light blue
-        "#93C5FD",  # soft blue
-        "#60A5FA",  # medium blue
-        "#10B981",  # green
+        "#2a78d6",
+        "#3987e5",
+        "#5598e7",
+        "#6da7ec",
+        "#86b6ef",
+        "#b7d3f6",
+    ],
+    # DIVERGING: two hues either side of a NEUTRAL gray midpoint. For polarity --
+    # a quantity signed about a meaningful zero (a revision against consensus, an
+    # over/underweight). Blue<->orange rather than red<->green, which is the
+    # classic pair that collapses under deuteranopia.
+    #
+    # What this replaces was neither ramp: red -> pale red -> pale blue -> blue
+    # with a GREEN tacked on the end, wired to BOTH `sequential` and
+    # `sequentialminus`. Three hues, no neutral midpoint, and a diverging shape
+    # used for magnitude -- so a plain quantity read as though it had a polarity,
+    # and the hue jump at pale-red/pale-blue landed at an arbitrary value rather
+    # than at zero.
+    "colorscale_diverging": [
+        "#1c5cab",
+        "#3987e5",
+        "#86b6ef",
+        "#64748B",
+        "#e8a06b",
+        "#d95926",
+        "#a8410f",
     ],
     "dbc_primary": "#0891B2",
     "dbc_secondary": "#0891B2",
@@ -152,11 +186,26 @@ FONT_FAMILY = THEME["font_family"]
 # Categorical colourway (spec "Chart Colors - Colorway").
 COLORWAY = list(THEME["colorway"])
 
-# Sequential colourscale (spec "Chart Colors - Colorscale"): navy -> gold.
+def _plotly_scale(colors: list[str]) -> list[list]:
+    """Return *colors* as an evenly-spaced Plotly colorscale."""
+    return [[i / (len(colors) - 1), c] for i, c in enumerate(colors)]
+
+
+# One hue, monotonic lightness -- for MAGNITUDE (a floor, no meaningful middle).
 _SCALE_COLORS = list(THEME["colorscale"])
-CONTINUOUS_SCALE = [
-    [i / (len(_SCALE_COLORS) - 1), color] for i, color in enumerate(_SCALE_COLORS)
-]
+SEQUENTIAL_SCALE = _plotly_scale(_SCALE_COLORS)
+
+# Two hues about a neutral gray -- for POLARITY (signed about a real zero).
+# Only correct when the colour axis is centred on that zero: pass
+# ``cmid=0`` (or symmetric ``cmin``/``cmax``), otherwise the neutral lands at an
+# arbitrary value and the ramp claims a polarity the data does not have.
+DIVERGING_SCALE = _plotly_scale(list(THEME["colorscale_diverging"]))
+
+#: Deprecated alias kept so existing imports resolve. It was the *diverging*
+#: shape wired to Plotly's ``sequential`` slot; it now resolves to the sequential
+#: ramp, which is what almost every caller actually wanted. Use
+#: :data:`SEQUENTIAL_SCALE` or :data:`DIVERGING_SCALE` explicitly in new code.
+CONTINUOUS_SCALE = SEQUENTIAL_SCALE
 
 # --- Plotly template -------------------------------------------------------
 _template = go.layout.Template()
@@ -169,7 +218,11 @@ _template.layout = go.Layout(
     xaxis=dict(gridcolor=GRID, zerolinecolor=BORDER, linecolor=BORDER),
     yaxis=dict(gridcolor=GRID, zerolinecolor=BORDER, linecolor=BORDER),
     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=BODY_TEXT)),
-    colorscale=dict(sequential=CONTINUOUS_SCALE, sequentialminus=CONTINUOUS_SCALE),
+    colorscale=dict(
+        sequential=SEQUENTIAL_SCALE,
+        sequentialminus=SEQUENTIAL_SCALE,
+        diverging=DIVERGING_SCALE,
+    ),
     hoverlabel=dict(bgcolor=NAVY, font=dict(color=WHITE, size=13)),
     margin=dict(l=60, r=30, t=50, b=70),
 )
