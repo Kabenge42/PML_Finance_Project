@@ -32,7 +32,7 @@ from ._common import coalesce, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
-from ..theme import COLORWAY, STACKED_GRAPH_STYLE, GREEN, RED, SUBTLE_TEXT, control
+from ..theme import ref_line, COLORWAY, STACKED_GRAPH_STYLE, SUBTLE_TEXT, control
 from ..theme import card as theme_card
 
 component_id = "piotroski_fscore_trend"
@@ -85,7 +85,6 @@ _WEAK = 4
 
 # Amber for the moderate reference line (semantic accent; the theme carries no
 # orange token — hardcoded like beta_capm's positive/negative pair).
-_MODERATE_COLOR = "#F59E0B"
 
 # Companies drawn on the trend pane when no explicit selection is made.
 _DEFAULT_TOP_N_COMPANIES = 8
@@ -271,13 +270,18 @@ def _trend_figure(df: pd.DataFrame, companies: list[str]) -> go.Figure:
         # ticks and rendered them with a thousands separator: "2,022.5". One tick
         # per year, no separator, no fractions.
         fig.update_xaxes(tickmode="linear", dtick=1, tickformat="d", separatethousands=False)
-    for value, color, text in (
-        (_STRONG, GREEN, "Strong (7+)"),
-        (_MODERATE, _MODERATE_COLOR, "Moderate (5-7)"),
-        (_WEAK, RED, "Weak (0-4)"),
+    # The bands are CONTEXT, not data. They were drawn in the status green/amber/
+    # red, and the colourway contains a green and a red -- so a green dashed rule
+    # sat among eight company lines, one of which was also green. The good/bad
+    # reading comes from the labels and from the axis direction (higher = better),
+    # which is where it always actually came from.
+    for value, text in (
+        (_STRONG, "Strong (7+)"),
+        (_MODERATE, "Moderate (5-7)"),
+        (_WEAK, "Weak (0-4)"),
     ):
-        fig.add_hline(y=value, line_dash="dash", line_color=color,
-                      annotation_text=text, annotation_position="top left")
+        fig.add_hline(y=value, **ref_line("anchor", annotation_text=text,
+                                          annotation_position="top left"))
     fig.update_yaxes(range=[-0.3, 9.3], title_text="Piotroski F-Score (0-9)")
     fig.update_layout(hovermode="x unified", legend_title_text="Company")
     return fig
@@ -362,9 +366,8 @@ def _rating_figure(df: pd.DataFrame) -> go.Figure:
     )
 
     # `layer="below"` so the rule passes behind the boxes rather than across them.
-    fig.add_vline(x=0, line_dash="dash", line_color=SUBTLE_TEXT, layer="below",
-                  annotation_text="No Change", annotation_position="bottom right",
-                  annotation_font=dict(size=10, color=SUBTLE_TEXT))
+    fig.add_vline(x=0, **ref_line("zero", annotation_text="No Change",
+                                  annotation_position="bottom right"))
     ticks = list(range(-_TAIL_CLAMP, _TAIL_CLAMP + 1))
     fig.update_xaxes(
         title_text="F-Score Change (Current - 1Y Ago)",

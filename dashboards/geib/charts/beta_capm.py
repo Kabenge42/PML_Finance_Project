@@ -34,7 +34,7 @@ from ._common import coalesce, empty_figure, scoped_filter
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
-from ..theme import COLORWAY, STACKED_GRAPH_STYLE, SUBTLE_TEXT, control
+from ..theme import ref_line, COLORWAY, STACKED_GRAPH_STYLE, SUBTLE_TEXT, control
 from ..theme import card as theme_card
 
 component_id = "capm_beta_return_calculator"
@@ -305,8 +305,8 @@ def _bar_figure(df: pd.DataFrame) -> go.Figure:
     fig.update_yaxes(categoryorder="array",
                      categoryarray=df_display["ticker"].tolist(),
                      title_text="Ticker")
-    fig.add_vline(x=0, line_dash="dash", line_color=SUBTLE_TEXT,
-                  annotation_text="Zero Alpha", annotation_position="top right")
+    fig.add_vline(x=0, **ref_line("zero", annotation_text="Zero Alpha",
+                                  annotation_position="top right"))
     fig.update_xaxes(title_text="Jensen's Alpha (Actual - CAPM Return)")
     # Grow the pane with the bar count so every company stays legible.
     fig.update_layout(showlegend=False, hovermode="closest",

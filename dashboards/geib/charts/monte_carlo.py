@@ -27,7 +27,7 @@ from ._common import coalesce, column_values, empty_figure
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
-from ..theme import COLORWAY, RED, STACKED_GRAPH_STYLE, control
+from ..theme import ref_line, COLORWAY, STACKED_GRAPH_STYLE, control
 from ..theme import card as theme_card
 
 component_id = "monte_carlo_return_distribution"
@@ -246,9 +246,12 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
             barmode="overlay", hovermode="x unified", height=500,
         )
         fig_histogram.add_vline(
-            x=target_return * 100.0, line_dash="dash", line_color=RED,
-            annotation_text=f"Target: {target_return * 100:.0f}%",
-            annotation_position="top right",
+            # The reader set this target, so it is the one line they are looking
+            # for: emphasis, not the status RED it used to borrow.
+            x=target_return * 100.0, **ref_line(
+                "emphasis",
+                annotation_text=f"Target: {target_return * 100:.0f}%",
+                annotation_position="top right"),
         )
     else:
         fig_histogram = empty_figure("Select 'Histogram' or 'Both' to view the histogram")
@@ -268,9 +271,12 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
             hovermode="x unified", height=500,
         )
         fig_cdf.add_vline(
-            x=target_return * 100.0, line_dash="dash", line_color=RED,
-            annotation_text=f"Target: {target_return * 100:.0f}%",
-            annotation_position="top right",
+            # The reader set this target, so it is the one line they are looking
+            # for: emphasis, not the status RED it used to borrow.
+            x=target_return * 100.0, **ref_line(
+                "emphasis",
+                annotation_text=f"Target: {target_return * 100:.0f}%",
+                annotation_position="top right"),
         )
     else:
         fig_cdf = empty_figure("Select 'CDF' or 'Both' to view the CDF")

@@ -31,7 +31,7 @@ from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
 from ..metrics import PRICE_TARGET_HORIZON_YEARS
-from ..theme import GOLD, GREEN, RED, control
+from ..theme import ref_line, COLORWAY, GOLD, GREEN, RED, control
 from ..theme import card as theme_card
 
 component_id = "monte_carlo_return_distribution_forecast"
@@ -195,8 +195,10 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=bin_centers * 100, y=counts, mode="lines", name="Simulated Distribution",
-        line=dict(color="#06B6D4", width=2), fill="tozeroy",
-        fillcolor="rgba(6, 182, 212, 0.3)",
+        # Slot 1 of the validated colourway. This was "#06B6D4", slot 3 of the
+        # RETIRED palette -- a series colour that no longer belonged to anything.
+        line=dict(color=COLORWAY[0], width=2), fill="tozeroy",
+        fillcolor="rgba(57, 135, 229, 0.30)",
     ))
     if distribution_type == "normal":
         x_range = np.linspace(terminal.min(), terminal.max(), 200)
@@ -208,19 +210,25 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     sim_median = float(np.median(terminal))
     # Posterior percentile markers; a name missing a percentile simply skips
     # that line instead of drawing an add_vline at NaN.
-    for column, dash, color, text, position in (
-            ("er_p05", "dash", RED, "5th %ile", "top left"),
-            ("er_p50", "solid", GREEN, "Median", "top right"),
-            ("er_p95", "dash", "#06B6D4", "95th %ile", "bottom right"),
+    # The tails are anchors; the median is the line a reader looks for, so it is
+    # the one that gets emphasis. They were four hand-picked hues -- RED, GREEN,
+    # and two hardcoded hexes, of which "#06B6D4" was slot 3 of the OLD colourway
+    # and went stale the moment the palette was revalidated. Separation is by dash
+    # and label now, which is what distinguished them to a reader anyway.
+    for column, kind, text, position in (
+            ("er_p05", "anchor", "5th %ile", "top left"),
+            ("er_p50", "emphasis", "Median", "top right"),
+            ("er_p95", "anchor", "95th %ile", "bottom right"),
     ):
         value = finite_cell(row, column)
         if value is not None:
-            fig.add_vline(x=value * 100, line_dash=dash, line_color=color,
-                          annotation_text=text, annotation_position=position)
+            fig.add_vline(x=value * 100, **ref_line(
+                kind, annotation_text=text, annotation_position=position))
     # Median of the actual simulated distribution (distinct from the posterior
     # er_p50 median above), drawn in a contrasting colour/style.
-    fig.add_vline(x=sim_median * 100, line_dash="dot", line_color="#A855F7",
-                  annotation_text="Sim. Median", annotation_position="bottom left")
+    fig.add_vline(x=sim_median * 100, **ref_line(
+        "anchor", line_dash="dot", annotation_text="Sim. Median",
+        annotation_position="bottom left"))
 
     fig.update_layout(
         xaxis_title="Return (%)", yaxis_title="Probability Density",

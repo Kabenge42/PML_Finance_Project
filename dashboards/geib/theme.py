@@ -207,6 +207,70 @@ DIVERGING_SCALE = _plotly_scale(list(THEME["colorscale_diverging"]))
 #: :data:`SEQUENTIAL_SCALE` or :data:`DIVERGING_SCALE` explicitly in new code.
 CONTINUOUS_SCALE = SEQUENTIAL_SCALE
 
+# --- Reference geometry ----------------------------------------------------
+# SSOT for zero lines, thresholds and target markers, mirroring the
+# ``_REF_LINE_KINDS`` / ``_add_ref_line`` convention the Kalman notebook side
+# already follows (CLAUDE.md: "never call add_hline / add_vline / add_vrect
+# directly").
+#
+# WHY A ROLE AND NOT A COLOUR. Reference geometry is CONTEXT -- it is closer to
+# the gridlines than to the data, and it should recede. Each chart had been
+# hand-picking a hue instead, which produced two problems at once:
+#
+#   Collision. The Piotroski strong/moderate/weak bands were drawn in the status
+#   green/amber/red. Those are legitimate status hues, but the categorical
+#   colourway also contains a green and a red, so with eight company lines on the
+#   chart a reader saw a green dashed rule and a green series and had to work out
+#   that only one of them was data.
+#
+#   Drift. Four different hand-picked colours across the percentile markers in
+#   monte_carlo_forecast, three of them hardcoded hexes outside the theme -- and
+#   one, "#06B6D4", was slot 3 of the OLD colourway, orphaned when the palette was
+#   revalidated. Nothing pointed at it, so nothing updated it.
+#
+# So reference lines carry no hue of their own. They are separated by DASH
+# PATTERN and by their direct label, which is what "Strong (7+)" and "5th %ile"
+# were always doing anyway. The one exception is ``emphasis``.
+REF_LINE_KINDS: dict[str, dict] = {
+    # A baseline the data is signed about -- zero, no-change, break-even. The most
+    # recessive: it should be findable and never compete.
+    "zero": dict(line_color=BORDER, line_dash="dash", line_width=1, layer="below"),
+    # A fixed threshold the reader reads values against: score bands, percentiles,
+    # horizon markers. Recessive, but legible against the plot area.
+    "anchor": dict(line_color=SUBTLE_TEXT, line_dash="dash", line_width=1, layer="below"),
+    # The ONE line a reader is looking for -- their own target, the central
+    # estimate. Allowed to read, drawn in the accent, which is deliberately not a
+    # categorical slot so it cannot be mistaken for a series.
+    "emphasis": dict(line_color=GOLD, line_dash="solid", line_width=2, layer="above"),
+}
+
+
+def ref_line(kind: str = "anchor", **overrides) -> dict:
+    """Return ``add_hline`` / ``add_vline`` kwargs for a reference-geometry *kind*.
+
+    Parameters
+    ----------
+    kind
+        One of :data:`REF_LINE_KINDS` -- ``zero``, ``anchor`` or ``emphasis``.
+    **overrides
+        Merged over the role's defaults; use for ``annotation_text`` and
+        ``annotation_position``, not to re-colour the line.
+
+    Raises
+    ------
+    KeyError
+        On an unknown *kind*, rather than silently falling back -- a reference
+        line with no role is how the hand-picked colours accumulated.
+    """
+    if kind not in REF_LINE_KINDS:
+        raise KeyError(f"Unknown reference-line kind {kind!r}. "
+                       f"Valid: {sorted(REF_LINE_KINDS)}")
+    style = dict(REF_LINE_KINDS[kind])
+    style.setdefault("annotation_font", dict(size=10, color=SUBTLE_TEXT))
+    style.update(overrides)
+    return style
+
+
 # --- Plotly template -------------------------------------------------------
 _template = go.layout.Template()
 _template.layout = go.Layout(
