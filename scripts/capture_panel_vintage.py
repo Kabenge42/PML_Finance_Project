@@ -210,6 +210,34 @@ def main() -> int:
             ),
             {"d": asof},
         ).scalar()
+        # A SECOND guard, on the export rather than the date. The vintage's prices
+        # come from `04_panel_frame_v2`, which only changes when an export runs --
+        # so capturing twice against one export writes IDENTICAL prices under two
+        # dates, and `score_panel_vintages.py` would then compute
+        # `last_price / last_price - 1` = 0 for every name and report a rank IC on
+        # noise. Nothing downstream could tell that from a real null result.
+        #
+        # This is the failure a SCHEDULED capture walks into by construction: the
+        # timer fires whether or not anything was re-exported. Refuse loudly, so a
+        # scheduled run that has nothing new to record fails visibly instead of
+        # quietly filling the table with duplicates.
+        seen_before = conn.execute(
+            text(
+                f'SELECT min(asof_date) FROM analytics."{_VINTAGE_TABLE}" '
+                "WHERE run_id = :r AND asof_date <> :d"
+            ),
+            {"r": run_id, "d": asof},
+        ).scalar()
+        if seen_before is not None and not args.replace:
+            raise SystemExit(
+                f"run_id {run_id} was already captured on {seen_before}. Capturing "
+                f"it again under {asof} would store the same prices twice, and "
+                "scoring the pair would return zero realised return for every "
+                "name. "
+                "Re-run the v2 export first, then capture — or pass --replace if "
+                "you have a reason to want the duplicate."
+            )
+
         if existing:
             if not args.replace:
                 # An append-only store whose rows can be silently rewritten is
