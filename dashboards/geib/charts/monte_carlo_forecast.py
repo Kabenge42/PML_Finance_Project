@@ -31,7 +31,7 @@ from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
 from ..metrics import PRICE_TARGET_HORIZON_YEARS
-from ..theme import ref_line, COLORWAY, GOLD, GREEN, RED, control
+from ..theme import ref_line, COLORWAY, translucent, GOLD, GREEN, RED, control
 from ..theme import card as theme_card
 
 component_id = "monte_carlo_return_distribution_forecast"
@@ -198,7 +198,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
         # Slot 1 of the validated colourway. This was "#06B6D4", slot 3 of the
         # RETIRED palette -- a series colour that no longer belonged to anything.
         line=dict(color=COLORWAY[0], width=2), fill="tozeroy",
-        fillcolor="rgba(57, 135, 229, 0.30)",
+        fillcolor=translucent(COLORWAY[0], 0.30),
     ))
     if distribution_type == "normal":
         x_range = np.linspace(terminal.min(), terminal.max(), 200)

@@ -31,7 +31,7 @@ from ..components.probability_filter import (
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import PRICE_TARGET_HORIZON_YEARS, quantile_return_volatility
-from ..theme import SEQUENTIAL_SCALE, GOLD, RED, control
+from ..theme import WHITE, SEQUENTIAL_SCALE, GOLD, RED, control
 from ..theme import card as theme_card
 
 component_id = "efficient_frontier_optimization"
@@ -380,7 +380,7 @@ def _build_table(mu, cov, rets, vols, sharpe, weights, tickers, names,
     ]
 
     return html.Div([
-        html.H5("Optimal Portfolio Allocation", style={"color": "#ffffff"}),
+        html.H5("Optimal Portfolio Allocation", style={"color": WHITE}),
         html.Table(
             [html.Thead(html.Tr([html.Th(h) for h in alloc_headers])), html.Tbody(alloc_rows)],
             className="geib-table",

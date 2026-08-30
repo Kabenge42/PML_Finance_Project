@@ -37,7 +37,7 @@ from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import PRICE_SUFFIXES, PRICE_TARGET_SUFFIXES, history_ladder
-from ..theme import GOLD, GRAPH_STYLE, SUBTLE_TEXT, control
+from ..theme import SERIES_COLORS, GOLD, GRAPH_STYLE, SUBTLE_TEXT, control
 from ..theme import card as theme_card
 
 component_id = "price_target_convergence"
@@ -55,8 +55,10 @@ sector_control_id = f"{component_id}_sector"
 sector_default = "All"
 
 # Trace palette (semantic, shared with the structural-forecast panel).
-_PRICE_COLOR = "#FACC15"  # yellow realized price
-_TARGET_COLOR = "#10B981"  # green analyst consensus target
+# From `theme.SERIES_COLORS` -- kalman_structural_forecast plots the same two
+# entities, and both files used to carry their own copy of these literals.
+_PRICE_COLOR = SERIES_COLORS["price"]
+_TARGET_COLOR = SERIES_COLORS["target"]
 _KALMAN_COLOR = GOLD  # cyan accent Kalman target
 
 title = "Price Target Convergence Over Time"

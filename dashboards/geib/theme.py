@@ -220,6 +220,53 @@ DIVERGING_POLES: dict[str, str] = {
 #: :data:`SEQUENTIAL_SCALE` or :data:`DIVERGING_SCALE` explicitly in new code.
 CONTINUOUS_SCALE = SEQUENTIAL_SCALE
 
+# --- Named series & translucency -------------------------------------------
+
+def translucent(color: str, alpha: float) -> str:
+    """Return *color* as an ``rgba(...)`` string at *alpha*.
+
+    Band fills were being written as a SECOND literal beside the line colour they
+    belong to -- ``_FORECAST_COLOR = "rgb(0,100,200)"`` next to
+    ``_BAND_FILL = "rgba(0,100,200,0.2)"``. Two literals for one decision drift
+    apart the moment either is edited, and a fill that no longer matches its line
+    reads as a third series. Derive the fill instead.
+
+    Accepts ``#rgb`` / ``#rrggbb`` / ``rgb(r,g,b)``.
+    """
+    c = color.strip()
+    if c.startswith("rgb("):
+        parts = [p.strip() for p in c[4:-1].split(",")]
+        r, g, b = (int(float(v)) for v in parts[:3])
+    else:
+        h = c.lstrip("#")
+        if len(h) == 3:
+            h = "".join(ch * 2 for ch in h)
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+#: Entities that appear on MORE THAN ONE card, so their hue is fixed centrally.
+#:
+#: ``pt_convergence`` and ``kalman_structural_forecast`` both plot the realised
+#: price against the analyst consensus target, and each had defined its own
+#: ``_PRICE_COLOR`` / ``_TARGET_COLOR`` -- the same two literals, written twice.
+#: That is the drift hazard the reference-geometry roles were introduced for, in
+#: a second place: edit one card and the same entity wears two colours across the
+#: board, with nothing to catch it.
+#:
+#: Drawn from the validated colourway, so these are the same eight hues the
+#: categorical charts use rather than a private palette.
+SERIES_COLORS: dict[str, str] = {
+    "forecast": COLORWAY[0],  # blue   - the model's own output
+    "target": COLORWAY[1],    # orange - analyst consensus, the comparison
+    "price": COLORWAY[3],     # yellow - realised price (was #FACC15; nearest slot)
+}
+
+#: Posterior draws are a texture, not a series: many faint paths whose job is to
+#: show spread without competing with the mean drawn over them.
+DRAW_COLOR = translucent(SUBTLE_TEXT, 0.18)
+
+
 # --- Reference geometry ----------------------------------------------------
 # SSOT for zero lines, thresholds and target markers, mirroring the
 # ``_REF_LINE_KINDS`` / ``_add_ref_line`` convention the Kalman notebook side

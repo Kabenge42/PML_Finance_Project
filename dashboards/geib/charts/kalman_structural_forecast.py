@@ -53,7 +53,7 @@ from ..metrics import (
     history_ladder,
     quantile_return_volatility,
 )
-from ..theme import card as theme_card
+from ..theme import DRAW_COLOR, SERIES_COLORS, REF_LINE_KINDS, translucent, card as theme_card
 from ..theme import control
 
 component_id = "kalman_state_structural_forecast"
@@ -93,21 +93,29 @@ _CONFIDENCE_Z = {"90": 1.6448536269514722, "94": 1.8807936081512509, "99": 2.575
 _HISTORY_DAYS = 183
 # Analyst price targets are next-twelve-month: the consensus band spans <= 1y.
 _TARGET_BAND_DAYS = 365
-# Real analyst consensus band fill (green at low alpha, distinct from the blue
-# model-HDI _BAND_FILL).
-_TARGET_BAND_FILL = "rgba(16,185,129,0.10)"
+# Analyst consensus band fill, derived from the target line so the two cannot
+# drift apart. Lower alpha than the model HDI: it is context for the forecast.
+_TARGET_BAND_FILL = translucent(SERIES_COLORS["target"], 0.10)
 # Trading days per year — the frequency the daily posterior draws compound over.
 _TRADING_DAYS = 252
 # Number of posterior predictive paths drawn when "Show" is selected.
 _NUM_DRAWS = 50
 
-# --- Spec palette (semantic, readable on the dark board template) -----------
-_FORECAST_COLOR = "rgb(0,100,200)"  # blue Kalman mean forecast
-_TARGET_COLOR = "#10B981"  # green observed analyst target (theme accent-positive)
-_PRICE_COLOR = "#FACC15"  # yellow current-price marker
-_BAND_FILL = "rgba(0,100,200,0.2)"  # light-blue HDI band fill
-_DRAW_COLOR = "rgba(150,150,150,0.18)"  # faint gray posterior draws
-_EVENT_COLOR = "rgb(230,150,0)"  # orange event markers
+#: Styling for the `anchor` reference role, unpacked for the shape-based path.
+_ANCHOR = REF_LINE_KINDS["anchor"]
+
+# --- Series colours ---------------------------------------------------------
+# From `theme.SERIES_COLORS`, not private literals. Price and target are plotted
+# by pt_convergence too, and both cards had been declaring their own copies of
+# the same two hex values -- so the entity's colour depended on which file you
+# edited last. Band fills derive from their line via `translucent`, which is the
+# other half of the same problem: `_BAND_FILL` was a second literal spelling of
+# `_FORECAST_COLOR` and would have silently stopped matching it.
+_FORECAST_COLOR = SERIES_COLORS["forecast"]
+_TARGET_COLOR = SERIES_COLORS["target"]
+_PRICE_COLOR = SERIES_COLORS["price"]
+_BAND_FILL = translucent(_FORECAST_COLOR, 0.20)
+_DRAW_COLOR = DRAW_COLOR
 
 title = "Kalman State & Structural Forecast"
 description = (
@@ -429,11 +437,18 @@ def _update_logic(**kwargs) -> go.Figure:
             fig.add_shape(
                 type="line", x0=event_date, x1=event_date,
                 yref="paper", y0=0.0, y1=1.0,
-                line=dict(color=_EVENT_COLOR, dash="dot"),
+                # An earnings date is a threshold the reader reads the forecast
+                # against, so it takes the `anchor` role rather than a hue of its
+                # own. Drawn as a shape because of the plotly/pandas datetime bug
+                # noted above, so the role's styling is unpacked by hand.
+                line=dict(color=_ANCHOR["line_color"], dash="dot",
+                          width=_ANCHOR["line_width"]),
+                layer=_ANCHOR["layer"],
             )
             fig.add_annotation(
                 x=event_date, yref="paper", y=1.0, yanchor="bottom",
-                text=label, showarrow=False, font=dict(color=_EVENT_COLOR),
+                text=label, showarrow=False,
+                font=dict(size=10, color=_ANCHOR["line_color"]),
             )
 
     fig.update_layout(

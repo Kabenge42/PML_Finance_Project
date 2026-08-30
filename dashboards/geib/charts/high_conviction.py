@@ -25,7 +25,7 @@ from ..components.probability_filter import (
 )
 from ..data import get_data
 from ..logger import logger
-from ..theme import BACKGROUND_CONTENT, BODY_TEXT, BORDER, GOLD, NAVY, control
+from ..theme import WHITE, BACKGROUND_CONTENT, BODY_TEXT, BORDER, GOLD, NAVY, control
 from ..theme import card as theme_card
 
 component_id = "high_conviction_opportunities"
@@ -136,7 +136,7 @@ def component() -> "object":
                         style_table={"overflowX": "auto"},
                         style_header={
                             "backgroundColor": NAVY,
-                            "color": "#FFFFFF",
+                            "color": WHITE,
                             "fontWeight": "bold",
                             "borderBottom": f"2px solid {GOLD}",
                             "fontFamily": "monospace",

@@ -51,7 +51,7 @@ from ..components.probability_filter import (
 from ..data import get_data
 from ..logger import logger, schema, tbl
 from ..metrics import quantile_return_volatility
-from ..theme import BACKGROUND_CONTENT, BODY_TEXT, BORDER, COLORWAY, DUAL_GRAPH_STYLE, GOLD, NAVY
+from ..theme import WHITE, BACKGROUND_CONTENT, BODY_TEXT, BORDER, COLORWAY, DUAL_GRAPH_STYLE, GOLD, NAVY
 from ..theme import card as theme_card
 from ..theme import control
 
@@ -187,7 +187,7 @@ def component() -> "object":
                     style_table={"overflowX": "auto", "width": "100%"},
                     style_header={
                         "backgroundColor": NAVY,
-                        "color": "#FFFFFF",
+                        "color": WHITE,
                         "fontWeight": "bold",
                         "borderBottom": f"2px solid {GOLD}",
                         "fontFamily": "monospace",

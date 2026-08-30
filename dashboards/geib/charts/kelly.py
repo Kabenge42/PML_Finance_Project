@@ -32,7 +32,7 @@ from ..components.probability_filter import (
 )
 from ..data import get_data
 from ..logger import logger, schema, tbl
-from ..theme import GRAPH_STYLE, control
+from ..theme import WHITE, GRAPH_STYLE, control
 
 # Mirrors of ``RiskBookModel.MIN_TAIL_RISK`` / ``DEFAULT_TAIL_RISK_VOL_FLOOR_K``
 # and ``KalmanRunConfigV2.tail_risk_vol_floor_k``. Duplicated rather than
@@ -231,7 +231,7 @@ def _create_table(df: pd.DataFrame) -> html.Div:
         for i in range(len(view))
     ]
     return html.Div([
-        html.H5("Top Stocks by Kelly Fraction", style={"color": "#ffffff"}),
+        html.H5("Top Stocks by Kelly Fraction", style={"color": WHITE}),
         html.Table(
             [html.Thead(html.Tr([html.Th(h) for h in headers])), html.Tbody(body)],
             className="geib-table",

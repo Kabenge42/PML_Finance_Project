@@ -32,7 +32,7 @@ from ._common import coalesce, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
-from ..theme import ref_line, COLORWAY, STACKED_GRAPH_STYLE, SUBTLE_TEXT, control
+from ..theme import ref_line, translucent, COLORWAY, STACKED_GRAPH_STYLE, SUBTLE_TEXT, control
 from ..theme import card as theme_card
 
 component_id = "piotroski_fscore_trend"
@@ -329,7 +329,7 @@ def _rating_figure(df: pd.DataFrame) -> go.Figure:
     fig.add_trace(go.Box(
         x=chg, y=rating, name="Rating distribution",
         marker_color=COLORWAY[0], line_color=COLORWAY[0],
-        fillcolor="rgba(57, 135, 229, 0.35)",
+        fillcolor=translucent(COLORWAY[0], 0.35),
         boxpoints=False, whiskerwidth=0.6, width=0.55,
         hovertemplate=("F-score change %{x:+.0f}<br>"
                        "median %{median:.2f} · q1 %{q1:.2f} · q3 %{q3:.2f}"
