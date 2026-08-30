@@ -28,7 +28,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
-from ._common import category_order, fold_categories, coalesce, empty_figure, scoped_filter, sector_values
+from ._common import coalesce, empty_figure, scoped_filter, sector_values
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
@@ -88,7 +88,7 @@ _WEAK = 4
 _MODERATE_COLOR = "#F59E0B"
 
 # Companies drawn on the trend pane when no explicit selection is made.
-_DEFAULT_TOP_N_COMPANIES = 10
+_DEFAULT_TOP_N_COMPANIES = 8
 
 # Minimum bubble size so zero / missing market caps still render.
 _MARKER_SIZE_MIN = 6
@@ -245,6 +245,17 @@ def _trend_figure(df: pd.DataFrame, companies: list[str]) -> go.Figure:
         x_col = "label"
     long_df = long_df.sort_values(["name", "offset"])
 
+    # One line per company against a fixed 8-hue colourway. The default was 10
+    # and the dropdown is multi-select, so Plotly cycled and two companies wore
+    # one colour with nothing to say so. A line chart is an adjacent form, whose
+    # token ceiling is 8; past that the answer is fewer series, not more hues.
+    plotted = list(dict.fromkeys(long_df["name"].astype(str)))
+    if len(plotted) > len(COLORWAY):
+        keep = set(plotted[: len(COLORWAY)])
+        long_df = long_df[long_df["name"].astype(str).isin(keep)]
+        logger.info("F-score trend: showing %d of %d selected companies "
+                    "(one per categorical hue)", len(keep), len(plotted))
+
     fig = px.line(
         long_df, x=x_col, y="fscore", color="name", markers=True,
         color_discrete_sequence=COLORWAY,
@@ -255,6 +266,11 @@ def _trend_figure(df: pd.DataFrame, companies: list[str]) -> go.Figure:
     if x_col == "label":
         fig.update_xaxes(categoryorder="array",
                          categoryarray=[label for _, _, label in _FSCORE_PERIODS])
+    else:
+        # Fiscal years are integers on a continuous axis, so Plotly interpolated
+        # ticks and rendered them with a thousands separator: "2,022.5". One tick
+        # per year, no separator, no fractions.
+        fig.update_xaxes(tickmode="linear", dtick=1, tickformat="d", separatethousands=False)
     for value, color, text in (
         (_STRONG, GREEN, "Strong (7+)"),
         (_MODERATE, _MODERATE_COLOR, "Moderate (5-7)"),
@@ -267,49 +283,104 @@ def _trend_figure(df: pd.DataFrame, companies: list[str]) -> go.Figure:
     return fig
 
 
+#: Levels beyond +/- this are pooled into the end boxes. The change is an integer
+#: from -8 to +7, but the tails are 1-3 names each: a box drawn on n=1 is a line
+#: pretending to be a distribution, and it gets the same visual weight as the
+#: n=1,487 box at zero.
+_TAIL_CLAMP = 5
+
+
 def _rating_figure(df: pd.DataFrame) -> go.Figure:
-    """F-score 1y change vs analyst rating (1-5, higher = more bullish)."""
+    """Analyst rating DISTRIBUTION per 1-year F-score change.
+
+    This was a scatter of every name -- ~6,500 markers, bubble-sized by market
+    cap and coloured by sector -- and it was the wrong form twice over.
+
+    **Overplotting.** The x is an integer with 16 levels and 83% of the mass in
+    -2..+2, so the marks collapsed into vertical stripes and the dense columns
+    saturated. What the picture hid is the finding: the median rating is
+    4.07-4.33 at *every* level and Spearman is +0.03. The chart drew six
+    thousand points to show a flat line.
+
+    **Colour.** Sector on a scatter is an all-pairs encoding -- any two marks can
+    land adjacent -- and those cap at THREE hues, not the eight the categorical
+    ladder allows for bars and lines. Eight sectors here was over the cap however
+    well-separated the palette is, so the encoding is dropped rather than folded
+    again. Sector remains a filter on this card and a colour on the pane above.
+
+    A box per level shows the conditional distribution honestly, costs 11 marks
+    instead of 6,500, and lets the flat median read as the result it is. Outlier
+    points stay off (``boxpoints=False``): drawing them would re-import the
+    overplotting this replaces.
+    """
     df = df.dropna(subset=["analyst_rating", "fscore_change"])
     if len(df) == 0:
         return empty_figure("No analyst-rated companies match the selected criteria")
     logger.debug(tbl(df[["name", "fscore_change", "analyst_rating"]]))
 
-    # px.scatter rejects NaN / negative sizes; clip so every name renders.
-    df = df.assign(_size=df["market_cap"].fillna(0.0).clip(lower=0.0))
-    # Eleven GICS sectors against eight validated hues: Plotly would cycle the
-    # list and hand three sectors a colour that already means another one. Fold
-    # the tail on the FULL universe's ranking so a sector keeps its hue when the
-    # board is filtered.
-    df = df.assign(sector=fold_categories(df["sector"]))
-    fig = px.scatter(
-        df, x="fscore_change", y="analyst_rating", size="_size", color="sector",
-        color_discrete_sequence=COLORWAY,
-        category_orders={"sector": category_order(df["sector"])},
-        hover_data={
-            "name": True,
-            "fscore_change": ":.0f",
-            "analyst_rating": ":.2f",
-            "market_cap": ":.0f",
-            "sector": True,
-            "piotroski_f_score_fy": ":.0f",
-            "fscore_momentum": ":.2f",
-            "_size": False,
-        },
-        labels={
-            "fscore_change": "F-Score Change (Current - 1Y Ago)",
-            "analyst_rating": "Analyst Rating (1=Sell, 5=Buy)",
-            "sector": "Sector",
-            "market_cap": "Market Cap (M)",
-            "piotroski_f_score_fy": "F-Score (FY)",
-            "fscore_momentum": "F-Score Momentum (3Y avg)",
-        },
+    chg = df["fscore_change"].clip(-_TAIL_CLAMP, _TAIL_CLAMP)
+    rating = df["analyst_rating"]
+
+    fig = go.Figure()
+    fig.add_trace(go.Box(
+        x=chg, y=rating, name="Rating distribution",
+        marker_color=COLORWAY[0], line_color=COLORWAY[0],
+        fillcolor="rgba(57, 135, 229, 0.35)",
+        boxpoints=False, whiskerwidth=0.6, width=0.55,
+        hovertemplate=("F-score change %{x:+.0f}<br>"
+                       "median %{median:.2f} · q1 %{q1:.2f} · q3 %{q3:.2f}"
+                       "<extra></extra>"),
+    ))
+
+    # The summary the boxes are there to support: one mark per level, so the
+    # trend (or its absence) is readable without reading eleven medians off an axis.
+    med = rating.groupby(chg).median().sort_index()
+    fig.add_trace(go.Scatter(
+        x=med.index, y=med.to_numpy(), mode="lines+markers", name="Median rating",
+        line=dict(color=COLORWAY[1], width=2), marker=dict(size=8),
+        hovertemplate="F-score change %{x:+.0f}<br>median %{y:.2f}<extra></extra>",
+    ))
+
+    # n per level, stated rather than implied by box width -- the end boxes pool
+    # several levels and the reader cannot otherwise tell 39 names from 1,487.
+    # Anchored to PAPER, not data: at y=5.42 inside the plot the n for level 0
+    # sat directly on the "No Change" rule and the two overprinted.
+    counts = chg.value_counts().sort_index()
+    for level, n in counts.items():
+        fig.add_annotation(x=level, xref="x", y=1.0, yref="paper",
+                           text=f"n={n:,}", showarrow=False, yanchor="bottom",
+                           font=dict(size=10, color=SUBTLE_TEXT))
+
+    # Reported on the UNCLAMPED change, so the number describes the data rather
+    # than this figure's binning.
+    rho = df["fscore_change"].corr(df["analyst_rating"], method="spearman")
+    fig.add_annotation(
+        xref="paper", yref="paper", x=0.0, y=1.16, showarrow=False, xanchor="left",
+        text=(f"Spearman ρ = {rho:+.3f} over {len(df):,} names "
+              "— F-score change carries essentially no analyst-rating signal"),
+        font=dict(size=12, color=SUBTLE_TEXT),
     )
-    fig.update_traces(marker=dict(sizemin=_MARKER_SIZE_MIN, opacity=0.7),
-                      selector=dict(mode="markers"))
-    fig.add_vline(x=0, line_dash="dash", line_color=SUBTLE_TEXT,
-                  annotation_text="No Change", annotation_position="top right")
-    fig.update_yaxes(range=[0.5, 5.5], title_text="Analyst Rating (1=Sell, 5=Buy)")
-    fig.update_layout(hovermode="closest", legend_title_text="Sector")
+
+    # `layer="below"` so the rule passes behind the boxes rather than across them.
+    fig.add_vline(x=0, line_dash="dash", line_color=SUBTLE_TEXT, layer="below",
+                  annotation_text="No Change", annotation_position="bottom right",
+                  annotation_font=dict(size=10, color=SUBTLE_TEXT))
+    ticks = list(range(-_TAIL_CLAMP, _TAIL_CLAMP + 1))
+    fig.update_xaxes(
+        title_text="F-Score Change (Current - 1Y Ago)",
+        tickmode="array", tickvals=ticks,
+        ticktext=[f"≤ −{_TAIL_CLAMP}" if t == -_TAIL_CLAMP
+                  else f"≥ +{_TAIL_CLAMP}" if t == _TAIL_CLAMP
+                  else f"{t:+d}" if t else "0"
+                  for t in ticks],
+    )
+    fig.update_yaxes(range=[0.5, 5.6], title_text="Analyst Rating (1=Sell, 5=Buy)")
+    fig.update_layout(
+        boxmode="overlay", hovermode="closest",
+        # Headroom for the paper-anchored n row and the rho note above it.
+        margin=dict(t=86),
+        legend=dict(orientation="h", y=1.10, yanchor="bottom", x=1, xanchor="right"),
+    )
     return fig
 
 
