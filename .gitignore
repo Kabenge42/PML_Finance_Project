@@ -16,3 +16,54 @@ pml_model_analysis_files/
 # (06_prior/, 07_posterior/, 10k_universe/, 13_forest/ ...) since 0.9.9.12.
 pymc_kalman_filter_pt_results/**/*.nc
 pymc_kalman_filter_pt_results/*.nc
+# v2 got its own results root on 2026-08-27 (KALMAN_V2_RESULTS_DIR). The rule
+# above predates that split and never covered it, so the v2 tree and the archived
+# copies of it were unprotected: 07_forecast_handoff_v2.nc is 102 MB, over
+# GitHub's HARD 100 MB per-file limit, and staging one would fail the push
+# outright rather than merely bloating the repo.
+pymc_kalman_filter_pt_v2_results/**/*.nc
+pymc_kalman_filter_pt_v2_results/*.nc
+archive/**/*.nc
+
+# Superseded whole run trees, kept on disk for reference only. Named by the
+# run_id they came from, so a new one appears every time a run is set aside.
+archive/pymc_kalman_filter_pt_v2_results_*/
+
+# NEW run output stops entering git here. A run writes ~40 MB of figures and
+# frames per section, and committing every one is what took .git past 3 GB.
+#
+# This does NOT untrack anything: git applies ignore rules only to files it does
+# not already track, so the curated frames already in the index (the 8 v2 export
+# CSVs, the v1 tree, archive/) stay versioned and their edits still show up. The
+# rule only stops the NEXT run's artifacts appearing as untracked noise.
+#
+# Consequence worth knowing: `git rm` one of those tracked files and it becomes
+# invisible rather than deleted-and-restorable. Re-add with `git add -f`.
+pymc_kalman_filter_pt_results/**/*.png
+pymc_kalman_filter_pt_results/**/*.csv
+pymc_kalman_filter_pt_results/**/*.html
+pymc_kalman_filter_pt_results/**/*.json
+pymc_kalman_filter_pt_v2_results/**/*.png
+pymc_kalman_filter_pt_v2_results/**/*.csv
+pymc_kalman_filter_pt_v2_results/**/*.html
+pymc_kalman_filter_pt_v2_results/**/*.json
+archive/*.png
+archive/*.ipynb
+
+# Git worktrees are separate checkouts living inside the repo (~1.7 GB). They
+# carry their own branches -- ignoring them is not the same as discarding them.
+.claude/worktrees/
+
+# Redirected validation runs. The `logs/` rule above does not reach the root,
+# and PYTHONIOENCODING=utf-8 runs land these beside the scripts.
+/*.log
+
+# Raw vendor snapshots that nothing reads: import_pml_data.sql \copy's only from
+# data/pml/, which stays tracked. data/playground/ is tracked too, but not these
+# two scratch copies of the pml frames (18.5 MB between them).
+data/equities/
+data/playground/pml_*_new.csv
+
+# Shell redirection artifacts from an unquoted `pip install pkg>=1.1.0` -- the
+# `>=1.1.0` became a redirect and left a 0-byte file named `=1.1.0`.
+/=*
