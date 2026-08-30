@@ -294,11 +294,11 @@ class KalmanPortfolioConfig:
     #: because each additional cap moves the book again.
     group_caps: dict[str, float] = field(default_factory=dict)
     kelly_multiplier: float = 0.5
-    apply_size_down_veto: bool = False
+    apply_size_down_veto: bool = True
     relative_denominator_q: float = 0.0
 
     mean_model_arms: tuple[str, ...] = ()
-    write_analytics: bool = False
+    write_analytics: bool = True
 
     @property
     def results_path(self) -> Path:
