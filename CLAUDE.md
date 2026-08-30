@@ -641,10 +641,16 @@ resolve — see the README TODOs.
 
 The **GEIB** (Global Equity Investment Board) dashboard lives in the
 `dashboards/geib/` package (`app.py`, `charts/`, `components/`, `data.py`,
-`metrics.py`, `theme.py`). It is driven by the single analytics table
-`analytics.kalman_filtered_price_targets` (DDL in
-`sql_scripts/analytics/kalman_filtered_price_targets.sql`, exported by
-`pymc_kalman_filter_pt.py`). Each chart module exposes a `component()` factory and
+`metrics.py`, `theme.py`). Since 2026-08-31 it reads the **v2** export:
+`analytics.kalman_filtered_price_targets_v2` (DDL in
+`sql_scripts/analytics/kalman_filtered_price_targets_v2.sql`), left-joined to
+`analytics."04_panel_frame_v2"` on `isin` for the descriptive block v2's
+canonical table does not carry — beta, the analyst rating mix, the Piotroski set,
+the price/price-target ladders, all under `feat_` names mapped in
+`data.PANEL_RENAME`. `data._join_panel` **asserts `run_id` equality** across the
+two frames and drops the panel block on a mismatch: a mixed vintage would join
+cleanly and describe one fit with another fit's features, which no chart could
+reveal. Each chart module exposes a `component()` factory and
 self-registers its Dash `@callback` on import. Cards include efficient frontier,
 CVaR-aware Kelly sizing, Monte Carlo (+ return forecast by name), Sharpe / VaR-CVaR,
 PT convergence, and high-conviction picks.

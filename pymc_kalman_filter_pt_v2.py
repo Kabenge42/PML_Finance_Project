@@ -5784,11 +5784,15 @@ def write_analytics_ddl_v2(
     """Render a reviewable DDL file for the v2 analytics table.
 
     ``to_sql(if_exists="replace")`` creates a table but leaves no schema anyone
-    can read, and no record of what the columns mean. v1 keeps that
-    documentation in ``sql_scripts/analytics/kalman_filtered_price_targets.sql``
-    and it is the only place the unit convention and the misleading column names
-    are written down. v2 does the same, generated from the frame actually
-    exported so schema and table cannot drift apart.
+    can read, and no record of what the columns mean. This file is where the unit
+    convention and the misleading column names are written down, generated from
+    the frame actually exported so schema and table cannot drift apart.
+
+    v1 wrote the same documentation to
+    ``sql_scripts/analytics/kalman_filtered_price_targets.sql``. That file was
+    deleted on 2026-08-31 once GEIB moved to the v2 table -- but v1's
+    ``export_analytics`` still regenerates it, so a v1 run puts it back. It is a
+    generated artifact either way, not a source of truth to maintain.
 
     Returns
     -------

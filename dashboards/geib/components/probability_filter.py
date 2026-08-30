@@ -45,7 +45,8 @@ from ..theme import COLORWAY, control
 
 # --- Metric registry -------------------------------------------------------
 # Single source of truth for the selectable probability columns. ``column`` must
-# match the analytics DDL exactly (sql_scripts/analytics/kalman_filtered_price_targets.sql).
+# match the analytics DDL exactly
+# (sql_scripts/analytics/kalman_filtered_price_targets_v2.sql).
 
 
 @dataclass(frozen=True)
