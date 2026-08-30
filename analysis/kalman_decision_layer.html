@@ -1,0 +1,808 @@
+<title>The Decision Layer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+
+<style>
+:root{
+  --ground:#F6F9FA;
+  --surface:#FFFFFF;
+  --surface-2:#EDF3F5;
+  --rule:#D7E2E6;
+  --rule-strong:#B6C7CD;
+  --ink:#0F171A;
+  --ink-2:#465A61;
+  --ink-3:#6E838A;
+  --accent:#12688A;
+  --accent-soft:#E2EFF5;
+  --amber:#9A5C05;
+  --amber-soft:#F5E9DC;
+  --rose:#8A4467;
+  --rose-soft:#F3E4EC;
+  --pass:#2A6647;
+  --pass-bg:#E3EFE8;
+  --warn:#9A5410;
+  --warn-bg:#F5E9DC;
+  --shadow:0 1px 2px rgba(15,23,26,.05), 0 12px 28px -22px rgba(15,23,26,.4);
+  --sans:"IBM Plex Sans Condensed",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --serif:"IBM Plex Serif",Georgia,"Times New Roman",serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0C1214;
+    --surface:#131C1F;
+    --surface-2:#182428;
+    --rule:#243237;
+    --rule-strong:#37484E;
+    --ink:#E7EFF1;
+    --ink-2:#A3B6BC;
+    --ink-3:#7A8D94;
+    --accent:#56B4E9;
+    --accent-soft:#12262F;
+    --amber:#E0A33C;
+    --amber-soft:#2A1E12;
+    --rose:#C98BAA;
+    --rose-soft:#2A1620;
+    --pass:#6BBE93;
+    --pass-bg:#14261D;
+    --warn:#D99553;
+    --warn-bg:#2A1E12;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 12px 28px -22px rgba(0,0,0,.9);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0C1214;
+  --surface:#131C1F;
+  --surface-2:#182428;
+  --rule:#243237;
+  --rule-strong:#37484E;
+  --ink:#E7EFF1;
+  --ink-2:#A3B6BC;
+  --ink-3:#7A8D94;
+  --accent:#56B4E9;
+  --accent-soft:#12262F;
+  --amber:#E0A33C;
+  --amber-soft:#2A1E12;
+  --rose:#C98BAA;
+  --rose-soft:#2A1620;
+  --pass:#6BBE93;
+  --pass-bg:#14261D;
+  --warn:#D99553;
+  --warn-bg:#2A1E12;
+  --shadow:0 1px 2px rgba(0,0,0,.5), 0 12px 28px -22px rgba(0,0,0,.9);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:var(--serif); font-size:16.5px; line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px; margin:0 auto; padding:0 30px 130px}
+.measure{max-width:64ch}
+
+h1,h2,h3,h4{font-family:var(--sans); margin:0; text-wrap:balance; letter-spacing:-.008em}
+h1{font-size:clamp(38px,5.6vw,66px); font-weight:700; line-height:1.02; letter-spacing:-.025em}
+h2{font-size:clamp(24px,2.7vw,32px); font-weight:600; line-height:1.15}
+h3{font-size:19px; font-weight:600}
+h4{font-size:13px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3)}
+p{margin:0}
+code,.mono{font-family:var(--mono); font-size:.88em}
+code{background:var(--surface-2); padding:.1em .34em; border-radius:3px; color:var(--accent)}
+a{color:var(--accent)}
+
+.eyebrow{
+  font-family:var(--mono); font-size:11px; font-weight:500;
+  letter-spacing:.17em; text-transform:uppercase; color:var(--ink-3);
+}
+
+.mast{padding:70px 0 0; border-bottom:1px solid var(--rule)}
+.mast-in{display:flex; flex-direction:column; gap:24px; padding-bottom:38px}
+.lede{font-size:20px; line-height:1.5; color:var(--ink-2); max-width:62ch}
+.lede strong{color:var(--ink); font-weight:600}
+
+.facts{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  border:1px solid var(--rule); border-radius:5px; overflow:hidden;
+  background:var(--surface);
+}
+.fact{padding:15px 18px; border-right:1px solid var(--rule)}
+.fact:last-child{border-right:none}
+.fact .k{font-family:var(--mono); font-size:10.5px; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--ink-3); display:block; margin-bottom:5px}
+.fact .v{font-family:var(--sans); font-size:21px; font-weight:600;
+  font-variant-numeric:tabular-nums; letter-spacing:-.01em}
+
+section{padding:60px 0 0}
+.shead{display:flex; align-items:baseline; gap:16px; margin-bottom:8px; flex-wrap:wrap}
+.marker{
+  font-family:var(--mono); font-size:12px; font-weight:600; color:var(--accent);
+  background:var(--accent-soft); padding:3px 9px; border-radius:3px;
+  letter-spacing:.04em; white-space:nowrap;
+}
+.sub{color:var(--ink-2); margin-top:14px}
+.stack{display:flex; flex-direction:column; gap:20px; margin-top:26px}
+
+.card{
+  background:var(--surface); border:1px solid var(--rule); border-radius:6px;
+  padding:22px 24px; box-shadow:var(--shadow);
+}
+.card h3{margin-bottom:8px}
+.card p + p{margin-top:11px}
+.grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:20px; margin-top:26px}
+.grid3{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; margin-top:26px}
+
+.pull{
+  border-left:3px solid var(--accent); padding:4px 0 4px 20px;
+  color:var(--ink-2); font-style:italic; margin:26px 0; max-width:60ch;
+}
+.pull strong{color:var(--ink); font-style:normal; font-weight:600}
+
+.runbar{
+  margin-top:26px; display:flex; flex-wrap:wrap; gap:0;
+  border:1px solid var(--rule); border-radius:6px; overflow:hidden;
+  background:var(--surface); font-family:var(--mono); font-size:12.5px;
+}
+.runbar div{padding:11px 16px; border-right:1px solid var(--rule); color:var(--ink-2)}
+.runbar div:last-child{border-right:none}
+.runbar b{color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums}
+
+.finding{
+  margin-top:26px; background:var(--amber-soft); border:1px solid var(--rule-strong);
+  border-radius:6px; padding:24px 26px;
+}
+.finding .n{
+  font-family:var(--sans); font-size:clamp(30px,4.2vw,44px); font-weight:700;
+  line-height:1.05; letter-spacing:-.02em; color:var(--amber);
+  font-variant-numeric:tabular-nums; display:block; margin-bottom:6px;
+}
+.finding p{max-width:62ch; color:var(--ink-2)}
+.finding p strong{color:var(--ink); font-weight:600}
+
+.chart{margin-top:26px; overflow-x:auto; background:var(--surface);
+  border:1px solid var(--rule); border-radius:6px; padding:24px 20px 14px}
+.chart svg{display:block; margin:0 auto; min-width:680px}
+.chart figcaption{font-size:13px; color:var(--ink-3); padding:14px 6px 0;
+  border-top:1px solid var(--rule); margin-top:16px}
+
+.tw{overflow-x:auto; margin-top:26px; border:1px solid var(--rule);
+  border-radius:6px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; font-size:14.5px; min-width:640px}
+th,td{padding:11px 15px; text-align:left; border-bottom:1px solid var(--rule);
+  vertical-align:top}
+th{font-family:var(--sans); font-size:11.5px; font-weight:600; letter-spacing:.07em;
+  text-transform:uppercase; color:var(--ink-3); background:var(--surface-2);
+  position:sticky; top:0}
+tbody tr:last-child td{border-bottom:none}
+td.n{font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap}
+td .mono{color:var(--ink-2)}
+caption{caption-side:bottom; text-align:left; padding:11px 15px; font-size:13px;
+  color:var(--ink-3); border-top:1px solid var(--rule)}
+
+.pill{
+  display:inline-block; font-family:var(--mono); font-size:10.5px; font-weight:600;
+  letter-spacing:.05em; padding:2px 7px; border-radius:3px; white-space:nowrap;
+}
+.pill.ow{background:var(--pass-bg); color:var(--pass)}
+.pill.uw{background:var(--rose-soft); color:var(--rose)}
+.pill.nu{background:var(--surface-2); color:var(--ink-3)}
+.pill.pass{background:var(--pass-bg); color:var(--pass)}
+.pill.rep{background:var(--warn-bg); color:var(--warn)}
+
+.delta{
+  display:block; margin-top:10px; padding-top:9px; border-top:1px dashed var(--rule-strong);
+  font-family:var(--mono); font-size:12px; color:var(--ink-3); line-height:1.5;
+}
+.delta b{color:var(--amber); font-weight:600}
+
+pre{
+  margin:22px 0 0; padding:18px 20px; background:var(--surface); color:var(--ink-2);
+  border:1px solid var(--rule); border-radius:6px; overflow-x:auto;
+  font-family:var(--mono); font-size:13.5px; line-height:1.62;
+}
+pre .c{color:var(--ink-3)}
+pre .k{color:var(--accent)}
+
+.panels{display:grid; grid-template-columns:repeat(auto-fit,minmax(268px,1fr));
+  gap:14px; margin-top:26px}
+.panel{background:var(--surface); border:1px solid var(--rule); border-radius:6px;
+  padding:15px 17px; display:flex; flex-direction:column; gap:7px}
+.panel .nm{font-family:var(--mono); font-size:12.5px; font-weight:600; color:var(--accent);
+  word-break:break-word}
+.panel .job{font-family:var(--sans); font-size:11px; letter-spacing:.06em;
+  text-transform:uppercase; color:var(--ink-3)}
+.panel .d{font-size:14px; color:var(--ink-2); line-height:1.5}
+
+footer{margin-top:70px; padding-top:24px; border-top:1px solid var(--rule);
+  color:var(--ink-3); font-size:14px}
+
+@media (max-width:640px){
+  .wrap{padding:0 20px 90px}
+  .fact{border-right:none; border-bottom:1px solid var(--rule)}
+  .runbar div{border-right:none; border-bottom:1px solid var(--rule); width:100%}
+}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="mast-in">
+    <span class="eyebrow">Kalman price-target workflow &#183; v2 &#183; forecast + decision replay</span>
+    <h1>The Decision Layer</h1>
+    <p class="lede">Run <span class="mono">807df55e7158</span> passed all twenty-six export
+    gates &#8212; zero divergences, R&#770; 1.0019, calibrated coverage &#8212; and then handed
+    the decision layer a portfolio. Replayed off that one fit in seconds, the portfolio turns
+    out to be <strong>eight positions at the cap and forty-two rounding errors</strong>, tilted
+    hard to small-cap, and built on a risk statistic that has effectively vanished for every
+    name it holds. The same run exported a second fifty-name book that shares
+    <strong>none</strong> of those names, and nothing declares which one is the
+    recommendation. This is what the numbers say about the portfolio, not about the code.</p>
+    <div class="facts">
+      <div class="fact"><span class="k">Universe</span><span class="v">6,518</span></div>
+      <div class="fact"><span class="k">Nominal names</span><span class="v">50</span></div>
+      <div class="fact"><span class="k">Effective N</span><span class="v">11.7</span></div>
+      <div class="fact"><span class="k">Top 8 weight</span><span class="v">80.0%</span></div>
+      <div class="fact"><span class="k">Weighted E[r]</span><span class="v">+96.8%</span></div>
+      <div class="fact"><span class="k">Modelled 1-in-20</span><span class="v">+40.6%</span></div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="shead">
+    <span class="marker">&#167; Read this first</span>
+    <h2>Four things this run says about the portfolio</h2>
+  </div>
+  <p class="sub measure">The replay produces seven frames and seven non-blocking gates. Read
+  as investment output rather than as diagnostics, they converge on four statements &#8212;
+  each one measured on this run, each one checkable in the tables below.</p>
+
+  <div class="grid2">
+    <div class="card">
+      <h4>Concentration</h4>
+      <h3>It is a 12-stock portfolio wearing a 50-stock label</h3>
+      <p>Eight names sit at the <span class="mono">10%</span> position cap and hold
+      <strong>80% of capital</strong>. The bottom thirty-eight hold <span class="mono">1.17%</span>
+      between them &#8212; the smallest is <span class="mono">0.0002%</span>, which is not a
+      position, it is a number that survived a sort. Effective N is
+      <strong>11.7</strong>.</p>
+      <p>Anything said about &#8220;the fifty names&#8221; is really a statement about eight.</p>
+    </div>
+    <div class="card">
+      <h4>Style</h4>
+      <h3>An unhedged small-cap bet nobody asked for</h3>
+      <p><strong>85.9% small cap</strong> against a 51.6% universe share, and
+      <span class="mono">0.7%</span> large cap against 21.5%. Core style takes 83.7% against
+      56.7%. None of these is a stated objective; all three fall out of the ranking.</p>
+      <p>The model's own size posture agrees only in the weakest sense: Small Cap is
+      <span class="pill nu">NEUTRAL</span> at <span class="mono">+2.16pp</span> on a
+      <span class="mono">&#177;2.53pp</span> band, while Large and Mid Cap are both formal
+      underweights.</p>
+    </div>
+    <div class="card">
+      <h4>Selection</h4>
+      <h3>It buys where consensus is loudest</h3>
+      <p>Book median analyst upside is <strong>+54.6%</strong> against a universe median of
+      <span class="mono">+18.1%</span>; the eight capped positions run from
+      <span class="mono">+85%</span> to <span class="mono">+144%</span>. The model's own
+      expected upside ranks the universe at Spearman <span class="mono">0.992</span> against
+      raw consensus.</p>
+      <p>The portfolio is therefore a leveraged expression of the analyst panel's most
+      extreme targets &#8212; which is precisely the region where a price target carries the
+      least information.</p>
+    </div>
+    <div class="card">
+      <h4>Risk</h4>
+      <h3>The downside it optimised against does not exist</h3>
+      <p>Every one of the fifty names has a <strong>positive 95% VaR</strong>: the modelled
+      1-in-20 bad year is a gain of <span class="mono">+23.2%</span> at the median name. The
+      worst single scenario out of two thousand loses <span class="mono">0.84%</span>.</p>
+      <p>The ranking denominator that produced this book is <strong>21.7&#215;</strong> smaller
+      at its largest book value than the universe median. Ranking on reward-per-risk selected
+      on the absence of modelled risk.</p>
+    </div>
+  </div>
+
+  <div class="pull">Every number here scores the model against the analyst trail it was
+  fitted to. <strong>No internal check can tell a favourable modelled tail from an optimistic
+  one</strong> &#8212; which is why none of this moves a default, and why the vintage capture
+  remains the only thing that would settle it.</div>
+
+  <div class="runbar">
+    <div>fit <b>807df55e7158</b></div>
+    <div>replay <b>0c04b0eb1ded</b></div>
+    <div>src <b>5667681</b> clean</div>
+    <div>6,518 &#215; 2,000 <span style="opacity:.6">(thinned 4.0&#215;)</span></div>
+    <div>R&#770; <b>1.0019</b></div>
+    <div>ESS <b>1,775</b></div>
+    <div>div <b>0</b></div>
+    <div>horizon <b>365 d</b></div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <span class="marker">&#167;1</span>
+    <h2>What you are actually holding</h2>
+  </div>
+  <p class="sub measure">Cap-and-spill sizing on a STARR ranking. When the top of the ranking
+  is a plateau, cap-and-spill fills it to the cap and the spill runs out almost immediately
+  &#8212; so the shape below is not a bug, it is what the sizing rule does with this ranking.</p>
+
+  <figure class="chart">
+    <svg viewBox="0 0 700 348" role="img" aria-label="Bar chart of the fifty book weights. Eight names sit at the ten per cent position cap and hold eighty per cent of capital between them; the ninth holds 5.6 per cent, the tenth 2.7 per cent, and the remaining thirty-eight names share 1.17 per cent."><g font-family="IBM Plex Mono, monospace"><text x="166" y="34" text-anchor="end" fill="var(--ink-2)" font-size="11">FPS</text><rect x="176" y="23" width="390.0" height="14" rx="2" fill="var(--amber)" opacity="0.95"/><text x="574.0" y="34" fill="var(--ink-3)" font-size="10.5">10.00%</text><text x="622" y="34" fill="var(--ink-3)" font-size="10">Industrials</text><text x="166" y="56" text-anchor="end" fill="var(--ink-2)" font-size="11">AURR</text><rect x="176" y="45" width="390.0" height="14" rx="2" fill="var(--amber)" opacity="0.95"/><text x="574.0" y="56" fill="var(--ink-3)" font-size="10.5">10.00%</text><text x="622" y="56" fill="var(--ink-3)" font-size="10">Consumer Discre</text><text x="166" y="78" text-anchor="end" fill="var(--ink-2)" font-size="11">HYQ</text><rect x="176" y="67" width="390.0" height="14" rx="2" fill="var(--amber)" opacity="0.95"/><text x="574.0" y="78" fill="var(--ink-3)" font-size="10.5">10.00%</text><text x="622" y="78" fill="var(--ink-3)" font-size="10">Financials</text><text x="166" y="100" text-anchor="end" fill="var(--ink-2)" font-size="11">EOLUB</text><rect x="176" y="89" width="390.0" height="14" rx="2" fill="var(--amber)" opacity="0.95"/><text x="574.0" y="100" fill="var(--ink-3)" font-size="10.5">10.00%</text><text x="622" y="100" fill="var(--ink-3)" font-size="10">Industrials</text><text x="166" y="122" text-anchor="end" fill="var(--ink-2)" font-size="11">ADOC</text><rect x="176" y="111" width="390.0" height="14" rx="2" fill="var(--amber)" opacity="0.95"/><text x="574.0" y="122" fill="var(--ink-3)" font-size="10.5">10.00%</text><text x="622" y="122" fill="var(--ink-3)" font-size="10">Health Care</text><text x="166" y="144" text-anchor="end" fill="var(--ink-2)" font-size="11">VNET</text><rect x="176" y="133" width="390.0" height="14" rx="2" fill="var(--amber)" opacity="0.95"/><text x="574.0" y="144" fill="var(--ink-3)" font-size="10.5">10.00%</text><text x="622" y="144" fill="var(--ink-3)" font-size="10">Information Tec</text><text x="166" y="166" text-anchor="end" fill="var(--ink-2)" font-size="11">MAZE</text><rect x="176" y="155" width="390.0" height="14" rx="2" fill="var(--amber)" opacity="0.95"/><text x="574.0" y="166" fill="var(--ink-3)" font-size="10.5">10.00%</text><text x="622" y="166" fill="var(--ink-3)" font-size="10">Health Care</text><text x="166" y="188" text-anchor="end" fill="var(--ink-2)" font-size="11">AVTX</text><rect x="176" y="177" width="390.0" height="14" rx="2" fill="var(--amber)" opacity="0.95"/><text x="574.0" y="188" fill="var(--ink-3)" font-size="10.5">10.00%</text><text x="622" y="188" fill="var(--ink-3)" font-size="10">Health Care</text><text x="166" y="210" text-anchor="end" fill="var(--ink-2)" font-size="11">688006</text><rect x="176" y="199" width="217.8" height="14" rx="2" fill="var(--accent)" opacity="0.68"/><text x="401.8" y="210" fill="var(--ink-3)" font-size="10.5">5.59%</text><text x="622" y="210" fill="var(--ink-3)" font-size="10">Industrials</text><text x="166" y="232" text-anchor="end" fill="var(--ink-2)" font-size="11">7003</text><rect x="176" y="221" width="106.3" height="14" rx="2" fill="var(--accent)" opacity="0.68"/><text x="290.3" y="232" fill="var(--ink-3)" font-size="10.5">2.73%</text><text x="622" y="232" fill="var(--ink-3)" font-size="10">Industrials</text><text x="166" y="254" text-anchor="end" fill="var(--ink-2)" font-size="11">PAX</text><rect x="176" y="243" width="80.4" height="14" rx="2" fill="var(--accent)" opacity="0.68"/><text x="264.4" y="254" fill="var(--ink-3)" font-size="10.5">2.06%</text><text x="622" y="254" fill="var(--ink-3)" font-size="10">Health Care</text><text x="166" y="276" text-anchor="end" fill="var(--ink-2)" font-size="11">SLS</text><rect x="176" y="265" width="75.9" height="14" rx="2" fill="var(--accent)" opacity="0.68"/><text x="259.9" y="276" fill="var(--ink-3)" font-size="10.5">1.95%</text><text x="622" y="276" fill="var(--ink-3)" font-size="10">Materials</text><text x="166" y="306" text-anchor="end" fill="var(--ink-3)" font-size="11">38 more</text><rect x="176" y="296" width="45.6" height="12" rx="2" fill="var(--ink-3)" opacity=".4"/><text x="192" y="306" fill="var(--ink-3)" font-size="10.5">1.17% between them</text><line x1="176" y1="322" x2="566" y2="322" stroke="var(--rule-strong)" stroke-width="1"/><text x="176" y="338" fill="var(--ink-3)" font-size="10.5">0</text><text x="566" y="338" fill="var(--ink-3)" font-size="10.5" text-anchor="end">10% position cap</text><line x1="566" y1="20" x2="566" y2="316" stroke="var(--amber)" stroke-width="1" stroke-dasharray="3 3" opacity=".6"/></g></svg>
+    <figcaption>The twelve largest of fifty positions, plus the remaining thirty-eight
+    aggregated. Amber bars are at the 10% cap. Weight nine is 5.6%, weight ten is 2.7%, and
+    from there the book decays by roughly a third per name into six-figure decimal places.</figcaption>
+  </figure>
+
+  <div class="tw">
+    <table>
+      <caption>The eight capped positions &#8212; 80% of the portfolio. Expected return is the
+      modelled 365-day total return; consensus is the analyst price target over last price.
+      Analysts is the panel size behind that target.</caption>
+      <thead><tr><th>Name</th><th>Sector &#183; country</th><th>Weight</th><th>E[r]</th><th>Consensus</th><th>95% VaR</th><th>Analysts</th></tr></thead>
+      <tbody>
+        <tr><td>Adocia SA <span class="mono">ADOC</span></td><td>Health Care &#183; France</td><td class="n">10.0%</td><td class="n">+138.5%</td><td class="n">+143.7%</td><td class="n">+48.8%</td><td class="n">4</td></tr>
+        <tr><td>Avalo Therapeutics <span class="mono">AVTX</span></td><td>Health Care &#183; United States</td><td class="n">10.0%</td><td class="n">+125.7%</td><td class="n">+114.9%</td><td class="n">+51.5%</td><td class="n">13</td></tr>
+        <tr><td>Maze Therapeutics <span class="mono">MAZE</span></td><td>Health Care &#183; United States</td><td class="n">10.0%</td><td class="n">+112.5%</td><td class="n">+111.5%</td><td class="n">+44.3%</td><td class="n">11</td></tr>
+        <tr><td>VNET Group <span class="mono">VNET</span></td><td>Info Technology &#183; China</td><td class="n">10.0%</td><td class="n">+110.9%</td><td class="n">+108.2%</td><td class="n">+39.6%</td><td class="n">14</td></tr>
+        <tr><td>Aurrigo International <span class="mono">AURR</span></td><td>Cons. Discretionary &#183; UK</td><td class="n">10.0%</td><td class="n">+92.9%</td><td class="n">+89.2%</td><td class="n">+41.7%</td><td class="n">3</td></tr>
+        <tr><td>Forgent Power Solutions <span class="mono">FPS</span></td><td>Industrials &#183; United States</td><td class="n">10.0%</td><td class="n">+86.5%</td><td class="n">+86.0%</td><td class="n">+37.7%</td><td class="n">10</td></tr>
+        <tr><td>Hypoport SE <span class="mono">HYQ</span></td><td>Financials &#183; Germany</td><td class="n">10.0%</td><td class="n">+83.4%</td><td class="n">+85.5%</td><td class="n">+46.2%</td><td class="n">4</td></tr>
+        <tr><td>Eolus AB <span class="mono">EOLUB</span></td><td>Industrials &#183; Sweden</td><td class="n">10.0%</td><td class="n">+82.0%</td><td class="n">+89.1%</td><td class="n">+41.0%</td><td class="n">2</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>Three biotechs are 30% of the book</h3>
+      <p>Adocia, Avalo and Maze are all small-cap therapeutics with binary clinical
+      catalogues, and the model holds them at full weight on consensus upsides of
+      <span class="mono">+112%</span> to <span class="mono">+144%</span>. Nothing in the
+      pipeline models a binary readout; the forward simulation is an OU-damped diffusion
+      around a shrunk analyst target.</p>
+      <p>That is the sharpest single mismatch between what the book holds and what the model
+      knows how to represent.</p>
+    </div>
+    <div class="card">
+      <h3>A full-weight position on a panel of two</h3>
+      <p>The size-down watch flags <strong>325 names</strong> on this run &#8212; every one of
+      them for thin coverage (<span class="mono">n_analysts = 2</span>), none for a wide
+      posterior. Three reached the book, and one of them, <span class="mono">EOLUB</span>, is
+      at the full <span class="mono">10%</span> cap.</p>
+      <p>The veto is <strong>reported, not applied</strong>. Turning it on removes 10% of the
+      portfolio and re-spills it, so it is a decision to take deliberately rather than by
+      omission: <span class="mono">--size-down-veto</span>.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <span class="marker">&#167;2</span>
+    <h2>One posterior exported two portfolios</h2>
+  </div>
+  <p class="sub measure">The fit writes a CVaR-aware risk book at &#167;10b. The replay writes
+  a decision book at &#167;15e. Both take fifty names, both size cap-and-spill off the same
+  posterior, and both were exported by this run. They share <strong>no name at all</strong>,
+  and nothing in either export says which one is the recommendation.</p>
+
+  <div class="tw">
+    <table>
+      <caption>Both books, run 807df55e7158. Overlap is zero &#8212; and most of that is
+      eligibility rather than disagreement: the risk book screens to the top 3% by
+      within-country market-cap rank, leaving 857 eligible names, and only 6 of the decision book's
+      50 clear that filter. Which is itself the finding: the two books are not two views of
+      the same universe.</caption>
+      <thead><tr><th></th><th>&#167;10b risk book</th><th>&#167;15e decision book</th></tr></thead>
+      <tbody>
+        <tr><td>Ranked on</td><td class="mono">STARR (CVaR-aware)</td><td class="mono">expected_return / downside_dev</td></tr>
+        <tr><td>Eligibility</td><td class="n">mcap_country_r &#8804; 0.03</td><td class="n">none</td></tr>
+        <tr><td>Effective N</td><td class="n">48.7</td><td class="n">11.7</td></tr>
+        <tr><td>Largest position</td><td class="n">3.2%</td><td class="n">10.0% &#215; 8</td></tr>
+        <tr><td>Largest sector</td><td class="n">Financials 34.6%</td><td class="n">Health Care 33.2%</td></tr>
+        <tr><td>Model's view on it</td><td><span class="pill uw">UNDERWEIGHT &#8722;6.39pp</span></td><td><span class="pill ow">OVERWEIGHT +2.68pp</span></td></tr>
+        <tr><td>Size profile</td><td class="n">large / mid cap</td><td class="n">85.9% small cap</td></tr>
+        <tr><td>Shared names</td><td class="n" colspan="2">0 of 50</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="sub measure" style="margin-top:26px">Two defensible portfolios from one fit is not
+  a defect &#8212; a CVaR-aware large-cap book and a reward-per-risk small-cap book answer
+  different questions. Exporting both with <strong>no declared precedence</strong> is the
+  defect, and it is the reason the risk book's 34.6% Financials weight sits directly against
+  the model's own strongest underweight without anything raising a hand.</p>
+</section>
+
+<section>
+  <div class="shead">
+    <span class="marker">&#167;3</span>
+    <h2>Does the book express the model's views?</h2>
+  </div>
+  <p class="sub measure">The same posterior produces two independent things: a ranked book,
+  and a group posture &#8212; over- and underweights by sector, country, size and style, each
+  shrunk by <span class="mono">&#955; = &#964;&#178;/(&#964;&#178;+s&#178;)</span> so that a
+  poorly-resolved group is pulled toward zero rather than to an extreme. Nothing forces them
+  to agree. This run is the first where they have been laid side by side.</p>
+
+  <figure class="chart">
+    <svg viewBox="0 0 700 358" role="img" aria-label="Two aligned bar panels by sector. Left: the book active weight against its universe share, largest Health Care plus 22.1 points and Industrials plus 11.4 points. Right: the model shrunk group excess with the plus or minus 2.63 point verdict band. Only Health Care clears the band on the overweight side; Financials at minus 6.39 points is the strongest underweight and still carries ten per cent of the book."><g font-family="IBM Plex Mono, monospace"><text x="288" y="22" text-anchor="end" fill="var(--ink-3)" font-size="10" letter-spacing="1.1">ACTIVE WEIGHT vs UNIVERSE</text><text x="412" y="22" fill="var(--ink-3)" font-size="10" letter-spacing="1.1">MODEL POSTURE (SHRUNK EXCESS)</text><line x1="188" y1="30" x2="188" y2="322" stroke="var(--ink-3)" stroke-width="1"/><line x1="512" y1="30" x2="512" y2="322" stroke="var(--ink-3)" stroke-width="1"/><line x1="477.0" y1="30" x2="477.0" y2="322" stroke="var(--rule-strong)" stroke-width="1" stroke-dasharray="2 3"/><line x1="547.0" y1="30" x2="547.0" y2="322" stroke="var(--rule-strong)" stroke-width="1" stroke-dasharray="2 3"/><text x="350" y="48" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Health Care</text><rect x="188.0" y="37" width="94.1" height="14" rx="2" fill="var(--accent)" opacity=".78"/><text x="289.1" y="48" text-anchor="start" fill="var(--ink-3)" font-size="10">+22.1</text><rect x="512.0" y="37" width="35.8" height="14" rx="2" fill="var(--accent)" opacity="0.9"/><text x="554.8" y="48" text-anchor="start" fill="var(--ink-2)" font-size="10">+2.68pp  OW</text><text x="350" y="74" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Industrials</text><rect x="188.0" y="63" width="48.4" height="14" rx="2" fill="var(--accent)" opacity=".78"/><text x="243.4" y="74" text-anchor="start" fill="var(--ink-3)" font-size="10">+11.4</text><rect x="512.0" y="63" width="9.3" height="14" rx="2" fill="var(--accent)" opacity="0.3"/><text x="528.3" y="74" text-anchor="start" fill="var(--ink-3)" font-size="10">+0.70pp</text><text x="350" y="100" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Consumer Discretionary</text><rect x="184.9" y="89" width="3.1" height="14" rx="2" fill="var(--rose)" opacity=".78"/><text x="177.9" y="100" text-anchor="end" fill="var(--ink-3)" font-size="10">-0.7</text><rect x="512.0" y="89" width="11.2" height="14" rx="2" fill="var(--accent)" opacity="0.3"/><text x="530.2" y="100" text-anchor="start" fill="var(--ink-3)" font-size="10">+0.84pp</text><text x="350" y="126" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Information Technology</text><rect x="181.7" y="115" width="6.3" height="14" rx="2" fill="var(--rose)" opacity=".78"/><text x="174.7" y="126" text-anchor="end" fill="var(--ink-3)" font-size="10">-1.5</text><rect x="512.0" y="115" width="15.8" height="14" rx="2" fill="var(--accent)" opacity="0.3"/><text x="534.8" y="126" text-anchor="start" fill="var(--ink-3)" font-size="10">+1.19pp</text><text x="350" y="152" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Financials</text><rect x="169.3" y="141" width="18.7" height="14" rx="2" fill="var(--rose)" opacity=".78"/><text x="162.3" y="152" text-anchor="end" fill="var(--ink-3)" font-size="10">-4.4</text><rect x="426.8" y="141" width="85.2" height="14" rx="2" fill="var(--rose)" opacity="0.9"/><text x="419.8" y="152" text-anchor="end" fill="var(--ink-2)" font-size="10">-6.39pp  UW</text><text x="350" y="178" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Materials</text><rect x="159.8" y="167" width="28.2" height="14" rx="2" fill="var(--rose)" opacity=".78"/><text x="152.8" y="178" text-anchor="end" fill="var(--ink-3)" font-size="10">-6.6</text><rect x="491.1" y="167" width="20.9" height="14" rx="2" fill="var(--rose)" opacity="0.3"/><text x="484.1" y="178" text-anchor="end" fill="var(--ink-3)" font-size="10">-1.56pp</text><text x="350" y="204" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Communication Services</text><rect x="175.4" y="193" width="12.6" height="14" rx="2" fill="var(--rose)" opacity=".78"/><text x="168.4" y="204" text-anchor="end" fill="var(--ink-3)" font-size="10">-3.0</text><rect x="512.0" y="193" width="4.4" height="14" rx="2" fill="var(--accent)" opacity="0.3"/><text x="523.4" y="204" text-anchor="start" fill="var(--ink-3)" font-size="10">+0.33pp</text><text x="350" y="230" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Utilities</text><rect x="176.7" y="219" width="11.3" height="14" rx="2" fill="var(--rose)" opacity=".78"/><text x="169.7" y="230" text-anchor="end" fill="var(--ink-3)" font-size="10">-2.7</text><rect x="449.2" y="219" width="62.8" height="14" rx="2" fill="var(--rose)" opacity="0.9"/><text x="442.2" y="230" text-anchor="end" fill="var(--ink-2)" font-size="10">-4.71pp  UW</text><text x="350" y="256" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Consumer Staples</text><rect x="158.1" y="245" width="29.9" height="14" rx="2" fill="var(--rose)" opacity=".78"/><text x="151.1" y="256" text-anchor="end" fill="var(--ink-3)" font-size="10">-7.0</text><rect x="476.4" y="245" width="35.6" height="14" rx="2" fill="var(--rose)" opacity="0.9"/><text x="469.4" y="256" text-anchor="end" fill="var(--ink-2)" font-size="10">-2.67pp  UW</text><text x="350" y="282" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Energy</text><rect x="167.7" y="271" width="20.3" height="14" rx="2" fill="var(--rose)" opacity=".78"/><text x="160.7" y="282" text-anchor="end" fill="var(--ink-3)" font-size="10">-4.8</text><rect x="479.9" y="271" width="32.1" height="14" rx="2" fill="var(--rose)" opacity="0.3"/><text x="472.9" y="282" text-anchor="end" fill="var(--ink-3)" font-size="10">-2.40pp</text><text x="350" y="308" text-anchor="middle" fill="var(--ink-2)" font-size="11.5" font-family="IBM Plex Sans Condensed, sans-serif">Real Estate</text><rect x="176.8" y="297" width="11.2" height="14" rx="2" fill="var(--rose)" opacity=".78"/><text x="169.8" y="308" text-anchor="end" fill="var(--ink-3)" font-size="10">-2.6</text><rect x="512.0" y="297" width="4.3" height="14" rx="2" fill="var(--accent)" opacity="0.3"/><text x="523.3" y="308" text-anchor="start" fill="var(--ink-3)" font-size="10">+0.32pp</text><text x="188" y="350" text-anchor="middle" fill="var(--ink-3)" font-size="10">book weight minus universe share, pp</text><text x="512" y="350" text-anchor="middle" fill="var(--ink-3)" font-size="10">dashed rules = the +/-2.63pp verdict band</text></g></svg>
+    <figcaption>Left: how far the book departs from the universe's sector composition. Right:
+    the model's own shrunk view of each sector, with the &#177;2.63pp band that separates a
+    verdict from silence. Rank correlation between the two panels is
+    <span class="mono">+0.76</span> &#8212; broadly aligned, with two specific exceptions.</figcaption>
+  </figure>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>The concentration is endorsed &#8212; barely</h3>
+      <p>Health Care is <strong>33.2%</strong> of the book, <span class="mono">+22.1pp</span>
+      active, and it is the run's only <span class="pill ow">OVERWEIGHT</span> sector. But it
+      clears the band by four hundredths of a point:
+      <span class="mono">+2.68pp</span> against <span class="mono">&#177;2.63pp</span>.</p>
+      <p>So the book's largest bet is endorsed by a signal that would have been silent on a
+      marginally different draw. Read it as concurrence, not as conviction &#8212; and note
+      that Industrials at <span class="mono">+11.4pp</span> active carries no endorsement at
+      all.</p>
+    </div>
+    <div class="card">
+      <h3>It holds 10% of the sector it likes least</h3>
+      <p>Financials is the model's strongest sector call in either direction &#8212;
+      <span class="pill uw">UNDERWEIGHT</span> at <span class="mono">&#8722;6.39pp</span>,
+      resolved at <span class="mono">&#955;&#160;=&#160;0.64</span> across 939 names. The book
+      holds Hypoport SE at the full cap regardless.</p>
+      <p>A single name overriding a well-resolved sector view is defensible &#8212; that is
+      what stock selection is &#8212; but it should be a stated exception, and here it is a
+      side effect. The posture layer and the ranking layer never consult each other.</p>
+    </div>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>Country posture &#8212; 43 groups, band &#177;6.91pp. The two overweights carry
+      1.2% of the book between them and the ten underweights carry 2.7%; the book's real
+      country bets (China +10.2pp active, Sweden +8.4pp, France and Germany +7pp each) are all
+      groups the model has no view on.</caption>
+      <thead><tr><th>Country</th><th>n</th><th>Raw excess</th><th>&#955;</th><th>Shrunk</th><th>Verdict</th><th>Book weight</th></tr></thead>
+      <tbody>
+        <tr><td>Brazil</td><td class="n">139</td><td class="n">+21.58pp</td><td class="n">0.54</td><td class="n">+11.72pp</td><td><span class="pill ow">OVERWEIGHT</span></td><td class="n">1.16%</td></tr>
+        <tr><td>Turkey</td><td class="n">58</td><td class="n">+14.97pp</td><td class="n">0.67</td><td class="n">+9.96pp</td><td><span class="pill ow">OVERWEIGHT</span></td><td class="n">0.00%</td></tr>
+        <tr><td>South Korea</td><td class="n">156</td><td class="n">+17.50pp</td><td class="n">0.37</td><td class="n">+6.51pp</td><td><span class="pill nu">NEUTRAL</span></td><td class="n">0.56%</td></tr>
+        <tr><td>China</td><td class="n">587</td><td class="n">+10.96pp</td><td class="n">0.55</td><td class="n">+6.02pp</td><td><span class="pill nu">NEUTRAL</span></td><td class="n">19.19%</td></tr>
+        <tr><td>United States</td><td class="n">1,607</td><td class="n">+0.24pp</td><td class="n">0.61</td><td class="n">+0.15pp</td><td><span class="pill nu">NEUTRAL</span></td><td class="n">31.80%</td></tr>
+        <tr><td>India</td><td class="n">321</td><td class="n">&#8722;11.99pp</td><td class="n">0.84</td><td class="n">&#8722;10.03pp</td><td><span class="pill uw">UNDERWEIGHT</span></td><td class="n">0.00%</td></tr>
+        <tr><td>Thailand</td><td class="n">49</td><td class="n">&#8722;14.92pp</td><td class="n">0.80</td><td class="n">&#8722;11.89pp</td><td><span class="pill uw">UNDERWEIGHT</span></td><td class="n">0.00%</td></tr>
+        <tr><td>Romania</td><td class="n">15</td><td class="n">&#8722;34.67pp</td><td class="n">0.80</td><td class="n">&#8722;27.78pp</td><td><span class="pill uw">UNDERWEIGHT</span></td><td class="n">0.00%</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="sub measure" style="margin-top:26px">South Korea is the shrinkage doing visible
+  work: the third-largest raw excess in the run, resolved at only
+  <span class="mono">&#955;&#160;=&#160;0.37</span>, lands at
+  <span class="mono">+6.51pp</span> just inside a <span class="mono">&#177;6.91pp</span> band
+  and receives no verdict. Turkey, on a smaller raw signal but resolved nearly twice as well,
+  clears it. That is the intended behaviour &#8212; and it is the exact inverse of what the
+  ranking denominator does with the same kind of thin evidence.</p>
+</section>
+
+<section>
+  <div class="shead">
+    <span class="marker">&#167;4</span>
+    <h2>Why these names, mechanically</h2>
+  </div>
+  <p class="sub measure">The shipped ranking is
+  <span class="mono">expected_return / downside_dev</span>. Two measurements on this run
+  explain the entire book, and they compound.</p>
+
+  <figure class="chart">
+    <svg viewBox="0 0 700 216" role="img" aria-label="Histogram of the ranking denominator across the universe on a log scale, with the fifty book names marked as ticks below the axis. Every book name sits far to the left of the universe median of 0.0132, clustered near one ten-thousandth."><g font-family="IBM Plex Mono, monospace"><rect x="92.0" y="137.8" width="12.0" height="0.2" fill="var(--accent)" opacity=".4"/><rect x="117.6" y="137.8" width="12.0" height="0.2" fill="var(--accent)" opacity=".4"/><rect x="143.3" y="137.8" width="12.0" height="0.2" fill="var(--accent)" opacity=".4"/><rect x="156.1" y="137.8" width="12.0" height="0.2" fill="var(--accent)" opacity=".4"/><rect x="181.7" y="137.8" width="12.0" height="0.2" fill="var(--accent)" opacity=".4"/><rect x="194.5" y="137.8" width="12.0" height="0.2" fill="var(--accent)" opacity=".4"/><rect x="207.4" y="137.8" width="12.0" height="0.2" fill="var(--accent)" opacity=".4"/><rect x="220.2" y="135.9" width="12.0" height="2.1" fill="var(--accent)" opacity=".4"/><rect x="233.0" y="135.5" width="12.0" height="2.5" fill="var(--accent)" opacity=".4"/><rect x="245.8" y="135.0" width="12.0" height="3.0" fill="var(--accent)" opacity=".4"/><rect x="258.6" y="135.3" width="12.0" height="2.7" fill="var(--accent)" opacity=".4"/><rect x="271.5" y="133.7" width="12.0" height="4.3" fill="var(--accent)" opacity=".4"/><rect x="284.3" y="130.7" width="12.0" height="7.3" fill="var(--accent)" opacity=".4"/><rect x="297.1" y="132.8" width="12.0" height="5.2" fill="var(--accent)" opacity=".4"/><rect x="309.9" y="128.2" width="12.0" height="9.8" fill="var(--accent)" opacity=".4"/><rect x="322.7" y="127.3" width="12.0" height="10.7" fill="var(--accent)" opacity=".4"/><rect x="335.5" y="124.1" width="12.0" height="13.9" fill="var(--accent)" opacity=".4"/><rect x="348.4" y="120.0" width="12.0" height="18.0" fill="var(--accent)" opacity=".4"/><rect x="361.2" y="112.4" width="12.0" height="25.6" fill="var(--accent)" opacity=".4"/><rect x="374.0" y="105.1" width="12.0" height="32.9" fill="var(--accent)" opacity=".4"/><rect x="386.8" y="101.0" width="12.0" height="37.0" fill="var(--accent)" opacity=".4"/><rect x="399.6" y="93.3" width="12.0" height="44.7" fill="var(--accent)" opacity=".4"/><rect x="412.5" y="87.8" width="12.0" height="50.2" fill="var(--accent)" opacity=".4"/><rect x="425.3" y="70.9" width="12.0" height="67.1" fill="var(--accent)" opacity=".4"/><rect x="438.1" y="63.8" width="12.0" height="74.2" fill="var(--accent)" opacity=".4"/><rect x="450.9" y="44.0" width="12.0" height="94.0" fill="var(--accent)" opacity=".4"/><rect x="463.7" y="56.5" width="12.0" height="81.5" fill="var(--accent)" opacity=".4"/><rect x="476.5" y="43.3" width="12.0" height="94.7" fill="var(--accent)" opacity=".4"/><rect x="489.4" y="36.2" width="12.0" height="101.8" fill="var(--accent)" opacity=".4"/><rect x="502.2" y="37.1" width="12.0" height="100.9" fill="var(--accent)" opacity=".4"/><rect x="515.0" y="36.0" width="12.0" height="102.0" fill="var(--accent)" opacity=".4"/><rect x="527.8" y="47.4" width="12.0" height="90.6" fill="var(--accent)" opacity=".4"/><rect x="540.6" y="54.9" width="12.0" height="83.1" fill="var(--accent)" opacity=".4"/><rect x="553.5" y="76.4" width="12.0" height="61.6" fill="var(--accent)" opacity=".4"/><rect x="566.3" y="82.6" width="12.0" height="55.4" fill="var(--accent)" opacity=".4"/><rect x="579.1" y="101.0" width="12.0" height="37.0" fill="var(--accent)" opacity=".4"/><rect x="591.9" y="121.8" width="12.0" height="16.2" fill="var(--accent)" opacity=".4"/><rect x="604.7" y="128.4" width="12.0" height="9.6" fill="var(--accent)" opacity=".4"/><rect x="617.5" y="136.9" width="12.0" height="1.1" fill="var(--accent)" opacity=".4"/><rect x="630.4" y="137.1" width="12.0" height="0.9" fill="var(--accent)" opacity=".4"/><rect x="643.2" y="137.8" width="12.0" height="0.2" fill="var(--accent)" opacity=".4"/><line x1="488.0" y1="26" x2="488.0" y2="154" stroke="var(--ink-2)" stroke-width="1.2" stroke-dasharray="4 3"/><text x="488.0" y="21" text-anchor="middle" fill="var(--ink-2)" font-size="10.5">universe median 0.0132</text><line x1="313.6" y1="140" x2="313.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="290.2" y1="140" x2="290.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="327.8" y1="140" x2="327.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="267.6" y1="140" x2="267.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="315.2" y1="140" x2="315.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="295.3" y1="140" x2="295.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="337.4" y1="140" x2="337.4" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="286.0" y1="140" x2="286.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="284.6" y1="140" x2="284.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="298.5" y1="140" x2="298.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="276.2" y1="140" x2="276.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="311.7" y1="140" x2="311.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="284.3" y1="140" x2="284.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="292.5" y1="140" x2="292.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="311.1" y1="140" x2="311.1" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="289.9" y1="140" x2="289.9" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="294.1" y1="140" x2="294.1" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="265.0" y1="140" x2="265.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="310.2" y1="140" x2="310.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="296.2" y1="140" x2="296.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="285.9" y1="140" x2="285.9" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="300.4" y1="140" x2="300.4" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="282.9" y1="140" x2="282.9" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="280.9" y1="140" x2="280.9" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="275.8" y1="140" x2="275.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="301.2" y1="140" x2="301.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="299.3" y1="140" x2="299.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="291.5" y1="140" x2="291.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="270.0" y1="140" x2="270.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="278.7" y1="140" x2="278.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="297.3" y1="140" x2="297.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="280.8" y1="140" x2="280.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="288.5" y1="140" x2="288.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="292.2" y1="140" x2="292.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="294.3" y1="140" x2="294.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="280.9" y1="140" x2="280.9" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="266.9" y1="140" x2="266.9" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="267.0" y1="140" x2="267.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="273.5" y1="140" x2="273.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="281.6" y1="140" x2="281.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="272.4" y1="140" x2="272.4" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="262.8" y1="140" x2="262.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="264.2" y1="140" x2="264.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="276.6" y1="140" x2="276.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="279.5" y1="140" x2="279.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="255.3" y1="140" x2="255.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="259.6" y1="140" x2="259.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="260.5" y1="140" x2="260.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="256.8" y1="140" x2="256.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="257.1" y1="140" x2="257.1" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="255.3" y1="163" x2="337.4" y2="163" stroke="var(--amber)" stroke-width="2"/><text x="346.4" y="167" fill="var(--amber)" font-size="10.5">all 50 book names</text><line x1="92" y1="138" x2="656" y2="138" stroke="var(--rule-strong)"/><text x="149.6" y="188" text-anchor="middle" fill="var(--ink-3)" font-size="10">1e-5</text><text x="255.0" y="188" text-anchor="middle" fill="var(--ink-3)" font-size="10">1e-4</text><text x="360.3" y="188" text-anchor="middle" fill="var(--ink-3)" font-size="10">1e-3</text><text x="465.7" y="188" text-anchor="middle" fill="var(--ink-3)" font-size="10">1e-2</text><text x="571.1" y="188" text-anchor="middle" fill="var(--ink-3)" font-size="10">1e-1</text><text x="374" y="206" text-anchor="middle" fill="var(--ink-3)" font-size="10.5">downside deviation of the forward-return draws &#8212; log scale</text></g></svg>
+    <figcaption>The universe's ranking denominator, log scale, with the fifty book names as
+    ticks below the axis. The largest denominator in the book is
+    <span class="mono">0.00061</span>; the universe median is <span class="mono">0.0132</span>
+    &#8212; a factor of <strong>21.7</strong>. The gate reports every book name at or below the
+    <span class="mono">13.1st</span> percentile.</figcaption>
+  </figure>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>The two halves of the ratio are negatively correlated</h3>
+      <p>Across the universe, <code>downside_dev</code> correlates
+      <strong>&#8722;0.68</strong> (Spearman) with <code>expected_return</code>. The names with
+      the biggest modelled upside are, by construction of the forward simulation, the names
+      whose downside deviation has collapsed toward zero.</p>
+      <p>So the ratio does not trade reward against risk. It multiplies a high numerator by a
+      vanishing denominator and ranks on the product &#8212; which is why the top of the
+      ranking is a plateau and the cut lands on a tie.</p>
+    </div>
+    <div class="card">
+      <h3>The floor admits the band it exists to exclude</h3>
+      <p>The absolute floor removed the denominators that were exactly zero and stopped
+      there. The problem is the band just above it, which the floor <em>admits</em> and the
+      ranking then rewards. On this run <span class="mono">59.2%</span> of the universe has
+      <code>tail_risk</code> sitting on its volatility floor and
+      <span class="mono">10.2%</span> has a floored <code>downside_dev</code>.</p>
+      <p>A relative floor &#8212; a fraction of the eligible universe's median, which
+      <strong>excludes rather than clamps</strong> &#8212; ships alongside it at
+      <span class="mono">q&#160;=&#160;0.0</span>, off by default so the shipped arm stays
+      bit-identical.</p>
+    </div>
+  </div>
+
+  <figure class="chart">
+    <svg viewBox="0 0 700 218" role="img" aria-label="Histogram of analyst consensus upside across the universe with the fifty book names marked as ticks. The universe median is plus 18.1 per cent; the book median is plus 54.6 per cent and its eight capped positions sit between plus 85 and plus 144 per cent."><g font-family="IBM Plex Mono, monospace"><rect x="92.0" y="137.4" width="10.5" height="0.6" fill="var(--accent)" opacity=".4"/><rect x="114.6" y="137.9" width="10.5" height="0.1" fill="var(--accent)" opacity=".4"/><rect x="125.8" y="137.5" width="10.5" height="0.5" fill="var(--accent)" opacity=".4"/><rect x="137.1" y="136.8" width="10.5" height="1.2" fill="var(--accent)" opacity=".4"/><rect x="148.4" y="134.6" width="10.5" height="3.4" fill="var(--accent)" opacity=".4"/><rect x="159.7" y="133.6" width="10.5" height="4.4" fill="var(--accent)" opacity=".4"/><rect x="171.0" y="127.0" width="10.5" height="11.0" fill="var(--accent)" opacity=".4"/><rect x="182.2" y="113.9" width="10.5" height="24.1" fill="var(--accent)" opacity=".4"/><rect x="193.5" y="95.7" width="10.5" height="42.3" fill="var(--accent)" opacity=".4"/><rect x="204.8" y="66.3" width="10.5" height="71.7" fill="var(--accent)" opacity=".4"/><rect x="216.1" y="52.4" width="10.5" height="85.6" fill="var(--accent)" opacity=".4"/><rect x="227.4" y="36.0" width="10.5" height="102.0" fill="var(--accent)" opacity=".4"/><rect x="238.6" y="58.2" width="10.5" height="79.8" fill="var(--accent)" opacity=".4"/><rect x="249.9" y="69.7" width="10.5" height="68.3" fill="var(--accent)" opacity=".4"/><rect x="261.2" y="79.7" width="10.5" height="58.3" fill="var(--accent)" opacity=".4"/><rect x="272.5" y="91.7" width="10.5" height="46.3" fill="var(--accent)" opacity=".4"/><rect x="283.8" y="100.0" width="10.5" height="38.0" fill="var(--accent)" opacity=".4"/><rect x="295.0" y="107.7" width="10.5" height="30.3" fill="var(--accent)" opacity=".4"/><rect x="306.3" y="113.1" width="10.5" height="24.9" fill="var(--accent)" opacity=".4"/><rect x="317.6" y="118.1" width="10.5" height="19.9" fill="var(--accent)" opacity=".4"/><rect x="328.9" y="125.7" width="10.5" height="12.3" fill="var(--accent)" opacity=".4"/><rect x="340.2" y="124.0" width="10.5" height="14.0" fill="var(--accent)" opacity=".4"/><rect x="351.4" y="128.6" width="10.5" height="9.4" fill="var(--accent)" opacity=".4"/><rect x="362.7" y="131.4" width="10.5" height="6.6" fill="var(--accent)" opacity=".4"/><rect x="374.0" y="130.5" width="10.5" height="7.5" fill="var(--accent)" opacity=".4"/><rect x="385.3" y="133.1" width="10.5" height="4.9" fill="var(--accent)" opacity=".4"/><rect x="396.6" y="133.0" width="10.5" height="5.0" fill="var(--accent)" opacity=".4"/><rect x="407.8" y="134.9" width="10.5" height="3.1" fill="var(--accent)" opacity=".4"/><rect x="419.1" y="135.8" width="10.5" height="2.2" fill="var(--accent)" opacity=".4"/><rect x="430.4" y="135.4" width="10.5" height="2.6" fill="var(--accent)" opacity=".4"/><rect x="441.7" y="136.0" width="10.5" height="2.0" fill="var(--accent)" opacity=".4"/><rect x="453.0" y="136.5" width="10.5" height="1.5" fill="var(--accent)" opacity=".4"/><rect x="464.2" y="136.5" width="10.5" height="1.5" fill="var(--accent)" opacity=".4"/><rect x="475.5" y="137.1" width="10.5" height="0.9" fill="var(--accent)" opacity=".4"/><rect x="486.8" y="136.8" width="10.5" height="1.2" fill="var(--accent)" opacity=".4"/><rect x="498.1" y="137.3" width="10.5" height="0.7" fill="var(--accent)" opacity=".4"/><rect x="509.4" y="137.4" width="10.5" height="0.6" fill="var(--accent)" opacity=".4"/><rect x="520.6" y="137.8" width="10.5" height="0.2" fill="var(--accent)" opacity=".4"/><rect x="531.9" y="137.4" width="10.5" height="0.6" fill="var(--accent)" opacity=".4"/><rect x="543.2" y="137.5" width="10.5" height="0.5" fill="var(--accent)" opacity=".4"/><rect x="554.5" y="137.9" width="10.5" height="0.1" fill="var(--accent)" opacity=".4"/><rect x="577.0" y="137.6" width="10.5" height="0.4" fill="var(--accent)" opacity=".4"/><rect x="588.3" y="137.9" width="10.5" height="0.1" fill="var(--accent)" opacity=".4"/><rect x="599.6" y="137.4" width="10.5" height="0.6" fill="var(--accent)" opacity=".4"/><rect x="610.9" y="137.6" width="10.5" height="0.4" fill="var(--accent)" opacity=".4"/><rect x="622.2" y="137.8" width="10.5" height="0.2" fill="var(--accent)" opacity=".4"/><rect x="633.4" y="137.9" width="10.5" height="0.1" fill="var(--accent)" opacity=".4"/><rect x="644.7" y="135.3" width="10.5" height="2.7" fill="var(--accent)" opacity=".4"/><line x1="245.6" y1="26" x2="245.6" y2="154" stroke="var(--ink-2)" stroke-width="1.2" stroke-dasharray="4 3"/><text x="245.6" y="21" text-anchor="middle" fill="var(--ink-2)" font-size="10.5">universe median +18.1%</text><line x1="398.7" y1="140" x2="398.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="406.0" y1="140" x2="406.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="397.6" y1="140" x2="397.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="405.7" y1="140" x2="405.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="529.0" y1="140" x2="529.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="448.8" y1="140" x2="448.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="456.2" y1="140" x2="456.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="463.9" y1="140" x2="463.9" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="383.2" y1="140" x2="383.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="368.3" y1="140" x2="368.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="357.5" y1="140" x2="357.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="370.8" y1="140" x2="370.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="372.6" y1="140" x2="372.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="362.5" y1="140" x2="362.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="364.7" y1="140" x2="364.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="345.8" y1="140" x2="345.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="349.1" y1="140" x2="349.1" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="341.0" y1="140" x2="341.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="343.8" y1="140" x2="343.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="351.3" y1="140" x2="351.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="359.1" y1="140" x2="359.1" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="354.7" y1="140" x2="354.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="329.9" y1="140" x2="329.9" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="326.6" y1="140" x2="326.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="339.4" y1="140" x2="339.4" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="325.0" y1="140" x2="325.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="329.5" y1="140" x2="329.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="319.1" y1="140" x2="319.1" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="305.6" y1="140" x2="305.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="315.4" y1="140" x2="315.4" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="299.1" y1="140" x2="299.1" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="304.0" y1="140" x2="304.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="301.3" y1="140" x2="301.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="320.7" y1="140" x2="320.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="298.3" y1="140" x2="298.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="293.3" y1="140" x2="293.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="297.2" y1="140" x2="297.2" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="293.7" y1="140" x2="293.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="287.6" y1="140" x2="287.6" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="282.0" y1="140" x2="282.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="286.7" y1="140" x2="286.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="271.8" y1="140" x2="271.8" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="275.9" y1="140" x2="275.9" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="273.4" y1="140" x2="273.4" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="271.1" y1="140" x2="271.1" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="269.3" y1="140" x2="269.3" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="264.5" y1="140" x2="264.5" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="257.0" y1="140" x2="257.0" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="255.7" y1="140" x2="255.7" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><line x1="241.1" y1="140" x2="241.1" y2="156" stroke="var(--amber)" stroke-width="1.6" opacity=".75"/><text x="328.0" y="174" text-anchor="middle" fill="var(--amber)" font-size="10.5">book median +54.6%</text><line x1="92" y1="138" x2="656" y2="138" stroke="var(--rule-strong)"/><text x="92.0" y="190" text-anchor="middle" fill="var(--ink-3)" font-size="10">-50%</text><text x="204.8" y="190" text-anchor="middle" fill="var(--ink-3)" font-size="10">+0%</text><text x="317.6" y="190" text-anchor="middle" fill="var(--ink-3)" font-size="10">+50%</text><text x="430.4" y="190" text-anchor="middle" fill="var(--ink-3)" font-size="10">+100%</text><text x="543.2" y="190" text-anchor="middle" fill="var(--ink-3)" font-size="10">+150%</text><text x="656.0" y="190" text-anchor="middle" fill="var(--ink-3)" font-size="10">+200%</text><text x="374" y="208" text-anchor="middle" fill="var(--ink-3)" font-size="10.5">analyst consensus upside &#8212; price target over last price</text></g></svg>
+    <figcaption>Where the book sits in the universe's distribution of analyst consensus
+    upside. Median book name is at the <span class="mono">89.5th</span> percentile; only one
+    book name is in the consensus top fifty, so this is not simply &#8220;buy the highest
+    target&#8221; &#8212; it is the top decile of consensus, filtered to those whose modelled
+    downside also disappeared.</figcaption>
+  </figure>
+
+  <p class="sub measure" style="margin-top:22px">The model's own departure from consensus is
+  real but small: the <code>shrinkage_slope</code> gate measures slope
+  <span class="mono">0.834</span>, median revision <span class="mono">1.02pp</span>, and rank
+  correlation <span class="mono">0.99245</span> against a ceiling of
+  <span class="mono">0.995</span>. It passes &#8212; but a screen that reproduces the consensus
+  ordering at &#961; 0.992 is adding risk structure, not a different view of value. That
+  structure is what the book is selected on, and it is the part nothing has validated.</p>
+</section>
+
+<section>
+  <div class="shead">
+    <span class="marker">&#167;5</span>
+    <h2>A portfolio that cannot lose money</h2>
+  </div>
+  <p class="sub measure">Three generative tail statistics per name, all read off the same
+  two thousand forward scenarios. They are ordered <span class="mono">GVaR &#8805; GES &#8805;
+  GTR</span> by construction, so their position relative to zero is the whole claim.</p>
+
+  <figure class="chart">
+    <svg viewBox="0 0 700 230" role="img" aria-label="Range chart of three tail statistics across the fifty book names. Generative value at risk spans plus 9.9 to plus 51.5 per cent with a median of plus 23.2. Generative expected shortfall spans plus 8.0 to plus 37.7 per cent. Both lie entirely to the right of zero. Only the single worst simulated scenario is negative, between minus 2.7 and minus 0.4 per cent."><g font-family="IBM Plex Mono, monospace"><line x1="197.4" y1="26" x2="197.4" y2="172" stroke="var(--ink-3)" stroke-width="1.25"/><text x="197.4" y="20" fill="var(--ink-3)" font-size="10.5" text-anchor="middle">0</text><text x="140" y="60" text-anchor="end" fill="var(--ink-2)" font-size="11.5">GVaR 95%</text><line x1="276.0" y1="56" x2="604.7" y2="56" stroke="var(--amber)" stroke-width="7" stroke-linecap="round" opacity=".32"/><circle cx="380.7" cy="56" r="5.5" fill="var(--amber)"/><text x="380.7" y="44" fill="var(--amber)" font-size="10.5" text-anchor="middle">+23.2%</text><text x="614.7" y="60" fill="var(--ink-3)" font-size="10.5">+51.5%</text><text x="266.0" y="60" text-anchor="end" fill="var(--ink-3)" font-size="10.5">+9.9%</text><line x1="518.7" y1="43" x2="518.7" y2="69" stroke="var(--ink)" stroke-width="1.6"/><text x="140" y="104" text-anchor="end" fill="var(--ink-2)" font-size="11.5">GES 95%</text><line x1="260.4" y1="100" x2="495.7" y2="100" stroke="var(--amber)" stroke-width="7" stroke-linecap="round" opacity=".32"/><circle cx="335.7" cy="100" r="5.5" fill="var(--amber)"/><text x="335.7" y="88" fill="var(--amber)" font-size="10.5" text-anchor="middle">+17.5%</text><text x="505.7" y="104" fill="var(--ink-3)" font-size="10.5">+37.7%</text><text x="250.4" y="104" text-anchor="end" fill="var(--ink-3)" font-size="10.5">+8.0%</text><line x1="431.8" y1="87" x2="431.8" y2="113" stroke="var(--ink)" stroke-width="1.6"/><text x="140" y="148" text-anchor="end" fill="var(--ink-2)" font-size="11.5">GTR worst</text><line x1="176.0" y1="144" x2="194.4" y2="144" stroke="var(--accent)" stroke-width="7" stroke-linecap="round" opacity=".32"/><circle cx="190.8" cy="144" r="5.5" fill="var(--accent)"/><text x="190.8" y="132" fill="var(--accent)" font-size="10.5" text-anchor="middle">-0.8%</text><text x="208.4" y="148" fill="var(--ink-3)" font-size="10.5">the whole book lies between -2.71% and -0.38%</text><line x1="186.6" y1="131" x2="186.6" y2="157" stroke="var(--ink)" stroke-width="1.6"/><line x1="110" y1="186" x2="650" y2="186" stroke="var(--rule-strong)"/><text x="157.9" y="201" fill="var(--ink-3)" font-size="10" text-anchor="middle">-5%</text><text x="197.4" y="201" fill="var(--ink-3)" font-size="10" text-anchor="middle">0%</text><text x="276.5" y="201" fill="var(--ink-3)" font-size="10" text-anchor="middle">10%</text><text x="355.5" y="201" fill="var(--ink-3)" font-size="10" text-anchor="middle">20%</text><text x="434.5" y="201" fill="var(--ink-3)" font-size="10" text-anchor="middle">30%</text><text x="513.5" y="201" fill="var(--ink-3)" font-size="10" text-anchor="middle">40%</text><text x="592.6" y="201" fill="var(--ink-3)" font-size="10" text-anchor="middle">50%</text><text x="380" y="219" fill="var(--ink-3)" font-size="10.5" text-anchor="middle">modelled total return over the 365-day horizon &#183; vertical tick = the weighted book value</text></g></svg>
+    <figcaption>Min&#8211;max across the fifty sized names, median marked, and the
+    weighted-book value as a vertical tick. Both <em>averaged</em> tail statistics sit entirely
+    right of zero for every name. Only the single worst scenario out of two thousand is
+    negative at all, and it is negative by less than three per cent.</figcaption>
+  </figure>
+
+  <div class="finding">
+    <span class="n">50 of 50</span>
+    <p>book names whose <strong>modelled 1-in-20 outcome is a gain</strong>. Weighted across
+    the portfolio the 95% VaR is <span class="mono">+40.6%</span> and the expected shortfall
+    is <span class="mono">+29.7%</span>. Universe-wide, <span class="mono">49.9%</span> of all
+    6,518 names carry a positive GVaR &#8212; the book is not an outlier in a healthy universe,
+    it is the tail of a universe that is half like this.</p>
+  </div>
+
+  <div class="grid3">
+    <div class="card">
+      <h4>Sizing</h4>
+      <h3>Kelly is a pin, not a size</h3>
+      <p><strong>89.6%</strong> of the universe carries
+      <span class="mono">kelly_fraction = 1.0</span> exactly, and
+      <strong>0 of 50</strong> book names have an interior solution. A pin is the bisection
+      reporting that <span class="mono">E[log(1+f&#183;r)]</span> never turned over inside the
+      feasible interval &#8212; no simulated scenario loses money.</p>
+      <p>A further <span class="mono">9.7%</span> of the universe is formally
+      <strong>unbounded</strong>: the fraction has no finite maximum at all. Those rows export
+      as NULL with a boolean saying why, never as an infinity.</p>
+    </div>
+    <div class="card">
+      <h4>Diversification</h4>
+      <h3>Fifty names, twelve names of risk</h3>
+      <p>Herfindahl concentration puts the book's <strong>effective N at 11.7</strong>. With
+      <span class="mono">factor_share = 0.35</span>, shared market / region / sector blocks
+      take 35% of shock variance and leave an idiosyncratic weight of
+      <span class="mono">0.806</span> &#8212; so pooling averages most of the name-specific
+      risk away, and what survives is the 35% that does not diversify.</p>
+      <p>That split is a <strong>prior, not an estimate</strong>. It cannot move a per-name
+      marginal &#8212; the variance split is preserving &#8212; but it decides the joint
+      distribution the book is sized against, which is exactly the quantity a twelve-name
+      portfolio is most sensitive to.</p>
+    </div>
+    <div class="card">
+      <h4>Actions</h4>
+      <h3>An action list that mostly says yes</h3>
+      <p><span class="mono">5,436 BUY &#183; 1,004 HOLD &#183; 73 AVOID</span> &#8212;
+      <strong>83.5% of the universe is a BUY</strong>, and all fifty book names are. Read
+      alongside the risk ladder this is one finding, not two.</p>
+      <p>A forward simulation in which half the universe cannot lose money will produce an
+      action list that rarely says no. The gates on the fit are all clean; they simply do not
+      measure this.</p>
+    </div>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>The seven replay gates. All non-blocking by design &#8212; each measures either
+      the consequence of a prior nothing identifies, or a property of a forward tail nothing
+      has validated.</caption>
+      <thead><tr><th>Gate</th><th>Value</th><th>Reading</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">portfolio_handoff_provenance</td><td class="n">807df55e7158 @ 5667681</td>
+          <td>Clean tree, thinned 4.0&#215;. 6,518 names &#215; 2,000 of 8,000 samples.</td></tr>
+        <tr><td class="mono">portfolio_rank_denominator</td><td class="n">max pctile 0.131</td>
+          <td>Every book name in the bottom eighth of the universe's denominator.</td></tr>
+        <tr><td class="mono">portfolio_kelly_interior</td><td class="n">1.9% univ &#183; 0.0% book</td>
+          <td>Nine names in ten are a pin. No book name is a size.</td></tr>
+        <tr><td class="mono">portfolio_sector_concentration</td><td class="n">33.2% Health Care</td>
+          <td>No cap set. The absence of a cap is also a decision.</td></tr>
+        <tr><td class="mono">portfolio_size_down_overlap</td><td class="n">3 of 50</td>
+          <td>325 names on a panel of two; three in the book, one at full weight.</td></tr>
+        <tr><td class="mono">portfolio_engine_contrast</td><td class="n">0.218&#215;</td>
+          <td>Fitted OU kernel against the shipped AR simulator's hand-set &#961;&#160;=&#160;0.85, 6,504 matched by ISIN, rank agreement 0.981.</td></tr>
+        <tr><td class="mono">portfolio_rank_tie_span</td><td class="n">1 tied at the cut</td>
+          <td>The tie-break did no work on this arm. It exists for the saturating one.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="sub measure" style="margin-top:26px">Nine gates are defined; this replay emitted
+  <strong>seven</strong>. <code>portfolio_book_agreement</code> needs more than one ranking arm
+  and <code>portfolio_factor_sensitivity</code> needs a sweep &#8212; so the two questions the
+  replay layer was built to make cheap are the two this run did not ask. Both are one flag
+  away.</p>
+</section>
+
+<section>
+  <div class="shead">
+    <span class="marker">&#167;6</span>
+    <h2>What to do with this book</h2>
+  </div>
+  <p class="sub measure">Ranked by how much each changes the portfolio for how little it costs
+  to find out. None of them moves a shipped default; all of them are replay flags against the
+  fit that already exists.</p>
+
+  <div class="stack">
+    <div class="card">
+      <h3>1 &#183; Run the other two ranking arms before trading any of it</h3>
+      <p>One posterior, three denominators. <code>reward_to_cvar</code> collapses to its
+      volatility floor; <code>p_upside_pos_cond</code> is <strong>bounded</strong>, so it
+      cannot be inflated by a vanishing denominator at all &#8212; it saturates instead, which
+      is a failure mode you can see. This run ranked on one arm and exported one book, so
+      <code>portfolio_book_agreement</code> never fired.</p>
+      <p>If the three arms share most of their names, the concentration above is a property of
+      the posterior. If they share few, it is a property of the ratio &#8212; and the book is
+      an artifact of a formula choice nobody has defended in writing.</p>
+      <span class="delta">cost <b>seconds</b> &#183; <span class="mono">--rank-arms all</span></span>
+    </div>
+    <div class="card">
+      <h3>2 &#183; Put a cap on Health Care and re-spill</h3>
+      <p>33.2% in one sector, 30% of it in three small-cap therapeutics, endorsed by a group
+      signal that clears its band by 0.04pp. The sizing rule has a
+      <code>sector_cap</code> parameter and this run set it to <span class="mono">None</span>.</p>
+      <p>The gate exists precisely so that <em>no cap</em> is a choice someone made rather
+      than a line nobody wrote. At 30% the spill would push weight into Industrials, which the
+      model rates <span class="pill nu">NEUTRAL</span> &#8212; so this trades an endorsed
+      concentration for an unendorsed one. Worth measuring before deciding.</p>
+      <span class="delta">cost <b>seconds</b> &#183; <span class="mono">--sector-cap 0.30</span></span>
+    </div>
+    <div class="card">
+      <h3>3 &#183; Decide the size-down veto explicitly</h3>
+      <p>Three book names sit on an analyst panel of two, one of them at the full cap. The
+      veto is orthogonal to the ranking: thin coverage is exactly the condition that produces
+      a forward simulation with no credible left tail, which is what the ranking is selecting
+      on. Applying it removes 10% of the portfolio.</p>
+      <span class="delta">cost <b>seconds</b> &#183; <span class="mono">--size-down-veto</span></span>
+    </div>
+    <div class="card">
+      <h3>4 &#183; Sweep the two priors that set the whole departure from consensus</h3>
+      <p><code>forecast_error_multiplier</code> buys the entire departure from analyst
+      consensus &#8212; at <span class="mono">&#954;&#160;=&#160;0</span> the screen reproduces
+      it at &#961; 0.999995. <code>factor_share</code> is variance-preserving, so it cannot move
+      a per-name marginal but decides the joint distribution the book is sized against.</p>
+      <p>Neither is identified by the panel. Both are chosen numbers, and the sweep is the
+      only honest way to report how much of the answer depends on them.</p>
+      <span class="delta">cost <b>~1 min</b> &#183; <span class="mono">--sweep factor_share,multiplier</span></span>
+    </div>
+    <div class="card">
+      <h3>5 &#183; Capture the vintage &#8212; still the only thing that would settle any of it</h3>
+      <p>Every measurement on this page scores the model against the analyst trail it was
+      fitted to. A book whose modelled 1-in-20 is <span class="mono">+40.6%</span> is not a
+      book any internal check can approve or reject. The handoff now carries
+      <code>run_id</code>, <code>source_sha</code> and <code>source_dirty</code>, which is what
+      makes a later realised-return comparison attributable to the code that produced it.</p>
+      <span class="delta">cost <b>one quarter of waiting</b> &#183; <span class="mono">scripts/capture_panel_vintage.py</span></span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <span class="marker">&#167;7</span>
+    <h2>Reproducing this</h2>
+  </div>
+  <p class="sub measure">The v2 workflow writes a compact handoff after the screen &#8212; four
+  posterior quantities the forward simulation actually reads, not the raw
+  <code>InferenceData</code>. Every figure and table above comes from replaying that file; no
+  sampling, no database write.</p>
+
+<pre><span class="c"># the run above, exactly as it was produced</span>
+python kalman_portfolio.py <span class="k">--handoff</span> pymc_kalman_filter_pt_v2_results/07_posterior/07_forecast_handoff_v2.nc
+
+<span class="c"># the two gates this replay did not emit: three books, and both prior sweeps</span>
+python kalman_portfolio.py <span class="k">--rank-arms</span> all <span class="k">--sweep</span> factor_share,multiplier
+
+<span class="c"># take the concentration and the veto deliberately rather than by omission</span>
+python kalman_portfolio.py <span class="k">--sector-cap</span> 0.30 <span class="k">--size-down-veto</span></pre>
+
+  <div class="panels">
+    <div class="panel"><span class="nm">15c_forecast_engines</span><span class="job">6,504 rows</span><span class="d">Forward dispersion from this engine against the shipped AR simulator, joined by ISIN. Median ratio 0.218&#215;.</span></div>
+    <div class="panel"><span class="nm">15c_forecast_summary</span><span class="job">6,518 rows</span><span class="d">Per-name forward return: <span class="mono">er_mean</span>, <span class="mono">er_sd</span>, the 5/50/95 quantiles and their 365-day terminal twins.</span></div>
+    <div class="panel"><span class="nm">15e_decision_books</span><span class="job">6,518 rows</span><span class="d">The ranked and sized book, one row per name per arm, carrying <span class="mono">rank_by</span> so no row is ambiguous about which rule produced it.</span></div>
+    <div class="panel"><span class="nm">14b_group_signals</span><span class="job">65 rows</span><span class="d">Group posture across five coordinates with raw excess, &#955;, shrunk excess, band and verdict.</span></div>
+    <div class="panel"><span class="nm">14b_name_actions</span><span class="job">6,513 rows</span><span class="d">BUY / HOLD / AVOID against gates at <span class="mono">+62.5%</span> and <span class="mono">+20.8%</span> expected upside.</span></div>
+    <div class="panel"><span class="nm">14b_size_down_watch</span><span class="job">325 rows</span><span class="d">Wide posterior or thin coverage. On this run: thin coverage only, all at <span class="mono">n_analysts = 2</span>.</span></div>
+    <div class="panel"><span class="nm">09_gate_report_portfolio</span><span class="job">7 rows</span><span class="d">The replay's own gates, each carrying its rationale in the row rather than in a docstring.</span></div>
+  </div>
+
+  <p class="sub measure" style="margin-top:26px">The figure suite in
+  <code>kalman_portfolio_viz.py</code> draws thirteen panels from these frames &#8212; including
+  <code>plot_two_books</code>, <code>plot_denominator_sanity</code> and
+  <code>plot_shrinkage_contrast</code>, the last two designed to be read together because they
+  show the same input condition, thin evidence, receiving opposite treatment. The charts on
+  this page are static reductions of that suite for a reader who wants the argument without
+  the notebook.</p>
+</section>
+
+<section>
+  <div class="shead">
+    <span class="marker">&#167;8</span>
+    <h2>Still open</h2>
+  </div>
+  <p class="sub measure">Carried forward from the previous edition of this page, because none
+  of it was closed by this run.</p>
+
+  <div class="stack measure">
+    <div class="card">
+      <h3>The vintage capture</h3>
+      <p>Still the top item, and still not done. Every gate above is internal, and the forward
+      tail both books select on stays unvalidated until realised returns exist. Run
+      <span class="mono">807df55e7158</span> sharpens the case rather than answering it: a book
+      whose modelled 1-in-20 is <span class="mono">+40.6%</span> is not a book any internal
+      check can approve or reject. What the handoff's provenance stamping adds is the piece
+      that makes a later vintage attributable to the code that produced it &#8212; and this
+      run is the first with a <strong>clean source tree</strong>, so
+      <span class="mono">source_sha 5667681</span> fully determines what ran.</p>
+    </div>
+    <div class="card">
+      <h3>An overflow in the ergodicity curve</h3>
+      <p><code>terminal_wealth_curve</code> raises
+      <span class="mono">RuntimeWarning: overflow encountered in exp</span>. Reproduced at book
+      scale it returns <strong>+inf for 21 of 100 bet fractions</strong>:
+      <span class="mono">log_growth</span> stays finite, but the terminal wealth it is
+      exponentiated back into does not. It reaches no exported frame, so no gate sees it
+      &#8212; which is exactly why it is written down. The same class of defect, in a column
+      that <em>was</em> exported, refused an analytics write earlier this month.</p>
+    </div>
+    <div class="card">
+      <h3>Mean-model arms from a replay</h3>
+      <p>Max-and-Smooth screens mean-structure arms in seconds against a frozen covariance,
+      but it freezes exactly the parameters the forward simulation reads, and the handoff
+      carries the four quantities the <em>simulator</em> needs rather than the model graph.
+      The stage refuses rather than silently degrading into a comparison of one arm against
+      itself.</p>
+    </div>
+    <div class="card">
+      <h3>Writing to the analytics schema</h3>
+      <p>The replay exports CSV. The v2 tables are DROP-and-RECREATE, so a replay that wrote
+      into them would destroy the export it was replaying. Given &#167;2, precedence between the
+      two books has to be declared in the v2 DDL before either can be the table the dashboard
+      reads.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>Fit <span class="mono">807df55e7158</span>, replayed as
+  <span class="mono">0c04b0eb1ded</span> at source <span class="mono">5667681</span> (clean
+  tree). All twenty-six export gates and all seven replay gates PASS. Returns are raw decimals
+  over a 365-day horizon; percent scaling happens only at this boundary. Every measurement
+  here scores the model against the analyst trail it was fitted to &#8212; model-implied
+  screens, not investment advice.</p>
+</footer>
+
+</div>
