@@ -43,6 +43,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -169,6 +170,32 @@ def _f(x: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return v if math.isfinite(v) else None
+
+
+#: Fallback only. The real value is read from ``KalmanRunConfigV2`` below.
+_MCAP_R_MAX_FALLBACK = 0.03
+
+
+def _mcap_r_max() -> float:
+    """Return the eligibility threshold the pipeline actually ships.
+
+    Read from ``KalmanRunConfigV2.mcap_global_r_max`` in the v2 script by regex
+    rather than by import, because importing that module drags in the whole
+    PyMC/ArviZ stack for one float.
+
+    This was a hard-coded ``0.01`` until 2026-08-30, and the hard-code went stale
+    when the default moved to ``0.03``: run ``317dbfff4bcf`` was reported as
+    drawing its book from an eligible pool of 175 names when the pool was 850,
+    and 38 of the 50 book names sat outside the number this file printed. A
+    threshold copied from a config is a second definition of that config.
+    """
+    src = Path(__file__).resolve().parents[3] / "pymc_kalman_filter_pt_v2.py"
+    try:
+        text_ = src.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return _MCAP_R_MAX_FALLBACK
+    m = re.search(r"^\s*mcap_global_r_max:\s*float\s*=\s*([0-9.eE+-]+)", text_, re.M)
+    return float(m.group(1)) if m else _MCAP_R_MAX_FALLBACK
 
 
 def _table_exists(eng, name: str) -> bool:
@@ -599,7 +626,8 @@ def read_detail(a: pd.DataFrame, risk: pd.DataFrame, book: pd.DataFrame,
 
     w = book["weight"] if "weight" in book.columns else book["book_weight"]
     top = book.assign(_w=w).nlargest(3, "_w")
-    eligible = int((risk["mcap_global_r"] < 0.01).sum()) if "mcap_global_r" in risk else None
+    r_max = _mcap_r_max()
+    eligible = int((risk["mcap_global_r"] < r_max).sum()) if "mcap_global_r" in risk else None
 
     def cross(frame: pd.DataFrame, key: str, weights: Optional[pd.Series] = None):
         out = []
@@ -635,6 +663,7 @@ def read_detail(a: pd.DataFrame, risk: pd.DataFrame, book: pd.DataFrame,
         "sigma_obs_base": scalar("sigma_obs_base"),
         "book": {
             "eligible_universe": eligible,
+            "eligible_mcap_r_max": r_max,
             "sector_weights": dict(sorted(sector_w.items(), key=lambda kv: -kv[1])),
             "region_weights": dict(sorted(region_w.items(), key=lambda kv: -kv[1])),
             "max_weight": _f(w.max()),

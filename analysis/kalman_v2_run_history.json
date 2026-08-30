@@ -1064,5 +1064,433 @@
         "to": "20.4"
       }
     ]
+  },
+  {
+    "run_id": "317dbfff4bcf",
+    "exported_at": "2026-08-30 22:02:32.184840+02:00",
+    "analysed_at": "2026-08-30T20:14:08+00:00",
+    "missing_tables": [],
+    "gates": {
+      "source": "table",
+      "n_pass": 26,
+      "n_warn": 0,
+      "n_fail": 0,
+      "unavailable": [],
+      "results": [
+        {
+          "gate": "panel_t_eff",
+          "status": "PASS",
+          "value": "T_eff = 1.45 of T = 4",
+          "threshold": ">= 1.30"
+        },
+        {
+          "gate": "panel_kernel_fit",
+          "status": "PASS",
+          "value": "rho_inf 0.436, ell 75d, rmse 0.0319",
+          "threshold": "rmse <= 0.08"
+        },
+        {
+          "gate": "drift_contrast_leakage",
+          "status": "PASS",
+          "value": "0 of 9 feature(s) measure the trail's increments (max dominance 1.30)",
+          "threshold": "|corr(contrast)| <= 1.5 x max(|corr(level)|, 0.05)"
+        },
+        {
+          "gate": "drift_selection",
+          "status": "PASS",
+          "value": "9 column(s) admitted; thinnest feat_eps_signal_beat at 86.8%",
+          "threshold": "coverage >= 80% and |r(response)| >= 0.0248"
+        },
+        {
+          "gate": "runtime_estimate",
+          "status": "PASS",
+          "value": "3.45 ms/grad, 56 free params, ~11.0 min [nutpie/NumbaLinker]",
+          "threshold": "<= 90 min on a compiled sampler"
+        },
+        {
+          "gate": "prior_scale",
+          "status": "PASS",
+          "value": "prior/empirical 90% width = 7.2x",
+          "threshold": "1x - 10x"
+        },
+        {
+          "gate": "divergences",
+          "status": "PASS",
+          "value": "0",
+          "threshold": "0"
+        },
+        {
+          "gate": "r_hat",
+          "status": "PASS",
+          "value": "1.0032 (sigma_state)",
+          "threshold": "< 1.01"
+        },
+        {
+          "gate": "ess_bulk",
+          "status": "PASS",
+          "value": "1536 (sigma_state)",
+          "threshold": ">= 400"
+        },
+        {
+          "gate": "mean_spread",
+          "status": "PASS",
+          "value": "Var(mu)/Var(y_now) = 0.44",
+          "threshold": "<= 1.00"
+        },
+        {
+          "gate": "mean_calibration",
+          "status": "PASS",
+          "value": "slope 1.065, 2Cov(mu,resid)/Var(y) = +0.057",
+          "threshold": "slope in [0.90, 1.10]"
+        },
+        {
+          "gate": "ppc_t_spread",
+          "status": "PASS",
+          "value": "IQR obs 1.026 vs rep [0.999, 1.038]",
+          "threshold": "observed IQR inside the replicated 94% interval"
+        },
+        {
+          "gate": "ppc_coverage",
+          "status": "PASS",
+          "value": "0.934 - 0.946 (target 0.94)",
+          "threshold": "within +/-0.02"
+        },
+        {
+          "gate": "ppc_decay",
+          "status": "PASS",
+          "value": "rho_inf obs 0.436 vs rep [0.377, 0.450]",
+          "threshold": "observed inside the replicated 94% interval"
+        },
+        {
+          "gate": "ppc_decay_residual",
+          "status": "PASS",
+          "value": "rho_inf obs 0.0231 vs rep [0.0000, 0.0415]",
+          "threshold": "observed <= replicated hi, and >= replicated lo - 0.05 (one-sided; see GATE_DECAY_RESIDUAL_TOL)"
+        },
+        {
+          "gate": "shrinkage_slope",
+          "status": "PASS",
+          "value": "slope 0.833, shift -0.0077, above 49.9%, rho 0.99224, median revision 1.05pp (intercept +0.0343)",
+          "threshold": "slope in [0.8, 0.98], |shift| <= 0.02, rho <= 0.995, revision >= 0.25pp"
+        },
+        {
+          "gate": "coverage_gradient",
+          "status": "PASS",
+          "value": "monotone, spread 2.42x",
+          "threshold": "monotone decreasing, spread >= 2x (posterior sd)"
+        },
+        {
+          "gate": "prob_pos_degenerate",
+          "status": "PASS",
+          "value": "59.5% pinned at 1.0, p_upside_pos_cond span 0.595",
+          "threshold": "pinned <= 60%, p_upside_pos_cond p95-p05 >= 0.30"
+        },
+        {
+          "gate": "forecast_handoff_written",
+          "status": "PASS",
+          "value": "07_forecast_handoff_v2.nc",
+          "threshold": "reported, not gated"
+        },
+        {
+          "gate": "forecast_factor_effect",
+          "status": "PASS",
+          "value": "2.73x wider",
+          "threshold": "reported, not gated"
+        },
+        {
+          "gate": "export_rowcount",
+          "status": "PASS",
+          "value": "9/9 non-empty; per-ISIN counts [6507]",
+          "threshold": "all non-empty, per-ISIN frames agree"
+        },
+        {
+          "gate": "export_finite",
+          "status": "PASS",
+          "value": "0 frame(s) with non-finite values",
+          "threshold": "all numeric cells finite"
+        },
+        {
+          "gate": "export_unique_columns",
+          "status": "PASS",
+          "value": "0 frame(s) with duplicate columns",
+          "threshold": "every frame has unique column names"
+        },
+        {
+          "gate": "export_duplicate_content",
+          "status": "PASS",
+          "value": "0 frame(s) with undeclared duplicated content",
+          "threshold": "one column per quantity, or a declared reason for two"
+        },
+        {
+          "gate": "export_ranking_range",
+          "status": "PASS",
+          "value": "0 column(s) out of range",
+          "threshold": "|metric| <= 100 on non-suppressed rows"
+        },
+        {
+          "gate": "export_vintage",
+          "status": "PASS",
+          "value": "9/9 tables stamped 317dbfff4bcf",
+          "threshold": "every written table carries exactly this run_id"
+        }
+      ]
+    },
+    "convergence": {
+      "n_monitored": 99,
+      "n_pinned": 3,
+      "max_rhat": 1.0031840585366922,
+      "worst_rhat_param": "sigma_state",
+      "min_ess_bulk": 1535.6197991926585,
+      "worst_ess_param": "sigma_state",
+      "min_ess_tail": 2001.6986377909736,
+      "divergences": 0
+    },
+    "structure": {
+      "n_drift": 9,
+      "drift_names": [
+        "feat_analyst_rating",
+        "feat_coverage_drift",
+        "feat_eps_signal_beat",
+        "feat_eps_signal_coverage",
+        "feat_mcap_country_r",
+        "feat_median_piotroski_f_score",
+        "feat_net_eps_drift",
+        "feat_pt_achievement_1y",
+        "feat_pt_range_hit_rate"
+      ],
+      "n_drift_straddling_zero": 2,
+      "drift_straddling_zero": [
+        "feat_coverage_drift",
+        "feat_eps_signal_beat"
+      ],
+      "group_effects": [
+        "sector",
+        "size_class",
+        "style_class",
+        "trading_region"
+      ],
+      "variance": {
+        "w_level": 0.003947835400742231,
+        "w_state": 0.9947370865079901,
+        "w_obs": 0.0013150780912677142,
+        "rho_inf": 0.002960623611971368,
+        "ell_days": 89.04488238342937,
+        "obs_share": 0.0003190233255415173,
+        "sigma_total": 0.567343282303437,
+        "nu": 11.251563661235453,
+        "signal_exponent": 0.3949887245349744
+      }
+    },
+    "screen": {
+      "n_names": 6507,
+      "ladder": {
+        "implied_upside": {
+          "unit": "pct",
+          "mean": 0.25212929448622656,
+          "median": 0.18231046931407935,
+          "sd": 0.3251129588144637,
+          "p05": -0.06020941216917721,
+          "p95": 0.7561381728337323,
+          "spearman_vs_implied": 1.0
+        },
+        "expected_return_kalman": {
+          "unit": "pct",
+          "mean": 0.24444162030624286,
+          "median": 0.18451168059361736,
+          "sd": 0.2775359820842896,
+          "p05": -0.041223923749748696,
+          "p95": 0.7089298997012564,
+          "spearman_vs_implied": 0.9922379375259265
+        },
+        "er_mean": {
+          "unit": "pct",
+          "mean": 0.2697735056487469,
+          "median": 0.20047945216340143,
+          "sd": 0.29611053381481534,
+          "p05": -0.023936479579354745,
+          "p95": 0.7770687584973646,
+          "spearman_vs_implied": 0.9862218071841851
+        },
+        "er_p50": {
+          "unit": "pct",
+          "mean": 0.2426455241403418,
+          "median": 0.18385685738536273,
+          "sd": 0.2761870424395373,
+          "p05": -0.04183041021219626,
+          "p95": 0.7057007302316295,
+          "spearman_vs_implied": 0.992055111627986
+        },
+        "risk_adj_return": {
+          "unit": "ratio",
+          "mean": 0.06331601298949834,
+          "median": -0.03453842640653802,
+          "sd": 0.8907104044810312,
+          "p05": -1.154474053571483,
+          "p95": 1.603472126573864,
+          "spearman_vs_implied": 0.9550262008630491
+        },
+        "expected_sharpe_ratio": {
+          "unit": "ratio",
+          "mean": 1.0737893458234355,
+          "median": 1.0707883929901243,
+          "sd": 0.7851771206456026,
+          "p05": -0.15267769482776544,
+          "p95": 2.3454496768844857,
+          "spearman_vs_implied": 0.8035239205045552
+        },
+        "reward_to_cvar": {
+          "unit": "ratio",
+          "mean": 2.892846976099794,
+          "median": 1.3690786001817286,
+          "sd": 3.243370817645363,
+          "p05": -0.12479704450139413,
+          "p95": 9.117381586759901,
+          "spearman_vs_implied": 0.8464907893636647
+        },
+        "p_upside_pos_cond": {
+          "unit": "prob",
+          "mean": 0.8150090191332411,
+          "median": 0.8845,
+          "sd": 0.19252448217163462,
+          "p05": 0.400546875,
+          "p95": 0.9956875,
+          "spearman_vs_implied": 0.7055082923139343
+        }
+      },
+      "spearman_vs_consensus": 0.9922379375259265,
+      "revision_pp_med": 1.04521741881122,
+      "revision_pp_p95": 7.961702422643309,
+      "ols_slope": 0.8333722431263004,
+      "ols_intercept": 0.03432406460240481,
+      "sd_ratio": 0.8536601650587373,
+      "post_sd_pp_med": 4.165829962760799,
+      "er_sd_pp_med": 18.617922834343403,
+      "dispersion_ratio": 4.469198935331687,
+      "shrink_gain_mean": 0.8323457524346536,
+      "prob_pos_pinned_pct": 59.489780236668196,
+      "kalman_gain_boundary_pct": 51.836483786691254,
+      "p_upside_interior_pct": 83.72521899492854,
+      "coverage_gradient_x": 2.4225810314123044,
+      "coverage_gradient_monotone": true,
+      "er_sd_gradient_x": 1.5959580857584195,
+      "starr_sharpe_rho": 0.9943179975994876
+    },
+    "risk": {
+      "cvar_med": -0.13636911784522165,
+      "cvar_pos_pct": 14.661134163208853,
+      "er_p05_neg_pct": 70.61625941293991,
+      "tail_floor_binds": 1640,
+      "tail_floor_pct": 25.2036268633779,
+      "book_tail_floor_n": 50,
+      "book_n": 50,
+      "book_weight_sum": 1.0000000000000002,
+      "book_hhi": 0.020555579884970615,
+      "book_eff_n": 48.64859106850877,
+      "book_cvar_pos_n": 50,
+      "book_w_cvar": 0.088577896532764,
+      "book_w_er_p05": 0.13657464812420828,
+      "book_w_er_sd": 0.1169975378323868,
+      "book_top_sector": "Financials",
+      "book_top_sector_w": 0.3367078059540411,
+      "book_regions": {
+        "Africa / Middle East": 0.06287295009912128,
+        "Asia / Pacific": 0.5539789655262461,
+        "Europe": 0.12954001424616765,
+        "Latin America and Caribbean": 0.055473693784742734,
+        "United States and Canada": 0.1981343763437224
+      }
+    },
+    "deltas": [
+      {
+        "metric": "Spearman vs consensus",
+        "verdict": "moved",
+        "from": "0.99313",
+        "to": "0.99224"
+      },
+      {
+        "metric": "median revision (pp)",
+        "verdict": "moved",
+        "from": "0.957",
+        "to": "1.045"
+      },
+      {
+        "metric": "posterior sd (pp)",
+        "verdict": "moved",
+        "from": "4.248",
+        "to": "4.166"
+      },
+      {
+        "metric": "prob_pos pinned (%)",
+        "verdict": "moved",
+        "from": "59.6",
+        "to": "59.5"
+      },
+      {
+        "metric": "coverage gradient (x)",
+        "verdict": "material",
+        "from": "1.52",
+        "to": "2.42"
+      },
+      {
+        "metric": "shrink_gain mean",
+        "verdict": "moved",
+        "from": "0.8471",
+        "to": "0.8323"
+      },
+      {
+        "metric": "max R-hat",
+        "verdict": "moved",
+        "from": "1.0023",
+        "to": "1.0032"
+      },
+      {
+        "metric": "min bulk ESS",
+        "verdict": "moved",
+        "from": "1704",
+        "to": "1536"
+      },
+      {
+        "metric": "variance weight: level",
+        "verdict": "moved",
+        "from": "0.00556",
+        "to": "0.00395"
+      },
+      {
+        "metric": "OU length scale (days)",
+        "verdict": "material",
+        "from": "75.5",
+        "to": "89.0"
+      },
+      {
+        "metric": "drift columns",
+        "verdict": "flat",
+        "from": "9",
+        "to": "9"
+      },
+      {
+        "metric": "book weighted cvar05",
+        "verdict": "moved",
+        "from": "+0.0882",
+        "to": "+0.0886"
+      },
+      {
+        "metric": "book names with cvar05 > 0",
+        "verdict": "material",
+        "from": "17",
+        "to": "50"
+      },
+      {
+        "metric": "book effective N",
+        "verdict": "material",
+        "from": "20.4",
+        "to": "48.6"
+      },
+      {
+        "metric": "gate: coverage_gradient",
+        "verdict": "material",
+        "from": "WARN",
+        "to": "PASS"
+      }
+    ]
   }
 ]
