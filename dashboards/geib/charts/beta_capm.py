@@ -34,7 +34,7 @@ from ._common import coalesce, empty_figure, scoped_filter
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema, tbl
-from ..theme import ref_line, COLORWAY, STACKED_GRAPH_STYLE, SUBTLE_TEXT, control
+from ..theme import ref_line, DIVERGING_POLES, COLORWAY, STACKED_GRAPH_STYLE, SUBTLE_TEXT, control
 from ..theme import card as theme_card
 
 component_id = "capm_beta_return_calculator"
@@ -109,10 +109,20 @@ _ALPHA_TOP_N = 15
 # Minimum marker size so zero / missing market caps still render on the SML.
 _MARKER_SIZE_MIN = 6
 
-# Alpha bar colours (spec hex; semantic positive/negative, distinct from the
-# categorical COLORWAY).
-_POS_COLOR = "#2ecc71"
-_NEG_COLOR = "#e74c3c"
+# Alpha bar colours come from `theme.DIVERGING_POLES`. They were a hardcoded
+# green/red pair, "#2ecc71" / "#e74c3c", and the measured case against them is
+# narrower than "red and green are colour-blind-unsafe":
+#
+#   The pair PASSES the adjacent-CVD floor -- dE 10.7 under deuteranopia against
+#   a floor of 8. It does not collapse. But the theme's diverging poles separate
+#   dE 26.8 on the same surface, 2.5x further apart, and the green also sat
+#   OUTSIDE the dark lightness band at L 0.746, which is the check the old pair
+#   actually failed.
+#
+# So this is a real improvement on a pair that was legible rather than broken,
+# and it buys consistency besides: the same two hues now serve the continuous
+# ramp (DIVERGING_SCALE) and this binary split, so the two views of a signed
+# quantity agree.
 
 title = "Beta & CAPM: Market Sensitivity Analysis"
 description = (
@@ -296,7 +306,8 @@ def _bar_figure(df: pd.DataFrame) -> go.Figure:
 
     fig = px.bar(
         df_display, x="alpha", y="ticker", color="alpha_color", orientation="h",
-        color_discrete_map={"Positive": _POS_COLOR, "Negative": _NEG_COLOR},
+        color_discrete_map={"Positive": DIVERGING_POLES["positive"],
+                            "Negative": DIVERGING_POLES["negative"]},
         hover_data={"ticker": True, "alpha": ":.4f", "alpha_color": False},
         labels={"alpha": "Alpha (Actual - CAPM Return)", "ticker": "Ticker"},
     )
@@ -305,8 +316,16 @@ def _bar_figure(df: pd.DataFrame) -> go.Figure:
     fig.update_yaxes(categoryorder="array",
                      categoryarray=df_display["ticker"].tolist(),
                      title_text="Ticker")
+    # "top left", not "top right": the bars are sorted ascending, so the top of
+    # the pane is the longest POSITIVE bar and a right-anchored label lands on it.
+    # Left of the rule at that height is empty.
     fig.add_vline(x=0, **ref_line("zero", annotation_text="Zero Alpha",
-                                  annotation_position="top right"))
+                                  annotation_position="top left"))
+    # No legend, deliberately. The rule is that identity must never be carried by
+    # colour ALONE -- here the sign is already given by which side of the labelled
+    # "Zero Alpha" rule a bar sits on, and colour is the redundant encoding that
+    # keeps it readable for a colour-blind reader. A Positive/Negative legend on a
+    # chart split about a labelled zero would restate the x-axis.
     fig.update_xaxes(title_text="Jensen's Alpha (Actual - CAPM Return)")
     # Grow the pane with the bar count so every company stays legible.
     fig.update_layout(showlegend=False, hovermode="closest",

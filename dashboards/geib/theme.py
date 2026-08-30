@@ -201,6 +201,19 @@ SEQUENTIAL_SCALE = _plotly_scale(_SCALE_COLORS)
 # arbitrary value and the ramp claims a polarity the data does not have.
 DIVERGING_SCALE = _plotly_scale(list(THEME["colorscale_diverging"]))
 
+#: The two POLES of that ramp, for a binary signed split -- a diverging bar whose
+#: bars sit either side of zero, an over/underweight flag. Same hues as the ramp,
+#: so a continuous and a binary view of the same quantity agree.
+#:
+#: Ordered low -> high, matching the ramp: cool for the negative side, warm for
+#: the positive. Which end reads as "good" is not encoded here and should not be
+#: -- on a diverging bar the SIDE OF THE ZERO LINE already says the sign, and
+#: colour is the redundant encoding that makes it survive a colour-blind reader.
+DIVERGING_POLES: dict[str, str] = {
+    "negative": "#3987e5",
+    "positive": "#d95926",
+}
+
 #: Deprecated alias kept so existing imports resolve. It was the *diverging*
 #: shape wired to Plotly's ``sequential`` slot; it now resolves to the sequential
 #: ramp, which is what almost every caller actually wanted. Use
