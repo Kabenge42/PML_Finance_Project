@@ -8,6 +8,15 @@
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/analytics" />
       <excludeFolder url="file://$MODULE_DIR$/archive" />
+      <excludeFolder url="file://$MODULE_DIR$/.cache" />
+      <excludeFolder url="file://$MODULE_DIR$/.idea/dataSources" />
+      <excludeFolder url="file://$MODULE_DIR$/.ipynb_checkpoints" />
+      <excludeFolder url="file://$MODULE_DIR$/sdk_ouputs/production/finance-ml-analytics-platform/Scripts" />
+      <excludeFolder url="file://$MODULE_DIR$/sdk_ouputs/production/finance-ml-analytics-platform/bin" />
+      <excludeFolder url="file://$MODULE_DIR$/sdk_ouputs/production/finance-ml-analytics-platform/lib" />
+      <excludeFolder url="file://$MODULE_DIR$/sdk_ouputs/production/finance-ml-analytics-platform/pip" />
+      <excludeFolder url="file://$MODULE_DIR$/sdk_ouputs/production/finance-ml-analytics-platform/pip-26.0.1.dist-info" />
+      <excludeFolder url="file://$MODULE_DIR$/data/equities" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.14 (PML_Finance_Project) (4)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
