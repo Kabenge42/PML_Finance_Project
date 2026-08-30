@@ -37,7 +37,6 @@ sort_by_id = f"{component_id}_sort_by"
 sort_by_options = [
     {"label": "Expected Return (Kalman)", "value": "expected_return_kalman"},
     {"label": "P(risk-adj. return > 0)", "value": "p_upside_pos_cond"},
-    {"label": "Signal Strength", "value": "signal_strength"},
     {"label": "Reward / Tail Risk (STARR)", "value": "reward_to_cvar"},
     {"label": "Price Target (Kalman)", "value": "price_target_kalman"},
     {"label": "Beta", "value": "beta"},
@@ -79,7 +78,6 @@ _COLUMNS = [
     ("p_upside_pos_cond", "P(risk-adj > 0)", 2),
     ("beta", "Beta", 2),
     ("expected_sharpe_ratio", "Uplift t-stat", 2),
-    ("signal_strength", "Signal Strength", 2),
     ("reward_to_cvar", "Reward / Tail Risk", 2),
 ]
 

@@ -6,9 +6,11 @@ produced by :class:`KalmanFilterPriceTarget` in ``pymc_kalman_filter_pt.py``:
 * ``expected_return_kalman`` — posterior-mean implied upside
   (``expected_pt / last_price - 1``, the de-standardised ``expected_upside``).
   A *total* return to the analyst price target, not a per-period (daily) return.
-* ``kalman_variance``        — posterior variance of the smoothed price-target
-  *level* (``var(expected_pt)``), i.e. in currency-squared units (not a return
-  variance).
+* ``er_sd``                  — pooled standard deviation of the forward-return
+  Monte-Carlo draws: a *return* dispersion in raw decimal, on the same NTM
+  horizon as the mean above. This replaced v1's ``kalman_variance`` (a
+  currency-squared price-target *level* variance), which every consumer had to
+  divide by spot before it meant anything.
 
 Both are next-twelve-month (NTM) quantities: analyst price targets are NTM, and
 the ``*_ago`` history the smoother is fit on is anchored at the snapshot "now"
@@ -82,56 +84,18 @@ def annualized_return_pct(
     return expected_return_kalman / horizon_years * 100.0
 
 
-def return_volatility(
-        kalman_variance: object,
-        price: object,
-        horizon_years: float = PRICE_TARGET_HORIZON_YEARS,
-) -> object:
-    """Return the annualized return standard deviation, as a decimal.
-
-    ``kalman_variance`` is the variance of the price-target *level*; dividing its
-    square root by the spot ``price`` converts the currency dispersion into a
-    return (the units cancel exactly because the implied upside is
-    ``expected_pt / price - 1`` with ``price`` constant per name), which is then
-    de-annualized by ``sqrt(horizon_years)``.
-
-    Parameters
-    ----------
-    kalman_variance
-        Posterior variance of the price-target level (currency-squared).
-    price
-        Spot/anchor price the upside is measured from (``original_price``). A
-        non-positive price yields ``NaN`` — the name is unusable for risk scaling.
-    horizon_years
-        Horizon the variance spans, in years. Defaults to
-        :data:`PRICE_TARGET_HORIZON_YEARS`.
-
-    Returns
-    -------
-    object
-        Annualized return standard deviation (decimal). Returns a
-        :class:`pandas.Series` (index preserved) when ``kalman_variance`` is a
-        Series, otherwise a NumPy array / scalar.
-    """
-    variance = np.asarray(kalman_variance, dtype="float64")
-    price_arr = np.asarray(price, dtype="float64")
-    safe_price = np.where(price_arr > 0, price_arr, np.nan)
-    sigma = np.sqrt(variance) / safe_price / np.sqrt(horizon_years)
-    if isinstance(kalman_variance, pd.Series):
-        return pd.Series(sigma, index=kalman_variance.index, name="return_volatility")
-    return sigma
-
-
-def annualized_volatility_pct(
-        kalman_variance: object,
-        price: object,
-        horizon_years: float = PRICE_TARGET_HORIZON_YEARS,
-) -> object:
-    """Return the annualized return volatility, in percent.
-
-    Thin wrapper over :func:`return_volatility` (see it for the unit reasoning).
-    """
-    return return_volatility(kalman_variance, price, horizon_years) * 100.0
+# ``return_volatility`` and ``annualized_volatility_pct`` lived here until the v2
+# repoint. Both took ``kalman_variance`` -- the price-target LEVEL variance in
+# currency-squared -- and divided its square root by the spot price to recover a
+# return sd. v2 does not export that column and does not need to: ``er_sd`` is
+# the forward-return standard deviation directly, in raw decimal, over the same
+# NTM horizon. The conversion those two functions existed to get right no longer
+# has to happen, so use ``er_sd`` and delete the round trip.
+#
+# For a name whose ``er_sd`` is missing, :func:`quantile_return_volatility` below
+# recovers a sd from the ``er_p05`` / ``er_p95`` spread under a normal
+# approximation -- that is the supported fallback, and the efficient-frontier and
+# VaR/CVaR cards already use it as their primary.
 
 
 def quantile_return_volatility(
@@ -147,7 +111,7 @@ def quantile_return_volatility(
     ``sigma = (p95 - p05) / (2 * z_0.95)``, de-annualized by ``sqrt(horizon_years)``.
 
     This is the asset's *return* dispersion — the proper mean-variance risk input —
-    unlike :func:`return_volatility`, which converts ``kalman_variance`` (the
+    unlike ``er_sd``, which is already a return sd (the
     posterior variance of the price-target *level*, i.e. estimation uncertainty of
     the mean) and so understates risk by ~1-2 orders of magnitude.
 

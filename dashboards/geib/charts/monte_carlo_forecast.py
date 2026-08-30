@@ -11,7 +11,7 @@ zooms into a single name.
 
 The simulation reuses the horizon-correct conversion in
 :mod:`dashboards.geib.metrics`: ``expected_return_kalman`` is the total
-next-twelve-month implied upside and ``kalman_variance`` is the price-target
+next-twelve-month implied upside and ``er_sd`` is the forward-return
 *level* variance, so they are de-annualised over the real price-target horizon
 (not a daily ``* 252``) and the level variance is divided by the spot price to
 become a return.
@@ -30,7 +30,7 @@ from ._common import coalesce, empty_figure, finite_cell, name_options, scoped_f
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
-from ..metrics import PRICE_TARGET_HORIZON_YEARS, return_volatility
+from ..metrics import PRICE_TARGET_HORIZON_YEARS
 from ..theme import GOLD, GREEN, RED, control
 from ..theme import card as theme_card
 
@@ -178,9 +178,9 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     if expected_return is None:
         return empty_figure(f"No Kalman expected return for {name}"), html.Div()
     annual_mean = expected_return / PRICE_TARGET_HORIZON_YEARS
-    annual_sigma = float(
-        return_volatility(finite_cell(row, "kalman_variance", np.nan), initial_price)
-    )
+    # ``er_sd`` is already the NTM forward-return sd in raw decimal; v1 had to
+    # convert a currency-squared level variance to get here.
+    annual_sigma = float(finite_cell(row, "er_sd", np.nan))
     if not np.isfinite(annual_sigma) or annual_sigma <= 0:
         annual_sigma = 0.01
 

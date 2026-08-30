@@ -20,7 +20,7 @@ The forecast is built from the horizon-correct quantities in
 original Plotly stub: ``expected_return_kalman`` is the *total* NTM implied upside
 (so it is de-annualised over the real price-target horizon) and the return
 dispersion is taken from the posterior ``er_p05`` / ``er_p95`` percentiles
-(``kalman_variance`` is only a fallback — it is the price-target *level* variance,
+(``er_sd`` is the fallback — the forward-return sd in raw decimal,
 which understates return risk; see :func:`~dashboards.geib.metrics.return_volatility`).
 """
 
@@ -52,7 +52,6 @@ from ..metrics import (
     PRICE_TARGET_HORIZON_YEARS,
     history_ladder,
     quantile_return_volatility,
-    return_volatility,
 )
 from ..theme import card as theme_card
 from ..theme import control
@@ -261,7 +260,7 @@ def _update_logic(**kwargs) -> go.Figure:
         finite_cell(row, "er_p05", np.nan), finite_cell(row, "er_p95", np.nan)
     ))
     if not np.isfinite(sigma) or sigma <= 0:
-        sigma = float(return_volatility(finite_cell(row, "kalman_variance", np.nan), spot))
+        sigma = float(finite_cell(row, "er_sd", np.nan))
     if not np.isfinite(sigma) or sigma <= 0:
         sigma = 0.01
 

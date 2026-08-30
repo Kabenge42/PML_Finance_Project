@@ -6,10 +6,11 @@ draws are generated from its Kalman expected return and a horizon-correct return
 volatility, then binned (histogram) and sorted (CDF). A live *Target Return*
 slider draws a red dashed reference line on both panes.
 
-The dispersion uses :func:`geib.metrics.return_volatility` — ``kalman_variance``
+The dispersion is ``er_sd`` — the forward-return sd in raw decimal. v1 used
 is the price-target *level* variance (currency-squared), so it is divided by the
 spot ``original_price`` to become a *return* before the normal draw. The bare
-``sqrt(kalman_variance)`` would be in price units and mis-scale the draws.
+``sqrt(kalman_variance)``, which was in price units and had to be divided by
+spot; ``er_sd`` is already a return, so the conversion is gone.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from ._common import coalesce, column_values, empty_figure
 from ..components.filter_component import FILTER_CALLBACK_INPUTS, filter_data
 from ..data import get_data
 from ..logger import logger, schema
-from ..metrics import return_volatility
 from ..theme import COLORWAY, RED, STACKED_GRAPH_STYLE, control
 from ..theme import card as theme_card
 
@@ -135,12 +135,15 @@ def component() -> "object":
 def _generate_scenarios(df: pd.DataFrame, num_simulations: int) -> list[dict]:
     """Return per-company Monte Carlo return scenarios (decimal return space).
 
-    The scale is the horizon-correct :func:`return_volatility` (``kalman_variance``
-    divided by the spot ``original_price``), floored to :data:`_MIN_SIGMA` when
-    degenerate. Draws use a seeded RNG for reproducibility.
+    The scale is ``er_sd``, the pooled standard deviation of the forward-return
+    Monte-Carlo draws, floored to :data:`_MIN_SIGMA` when degenerate. It is a raw
+    decimal return over the same NTM horizon as ``expected_return_kalman``, so it
+    is used as-is -- the v1 code path converted ``kalman_variance`` (a
+    currency-squared price-target level variance) into a return here, and that
+    conversion no longer exists to get wrong. Draws use a seeded RNG.
     """
     rng = np.random.default_rng(42)
-    sigmas = return_volatility(df["kalman_variance"], df["original_price"]).to_numpy()
+    sigmas = df["er_sd"].to_numpy(dtype="float64")
     names = df["name"].to_numpy()
     means = df["expected_return_kalman"].to_numpy(dtype="float64")
 
@@ -188,7 +191,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, go.Figure]:
         empty = empty_figure("No data is available to display")
         return empty, empty
 
-    df = df[["name", "sector", "market_cap", "expected_return_kalman", "kalman_variance",
+    df = df[["name", "sector", "market_cap", "expected_return_kalman", "er_sd",
              "original_price", "p_upside_pos_cond", "er_p05", "er_p50", "er_p95"]].copy()
     logger.debug(schema(df))
 

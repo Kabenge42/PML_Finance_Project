@@ -32,7 +32,7 @@ _CARDS = [
     (TOTAL_ID, "Total Securities"),
     (AVG_MKTCAP_ID, "Avg Market Cap (M)"),
     (AVG_ER_ID, "Avg Expected Return"),
-    (AVG_SIGNAL_ID, "Avg Signal Strength"),
+    (AVG_SIGNAL_ID, "Avg P(risk-adj > 0)"),
     (AVG_RCVAR_ID, "Avg Reward/Tail Risk"),
     (AVG_BETA_ID, "Avg Beta"),
 ]
@@ -106,7 +106,7 @@ def update(**kwargs):
         total = f"{len(df):,}"
         avg_mktcap = f"{df['market_cap'].mean():,.0f}"
         avg_er = f"{df['expected_return_kalman'].mean():.4f}"
-        avg_signal = f"{df['signal_strength'].mean():.2f}"
+        avg_signal = f"{df['p_upside_pos_cond'].mean():.1%}"
         avg_rcvar = f"{df['reward_to_cvar'].mean():.2f}"
         beta_mean = df["beta"].mean() if "beta" in df.columns else float("nan")
         avg_beta = "—" if pd.isna(beta_mean) else f"{beta_mean:.2f}"

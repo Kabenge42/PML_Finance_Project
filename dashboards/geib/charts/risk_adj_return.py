@@ -34,10 +34,14 @@ color_by_default = "sector"
 size_by_id = f"{component_id}_size_by"
 size_by_options = [
     {"label": "None", "value": "none"},
-    {"label": "Signal Strength", "value": "signal_strength"},
+    {"label": "P(risk-adj. return > 0)", "value": "p_upside_pos_cond"},
     {"label": "Market Cap", "value": "market_cap"},
 ]
-size_by_default = "signal_strength"
+# v1 sized on ``signal_strength``, which v2 does not export and has no successor.
+# ``p_upside_pos_cond`` is the screen's documented primary ranking column and is
+# bounded [0, 1], so it maps onto a marker area without an outlier blowing the
+# scale -- which an unbounded STARR would.
+size_by_default = "p_upside_pos_cond"
 
 sector_filter_id = f"{component_id}_sector_filter"
 
@@ -118,7 +122,7 @@ def _update_logic(**kwargs) -> go.Figure:
             "sector",
             "industry",
             "country_name",
-            "signal_strength",
+            "p_upside_pos_cond",
             "market_cap",
             "beta",
             "price_target_median",

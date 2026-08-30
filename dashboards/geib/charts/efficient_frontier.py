@@ -261,7 +261,7 @@ def _update_logic(**kwargs) -> Tuple[go.Figure, html.Div]:
     # normal approximation (``quantile_return_volatility``). ``er_mean`` tracks
     # ``expected_return_kalman``, so the mean and risk stay on one distribution.
     #
-    # NOTE: ``kalman_variance`` must NOT be used as risk here. It is the posterior
+    # NOTE: ``expected_upside_sd`` must NOT be used as risk here. It is the posterior
     # variance of the price-target *level* (estimation uncertainty of the mean), not
     # the return volatility; converted to a return and diversified across the book it
     # collapsed portfolio vol to ~0.1% and pushed Sharpe ratios past 150 (e.g. a
