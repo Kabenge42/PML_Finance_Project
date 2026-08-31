@@ -2555,16 +2555,9 @@ def forecast_error_variance(
     mean, with no inflation. ``2.0`` was tried first and rejected on the
     production fit: it over-shrinks, giving a model-on-consensus slope of 0.723
     against a ``[0.80, 0.98]`` band. See
-    :attr:`KalmanRunConfigV2.forecast_error_multiplier` for the full sweep.
+    :attr:`KalmanPortfolioConfig.forecast_error_multiplier` for the full sweep.
     """
-    if multiplier < 0:
-        raise ValueError(f"multiplier must be non-negative, got {multiplier!r}")
-    if n_exponent < 0:
-        raise ValueError(f"n_exponent must be non-negative, got {n_exponent!r}")
-
-    cv = np.nan_to_num(np.asarray(panel.dispersion_cv, dtype="float64"), nan=0.0)
-    cv = np.clip(cv, 0.0, None)
-
+    cv = np.asarray(panel.dispersion_cv, dtype="float64")
     frame = panel.frame
     if "n_analysts" in frame.columns:
         n = pd.to_numeric(frame["n_analysts"], errors="coerce").to_numpy(dtype="float64")
@@ -2574,11 +2567,150 @@ def forecast_error_variance(
             "falls back to a flat count of 1, which removes the coverage gradient"
         )
         n = np.ones(len(cv))
-    n = np.clip(np.nan_to_num(n, nan=1.0), 1.0, None)
+    # The arithmetic lives in `forecast_error_variance_from_arrays`; this reads
+    # the three inputs off a panel and nothing else. The decision layer has a
+    # handoff rather than a panel and calls that directly.
+    return forecast_error_variance_from_arrays(
+        cv, n, panel.response_std, multiplier=multiplier, n_exponent=n_exponent
+    )
 
+
+def forecast_error_variance_from_arrays(
+    dispersion_cv: np.ndarray,
+    n_analysts: np.ndarray,
+    response_std: float,
+    *,
+    multiplier: float = 1.0,
+    n_exponent: float = 0.5,
+) -> np.ndarray:
+    """``forecast_error_variance`` with the panel taken apart into its inputs.
+
+    The arithmetic SSOT. :func:`forecast_error_variance` is a thin wrapper that
+    reads the three arguments off a ``KalmanPanelV2``; the decision layer calls
+    this directly, because a replay has a handoff rather than a panel. Two
+    implementations of a prior that decides the whole departure from consensus is
+    how the fit and the replay would come to disagree about what was applied.
+
+    Parameters
+    ----------
+    dispersion_cv
+        ``(n_isin,)`` relative dispersion, already on the log-uplift scale.
+    n_analysts
+        ``(n_isin,)`` analyst counts. Floored at 1 -- a count of zero would make
+        the standard error of the mean infinite rather than large.
+    response_std
+        The panel's standardisation constant.
+    multiplier, n_exponent
+        The prior. ``multiplier=0`` returns zeros exactly, so the caller's gain
+        is 1 and the latent comes back unshrunk bit for bit.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(n_isin,)`` variance on the standardised response scale.
+    """
+    if multiplier < 0:
+        raise ValueError(f"multiplier must be non-negative, got {multiplier!r}")
+    if n_exponent < 0:
+        raise ValueError(f"n_exponent must be non-negative, got {n_exponent!r}")
+
+    cv = np.clip(np.nan_to_num(np.asarray(dispersion_cv, dtype="float64"), nan=0.0),
+                 0.0, None)
+    n = np.clip(
+        np.nan_to_num(np.asarray(n_analysts, dtype="float64"), nan=1.0), 1.0, None
+    )
     sem = cv / np.power(n, n_exponent)
-    std = float(panel.response_std) or 1.0
+    std = float(response_std) or 1.0
     return np.square(multiplier * sem / std)
+
+
+def shrink_latent_from_arrays(
+    *,
+    latent_mean: np.ndarray,
+    latent_sd: Optional[np.ndarray],
+    fitted_mean: np.ndarray,
+    sigma: np.ndarray,
+    variance_weights: Optional[np.ndarray],
+    fe_var: np.ndarray,
+    random_seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The normal-normal update of :func:`apply_forecast_error_shrinkage`, on arrays.
+
+    **Every per-ISIN array is ``(n_isin, n_sample)``** and the sample axes must be
+    aligned draw for draw -- ``sigma`` draw *i* is the same posterior sample as
+    ``latent_mean`` draw *i*. That is a real constraint, not a formality: the
+    update multiplies them, so independently ordered arrays would combine
+    unrelated draws while every shape still matched.
+
+    :func:`apply_forecast_error_shrinkage` is the ``(idata, panel)`` wrapper over
+    this; the decision layer calls it directly off a handoff. One implementation,
+    because the whole departure from consensus rests on it.
+
+    Parameters
+    ----------
+    latent_mean
+        The smoother's conditional mean, ``state_now_mean``.
+    latent_sd
+        Its conditional sd. ``None`` carries parameter uncertainty only, which
+        understates per-name spread.
+    fitted_mean
+        The linear predictor the likelihood centres on -- the target the latent
+        is shrunk toward, and the reason the drift betas and group effects reach
+        the exported number at all.
+    sigma
+        ``sigma_isin`` draws, before the ``response_std`` multiplication.
+    variance_weights
+        ``(n_sample, 3)`` level / state / observation shares. ``None`` falls back
+        to ``latent_sd`` as the structured scale, which understates the target.
+    fe_var
+        ``(n_isin,)`` from :func:`forecast_error_variance_from_arrays`.
+    random_seed
+        Seeds the latent draw.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        ``(theta, gain_mean)`` -- shrunk draws ``(n_isin, n_sample)`` and the
+        posterior-mean gain per name ``(n_isin,)``.
+    """
+    s_mean = np.asarray(latent_mean, dtype="float64")
+    mu = np.asarray(fitted_mean, dtype="float64")
+    s_sd = (np.zeros_like(s_mean) if latent_sd is None
+            else np.asarray(latent_sd, dtype="float64"))
+    fe = np.asarray(fe_var, dtype="float64")
+    if fe.shape[0] != s_mean.shape[0]:
+        raise ValueError(
+            f"forecast-error vector has {fe.shape[0]} entries but the latent "
+            f"carries {s_mean.shape[0]} names -- the panel and the idata are "
+            "not from the same run."
+        )
+    fe = fe[:, None]
+
+    if variance_weights is not None:
+        w = np.asarray(variance_weights, dtype="float64")     # (sample, 3)
+        struct_w = (w[:, 0] + w[:, 1])[None, :]               # level + state
+        struct_var = np.asarray(sigma, dtype="float64") ** 2 * struct_w
+    else:  # pragma: no cover - defensive, pre-2026-08 idata
+        logger.warning(
+            "variance_weights absent; falling back to latent_sd as the structured "
+            "scale, which understates the shrinkage target."
+        )
+        struct_var = np.maximum(s_sd, _EPS) ** 2
+
+    gain = struct_var / (struct_var + fe)
+    theta_mean = mu + gain * (s_mean - mu)
+    theta_sd = np.sqrt(np.clip(gain ** 2 * s_sd ** 2 + gain * fe, 0.0, None))
+    # Drawn as (sample, isin) and transposed, NOT as (isin, sample) directly.
+    # numpy fills C-order, so this reproduces `standard_normal((chain, draw,
+    # isin))` element for element once the caller's chain-major flatten is undone
+    # -- which is what makes the `(idata, panel)` wrapper bit-identical to what it
+    # was before it delegated here. Draw the other orientation and every shrunk
+    # value moves by a Monte-Carlo error that no test tolerance would catch as a
+    # refactor.
+    n_isin, n_sample = theta_mean.shape
+    rng = np.random.default_rng(random_seed)
+    theta = theta_mean + theta_sd * rng.standard_normal(size=(n_sample, n_isin)).T
+    return theta, gain.mean(axis=1)
 
 
 def apply_forecast_error_shrinkage(
@@ -2687,37 +2819,38 @@ def apply_forecast_error_shrinkage(
     fe_var = forecast_error_variance(
         panel, multiplier=multiplier, n_exponent=n_exponent
     )
-    if fe_var.shape[0] != s_mean.shape[-1]:
-        raise ValueError(
-            f"forecast-error vector has {fe_var.shape[0]} entries but the "
-            f"posterior carries {s_mean.shape[-1]} names — the panel and the "
-            "idata are not from the same run."
-        )
 
-    # Structured within-name variance at the snapshot: everything the model
-    # attributes to the name itself rather than to measurement.
-    if "sigma_isin" in post and "variance_weights" in post:
-        sigma_isin = np.asarray(post["sigma_isin"], dtype="float64")
-        w = np.asarray(post["variance_weights"], dtype="float64")  # (chain, draw, 3)
-        struct_w = (w[..., 0] + w[..., 1])[..., None]              # level + state
-        struct_var = sigma_isin ** 2 * struct_w
-    else:  # pragma: no cover - defensive, pre-2026-08 idata
-        logger.warning(
-            "sigma_isin / variance_weights absent; falling back to state_now_sd "
-            "as the structured scale, which understates the shrinkage target."
-        )
-        struct_var = np.maximum(s_sd, _EPS) ** 2
-
-    gain = struct_var / (struct_var + fe_var)
-    theta_mean = mu + gain * (s_mean - mu)
-    theta_sd = np.sqrt(np.clip(gain ** 2 * s_sd ** 2 + gain * fe_var, 0.0, None))
-
-    rng = np.random.default_rng(random_seed)
-    theta = theta_mean + theta_sd * rng.standard_normal(size=theta_mean.shape)
-
+    # Flattened to the (isin, sample) orientation the array core works in, then
+    # reshaped back onto the posterior's own dims. The flatten and the un-flatten
+    # are the same chain-major reshape, so draw i stays draw i throughout.
     template = post[latent]
-    out = xr.DataArray(theta, dims=template.dims, coords=template.coords)
-    gain_mean = gain.reshape(-1, gain.shape[-1]).mean(axis=0)
+    shape = s_mean.shape
+    def _flat(arr):
+        return np.asarray(arr, dtype="float64").reshape(-1, shape[-1]).T
+
+    vw = None
+    if "variance_weights" in post:
+        vw_arr = np.asarray(post["variance_weights"], dtype="float64")
+        vw = vw_arr.reshape(-1, vw_arr.shape[-1])              # (sample, 3)
+    sigma_flat = (
+        _flat(post["sigma_isin"]) if "sigma_isin" in post
+        else np.zeros((shape[-1], int(np.prod(shape[:-1]))))
+    )
+    if "sigma_isin" not in post or vw is None:  # pragma: no cover - defensive
+        vw = None
+
+    theta_flat, gain_mean = shrink_latent_from_arrays(
+        latent_mean=_flat(s_mean),
+        latent_sd=_flat(s_sd),
+        fitted_mean=_flat(mu),
+        sigma=sigma_flat,
+        variance_weights=vw,
+        fe_var=fe_var,
+        random_seed=random_seed,
+    )
+    out = xr.DataArray(
+        theta_flat.T.reshape(shape), dims=template.dims, coords=template.coords
+    )
     logger.info(
         "Forecast-error shrinkage: multiplier %.2f, median gain %.3f "
         "(p05 %.3f, p95 %.3f)",

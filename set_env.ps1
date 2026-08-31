@@ -36,6 +36,11 @@ $env:KALMAN_PT_RESULTS_DIR = Join-Path $PSScriptRoot "pymc_kalman_filter_pt_resu
 #   python pymc_kalman_filter_pt_v2.py --migrate-layout          # list the moves
 #   python pymc_kalman_filter_pt_v2.py --migrate-layout --apply  # make them
 $env:KALMAN_V2_RESULTS_DIR = Join-Path $PSScriptRoot "pymc_kalman_filter_pt_v2_results"
+
+# Third root, 2026-08-31. The DECISION LAYER writes here and reads the v2 tree.
+# One root until then, so a fit and every replay of it interleaved in one
+# directory -- a fit happens once, a replay happens many times over that fit.
+$env:KALMAN_PORTFOLIO_RESULTS_DIR = Join-Path $PSScriptRoot "kalman_portfolio_results"
 # 0 -> emit DDL + CSV without writing to the analytics schema (same fallback
 #      happens automatically when the database is unreachable).
 $env:KALMAN_PT_SQL_EXPORT = "1"
@@ -159,6 +164,7 @@ Write-Host "DATA_DIR: $env:DATA_DIR"
 Write-Host "OUTPUT_DIR: $env:OUTPUT_DIR"
 Write-Host "KALMAN_PT_RESULTS_DIR: $env:KALMAN_PT_RESULTS_DIR"
 Write-Host "KALMAN_V2_RESULTS_DIR: $env:KALMAN_V2_RESULTS_DIR"
+Write-Host "KALMAN_PORTFOLIO_RESULTS_DIR: $env:KALMAN_PORTFOLIO_RESULTS_DIR"
 Write-Host "KALMAN_PT_SQL_EXPORT: $env:KALMAN_PT_SQL_EXPORT  KALMAN_PT_CLEAN_RESULTS: $env:KALMAN_PT_CLEAN_RESULTS"
 Write-Host "MODEL_DIR: $env:MODEL_DIR"
 Write-Host "RANDOM_SEED: $env:RANDOM_SEED"

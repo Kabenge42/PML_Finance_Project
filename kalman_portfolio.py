@@ -23,7 +23,15 @@ What it deliberately does not do
 It does not move a default. All three ranking arms are exported side by side with the
 shipped one labelled, because which of them is *better* is a question about realised
 returns and no gate here can answer it. Every gate below scores the model against the
-analyst trail it was fitted to; that is why none of them blocks.
+analyst trail it was fitted to; that is why none of THOSE blocks.
+
+Two gates do block, and both grade something other than the model.
+``portfolio_input_vintage`` grades LINEAGE -- whether the files this replay read
+came from the fit it is replaying, which is a fact about provenance and is
+checkable now. ``portfolio_sector_concentration`` grades whether a stated
+CONSTRAINT was actually applied to the weight it claims to cap. Neither is an
+opinion about whether the model is any good, which is the thing no gate here can
+have.
 
 Usage
 -----
@@ -47,6 +55,7 @@ import logging
 import os
 import sys
 import uuid
+import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -61,18 +70,29 @@ logger = logging.getLogger("kalman_portfolio")
 from pymc_kalman_filter_pt_v2 import (  # noqa: E402
     EXPORT_IDENTITY_COLUMNS,
     GATE_CATALOGUE,
+    LOG_UPLIFT_CLIP_HI,
+    LOG_UPLIFT_CLIP_LO,
     GateReport,
     GateResult,
     KalmanRunConfigV2,
     PROVENANCE_COLUMNS,
+    _ANALYTICS_TABLE_V2,
+    _EPS,
     _HANDOFF_STEM,
+    apply_out_of_support,
+    write_analytics_ddl_v2,
     attach_identity_columns,
     resolve_source_revision,
     stamp_export_provenance,
 )
 from probabilistic_ml_model.export_layout import (  # noqa: E402
+    DEFAULT_RESULTS_DIRNAME_PORTFOLIO,
     DEFAULT_RESULTS_DIRNAME_V2,
+    EXPORT_SECTION_DIRS,
+    PORTFOLIO_ONLY_SECTION_DIRS,
+    RESULTS_DIR_ENV_PORTFOLIO,
     RESULTS_DIR_ENV_V2,
+    export_dir_for,
     resolve_results_root,
     section_path,
 )
@@ -102,7 +122,14 @@ from probabilistic_ml_model.pymc_models.PortfolioOptimizationModel import (  # n
 __all__ = [
     "KalmanPortfolioConfig",
     "PORTFOLIO_GATES",
+    "VintageMismatch",
+    "check_input_vintage",
+    "migrate_portfolio_layout",
+    "publish_canonical_table",
     "load_handoff",
+    "ScreenDraws",
+    "run_screen",
+    "run_risk_book",
     "run_forecast",
     "run_prior_sweeps",
     "run_decision_books",
@@ -177,11 +204,34 @@ PORTFOLIO_GATES: dict[str, str] = {
         "is set, because the absence of a cap is also a decision and the only way it "
         "should never be taken is by omission."
     ),
+    "portfolio_factor_effect": (
+        "How much of a book's forward dispersion the SHARED factors carry, "
+        "measured as the ratio of an equal-weight book's sd at the shipped "
+        "`factor_share` to its sd with independent shocks. Reported, never gated: "
+        "`factor_share` is a prior, so a threshold on it would test only that the "
+        "prior was applied. Independent shocks make diversification free, which "
+        "is how a LONG book comes to report a positive expected shortfall."
+    ),
     "portfolio_factor_sensitivity": (
         "Spread of book membership and dispersion across the `factor_share` grid. "
         "The split is variance-preserving, so per-name marginals are invariant and "
         "only the JOINT distribution moves -- harmless for the screen, decisive for "
         "every portfolio statistic."
+    ),
+    "portfolio_input_vintage": (
+        "Whether every v2 artifact this replay reads was stamped by the same fit "
+        "as the handoff. BLOCKING. A replay joins a posterior to frames sitting "
+        "beside it in a results directory, and nothing about the file system says "
+        "they came from one run -- so on run `b00f8d8ca093` a 2026-08-30 "
+        "posterior of 6,507 names met a 2026-08-27 screen of 6,513 from a "
+        "different fit, and the 145 names the two universes did not share became "
+        "a phantom sector that evaded a 30% cap."
+    ),
+    "portfolio_size_down_coverage": (
+        "How many eligible names the size-down watch never saw. A name absent "
+        "from the frame the watch was scored on comes back SIZEABLE, which is "
+        "indistinguishable from one the watch examined and cleared -- so a veto "
+        "can report itself applied while being blind to part of the universe."
     ),
     "portfolio_size_down_overlap": (
         "How many of the sized book's names the size-down watch would veto -- a wide "
@@ -246,7 +296,10 @@ class KalmanPortfolioConfig:
     """
 
     handoff_path: Optional[str] = None
+    #: Where this replay WRITES. ``None`` resolves `KALMAN_PORTFOLIO_RESULTS_DIR`.
     results_dir: Optional[str] = None
+    #: Where it READS the fit's artifacts. ``None`` resolves `KALMAN_V2_RESULTS_DIR`.
+    v2_results_dir: Optional[str] = None
     random_seed: int = 42
     log_level: str = "INFO"
     #: Target figure width in px. Required by the figure layer's resolver
@@ -298,13 +351,83 @@ class KalmanPortfolioConfig:
     relative_denominator_q: float = 0.0
 
     mean_model_arms: tuple[str, ...] = ()
-    write_analytics: bool = True
+    #: Append the frames to the `kalman_portfolio` schema.
+    #:
+    #: **Default False since 2026-08-31**, matching what the docstring above has
+    #: always said. It was `True` while the write was a no-op, so `--write` set a
+    #: flag that was already set and the documented "opt in" was not one. Now that
+    #: the write appends real rows to an append-only store, the difference is a
+    #: row in a history rather than a log line.
+    write_analytics: bool = False
+    #: Run against v2 artifacts stamped with a DIFFERENT fit's ``run_id``.
+    #:
+    #: Default ``False``, and the refusal is the point: a replay of the wrong fit
+    #: is not a degraded replay, it is a different one. With this on, a
+    #: mismatched frame is DROPPED rather than joined, so the stages that needed
+    #: it skip and say so -- degrading to empty, never to wrong.
+    allow_stale_inputs: bool = False
+
+    # ---- screen and risk book, moved here from KalmanRunConfigV2 -----------
+    #
+    # The DEFAULTS ARE THE FIT'S, value for value, so a replay of a handoff
+    # reproduces the screen the fit used to publish. They live here because the
+    # stages that read them live here now -- and because the first two are a
+    # PRIOR the panel cannot identify, which belongs beside `--sweep multiplier`
+    # rather than inside the artifact the sweep reads.
+    enable_forecast_error_shrinkage: bool = True
+    forecast_error_multiplier: float = 1.0
+    forecast_error_n_exponent: float = 0.5
+    #: Forward-return Monte Carlo: unitless periods, and the AR decay across them.
+    mc_horizon: int = 4
+    mc_rho: float = 0.85
+    #: CVaR-aware risk book (§10b). `k_book` is a CEILING since 2026-08-28, not
+    #: the book size; `book_min_weight` is what decides breadth.
+    #:
+    #: `book_min_weight` is NOT a duplicate of :attr:`min_weight` despite sharing
+    #: its value. They floor two different books built by two different sizers:
+    #: `min_weight` is the DECISION book's, applied by `optimize_portfolio`;
+    #: this one is the RISK book's, applied by `compute_cvar_aware_book`. The two
+    #: books share no name on a typical run -- the risk book screens to
+    #: `mcap_global_r_max` and the decision book does not screen at all -- so
+    #: collapsing them into one field would tie two independent decisions
+    #: together on the strength of a coincidence of defaults.
+    cvar_alpha: float = 0.05
+    k_book: int = 50
+    book_min_weight: float = 0.005
+    p_long: float = 0.67
+    mcap_global_r_max: float = 0.03
+    tail_risk_vol_floor_k: float = 0.25
+    #: `shrinkage_slope`, the four-part calibration/disagreement test. Slope and
+    #: intercept grade CALIBRATION; rho and the median revision grade
+    #: DISAGREEMENT, and both halves are needed -- an exact copy of the input
+    #: scores a perfect 1.0/0.0 on the first pair, which is how run
+    #: `49e84d7e9d59` passed while reproducing consensus at rho 0.999995.
+    gate_shrinkage_slope_lo: float = 0.80
+    gate_shrinkage_slope_hi: float = 0.98
+    gate_shrinkage_center_shift_max: float = 0.02
+    gate_shrinkage_rho_max: float = 0.995
+    gate_shrinkage_revision_min_pp: float = 0.25
 
     @property
     def results_path(self) -> Path:
-        """Root of the artifact tree — the same one the v2 workflow writes to."""
+        """Where this replay WRITES: ``kalman_portfolio_results`` by default.
+
+        Separate from :attr:`v2_results_path`, which is where it reads. They were
+        one root until 2026-08-31, so a fit and every replay of it interleaved in
+        one tree and a reader browsing it could not tell which run had produced
+        what. A fit happens once; a replay happens many times over that fit.
+        """
         return resolve_results_root(
             self.results_dir,
+            env_value=os.environ.get(RESULTS_DIR_ENV_PORTFOLIO),
+            default_dirname=DEFAULT_RESULTS_DIRNAME_PORTFOLIO,
+        )
+
+    @property
+    def v2_results_path(self) -> Path:
+        """Where this replay READS: the fit's tree. **Never written to.**"""
+        return resolve_results_root(
+            self.v2_results_dir,
             env_value=os.environ.get(RESULTS_DIR_ENV_V2),
             default_dirname=DEFAULT_RESULTS_DIRNAME_V2,
         )
@@ -320,10 +443,10 @@ class KalmanPortfolioConfig:
         if self.handoff_path:
             return Path(self.handoff_path)
         stem, suffix = Path(_HANDOFF_STEM).stem, Path(_HANDOFF_STEM).suffix
-        sectioned = section_path(self.results_path, stem, suffix=suffix)
+        sectioned = section_path(self.v2_results_path, stem, suffix=suffix)
         if sectioned.exists():
             return sectioned
-        legacy = self.results_path / _HANDOFF_STEM
+        legacy = self.v2_results_path / _HANDOFF_STEM
         if legacy.exists():
             logger.info(
                 "reading the handoff from the pre-migration flat path %s; "
@@ -332,6 +455,60 @@ class KalmanPortfolioConfig:
             )
             return legacy
         return sectioned
+
+    def __post_init__(self) -> None:
+        """Reject the knobs that would otherwise fail silently several stages on.
+
+        Moved here with the fields on 2026-08-31. Each of these produces a
+        plausible-looking number downstream rather than an error at the point of
+        the mistake: a negative multiplier gives a negative variance and a gain
+        above 1, i.e. ANTI-shrinkage; a slope band that does not contain a
+        shrinkage estimator makes `shrinkage_slope` unsatisfiable, so it fails on
+        every run and stops being read.
+        """
+        if self.forecast_error_multiplier < 0:
+            raise ValueError(
+                "forecast_error_multiplier must be non-negative, got "
+                f"{self.forecast_error_multiplier!r}"
+            )
+        if self.forecast_error_n_exponent < 0:
+            raise ValueError(
+                "forecast_error_n_exponent must be non-negative, got "
+                f"{self.forecast_error_n_exponent!r}"
+            )
+        if self.tail_risk_vol_floor_k < 0:
+            raise ValueError(
+                f"tail_risk_vol_floor_k must be non-negative, got "
+                f"{self.tail_risk_vol_floor_k!r}"
+            )
+        if not self.gate_shrinkage_slope_lo < self.gate_shrinkage_slope_hi:
+            raise ValueError(
+                "gate_shrinkage_slope band must be increasing, got "
+                f"[{self.gate_shrinkage_slope_lo}, {self.gate_shrinkage_slope_hi}]"
+            )
+        if not 0.0 < self.gate_shrinkage_rho_max <= 1.0:
+            raise ValueError(
+                "gate_shrinkage_rho_max must be in (0, 1], got "
+                f"{self.gate_shrinkage_rho_max!r}"
+            )
+
+    @property
+    def mcap_country_r_max(self) -> float:
+        """Deprecated alias of :attr:`mcap_global_r_max`.
+
+        The old name claimed a country-relative rank; the comparison has always
+        been against ``mcap_global_r``. Read-only on purpose -- a writable alias
+        on a frozen dataclass would let ``replace()`` appear to work while
+        setting nothing.
+        """
+        warnings.warn(
+            "mcap_country_r_max is deprecated; it was renamed to "
+            "mcap_global_r_max because the threshold is compared against the "
+            "mcap_global_r column, not a country rank.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.mcap_global_r_max
 
     def forecast_config(self, **overrides: Any) -> ForecastConfig:
         """A :class:`ForecastConfig` from these knobs, with optional overrides."""
@@ -355,9 +532,11 @@ class KalmanPortfolioConfig:
         shell.
         """
         return cls(
-            # v2's variable, not v1's: a replay must land beside the run it
-            # replays, and `set_env.ps1` points KALMAN_PT_RESULTS_DIR at v1.
-            results_dir=os.environ.get(RESULTS_DIR_ENV_V2) or None,
+            # Two roots, and neither is v1's: this replay writes its own tree and
+            # reads the fit's. `set_env.ps1` points KALMAN_PT_RESULTS_DIR at v1,
+            # which is why neither of these is that variable.
+            results_dir=os.environ.get(RESULTS_DIR_ENV_PORTFOLIO) or None,
+            v2_results_dir=os.environ.get(RESULTS_DIR_ENV_V2) or None,
             random_seed=int(os.environ.get("RANDOM_SEED", 42)),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )
@@ -388,6 +567,695 @@ def load_handoff(cfg: KalmanPortfolioConfig, report: GateReport) -> ForecastHand
         ),
     ))
     return handoff
+
+
+# =========================================================================== #
+# §P0c-b  Input vintage                                                       #
+# =========================================================================== #
+
+#: Provenance column the vintage check compares on. One spelling, shared with
+#: `dashboards/geib/data.py`, which has asserted the same relation since it was
+#: written.
+VINTAGE_COLUMN: str = "run_id"
+
+
+class VintageMismatch(RuntimeError):
+    """A v2 artifact this replay read was stamped by a different fit.
+
+    Raised before any book is sized, because the point is not to report the
+    mismatch afterwards -- it is to not produce the book. Caught by ``_cli``,
+    which exits 2.
+    """
+
+
+def check_input_vintage(
+    handoff: ForecastHandoff,
+    frames: dict[str, Optional[pd.DataFrame]],
+    cfg: KalmanPortfolioConfig,
+    report: GateReport,
+) -> dict[str, Optional[pd.DataFrame]]:
+    """Refuse, or drop, any read frame that did not come from the handoff's fit.
+
+    The gate `dashboards/geib/data.py::_join_panel` has had since it was written,
+    which the replay did not. A results directory is a directory: the file system
+    says nothing about whether the CSV beside a handoff came from the run that
+    wrote the handoff. On run ``b00f8d8ca093`` it did not, and the join still
+    succeeded -- 6,362 names matched, 145 did not, and the 145 were filled to
+    ``"Unknown"`` and sized.
+
+    Three verdicts, and the difference between the last two is the whole design:
+
+    ``clean``
+        The frame carries exactly the handoff's ``run_id``.
+    ``MISMATCH``
+        It carries a **different** ``run_id``. That is a positive assertion of the
+        wrong lineage, so it BLOCKS -- or, under ``allow_stale_inputs``, the frame
+        is dropped and the stages needing it skip with their own warnings.
+    ``unstamped``
+        It carries no ``run_id`` at all: an export predating the provenance SSOT.
+        WARNED and KEPT. "No provenance" is not "wrong provenance", and every
+        frame that can still reach this path has no ISIN axis -- it is one row per
+        model PARAMETER -- so it cannot mis-attribute a company to a name. If a
+        per-ISIN frame is ever read here again, this branch must become a refusal.
+
+    Parameters
+    ----------
+    frames
+        Stem -> frame, as read. ``None`` entries pass through untouched: a file
+        that is absent was already handled by whoever tried to read it.
+
+    Returns
+    -------
+    dict[str, pandas.DataFrame or None]
+        The same mapping with mismatched frames replaced by ``None``.
+
+    Raises
+    ------
+    VintageMismatch
+        On a mismatch when ``allow_stale_inputs`` is False.
+    """
+    fit_run = str(handoff.attrs.get("run_id") or "").strip()
+    present = {k: v for k, v in frames.items() if v is not None and len(v)}
+
+    mismatched: dict[str, list[str]] = {}
+    unstamped: list[str] = []
+    for stem, frame in present.items():
+        if VINTAGE_COLUMN not in frame.columns:
+            unstamped.append(stem)
+            continue
+        ids = sorted(
+            {str(v) for v in frame[VINTAGE_COLUMN].dropna().unique() if str(v).strip()}
+        )
+        if not ids:
+            unstamped.append(stem)
+        elif not fit_run or ids != [fit_run]:
+            mismatched[stem] = ids
+
+    if mismatched:
+        detail = "; ".join(
+            f"{stem} at run_id {', '.join(ids)}" for stem, ids in mismatched.items()
+        )
+        # Name BOTH sides. A verdict that reports only the offending frame costs
+        # its reader a forensic pass to find what it was supposed to match.
+        message = (
+            f"the handoff is run_id {fit_run or '<unstamped>'} but {detail}. "
+            f"These are different fits. Re-run "
+            f"`python pymc_kalman_filter_pt_v2.py --write` so the handoff and the "
+            f"frames beside it carry one run_id, or pass --allow-stale-inputs to "
+            f"drop the mismatched frames and replay without them."
+        )
+        report.add(GateResult(
+            name="portfolio_input_vintage",
+            passed=False,
+            value=f"{len(mismatched)} frame(s) from another fit",
+            threshold=f"every read frame at run_id {fit_run or '<unstamped>'}",
+            blocking=not cfg.allow_stale_inputs,
+            detail=message,
+        ))
+        if not cfg.allow_stale_inputs:
+            raise VintageMismatch(message)
+        logger.error(
+            "VINTAGE MISMATCH (--allow-stale-inputs): %s Dropping them rather "
+            "than joining them -- the stages that needed them will degrade to "
+            "empty, which is recoverable, instead of to wrong, which is not.",
+            message,
+        )
+        return {k: (None if k in mismatched else v) for k, v in frames.items()}
+
+    report.add(GateResult(
+        name="portfolio_input_vintage",
+        passed=True,
+        value=(
+            f"{len(present)} frame(s) at run_id {fit_run or '<unstamped>'}"
+            + (f", {len(unstamped)} unstamped" if unstamped else "")
+        ),
+        threshold=f"every read frame at run_id {fit_run or '<unstamped>'}",
+        blocking=True,
+        detail=(
+            "The screen, the risk book and the identity block are built from the "
+            "handoff itself since 2026-08-31, so this gate now guards only what "
+            "is still read from disk beside it."
+            + (
+                f" {', '.join(unstamped)} carries no run_id -- an export predating "
+                "the provenance SSOT. Kept, because 'no provenance' is not 'wrong "
+                "provenance' and it has no ISIN axis to mis-attribute; a per-ISIN "
+                "frame in this position would be refused."
+                if unstamped else ""
+            )
+        ),
+    ))
+    return frames
+
+
+# =========================================================================== #
+# §P0d  Screen                                                                #
+# =========================================================================== #
+#
+# Moved here from `pymc_kalman_filter_pt_v2.run_screen` on 2026-08-31 and
+# re-expressed over the handoff. The fit no longer decides: it fits, checks and
+# writes `07_forecast_handoff_v2.nc`, and everything from here on is this file's.
+#
+# The arithmetic is unchanged, value for value. What moved with it is the
+# forecast-error shrinkage -- a PRIOR the panel cannot identify, gridded by
+# `--sweep multiplier`. Baking one reading of it into the artifact the sweep
+# reads would make the sweep measure only that the prior had been applied, so the
+# handoff carries the UNSHRUNK latent and the update happens below.
+
+
+@dataclass(frozen=True)
+class ScreenDraws:
+    """The draw arrays the screen builds and the risk book needs, carried explicitly.
+
+    Handed over rather than re-derived. Re-resolving the latent in the risk book
+    would size the book on the UNSHRUNK latent while the screen reported the
+    shrunk one, and every gate would still pass.
+
+    Attributes
+    ----------
+    eu
+        Expected-upside draws in RETURN space, dims ``(chain, draw, isin)`` with a
+        single pseudo-chain. The handoff's sample axis is a seeded subsample drawn
+        ACROSS chains, so chain identity is genuinely gone; one pseudo-chain says
+        that, where reshaping into a plausible-looking grid would claim a
+        between-chain structure the file does not carry.
+    mc_returns
+        Monte-Carlo forward returns, ``(n_isin, n_samples, horizon)``.
+    isins
+        Identifiers, aligned to the ``isin`` axis of both.
+    shrink_gain
+        Per-name weight the update put on the name's own observation.
+    """
+
+    eu: Any
+    mc_returns: np.ndarray
+    isins: np.ndarray
+    shrink_gain: np.ndarray
+
+    @property
+    def pooled_returns(self) -> np.ndarray:
+        """``mc_returns`` flattened to ``(n_isin, n_samples * horizon)``.
+
+        The pooling ``summarize_mc_returns`` uses, so a CVaR taken from this and
+        the exported ``er_p05`` describe the same distribution.
+        """
+        return np.asarray(self.mc_returns).reshape(len(self.isins), -1)
+
+
+def _handoff_vector(handoff: ForecastHandoff, name: str) -> Optional[np.ndarray]:
+    """One numeric per-ISIN column, from the panel vectors or the identity block."""
+    vec = (handoff.panel_vectors or {}).get(name)
+    if vec is not None:
+        return np.asarray(vec, dtype="float64")
+    ident = handoff.identity
+    if ident is not None and name in getattr(ident, "columns", []):
+        keyed = ident.drop_duplicates("isin").set_index("isin")[name]
+        return pd.to_numeric(keyed.reindex(handoff.isins), errors="coerce").to_numpy()
+    return None
+
+
+def _handoff_labels(handoff: ForecastHandoff, name: str) -> Optional[np.ndarray]:
+    """One per-ISIN label column from the identity block. Never filled."""
+    ident = handoff.identity
+    if ident is None or name not in getattr(ident, "columns", []):
+        return None
+    keyed = ident.drop_duplicates("isin").set_index("isin")[name]
+    return keyed.reindex(handoff.isins).to_numpy()
+
+
+def _risk_adjusted_prob_positive(
+    mc_log: np.ndarray,
+    latent: np.ndarray,
+    rar: np.ndarray,
+    response_std: float,
+    *,
+    chunk: int = 512,
+) -> Optional[np.ndarray]:
+    """P(risk-adjusted forward return > 0) per name, from log-space MC draws.
+
+    Replaces ``mc_prob_pos * kalman_gain``, which multiplied a probability by a
+    sigmoid of a location parameter: usable as an ordering, meaningless as a
+    level. This is one probability of one stated event -- that the forward return,
+    net of the same risk / size / volume penalties the model applies to
+    ``risk_adj_return``, is positive.
+
+    Two implementation notes that are not incidental:
+
+    * The penalty is recovered as ``latent - rar`` rather than rebuilt from the
+      three loadings and their data columns. That is the penalty the model
+      actually applied, so it cannot drift out of step with the builder the way a
+      reimplementation would.
+    * The test is on the LOG draws. ``expm1`` is monotone and the clip bounds
+      straddle zero, so ``expm1(x) > 0`` exactly when ``x > 0`` -- converting
+      first would allocate a second multi-gigabyte array to learn nothing.
+
+    Parameters
+    ----------
+    mc_log
+        Simulated log-uplift, ``(n_isin, n_samples, horizon)``, already clipped.
+        Not modified.
+    latent, rar
+        ``(n_isin, n_samples)`` on the standardised scale. Both come off one
+        handoff and are therefore aligned draw for draw.
+    chunk
+        Names per block. The comparison materialises
+        ``chunk * n_samples * horizon`` floats, so this bounds peak memory at a
+        few hundred MB against a ~1.7 GB source array.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Shape ``(n_isin,)``, or ``None`` when the arrays do not align, which
+        signals the caller to fall back to the legacy product.
+    """
+    penalty = (np.asarray(latent) - np.asarray(rar)) * response_std
+    n_isin = mc_log.shape[0]
+    if penalty.shape[0] != n_isin or penalty.shape[1] != mc_log.shape[1]:
+        logger.warning(
+            "penalty draws %s do not align with the MC array %s; "
+            "p_upside_pos_cond falls back to the legacy product.",
+            penalty.shape, mc_log.shape,
+        )
+        return None
+
+    out = np.empty(n_isin, dtype="float64")
+    for i0 in range(0, n_isin, chunk):
+        sl = slice(i0, min(i0 + chunk, n_isin))
+        adj = mc_log[sl] - penalty[sl, :, None]
+        out[sl] = (adj > 0.0).mean(axis=(1, 2))
+    return out
+
+
+def run_screen(
+    handoff: ForecastHandoff,
+    cfg: KalmanPortfolioConfig,
+    report: GateReport,
+) -> tuple[pd.DataFrame, ScreenDraws]:
+    """Build the per-ISIN screen off the handoff, and gate the decision layer.
+
+    Raises
+    ------
+    ValueError
+        If the handoff cannot be screened from. That is a refusal, not a
+        degradation: a screen assembled from part of a handoff would publish a
+        decision quantity with no definition.
+    """
+    import xarray as xr
+
+    from probabilistic_ml_model.pymc_models._price_target_mc import (
+        simulate_lagged_risk_adjusted_returns,
+        summarize_mc_returns,
+    )
+    from probabilistic_ml_model.pymc_models.KalmanFilterModel_v2 import (
+        forecast_error_variance_from_arrays,
+        shrink_latent_from_arrays,
+    )
+
+    if not handoff.screen_ready:
+        raise ValueError(
+            "this handoff carries the forward simulation's inputs but not the "
+            "screen's (latent_mean / latent_sd / fitted_mean / rar / "
+            "variance_weights). Re-run `python pymc_kalman_filter_pt_v2.py` to "
+            "write a current one."
+        )
+
+    isins = np.asarray(handoff.isins)
+    n_isin = len(isins)
+    rstd, rmean = handoff.response_std, handoff.response_mean
+
+    # ---- the decision latent, shrunk or not --------------------------------
+    if cfg.enable_forecast_error_shrinkage:
+        cv = handoff.panel_vectors.get("dispersion_cv")
+        n_an = handoff.panel_vectors.get("n_analysts")
+        if cv is None or n_an is None:
+            raise ValueError(
+                "forecast-error shrinkage is on but the handoff carries no "
+                "dispersion_cv / n_analysts. Screening without it is possible "
+                "(enable_forecast_error_shrinkage=False) and reproduces analyst "
+                "consensus at Spearman 0.999995 -- see run 49e84d7e9d59."
+            )
+        fe_var = forecast_error_variance_from_arrays(
+            cv, n_an, rstd,
+            multiplier=cfg.forecast_error_multiplier,
+            n_exponent=cfg.forecast_error_n_exponent,
+        )
+        latent_std, shrink_gain = shrink_latent_from_arrays(
+            latent_mean=handoff.latent_mean,
+            latent_sd=handoff.latent_sd,
+            fitted_mean=handoff.fitted_mean,
+            sigma=handoff.sigma_std,
+            variance_weights=handoff.variance_weights,
+            fe_var=fe_var,
+            random_seed=cfg.random_seed,
+        )
+        logger.info(
+            "forecast-error shrinkage: multiplier %.2f, median gain %.3f "
+            "(p05 %.3f, p95 %.3f)",
+            cfg.forecast_error_multiplier, float(np.median(shrink_gain)),
+            float(np.quantile(shrink_gain, 0.05)),
+            float(np.quantile(shrink_gain, 0.95)),
+        )
+    else:
+        # `resolve_screen_latent_v2(include_latent_noise=True)`, on arrays. The
+        # smoother stores a conditional mean and sd rather than a sampled path, so
+        # the residual uncertainty about where a name's latent SITS has to be drawn
+        # back in or per-name spread is understated.
+        rng = np.random.default_rng(cfg.random_seed)
+        sd = handoff.latent_sd if handoff.latent_sd is not None else 0.0
+        latent_std = handoff.latent_mean + sd * rng.standard_normal(
+            size=(handoff.n_samples, n_isin)
+        ).T
+        shrink_gain = np.ones(n_isin)
+
+    draws = latent_std.T                                    # (sample, isin)
+
+    # De-standardise back to log-uplift, then to a return. The clip is applied in
+    # LOG space so it is sign-preserving; converting first and clipping after
+    # would distort prob_pos.
+    log_uplift = np.clip(draws * rstd + rmean, LOG_UPLIFT_CLIP_LO, LOG_UPLIFT_CLIP_HI)
+    upside = np.expm1(log_uplift)
+    eu_draws = xr.DataArray(
+        upside[None, :, :], dims=("chain", "draw", "isin"), coords={"isin": isins},
+    )
+
+    screen = pd.DataFrame({"isin": isins})
+    for col in ("ticker", "name", "sector", "industry", "trading_region",
+                "country", "country_name", "style_class", "size_class"):
+        labels = _handoff_labels(handoff, col)
+        if labels is not None:
+            screen[col] = labels
+    for src, dest in (
+        ("n_analysts", "n_analysts"),
+        # The analyst panel's own 1-5 consensus (5 = Strong Buy), carried so
+        # `name_action_list` can emit `consensus_gap` -- the model's action score
+        # against the panel's rating, on one scale.
+        ("feat_analyst_rating", "feat_analyst_rating"),
+        ("market_cap", "market_cap"),
+        ("feat_mcap_global_r", "mcap_global_r"),
+        ("feat_mcap_country_r", "mcap_country_r"),
+        ("last_price", "last_price"),
+        ("observed_pt", "observed_pt"),
+    ):
+        vec = _handoff_vector(handoff, src)
+        if vec is not None:
+            screen[dest] = vec
+        else:
+            logger.warning(
+                "%s absent from the handoff; the screen omits %r", src, dest
+            )
+
+    screen["expected_upside"] = upside.mean(axis=0)
+    screen["expected_upside_sd"] = upside.std(axis=0)
+    screen["prob_pos"] = (upside > 0).mean(axis=0)
+    screen["implied_upside"] = screen["observed_pt"] / screen["last_price"] - 1.0
+    screen["expected_pt"] = screen["last_price"] * (1.0 + screen["expected_upside"])
+    # v1's column names, not v2's first draft. `compute_cvar_aware_book` requires
+    # `expected_pt_hdi_lo` / `_hi` BY NAME; supplying `expected_upside_p05` /
+    # `_p95` instead silently degrades three risk columns rather than raising.
+    screen["expected_pt_hdi_lo"] = screen["last_price"] * (
+        1.0 + np.percentile(upside, 3, axis=0)
+    )
+    screen["expected_pt_hdi_hi"] = screen["last_price"] * (
+        1.0 + np.percentile(upside, 97, axis=0)
+    )
+    screen["shrink_gain"] = shrink_gain
+    screen["risk_adj_return"] = np.asarray(handoff.rar).mean(axis=1)
+    # `kalman_gain` was `sigmoid(risk_adj_return)` -- a sigmoid of a STANDARDISED
+    # LOG-UPLIFT, which is not the probability of any defined event: it has no
+    # calibration target and pins at 0.5 wherever the risk-adjusted latent is near
+    # zero. It is now the posterior probability that that latent is positive -- a
+    # real tail probability of a stated event, and a reduction over draws rather
+    # than a per-draw Deterministic, which is why it lives here and not in the graph.
+    screen["kalman_gain"] = (np.asarray(handoff.rar) > 0.0).mean(axis=1)
+
+    # ---- Monte-Carlo forward returns ---------------------------------------
+    # mu and sigma must be de-standardised onto the response scale BEFORE the
+    # simulation, and the draws clipped in log space afterwards. Skipping the
+    # de-standardisation yields z-scores rather than returns -- a real historical
+    # bug that reached the exported table.
+    sigma_draws = np.asarray(handoff.sigma_std) * rstd
+    mu_draws = latent_std * rstd + rmean                     # (isin, sample)
+    nu_draws = np.asarray(handoff.nu).ravel()
+    if sigma_draws.shape != mu_draws.shape:
+        raise ValueError(
+            f"MC input shape mismatch: sigma {sigma_draws.shape} vs mu "
+            f"{mu_draws.shape}. Both must be (n_isin, n_samples)."
+        )
+    mc = simulate_lagged_risk_adjusted_returns(
+        mu_draws, sigma_draws, nu_draws,
+        horizon=cfg.mc_horizon, rho=cfg.mc_rho, random_seed=cfg.random_seed,
+    )
+    # In place, and in this order, because the array is large: at the production
+    # budget it is (6500, samples, horizon) ~ 1.7 GB. Clip -> read the log array
+    # -> expm1 over the SAME buffer keeps exactly one copy alive.
+    np.clip(mc, LOG_UPLIFT_CLIP_LO, LOG_UPLIFT_CLIP_HI, out=mc)
+    p_cond = _risk_adjusted_prob_positive(
+        mc, latent_std, np.asarray(handoff.rar), rstd
+    )
+    np.expm1(mc, out=mc)
+    mc_summary = summarize_mc_returns(mc, isins)
+    screen = screen.merge(
+        mc_summary.rename(columns={"prob_pos": "mc_prob_pos"}), on="isin", how="left"
+    )
+
+    if p_cond is not None:
+        screen["p_upside_pos_cond"] = p_cond
+    else:
+        # Documented fallback, matching `compute_cvar_aware_book`'s
+        # degrade-with-a-warning pattern: the product form still orders names, it
+        # just cannot be read as a probability of anything.
+        screen["p_upside_pos_cond"] = (
+            screen["mc_prob_pos"].fillna(screen["prob_pos"])
+            * screen["kalman_gain"].fillna(1.0)
+        )
+
+    screen = screen.sort_values(
+        "expected_upside", ascending=False
+    ).reset_index(drop=True)
+    _report_screen_gates(screen, cfg, report)
+    return screen, ScreenDraws(
+        eu=eu_draws, mc_returns=mc, isins=isins, shrink_gain=shrink_gain
+    )
+
+
+def _report_screen_gates(
+    screen: pd.DataFrame, cfg: KalmanPortfolioConfig, report: GateReport
+) -> None:
+    """The three gates that grade the screen. Moved with it, unchanged."""
+    # ---- shrinkage slope ---------------------------------------------------
+    valid = screen[["expected_upside", "implied_upside"]].replace(
+        [np.inf, -np.inf], np.nan
+    ).dropna()
+    if len(valid) >= 100:
+        slope, intercept = np.polyfit(
+            valid["implied_upside"], valid["expected_upside"], 1
+        )
+        above = float((screen["expected_upside"] > screen["implied_upside"]).mean())
+        # Slope and intercept grade CALIBRATION; rho and the median revision grade
+        # DISAGREEMENT. Both halves are needed: an exact copy of the input scores a
+        # perfect 1.0 / 0.0 on the first pair, which is how run `49e84d7e9d59`
+        # passed while reproducing consensus at rho 0.999995.
+        rho = float(
+            valid["expected_upside"].corr(valid["implied_upside"], method="spearman")
+        )
+        revision_pp = float(
+            (valid["expected_upside"] - valid["implied_upside"]).abs().median() * 100.0
+        )
+        # The universe-wide shift, which is what the old |intercept| threshold was
+        # reaching for. The intercept itself is (1 - slope) * centre by
+        # construction and so cannot separate an offset from shrinkage.
+        center_shift = float(
+            valid["expected_upside"].mean() - valid["implied_upside"].mean()
+        )
+        slope_ok = cfg.gate_shrinkage_slope_lo <= slope <= cfg.gate_shrinkage_slope_hi
+        shift_ok = abs(center_shift) <= cfg.gate_shrinkage_center_shift_max
+        rho_ok = not (np.isfinite(rho) and rho > cfg.gate_shrinkage_rho_max)
+        rev_ok = revision_pp >= cfg.gate_shrinkage_revision_min_pp
+        report.add(GateResult(
+            name="shrinkage_slope",
+            passed=bool(slope_ok and shift_ok and rho_ok and rev_ok),
+            value=(
+                f"slope {slope:.3f}, shift {center_shift:+.4f}, above {above:.1%}, "
+                f"rho {rho:.5f}, median revision {revision_pp:.2f}pp "
+                f"(intercept {intercept:+.4f})"
+            ),
+            threshold=(
+                f"slope in [{cfg.gate_shrinkage_slope_lo}, "
+                f"{cfg.gate_shrinkage_slope_hi}], |shift| <= "
+                f"{cfg.gate_shrinkage_center_shift_max}, rho <= "
+                f"{cfg.gate_shrinkage_rho_max}, revision >= "
+                f"{cfg.gate_shrinkage_revision_min_pp}pp"
+            ),
+            blocking=False,
+            detail=(
+                "A shift of the centre is a universe-wide offset, not a signal. "
+                "Expect ~50% of names above consensus, not 80%. A rho at the "
+                "ceiling or a revision at the floor means the opposite failure: "
+                "the screen is a consensus sort, and the drift betas and the "
+                "hierarchy are being estimated but are not reaching the exported "
+                "number. The intercept is reported for continuity but is not "
+                "graded -- it equals (1 - slope) * centre."
+            ),
+        ))
+
+    # ---- coverage gradient -------------------------------------------------
+    cov = screen.dropna(subset=["n_analysts"]).copy() if "n_analysts" in screen else None
+    if cov is not None and len(cov) >= 500:
+        cov["bucket"] = pd.cut(
+            cov["n_analysts"], [0, 3, 8, 20, np.inf],
+            labels=["1-3", "4-8", "9-20", "21+"],
+        )
+        # GRADE THE POSTERIOR SD. This gate asks whether the hierarchy prices
+        # information -- whether a name covered by 30 analysts gets a tighter
+        # ESTIMATE than one covered by 2 -- so it has to be measured on the
+        # estimate's own uncertainty.
+        #
+        # It used to read `er_sd if "er_sd" in cov.columns else expected_upside_sd`,
+        # and the fallback silently became the primary when the 2026-08-20 change
+        # made `er_sd` the pooled sd of the FORWARD-RETURN Monte Carlo. Named
+        # explicitly rather than resolved by membership, because a
+        # column-availability fallback is precisely how the measured quantity
+        # changed underneath the threshold without anything failing.
+        col = "expected_upside_sd"
+        if col not in cov.columns:
+            logger.warning(
+                "%s absent from the screen; the coverage gradient cannot be "
+                "measured on the posterior sd this run", col,
+            )
+        else:
+            grad = cov.groupby("bucket", observed=True)[col].mean()
+            monotone = bool(grad.is_monotonic_decreasing)
+            spread = float(grad.max() / max(grad.min(), _EPS))
+            # The forward-return gradient, REPORTED and never graded. `er_sd`
+            # carries the forecast-error term, whose steepness is set by
+            # `forecast_error_n_exponent` -- a prior the panel cannot identify, so
+            # a threshold on it would test only that the prior was applied.
+            fwd = ""
+            if "er_sd" in cov.columns:
+                g2 = cov.groupby("bucket", observed=True)["er_sd"].mean()
+                fwd = (
+                    f"; forward-return er_sd {g2.round(4).to_dict()} "
+                    f"(spread {float(g2.max() / max(g2.min(), _EPS)):.2f}x, "
+                    "reported not gated: its steepness is set by "
+                    "forecast_error_n_exponent, a prior)"
+                )
+            report.add(GateResult(
+                name="coverage_gradient",
+                passed=monotone and spread >= 2.0,
+                value=(
+                    f"{'monotone' if monotone else 'NOT monotone'}, "
+                    f"spread {spread:.2f}x"
+                ),
+                threshold="monotone decreasing, spread >= 2x (posterior sd)",
+                blocking=False,
+                detail=f"mean {col} by bucket: {grad.round(4).to_dict()}{fwd}",
+            ))
+
+    # ---- prob_pos degeneracy -----------------------------------------------
+    pinned = float((screen["prob_pos"] >= 0.99995).mean())
+    # The span check is the half that was missing. Grading only `prob_pos` meant
+    # its collapse was reported while the column that INHERITED the ranking went
+    # unmeasured; a future collapse of the promoted column would then be silent.
+    # p95 - p05 is the range the ranking actually has to work in.
+    _cond = pd.to_numeric(screen.get("p_upside_pos_cond"), errors="coerce")
+    span = (
+        float(_cond.quantile(0.95) - _cond.quantile(0.05))
+        if _cond is not None and _cond.notna().any() else float("nan")
+    )
+    span_ok = bool(np.isfinite(span) and span >= 0.30)
+    report.add(GateResult(
+        name="prob_pos_degenerate",
+        passed=(pinned <= 0.60) and span_ok,
+        value=f"{pinned:.1%} pinned at 1.0, p_upside_pos_cond span {span:.3f}",
+        threshold="pinned <= 60%, p_upside_pos_cond p95-p05 >= 0.30",
+        blocking=False,
+        detail=(
+            "prob_pos is a REPORTED diagnostic and is never ranked on. "
+            "p_upside_pos_cond is the primary probability column -- since "
+            "2026-08-20 it is P(risk-adjusted forward return > 0) computed "
+            "directly from the MC draws, not the old mc_prob_pos * sigmoid "
+            "product. The export ranks on it and suppresses it alongside the "
+            "other out-of-support metrics."
+        ),
+    ))
+
+
+# =========================================================================== #
+# §P0e  CVaR risk book                                                        #
+# =========================================================================== #
+
+
+def run_risk_book(
+    screen: pd.DataFrame,
+    cfg: KalmanPortfolioConfig,
+    draws: ScreenDraws,
+) -> Any:
+    """Size a CVaR-aware long book, reusing :mod:`RiskBookModel` unchanged.
+
+    ``compute_cvar_aware_book`` needs the screen frame to already carry
+    ``er_mean`` / ``er_sd`` / ``er_p05`` and ``mc_prob_pos``. Without them
+    ``expected_sharpe_ratio`` silently becomes NaN, ``tail_risk`` loses its
+    Monte-Carlo loss leg and ``p_upside_pos_cond`` degrades to
+    ``p_upside_pos * kalman_gain`` -- three quiet degradations rather than one
+    loud failure, which is why :func:`run_screen` builds those columns first.
+
+    ``idata`` is passed as ``None``: the only posterior read left in
+    ``compute_cvar_aware_book`` is the legacy ``achieve_prob`` fallback for
+    ``kalman_gain``, and v2 posteriors have never carried that variable -- the
+    screen supplies the column.
+
+    Returns
+    -------
+    RiskBook or None
+        ``None`` when the book cannot be computed; the caller keeps going with
+        the screen alone rather than losing the whole replay.
+    """
+    from probabilistic_ml_model.pymc_models.RiskBookModel import compute_cvar_aware_book
+
+    try:
+        # Labels for the capped dimensions, aligned BY ISIN and never filled.
+        # `run_screen` returns the screen sorted by `expected_upside` while the
+        # draws stay in handoff order, so a positional attach would give every
+        # name someone else's sector with the row count still matching.
+        group_labels: dict[str, np.ndarray] = {}
+        keyed = screen.drop_duplicates("isin").set_index("isin")
+        for dim in (cfg.group_caps or {}):
+            if dim not in keyed.columns:
+                logger.warning(
+                    "group cap set for %r but the screen has no such column, so "
+                    "the cap CANNOT be applied.", dim,
+                )
+                continue
+            group_labels[dim] = keyed[dim].reindex(screen["isin"]).to_numpy()
+
+        book = compute_cvar_aware_book(
+            None,
+            draws.eu,
+            screen,
+            alpha=cfg.cvar_alpha,
+            cap=cfg.weight_cap,
+            # A CEILING since 2026-08-28, not the book size. `book_min_weight`
+            # decides breadth; this only bounds it.
+            max_names=cfg.k_book,
+            min_weight=cfg.book_min_weight,
+            group_labels=group_labels,
+            group_caps=cfg.group_caps,
+            p_long=cfg.p_long,
+            mcap_r_max=cfg.mcap_global_r_max,
+            return_draws=draws.pooled_returns,
+            return_draws_isins=draws.isins,
+            tail_risk_vol_floor_k=cfg.tail_risk_vol_floor_k,
+        )
+        logger.info(
+            "Risk book: %d names, port_up %.3f, STARR %.3f, div %.3f",
+            int(book.summary.get("n_book", 0)),
+            book.summary.get("port_up", float("nan")),
+            book.summary.get("starr_book", float("nan")),
+            book.summary.get("div", float("nan")),
+        )
+        return book
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Risk book failed: %s", exc, exc_info=True)
+        return None
 
 
 # =========================================================================== #
@@ -433,6 +1301,46 @@ def run_forecast(
                     f"rather than the fitted OU kernel"
                 ),
             ))
+
+    # `forecast_factor_effect`, carried over from the v2 workflow's §15 when that
+    # stage was retired. How much diversification the shared factors removed.
+    # ALWAYS PASSES: `factor_share` is a prior, so this measures a prior's
+    # consequence, and a gate on an assumption would only test that the
+    # assumption was applied. At 0.0 the shocks are cross-sectionally
+    # independent, which is what the AR simulator assumes -- and that assumption
+    # is why a LONG book can report a positive expected shortfall, because
+    # pooling names averages their idiosyncratic risk to nearly nothing.
+    try:
+        from dataclasses import replace as _replace
+
+        independent = forecast_from_posterior(
+            handoff, config=_replace(cfg.forecast_config(), factor_share=0.0)
+        )
+        k = min(cfg.max_names or 50, fc.n_isin)
+        w = np.full(k, 1.0 / k)
+        rows = slice(0, k)
+        sd_joint = float((w @ fc.terminal[rows]).std())
+        sd_indep = float((w @ independent.terminal[rows]).std())
+        ratio = sd_joint / sd_indep if sd_indep > 0 else float("nan")
+        report.add(GateResult(
+            name="portfolio_factor_effect",
+            passed=True,
+            value=f"{ratio:.2f}x wider",
+            threshold="reported, not gated",
+            blocking=False,
+            detail=(
+                f"equal-weight {k}-name book sd {sd_joint:.4f} with shared "
+                f"factors vs {sd_indep:.4f} with independent shocks, at "
+                f"factor_share {cfg.factor_share}"
+            ),
+        ))
+        logger.info(
+            "factor structure widens an equal-weight %d-name book's sd by %.2fx "
+            "(%.4f -> %.4f); independent shocks make diversification free",
+            k, ratio, sd_indep, sd_joint,
+        )
+    except Exception as exc:  # pragma: no cover - additive, never fatal
+        logger.info("factor-effect contrast skipped: %s", exc)
     return out
 
 
@@ -584,10 +1492,32 @@ def run_decision_books(
         # contain a flagged name, so an overlap of zero would be true by construction
         # and would read as reassurance; what is worth reporting then is how many
         # names it removed from eligibility. Measuring is not optional; applying is.
-        sizeable = recs.size_down_mask(screen, isins)
+        sizeable, veto_unseen = recs.size_down_mask(
+            screen, isins, return_unseen=True
+        )
         veto_names = set(isins[~sizeable].tolist())
         if cfg.apply_size_down_veto:
             eligible = sizeable
+        # A name the watch never saw comes back sizeable, which is
+        # indistinguishable from one it examined and cleared. That silence sized
+        # MaaT Pharma at 9.13 % on two analysts -- the watch's own thin-coverage
+        # condition -- because the screen came from a different fit and did not
+        # contain it. Recorded as a finding rather than swallowed; the vintage
+        # gate is what will stop it happening.
+        if veto_unseen:
+            report.add(GateResult(
+                name="portfolio_size_down_coverage",
+                passed=False,
+                value=f"{veto_unseen} of {len(isins)} names unseen by the watch",
+                threshold="the watch must see every eligible name",
+                blocking=False,
+                detail=(
+                    "These names are sizeable by silence, not by assessment: the "
+                    "frame the watch was scored on does not contain them, so no "
+                    "leg of the veto could be evaluated. Check that the screen "
+                    "and the handoff come from the same fit."
+                ),
+            ))
 
     rank_source = screen if screen is not None else handoff.identity
     books: dict[str, Any] = {}
@@ -640,6 +1570,11 @@ def run_decision_books(
         frame["rank_by"] = arm
         # The precedence declaration, on the row rather than in a docstring.
         frame["book_role"] = "recommendation" if position == 0 else "contrast"
+        # The same three columns `10b_risk_book_v2` now carries, so the two books
+        # can be read side by side and told apart on their own rows rather than
+        # by knowing which file they came from.
+        frame["book_engine"] = f"log_growth:{arm}"
+        frame["book_universe"] = "unscreened"
         frame["backend"] = fc.backend
         frame["factor_share"] = fc.factor_share
         frame["sector_cap"] = cfg.sector_cap if cfg.sector_cap is not None else np.nan
@@ -729,18 +1664,49 @@ def _group_labels(
     column: str,
     isins: np.ndarray,
 ) -> Optional[np.ndarray]:
-    """Per-name group labels aligned to ``isins`` **by key**, from screen or handoff."""
-    if screen is not None and column in screen.columns and "isin" in screen.columns:
-        keyed = screen.drop_duplicates("isin").set_index("isin")[column]
-        return keyed.reindex(isins).fillna("Unknown").astype(str).to_numpy()
+    """Per-name group labels aligned to ``isins`` **by key**, from screen or handoff.
+
+    **Never filled.** An ISIN the source does not carry gets ``None``, not
+    ``"Unknown"``. The fill was source-level rather than per-row, so a screen
+    matching 6,362 of 6,507 names fully shadowed a handoff carrying all 6,507 and
+    manufactured a 145-name group that then cleared ``MIN_GROUP_N``, took the
+    largest shrunk excess on the run and hid a 30 % sector cap being satisfied at
+    a true 59.1 %. ``None`` propagates: it matches no group in
+    ``group_allocation_signals``, receives no spill in the cap projection, and is
+    counted by ``unlabelled_<dim>_weight`` so the concentration gate can block.
+
+    **The handoff comes first.** It carries the full 42-column identity block,
+    written from ``panel.frame`` by the fit itself, so it is in-vintage by
+    construction and covers every name the posterior does. The screen is a
+    derived frame and is consulted only for a column the handoff does not have.
+    The order used to be the other way round, and the fallback was source-level
+    rather than per-row: a screen matching 6,362 of 6,507 names fully shadowed a
+    complete handoff, and the 145 it did not match were filled to ``"Unknown"``.
+    """
+    def _keyed(frame: pd.DataFrame) -> np.ndarray:
+        keyed = frame.drop_duplicates("isin").set_index("isin")[column]
+        aligned = keyed.reindex(isins)
+        present = aligned.notna().to_numpy()
+        missing = int((~present).sum())
+        if missing:
+            logger.warning(
+                "%d of %d names carry no %r label and are left UNLABELLED. They "
+                "are not a group -- a cap on this dimension cannot reach them and "
+                "the concentration gate will say so.",
+                missing, len(present), column,
+            )
+        return np.where(present, aligned.astype(str).to_numpy(), None)
+
     ident = handoff.identity
     if ident is not None and column in getattr(ident, "columns", []):
-        keyed = ident.drop_duplicates("isin").set_index("isin")[column]
-        return keyed.reindex(isins).fillna("Unknown").astype(str).to_numpy()
+        return _keyed(ident)
+    if screen is not None and column in screen.columns and "isin" in screen.columns:
+        return _keyed(screen)
     codes = handoff.coord_idx.get(column)
     uniques = handoff.coord_uniques.get(column)
     if codes is not None and uniques is not None:
-        return np.asarray(uniques)[np.asarray(codes)]
+        # Codes index a complete level vocabulary, so there is nothing to miss.
+        return np.asarray(uniques, dtype=object)[np.asarray(codes)]
     logger.info("no %r labels available; sector concentration will not be reported", column)
     return None
 
@@ -814,16 +1780,38 @@ def _report_book_gates(
     ))
 
     if "top_group_weight" in summary:
+        # A cap enforced on a label that can be absent is not a cap. `groupby`
+        # drops null keys, so unlabelled weight leaves the total rather than
+        # joining a bucket, and the maximum is taken over what survives: run
+        # `b00f8d8ca093` reported 30.0 % in Health Care against a 30 % cap while
+        # the true weight was 59.1 %, because three of the sector's names had no
+        # label. Reported on every run; BLOCKING only where it changes an answer,
+        # which is when a cap is set on the dimension and some weight escaped it.
+        unlabelled = float(summary.get("unlabelled_group_weight", 0.0))
+        capped = cfg.sector_cap is not None
+        clean = unlabelled <= 0.0
         report.add(GateResult(
             name="portfolio_sector_concentration",
-            passed=True,
-            value=f"{summary['top_group_weight']:.1%} in {summary.get('top_group', '?')}",
-            threshold=(f"cap {cfg.sector_cap:.0%}" if cfg.sector_cap is not None
+            passed=clean or not capped,
+            value=(
+                f"{summary['top_group_weight']:.1%} in "
+                f"{summary.get('top_group', '?')}"
+                + (f", {unlabelled:.1%} unlabelled" if unlabelled > 0 else "")
+            ),
+            threshold=(f"cap {cfg.sector_cap:.0%}, 0% unlabelled" if capped
                        else "no cap set"),
-            blocking=False,
+            blocking=capped and not clean,
             detail=(
                 f"[{arm}] {int(summary.get('n_groups', 0))} groups held. No cap is "
                 f"also a decision -- it should just never be taken by omission."
+                + (
+                    f" {unlabelled:.1%} of the book carries no "
+                    f"{summary.get('top_group_dimension', 'group')} label, so the "
+                    f"reported weight is a maximum over the labelled part only and "
+                    f"the cap was NOT enforced on that share. Fix the labels; do "
+                    f"not raise the cap."
+                    if unlabelled > 0 else ""
+                )
             ),
         ))
 
@@ -1008,10 +1996,12 @@ def run_recommendations_v2(
 
     if screen is not None:
         conf_scale = float(np.nanmean(confidence)) if confidence is not None else 1.0
-        # The analyst consensus reached the screen frame only from 2026-08-28, so
-        # a replay against an older export would silently lose `consensus_gap` --
-        # the one column that says where this model DIFFERS from the panel it
-        # reproduces at Spearman 0.992. The panel frame has always carried it.
+        # Vestigial since 2026-08-31 and kept as a floor, not as a path: this
+        # file builds the screen now and `run_screen` always emits
+        # `feat_analyst_rating` from the handoff's panel vectors, so `main` passes
+        # `panel_frame=None`. It stays because `consensus_gap` is the one column
+        # that says where this model DIFFERS from the panel it reproduces at
+        # Spearman 0.992, and losing it silently is what this guard is for.
         actions_input = screen
         if "feat_analyst_rating" not in screen.columns and panel_frame is not None:
             if {"isin", "feat_analyst_rating"} <= set(panel_frame.columns):
@@ -1097,6 +2087,28 @@ def _report_action_ladder(
     ))
 
 
+#: Screen/risk-book column -> the name it is PUBLISHED under.
+#:
+#: Moved here with the export on 2026-08-31, verbatim. Two of these entries are
+#: one-release guards rather than live renames: `compute_cvar_aware_book` stopped
+#: emitting the `expected_sharpe` alias on 2026-08-24 and `exp_vol` now keeps its
+#: own name until `EXPORT_REDUNDANT_COLUMNS` drops it as a duplicate of `er_sd`.
+#: They stay because a stale or pinned `RiskBookModel` that still emitted both
+#: would otherwise rename one onto the other and produce TWO columns under one
+#: name -- not merely untidy: `export_ranking_range` then hands `pd.to_numeric` a
+#: DataFrame instead of a Series and the whole export dies, after the fit has
+#: already been paid for.
+_CANONICAL_RENAMES: dict[str, str] = {
+    "starr": "reward_to_cvar",
+    "cvar05": "cvar_5pct_kalman",
+    "book_weight": "cvar_book_weight",
+    "expected_upside": "expected_return_kalman",
+    "expected_pt": "price_target_kalman",
+    "last_price": "original_price",
+    "observed_pt": "original_target",
+}
+
+
 # =========================================================================== #
 # §P6  Export                                                                 #
 # =========================================================================== #
@@ -1108,7 +2120,9 @@ PORTFOLIO_FRAMES: dict[str, str] = {
     "15c_forecast_engines": "this engine against the shipped AR simulator, by ISIN",
     "15d_factor_share_sweep": "book dispersion and membership across the factor_share grid",
     "15d_multiplier_sweep": "cross-sectional spread across the forecast-error grid",
-    "15e_decision_books": "one row per (isin, rank_by); book_role names the recommendation",
+    "15e_decision_books": ("one row per (isin, rank_by); book_role names the "
+                          "recommendation, book_engine/book_universe distinguish "
+                          "it from the CVaR book at 10b"),
     "15e_book_agreement": "pairwise membership overlap between the ranking arms",
     "15e_frontier": ("the solved mean-variance frontier over the book's "
                      "holdings, with the tangency point -- a labelled "
@@ -1121,6 +2135,146 @@ PORTFOLIO_FRAMES: dict[str, str] = {
 }
 
 
+#: Schema the replay appends to. Read at point of use, the project pattern.
+PORTFOLIO_SCHEMA_ENV = "DB_PORTFOLIO_SCHEMA"
+DEFAULT_PORTFOLIO_SCHEMA = "kalman_portfolio"
+
+
+def _portfolio_engine(
+    cfg: KalmanPortfolioConfig, run_id: str
+) -> tuple[Optional[Any], str]:
+    """Resolve the append target, refusing a ``run_id`` already stored.
+
+    Returns ``(None, schema)`` whenever the write is off, `DB_URL` is unset, the
+    database is unreachable, or this replay's ``run_id`` is already present --
+    each of which falls back to CSV rather than failing the replay, because the
+    frames are the point and the table is a convenience.
+
+    The duplicate check is the append-only half that is easy to skip. Appending a
+    second copy of one ``run_id`` does not error, does not warn, and quietly
+    doubles the weight of that replay in every aggregate over the history.
+    """
+    if not cfg.write_analytics:
+        return None, DEFAULT_PORTFOLIO_SCHEMA
+
+    from probabilistic_ml_model.data_utils.inference_schema import (
+        _validate_schema_name,
+    )
+
+    schema = _validate_schema_name(
+        os.environ.get(PORTFOLIO_SCHEMA_ENV, DEFAULT_PORTFOLIO_SCHEMA)
+    )
+    url = os.environ.get("DB_URL")
+    if not url:
+        logger.info("DB_URL is not set; the replay writes CSV only")
+        return None, schema
+    try:
+        from sqlalchemy import create_engine, text
+
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            if not conn.execute(
+                text("SELECT 1 FROM information_schema.schemata "
+                     "WHERE schema_name = :s"), {"s": schema},
+            ).first():
+                logger.error(
+                    "schema %s does not exist; run "
+                    "`python scripts/apply_kalman_portfolio_schema.py` first. "
+                    "Writing CSV only.", schema,
+                )
+                return None, schema
+            # Every table carries `run_id`, so any one of them answers this.
+            existing = list(conn.execute(
+                text("SELECT table_name FROM information_schema.tables "
+                     "WHERE table_schema = :s"), {"s": schema},
+            ))
+            for (table,) in existing:
+                hit = conn.execute(
+                    text(f'SELECT 1 FROM {schema}."{table}" '
+                         f"WHERE run_id = :r LIMIT 1"), {"r": run_id},
+                ).first()
+                if hit:
+                    logger.error(
+                        'run_id %s is already stored in %s."%s". REFUSING to '
+                        "append a second copy -- an append-only store whose rows "
+                        "can be silently doubled is not a history. Writing CSV "
+                        "only.", run_id, schema, table,
+                    )
+                    return None, schema
+        return engine, schema
+    except Exception as exc:
+        logger.error("cannot reach %s (%s); the replay writes CSV only",
+                     schema, exc)
+        return None, schema
+
+
+def publish_canonical_table(
+    frame: pd.DataFrame,
+    cfg: KalmanPortfolioConfig,
+    fit_run_id: str,
+    replay_id: str,
+    *,
+    identity: Optional[pd.DataFrame] = None,
+) -> dict[str, int]:
+    """Publish ``analytics.kalman_filtered_price_targets_v2`` -- GEIB's only source.
+
+    The one frame this replay writes that is NOT its own. It is the current state
+    of one fit, so it stays in the `analytics` schema with `if_exists='replace'`
+    and carries the **FIT's** ``run_id``.
+
+    That is load-bearing rather than tidy. `dashboards/geib/data.py::_join_panel`
+    asserts this table's `run_id` equals `analytics."04_panel_frame_v2"`'s, and
+    the fit writes that panel frame. Stamping this table with the REPLAY's id
+    would fail that assertion on every run, and `_join_panel` drops the panel
+    block on a mismatch -- so beta, the Piotroski set, the rating mix and the
+    price ladders would all silently disappear from the board, which is exactly
+    the degrade-to-empty the assertion exists to produce.
+
+    ``replay_id`` / ``replayed_at`` name the replay. Two ids because there are
+    two runs behind the row, and one id cannot answer both questions.
+    """
+    out = frame
+    if identity is not None and "isin" in out.columns:
+        out = attach_identity_columns(out, identity, label=_ANALYTICS_TABLE_V2)
+    out = stamp_export_provenance(out, fit_run_id, pd.Timestamp.now("UTC"))
+    if "replay_id" not in out.columns:
+        out = out.assign(replay_id=replay_id, replayed_at=pd.Timestamp.now("UTC"))
+
+    path = section_path(cfg.results_path, _ANALYTICS_TABLE_V2)
+    out.to_csv(path, index=False)
+    if not cfg.write_analytics:
+        logger.info("wrote %s (%d rows); --write publishes it to analytics",
+                    path, len(out))
+        return {_ANALYTICS_TABLE_V2: len(out)}
+
+    schema = os.environ.get("DB_ANALYTICS_SCHEMA", "analytics")
+    url = os.environ.get("DB_URL")
+    if not url:
+        logger.warning("DB_URL is not set; %s stays CSV-only and GEIB will read "
+                       "the previous run", _ANALYTICS_TABLE_V2)
+        return {_ANALYTICS_TABLE_V2: len(out)}
+    try:
+        from sqlalchemy import create_engine
+
+        engine = create_engine(url)
+        out.to_sql(_ANALYTICS_TABLE_V2, engine, schema=schema,
+                   if_exists="replace", index=False, chunksize=2000)
+        # The ONE file in `sql_scripts/analytics/` carrying per-column
+        # documentation and the raw-decimal unit header. Regenerated here
+        # because this script now produces the table -- and only on a publish,
+        # so the committed schema always describes something that was published.
+        write_analytics_ddl_v2(out, table=_ANALYTICS_TABLE_V2, schema=schema)
+        logger.info(
+            'published %s."%s" (%d rows, fit %s / replay %s). GEIB reads this '
+            "table -- deploy the dashboard if the schema changed.",
+            schema, _ANALYTICS_TABLE_V2, len(out), fit_run_id, replay_id,
+        )
+    except Exception as exc:
+        logger.error("could not publish %s (%s); the CSV at %s is current and "
+                     "the table is NOT", _ANALYTICS_TABLE_V2, exc, path)
+    return {_ANALYTICS_TABLE_V2: len(out)}
+
+
 def export_frames(
     frames: dict[str, pd.DataFrame],
     cfg: KalmanPortfolioConfig,
@@ -1128,12 +2282,23 @@ def export_frames(
     *,
     identity: Optional[pd.DataFrame] = None,
 ) -> dict[str, int]:
-    """Write the frames as CSV, stamped and identity-attached.
+    """Write the frames, stamped and identity-attached.
 
-    CSV by default and by design. This script exists to be run many times over one
-    fit; a workflow that writes to the analytics schema on every run is not that, and
-    the v2 tables are DROP-and-RECREATE, so a replay that wrote would destroy the
-    export it was replaying.
+    Database first, CSV as the fallback -- the shape ``export_analytics`` uses,
+    including the memoised ``sql_ok``: one dead connection is not eleven errors.
+
+    **APPEND-ONLY, into ``kalman_portfolio``.** Not the analytics schema, which
+    the fit DROPs and RECREATEs each export: a replay writing there would destroy
+    the export it was replaying, which is why ``--write`` was a documented no-op
+    until 2026-08-31. And not ``replace`` here either, because a replay is one
+    observation about a fit rather than the current state of one -- three ranking
+    arms and two prior sweeps only mean something against each other, and a
+    replay stops being reproducible the moment its handoff is superseded.
+
+    A ``run_id`` already present is REFUSED rather than duplicated, in the spirit
+    of ``capture_panel_vintage.py``: an append-only store whose rows can be
+    silently rewritten is not append-only, and one whose rows can be silently
+    doubled is not a history.
     """
     # One section directory per stem, resolved through the shared layout SSOT --
     # not one `15_portfolio` bucket. The bucket was the whole replay in a single
@@ -1145,6 +2310,9 @@ def export_frames(
     stamped = pd.Timestamp.now('UTC')
     counts: dict[str, int] = {}
 
+    engine, schema = _portfolio_engine(cfg, run_id)
+    sql_ok = engine is not None
+
     for stem, frame in frames.items():
         if frame is None or not len(frame):
             continue
@@ -1152,17 +2320,44 @@ def export_frames(
         if identity is not None and "isin" in written.columns:
             written = attach_identity_columns(written, identity, label=stem)
         written = stamp_export_provenance(written, run_id, stamped)
+        counts[stem] = len(written)
+
+        # DDL only on a PUBLISHING run. The fit renders it unconditionally,
+        # because it exports once and an offline run still deserves a reviewable
+        # schema. A replay is different on both counts: it runs many times over
+        # one fit, so re-rendering identical files is noise, and it is the thing
+        # test suites drive with synthetic frames -- which is not hypothetical.
+        # `sql_scripts/` is committed source, and `write_analytics_ddl_v2`
+        # resolves its default path relative to the CWD, so an unconditional
+        # render let a 40-name fixture overwrite a real 79-column schema.
+        if cfg.write_analytics:
+            try:
+                write_analytics_ddl_v2(written, table=stem, schema=schema)
+            except Exception as exc:  # pragma: no cover - docs are not the run
+                logger.info("could not render DDL for %s: %s", stem, exc)
+
+        wrote_table = False
+        if sql_ok:
+            try:
+                written.to_sql(stem, engine, schema=schema, if_exists="append",
+                               index=False, chunksize=2000)
+                wrote_table = True
+                logger.info('wrote %s."%s" (%d rows, appended)',
+                            schema, stem, len(written))
+            except Exception as exc:
+                logger.error(
+                    "SQL export failed for %s (%s); CSV from here on", stem, exc
+                )
+                sql_ok = False
+        # CSV is written EITHER WAY. The analytics export treats it as a
+        # fallback, but a replay is meant to be read from the tree it wrote --
+        # the figures sit beside these frames, and a reader browsing a section
+        # directory should not find half of it in a database.
         path = section_path(root, stem)
         written.to_csv(path, index=False)
-        counts[stem] = len(written)
-        logger.info("wrote %s (%d rows)", path, len(written))
+        if not wrote_table:
+            logger.info("wrote %s (%d rows)", path, len(written))
 
-    if cfg.write_analytics:
-        logger.warning(
-            "--write is accepted but intentionally does nothing yet: the v2 analytics "
-            "tables are DROP-and-RECREATE, so a replay writing into them would "
-            "destroy the export it replayed. Declare precedence in the v2 DDL first."
-        )
     return counts
 
 
@@ -1192,11 +2387,11 @@ def _read_v2_artifact(
     a silent degradation here costs the replay its screen, and with it the sector
     labels, the `p_upside_pos_cond` arm and the size-down watch.
     """
-    sectioned = section_path(cfg.results_path, stem)
+    sectioned = section_path(cfg.v2_results_path, stem)
     frame = _read_optional_csv(sectioned)
     if frame is not None:
         return frame
-    legacy = cfg.results_path / f"{stem}.csv"
+    legacy = cfg.v2_results_path / f"{stem}.csv"
     frame = _read_optional_csv(legacy)
     if frame is not None:
         logger.info(
@@ -1206,7 +2401,7 @@ def _read_v2_artifact(
         )
     else:
         logger.info("no %s under %s; stages needing it will be skipped",
-                    stem, cfg.results_path)
+                    stem, cfg.v2_results_path)
     return frame
 
 
@@ -1222,8 +2417,12 @@ def main(
     Returns
     -------
     dict[str, Any]
-        ``run_id``, ``handoff``, ``forecast``, ``sweeps``, ``decision``,
+        ``run_id``, ``handoff``, ``screen``, ``screen_draws``, ``risk_book``,
+        ``kalman_results``, ``forecast``, ``sweeps``, ``decision``,
         ``recommendations``, ``report``, ``export_counts``.
+
+        The first six are new on 2026-08-31: the screen and the CVaR risk book
+        moved here from the fit script, so this is where they are produced now.
     """
     cfg = config or KalmanPortfolioConfig.from_env()
     logging.basicConfig(
@@ -1242,23 +2441,43 @@ def main(
     report = GateReport()
     handoff = load_handoff(cfg, report)
 
-    # Resolved through the section tree, with a flat-path fallback: the v2 export
-    # moved into subdirectories on 2026-08-27 and these three reads are what give
-    # the replay its sector labels, its bounded ranking arm and its size-down
-    # watch. Reading only the new path would have degraded all three SILENTLY
-    # against an older results tree -- `_read_optional_csv` never fails, which is
-    # exactly why the fallback has to be explicit.
-    screen = _read_v2_artifact(cfg, "10_screen_results_v2")
-    mc_summary = _read_v2_artifact(cfg, "10_screen_mc_summary_v2")
-    diagnostics = _read_v2_artifact(cfg, "09_diagnostics_v2")
-    # Read only for the analyst consensus the older screens lack; a
-    # missing panel frame costs `consensus_gap` and nothing else.
-    panel_frame = _read_v2_artifact(cfg, "04_panel_frame_v2")
+    # Still read, and now only for what the handoff genuinely does not carry:
+    # per-parameter R-hat / ESS, which is one row per PARAMETER and has no ISIN
+    # axis at all. Resolved through the section tree with a flat-path fallback for
+    # a pre-2026-08-27 tree.
+    #
+    # Checked against the handoff's own run_id BEFORE anything reads it. This is
+    # a small surface now -- the screen and the identity block moved into the
+    # handoff -- but it is the surface that was never checked, and the gate is
+    # what makes reading anything from beside the handoff safe to add back.
+    read_frames = check_input_vintage(
+        handoff, {"09_diagnostics_v2": _read_v2_artifact(cfg, "09_diagnostics_v2")},
+        cfg, report,
+    )
+    diagnostics = read_frames["09_diagnostics_v2"]
 
-    forecast = run_forecast(handoff, cfg, report, mc_summary=mc_summary)
+    # THE SCREEN IS BUILT HERE, off the handoff, not read from a CSV.
+    #
+    # It used to be `_read_v2_artifact(cfg, "10_screen_results_v2")`, and nothing
+    # checked that the file came from the fit being replayed. On run
+    # `b00f8d8ca093` it did not: a 2026-08-30 handoff of 6,507 names met a
+    # 2026-08-27 screen of 6,513 from a DIFFERENT fit, 145 names had no row, and
+    # those 145 became a phantom sector that evaded a 30 % cap and hid three
+    # unnamed positions in an eleven-name book. Building it from the handoff
+    # removes the seam rather than guarding it.
+    screen, screen_draws = run_screen(handoff, cfg, report)
+    risk_book = run_risk_book(screen, cfg, screen_draws)
+
+
+    forecast = run_forecast(
+        handoff, cfg, report,
+        mc_summary=screen[[c for c in (
+            "isin", "er_mean", "er_sd", "er_p05", "er_p50", "er_p95", "mc_prob_pos"
+        ) if c in screen.columns]],
+    )
 
     rank_values = None
-    if screen is not None and "p_upside_pos_cond" in screen.columns:
+    if "p_upside_pos_cond" in screen.columns:
         keyed = screen.drop_duplicates("isin").set_index("isin")["p_upside_pos_cond"]
         rank_values = pd.to_numeric(
             keyed.reindex(np.asarray(forecast["draws"].isins)), errors="coerce"
@@ -1275,11 +2494,43 @@ def main(
 
     recommendations = run_recommendations_v2(
         forecast, handoff, decision, cfg,
-        screen=screen, diagnostics=diagnostics, panel_frame=panel_frame,
+        screen=screen, diagnostics=diagnostics, panel_frame=None,
         report=report, render=render,
     )
 
+    # The canonical frame: the risk book's analytics if we have it (it is the
+    # screen plus the risk columns), otherwise the screen alone. Renames and
+    # out-of-support suppression are `pymc_kalman_filter_pt_v2`'s SSOT, imported
+    # rather than re-spelled -- the published column names must not depend on
+    # which script happens to write them.
+    kalman_results = (
+        risk_book.analytics.copy() if risk_book is not None else screen.copy()
+    )
+    kalman_results = kalman_results.drop(columns=["expected_sharpe"], errors="ignore")
+    kalman_results = kalman_results.rename(columns=_CANONICAL_RENAMES)
+    # Suppression runs BEFORE anything is written, so every consumer -- including
+    # the intermediate risk table -- sees the same guarded values.
+    kalman_results = apply_out_of_support(kalman_results)
+    # GEIB reads this table and asserts its `run_id` matches
+    # `analytics."04_panel_frame_v2"`, which the FIT still writes. So the
+    # canonical frame carries the FIT's id, not this replay's -- otherwise the
+    # dashboard's vintage assertion fails on every run and the whole descriptive
+    # block (beta, Piotroski, rating mix, price ladders) silently drops.
+    #
+    # `replay_id` / `replayed_at` say which replay produced the row. Two ids
+    # because there are genuinely two runs behind it, and collapsing them would
+    # make one of the two unanswerable.
+    kalman_results = kalman_results.assign(
+        replay_id=run_id, replayed_at=pd.Timestamp.now("UTC")
+    )
+
+    fit_run_id = str(handoff.attrs.get("run_id") or run_id)
     frames: dict[str, pd.DataFrame] = {
+        "10_screen_results_v2": screen,
+        "10_screen_mc_summary_v2": screen[[c for c in (
+            "isin", "er_mean", "er_sd", "er_p05", "er_p50", "er_p95", "mc_prob_pos"
+        ) if c in screen.columns]],
+        _ANALYTICS_TABLE_V2: kalman_results,
         "15c_forecast_summary": forecast.get("summary"),
         "15c_forecast_engines": forecast.get("engines"),
         "15d_factor_share_sweep": sweep_frames.get("factor_share"),
@@ -1292,15 +2543,54 @@ def main(
         "14b_size_down_watch": recommendations.get("watch"),
         "09_gate_report_portfolio": report.to_frame(),
     }
+    if risk_book is not None:
+        frames["10b_risk_analytics_v2"] = apply_out_of_support(
+            risk_book.analytics.drop(columns=["expected_sharpe"], errors="ignore")
+        )
+        # PRECEDENCE, declared on the row. One posterior produces two books --
+        # a CVaR-aware large-cap book here and a growth-optimal micro-cap book at
+        # §15e -- and for four editions they shared no name at all while nothing
+        # in either export said which was the recommendation. A reader handed two
+        # books with no statement of precedence uses whichever they find first.
+        #
+        # `15e_decision_books` has carried `book_role` since it gained ranking
+        # arms; this is the other half. The two are not competing answers to one
+        # question: they screen DISJOINT universes (`mcap_country_r <= 0.03`
+        # against no screen at all), which is why neither is simply better.
+        frames["10b_risk_book_v2"] = risk_book.book.assign(
+            book_role="contrast",
+            book_engine="cvar_starr",
+            book_universe=f"mcap_global_r <= {cfg.mcap_global_r_max}",
+        )
+    # `handoff.identity`, never the screen. The handoff's block is written from
+    # `panel.frame` by the fit itself, so it is in-vintage by construction and
+    # complete for every name the posterior covers -- which is what the stale CSV
+    # was not.
+    # The canonical table is published separately: it goes to `analytics` with
+    # `if_exists='replace'` under the FIT's run_id, because it is the current
+    # state of one fit and GEIB joins it to a table the fit wrote. Everything
+    # else is this replay's own and appends to `kalman_portfolio` under this
+    # replay's id. One frame, one destination, two different meanings of "the
+    # latest".
+    canonical = frames.pop(_ANALYTICS_TABLE_V2, None)
     counts = export_frames(
         {k: v for k, v in frames.items() if v is not None},
-        cfg, run_id, identity=screen if screen is not None else handoff.identity,
+        cfg, run_id, identity=handoff.identity,
     ) if export else {}
+    if export and canonical is not None:
+        counts.update(
+            publish_canonical_table(canonical, cfg, fit_run_id, run_id,
+                                    identity=handoff.identity)
+        )
 
     print(report.render())
     return {
         "run_id": run_id,
         "handoff": handoff,
+        "screen": screen,
+        "screen_draws": screen_draws,
+        "risk_book": risk_book,
+        "kalman_results": kalman_results,
         "forecast": forecast,
         "sweeps": sweep_frames,
         "decision": decision,
@@ -1310,17 +2600,136 @@ def main(
     }
 
 
+def migrate_portfolio_layout(
+    root: Optional[str] = None,
+    *,
+    from_root: Optional[str] = None,
+    dry_run: bool = True,
+) -> dict[str, str]:
+    """Move this replay's artifacts out of the fit's tree into its own.
+
+    The replay wrote into ``pymc_kalman_filter_pt_v2_results`` until 2026-08-31,
+    so a fit and every replay of it interleaved in one directory. A fit happens
+    once; a replay happens many times over that fit, and a reader browsing the
+    tree could not tell which run had produced what.
+
+    **Moves only what it can prove it owns.** A file in the fit's tree belongs to
+    the replay when its stem ends ``_portfolio`` or resolves to
+    :data:`PORTFOLIO_ONLY_SECTION_DIRS`. That was checked rather than assumed:
+    neither the v2 fit nor v1 writes any ``14b_*`` stem into the v2 tree (v1 has
+    its own ``14b_recommendations`` under its own root), and
+    ``09_gate_report_portfolio`` carries a suffix that distinguishes it from
+    ``09_gate_report_v2`` -- which is why ``09_gates`` is not an owned section and
+    the fit's gate report stays where it is.
+
+    Idempotent, and by the same means as the v2 migration: a planned move whose
+    target resolves to its source is skipped, so a second run is a no-op. Nothing
+    is recorded on disk.
+
+    Parameters
+    ----------
+    root
+        Destination. Defaults to the configured portfolio results root.
+    from_root
+        Source to sweep. Defaults to the v2 fit's tree, which is the only place
+        these files have ever been.
+    dry_run
+        Report the moves without making them. **The default**, because this
+        rewrites a results tree and the first thing anyone should see is the list.
+
+    Returns
+    -------
+    dict[str, str]
+        ``source -> destination`` for every move planned or made.
+    """
+    import contextlib
+    import shutil
+
+    cfg = KalmanPortfolioConfig.from_env()
+    dest_root = Path(root) if root else cfg.results_path
+    src_root = Path(from_root) if from_root else cfg.v2_results_path
+    dest_root.mkdir(parents=True, exist_ok=True)
+    moves: dict[str, str] = {}
+    emptied: list[Path] = []
+
+    def _owned(stem: str) -> bool:
+        return stem.endswith("_portfolio") or export_dir_for(stem) in PORTFOLIO_ONLY_SECTION_DIRS
+
+    def _plan(path: Path) -> None:
+        if not _owned(path.stem):
+            return
+        target = section_path(dest_root, path.stem, suffix=path.suffix)
+        if target.resolve() == path.resolve():
+            return
+        moves[str(path)] = str(target)
+        if not dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(target))
+
+    if src_root.is_dir() and src_root.resolve() != dest_root.resolve():
+        # Recursive: the frames landed in section directories and so did the
+        # figures beside them. A root-only sweep would leave every PNG behind.
+        for entry in sorted(src_root.rglob("*")):
+            if entry.is_file():
+                _plan(entry)
+        # A section directory the replay owned OUTRIGHT is empty afterwards.
+        # `09_gates` and `04_panel` are shared and must survive, which is what
+        # the ownership set above is for.
+        for name in sorted(PORTFOLIO_ONLY_SECTION_DIRS):
+            candidate = src_root / name
+            if candidate.is_dir():
+                emptied.append(candidate)
+
+    # Anything already under the destination but in the wrong section, e.g. a
+    # tree migrated by hand.
+    for entry in sorted(dest_root.iterdir()) if dest_root.is_dir() else []:
+        if entry.is_file():
+            _plan(entry)
+
+    if not dry_run:
+        for directory in emptied:
+            # Only when empty. A directory still holding something holds a file
+            # this migration could not place, and removing it would destroy
+            # exactly what most needs looking at.
+            with contextlib.suppress(OSError):
+                directory.rmdir()
+                logger.info("removed the now-empty %s", directory)
+
+    verb = "would move" if dry_run else "moved"
+    if moves:
+        logger.info("%s %d artifact(s) from %s into %s",
+                    verb, len(moves), src_root, dest_root)
+        for src, dst in sorted(moves.items()):
+            logger.info("  %s %s -> %s", verb, src, dst)
+        if dry_run:
+            logger.info("dry run: re-run with --apply to make these moves")
+    else:
+        logger.info("portfolio layout is already current under %s", dest_root)
+    return moves
+
+
 def _cli() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--handoff", default=None,
                         help=f"path to {_HANDOFF_STEM} (default: under the results dir)")
-    parser.add_argument("--results-dir", default=None)
+    parser.add_argument("--results-dir", default=None,
+                        help="where the replay WRITES (default: kalman_portfolio_results)")
+    parser.add_argument("--v2-results-dir", default=None,
+                        help="where it READS the fit's artifacts (default: the v2 tree)")
     parser.add_argument("--fit", action="store_true",
                         help="run the v2 workflow first to produce a handoff")
     parser.add_argument("--rank-arms", default=DEFAULT_RANKING_RULE,
                         help="comma-separated, or 'all'. The FIRST is the recommendation")
     parser.add_argument("--sweep", default="",
                         help="comma-separated: factor_share, multiplier")
+    parser.add_argument("--migrate-layout", action="store_true",
+                        help=("move this replay's artifacts out of the fit's tree "
+                              "into kalman_portfolio_results (dry run by default)"))
+    parser.add_argument("--apply", action="store_true",
+                        help="with --migrate-layout: actually move the files")
+    parser.add_argument("--allow-stale-inputs", action="store_true",
+                        help=("replay against v2 artifacts from a DIFFERENT fit; "
+                              "the mismatched frames are dropped, not joined"))
     parser.add_argument("--arms", default="",
                         help="mean-model arms to contrast (needs a live panel)")
     parser.add_argument("--max-names", type=int, default=None,
@@ -1347,12 +2756,28 @@ def _cli() -> int:
                         help="opt in to the analytics write (currently a no-op; see export_frames)")
     args = parser.parse_args()
 
+    if args.migrate_layout:
+        # Before any config is built and before anything is read: this rewrites a
+        # results tree and must not be entangled with a replay that might fail
+        # halfway through it.
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        )
+        migrate_portfolio_layout(
+            root=args.results_dir, from_root=args.v2_results_dir,
+            dry_run=not args.apply,
+        )
+        return 0
+
     cfg = KalmanPortfolioConfig.from_env()
     overrides: dict[str, Any] = {}
     if args.handoff:
         overrides["handoff_path"] = args.handoff
     if args.results_dir:
         overrides["results_dir"] = args.results_dir
+    if args.v2_results_dir:
+        overrides["v2_results_dir"] = args.v2_results_dir
     if args.k_book is not None:
         logger.warning(
             "--k-book is deprecated: breadth is solved, not chosen. Applying it "
@@ -1400,6 +2825,8 @@ def _cli() -> int:
         overrides["apply_size_down_veto"] = True
     if args.write:
         overrides["write_analytics"] = True
+    if args.allow_stale_inputs:
+        overrides["allow_stale_inputs"] = True
     arms = (tuple(RANKING_RULES) if args.rank_arms.strip() == "all"
             else tuple(a.strip() for a in args.rank_arms.split(",") if a.strip()))
     unknown = [a for a in arms if a not in RANKING_RULES]
@@ -1425,6 +2852,18 @@ def _cli() -> int:
     except FileNotFoundError as exc:
         logger.error("%s", exc)
         return 2
+    except VintageMismatch as exc:
+        # Non-zero and NOTHING WRITTEN. Reporting the mismatch in a gate table
+        # beside a sized book would be reporting it; refusing to produce the book
+        # is the point.
+        logger.error("REFUSING TO REPLAY: %s", exc)
+        return 3
+    except ValueError as exc:
+        # `run_screen`'s refusals: a handoff that cannot be screened from, or
+        # shrinkage asked for without the inputs it needs. Both carry a message
+        # that says what to do, so a traceback adds nothing but noise.
+        logger.error("%s", exc)
+        return 4
     return 0
 
 

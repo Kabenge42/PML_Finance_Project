@@ -51,7 +51,11 @@ if str(_REPO_ROOT) not in sys.path:
 _VINTAGE_TABLE = "panel_vintage_v2"
 _PANEL_TABLE = "04_panel_frame_v2"
 _RESULTS_TABLE = "kalman_filtered_price_targets_v2"
-_DDL_PATH = _REPO_ROOT / "sql_scripts" / "analytics" / "kalman_panel_vintage.sql"
+# Renamed from `kalman_panel_vintage.sql` on 2026-08-31. The old name was
+# still referenced here, so `ensure_table` would have exited with "missing
+# DDL" on any database that did not already have the table -- which is the
+# only case it exists to handle.
+_DDL_PATH = _REPO_ROOT / "sql_scripts" / "analytics" / "panel_vintage_v2.sql"
 
 #: Columns taken from the panel frame. Everything here is point-in-time by
 #: construction and unrecoverable afterwards.

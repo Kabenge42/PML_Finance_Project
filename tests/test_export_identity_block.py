@@ -461,3 +461,72 @@ def test_source_revision_scope_excludes_generated_analytics():
 def test_every_scoped_source_path_exists(path):
     """A typo'd path silently narrows the check to nothing and reads as clean."""
     assert (_REPO / path).exists(), f"{path} does not exist; the scope is a no-op"
+
+
+# ---------------------------------------------------------------------------
+# The handoff carries the WHOLE block
+#
+# It used to be built from `screen`, which is assembled BEFORE
+# `_attach_identity_frames` enriches it, so it owned only the nine identity
+# columns it happens to compute itself. The handoff therefore carried 9 of 42 --
+# and no `country_name`, one of the five coordinates the recommendation layer
+# reports a posture on, so a replay could not fall back to it even in principle.
+# It is built from `panel.frame` now, the same source the export's own identity
+# join reads.
+# ---------------------------------------------------------------------------
+
+
+def test_the_handoff_round_trips_every_identity_column(tmp_path):
+    xr = pytest.importorskip("xarray")
+    from probabilistic_ml_model.pymc_models.KalmanForecast import (
+        load_forecast_handoff,
+        save_forecast_handoff,
+    )
+
+    n = 12
+    source = v2._coerce_identity_dtypes(_source(n).copy())
+    isins = source["isin"].to_numpy()
+
+    post = xr.Dataset(
+        {"sigma_isin": (("chain", "draw", "isin"), np.abs(
+            np.random.default_rng(0).normal(0.3, 0.05, (2, 8, n))))},
+        coords={"chain": np.arange(2), "draw": np.arange(8), "isin": isins},
+    )
+    idata = xr.DataTree()
+    idata["posterior"] = xr.DataTree(post)
+
+    class _P:
+        pass
+
+    panel = _P()
+    panel.isins = isins
+    panel.response_mean, panel.response_std = 0.1, 0.4
+    panel.coord_idx, panel.coord_uniques = {}, {}
+    panel.frame = source
+
+    path = tmp_path / "h.nc"
+    save_forecast_handoff(
+        path, idata, panel,
+        latent=np.random.default_rng(1).normal(0.2, 0.5, (2, 8, n)),
+        n_samples=None, identity=source,
+    )
+    out = load_forecast_handoff(path).identity
+
+    assert out is not None
+    missing = [c for c in v2.EXPORT_IDENTITY_NAMES if c not in out.columns]
+    assert not missing, f"handoff dropped {missing}"
+    assert len(out.columns) >= 42
+
+    # Declared types survive the flattening, which is what NetCDF does not give
+    # for free: it has no null string and no nullable integer.
+    for col, sql_type in v2.EXPORT_IDENTITY_COLUMNS:
+        if sql_type == "DATE":
+            assert pd.api.types.is_datetime64_any_dtype(out[col]), col
+        elif sql_type == "INTEGER":
+            assert str(out[col].dtype) == "Int64", col
+        elif sql_type == "DOUBLE PRECISION":
+            assert pd.api.types.is_float_dtype(out[col]), col
+
+    # Joined by key, not by position.
+    assert list(out["isin"]) == list(isins)
+    assert list(out["ticker"]) == list(source["ticker"])

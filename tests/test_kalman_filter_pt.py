@@ -1601,9 +1601,11 @@ def test_shrinkage_gate_band_excludes_identity():
     perfect 1.0 / 0.0. If someone widens the band back past 1.0, or drops either
     companion statistic, this fails.
     """
-    import pymc_kalman_filter_pt_v2 as kf2
+    # `KalmanPortfolioConfig` since 2026-08-31: the gate grades the SCREEN, and
+    # the screen moved to the decision layer with its thresholds.
+    import kalman_portfolio as kp
 
-    cfg = kf2.KalmanRunConfigV2()
+    cfg = kp.KalmanPortfolioConfig()
     assert cfg.gate_shrinkage_slope_hi < 1.0
     assert cfg.gate_shrinkage_rho_max < 1.0
     assert cfg.gate_shrinkage_revision_min_pp > 0.0
@@ -1629,9 +1631,9 @@ def test_the_gate_grades_center_shift_not_the_raw_intercept():
     """
     import numpy as np
 
-    import pymc_kalman_filter_pt_v2 as kf2
+    import kalman_portfolio as kp
 
-    cfg = kf2.KalmanRunConfigV2()
+    cfg = kp.KalmanPortfolioConfig()
     assert not hasattr(cfg, "gate_shrinkage_intercept_max")
     assert cfg.gate_shrinkage_center_shift_max > 0
 
@@ -1669,12 +1671,28 @@ def test_the_gate_grades_center_shift_not_the_raw_intercept():
     ],
 )
 def test_run_config_rejects_invalid_decision_knobs(field, bad):
+    """On `KalmanPortfolioConfig` since 2026-08-31.
+
+    The knobs and their `__post_init__` moved together, which is the point: a
+    validation left behind on a config that no longer has the field is a
+    validation that passes because there is nothing to check.
+    """
     import dataclasses
 
-    import pymc_kalman_filter_pt_v2 as kf2
+    import kalman_portfolio as kp
 
     with pytest.raises(ValueError):
-        dataclasses.replace(kf2.KalmanRunConfigV2(), **{field: bad})
+        dataclasses.replace(kp.KalmanPortfolioConfig(), **{field: bad})
+
+
+def test_the_fit_config_no_longer_accepts_them_at_all():
+    """Deleted, not deprecated: the constructor refuses the keyword outright."""
+    import pymc_kalman_filter_pt_v2 as kf2
+
+    for field in ("forecast_error_multiplier", "tail_risk_vol_floor_k",
+                  "gate_shrinkage_rho_max", "k_book", "weight_cap"):
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            kf2.KalmanRunConfigV2(**{field: 1.0})
 
 
 def test_shrinkage_recovers_the_latent_better_than_the_raw_consensus():
@@ -1761,3 +1779,117 @@ def test_shrinkage_recovers_the_latent_better_than_the_raw_consensus():
     # And it must beat the other degenerate choice: ignoring the name entirely.
     rmse_pooled = float(np.sqrt(np.mean((mu - theta) ** 2)))
     assert rmse_shrunk < rmse_pooled
+
+
+# ---------------------------------------------------------------------------
+# The contrast screen measures the FEATURE, not the zero-fill
+#
+# `prepare_panel` z-scores each feature and then zero-fills the gaps, so a
+# missing name lands exactly on the feature mean. Correlating that column
+# against the response measures the fill too -- asymmetrically, because the
+# pinned block pulls the level correlation toward zero faster than the contrast
+# correlation, and the level is the DENOMINATOR of the dominance ratio.
+#
+# Measured on `feat_eps_signal_beat` (86.8% covered, 856 names filled): 1.52
+# with the fill against 1.39 without, across a 1.5 threshold. The feature is a
+# historical EPS beat rate -- it carries no price and no price-target term, so it
+# cannot be a leg of `Delta log PT - Delta log P` by construction, which the
+# `screen_contrast_identities` docstring has recorded since 2026-08-19.
+# ---------------------------------------------------------------------------
+
+
+def _contrast_fixture(n=4000, fill_share=0.15, seed=3):
+    """A feature correlated with the LEVEL, with a block of missing names."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    level = rng.normal(size=n)
+    x = 0.30 * level + rng.normal(scale=0.95, size=n)      # genuine level signal
+    contrast = 0.30 * x + rng.normal(scale=0.95, size=n)   # and some contrast content
+
+    obs = rng.random(n) >= fill_share
+    xf = np.where(obs, x, np.nan)
+    xf = (xf - np.nanmean(xf)) / np.nanstd(xf)
+    xf = np.nan_to_num(xf, nan=0.0)                        # the zero-fill
+    Y = np.column_stack([level - contrast, level])         # (n, T=2), snapshot last
+    return Y, xf.reshape(-1, 1), obs.reshape(-1, 1)
+
+
+def test_the_screen_measures_the_feature_not_the_fill():
+    """The definition, pinned: a masked correlation IS the observed-row one.
+
+    Deliberately not an assertion about which way `dominance` moves. On the
+    production universe the fill inflates it (1.39 -> 1.52) because the level
+    attenuates faster than the contrast, but that ordering depends on how the
+    two relationships happen to sit and a synthetic fixture tuned until it
+    reproduced the sign would be fitted to its own answer. What is always true
+    is that the statistic must describe the rows where the feature was measured.
+    """
+    import numpy as np
+
+    import pymc_kalman_filter_pt_v2 as kf2
+
+    Y, X, obs = _contrast_fixture()
+    days = np.array([-7.0, 0.0])
+
+    filled = kf2.screen_contrast_identities(Y, X, ["f"], days).iloc[0]
+    clean = kf2.screen_contrast_identities(Y, X, ["f"], days, observed=obs).iloc[0]
+
+    keep = obs[:, 0]
+    snapshot, contrast = Y[:, 1], Y[:, 1] - Y[:, 0]
+    assert clean["corr_level"] == pytest.approx(
+        np.corrcoef(X[keep, 0], snapshot[keep])[0, 1]
+    )
+    assert abs(clean["corr_contrast"]) == pytest.approx(
+        abs(np.corrcoef(X[keep, 0], contrast[keep])[0, 1])
+    )
+    # The fill pulls a correlation toward zero -- 856 names sitting exactly at
+    # the feature mean carry no covariance with anything.
+    assert abs(clean["corr_level"]) > abs(filled["corr_level"])
+    assert clean["n_observed"] == int(keep.sum()) < filled["n_observed"]
+
+
+def test_a_fully_observed_feature_is_measured_identically_either_way():
+    """The mask must be inert where there is nothing to mask."""
+    import numpy as np
+
+    import pymc_kalman_filter_pt_v2 as kf2
+
+    Y, X, _ = _contrast_fixture(fill_share=0.0)
+    days = np.array([-7.0, 0.0])
+    allobs = np.ones_like(X, dtype=bool)
+
+    a = kf2.screen_contrast_identities(Y, X, ["f"], days).iloc[0]
+    b = kf2.screen_contrast_identities(Y, X, ["f"], days, observed=allobs).iloc[0]
+    for col in ("corr_level", "corr_contrast", "dominance"):
+        assert a[col] == pytest.approx(b[col])
+
+
+def test_a_mask_of_the_wrong_shape_degrades_loudly_and_measures_everything():
+    """Never silently apply a mask that does not line up with the design."""
+    import numpy as np
+
+    import pymc_kalman_filter_pt_v2 as kf2
+
+    Y, X, _ = _contrast_fixture()
+    days = np.array([-7.0, 0.0])
+    bad = np.ones((X.shape[0], X.shape[1] + 1), dtype=bool)
+
+    plain = kf2.screen_contrast_identities(Y, X, ["f"], days).iloc[0]
+    got = kf2.screen_contrast_identities(Y, X, ["f"], days, observed=bad).iloc[0]
+    assert got["dominance"] == pytest.approx(plain["dominance"])
+
+
+def test_prepare_panel_builds_the_mask_before_the_fill():
+    """The mask has to be captured while the gaps are still NaN."""
+    import inspect
+
+    import pymc_kalman_filter_pt_v2 as kf2
+
+    src = inspect.getsource(kf2.prepare_panel)
+    obs_at = src.index("observed = np.column_stack")
+    fill_at = src.index("X = np.column_stack([_standardise(")
+    assert obs_at < fill_at, (
+        "the observed mask is built after the standardise/zero-fill, so it can "
+        "no longer tell a missing name from one at the mean"
+    )

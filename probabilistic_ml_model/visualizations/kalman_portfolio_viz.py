@@ -1153,6 +1153,30 @@ def render_replay(result: dict[str, Any], cfg: Any = None) -> None:
     shipped_share = getattr(cfg, "factor_share", 0.35)
     sector_cap = getattr(cfg, "sector_cap", None)
 
+    # The screen and risk-book panels came with the stages on 2026-08-31. They are
+    # `kalman_viz_v2`'s functions, called rather than copied: the plotting code has
+    # one home and the import direction stays one-way (`kalman_portfolio_viz` ->
+    # `kalman_viz_v2`, never back). The v2 workflow's own `render_run` already
+    # guards these with `.get()`, so it simply draws fewer panels now.
+    screen = result.get("screen")
+    if screen is not None and len(screen):
+        try:
+            from probabilistic_ml_model.visualizations import kalman_viz_v2 as _v2viz
+        except Exception as exc:  # pragma: no cover - optional plotting stack
+            logger.warning("screen panels skipped: %s", exc)
+        else:
+            with section("10_screen"):
+                _attempt("screen_overview", _v2viz.plot_screen_overview, screen, None)
+                _attempt("rank_correlations", _v2viz.plot_rank_correlations,
+                         result.get("kalman_results")
+                         if result.get("kalman_results") is not None else screen)
+                _attempt("er_sd_calibration", _v2viz.plot_er_sd_calibration,
+                         screen, None)
+            if result.get("risk_book") is not None:
+                with section("10b_risk"):
+                    _attempt("risk_book", _v2viz.plot_risk_book,
+                             result["risk_book"], cfg)
+
     # The REPLAY's own sections, not the fit's. `15_forecast` and `15b_decision`
     # belong to the v2 workflow, which writes them once per fit; this script runs
     # many times over one fit, so its panels landing there would overwrite the

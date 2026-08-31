@@ -1765,7 +1765,17 @@ def optimize_portfolio(
     if groups is not None and "sector" not in _report_labels:
         _report_labels["sector"] = np.asarray(groups)
     for _dim, _vals in _report_labels.items():
-        _totals = pd.Series(w).groupby(np.asarray(_vals)[rows]).sum()
+        _keys = pd.Series(np.asarray(_vals, dtype=object)[rows])
+        # `groupby` DROPS null keys, so weight on an unlabelled name leaves the
+        # total silently rather than joining a bucket. That is what let a 30 %
+        # sector cap report itself satisfied at a true 59.1 % on run
+        # `b00f8d8ca093`: three of the sector's names had no label, so a fifth of
+        # the book was not in any group and the maximum was taken over what was
+        # left. Measured here, on the same weights, so the cap and the number
+        # that reports it cannot disagree.
+        _unlabelled = float(pd.Series(w)[_keys.isna().to_numpy()].sum())
+        summary[f"unlabelled_{_dim}_weight"] = _unlabelled
+        _totals = pd.Series(w).groupby(_keys.to_numpy()).sum()
         if not len(_totals):
             continue
         summary[f"top_{_dim}_weight"] = float(_totals.max())
@@ -1780,6 +1790,20 @@ def optimize_portfolio(
         summary["top_group"] = summary[f"top_{_primary}"]
         summary["n_groups"] = summary[f"n_{_primary}_groups"]
         summary["top_group_dimension"] = _primary
+        summary["unlabelled_group_weight"] = summary.get(
+            f"unlabelled_{_primary}_weight", 0.0
+        )
+        if summary["unlabelled_group_weight"] > 0:
+            logger.warning(
+                "book [%s]: %.1f%% of weight carries no %s label, so "
+                "top_group_weight (%.1f%%) is a maximum over the LABELLED part "
+                "only and any cap on this dimension was not enforced on that "
+                "share.",
+                rank_by,
+                100.0 * summary["unlabelled_group_weight"],
+                _primary,
+                100.0 * summary["top_group_weight"],
+            )
     logger.info(
         "book [%s]: %d names, effective N %.1f, E[r] %.2f%%, GVaR %.2f%%, growth "
         "%.5f, interior Kelly %.0f%% of book, top group %s",

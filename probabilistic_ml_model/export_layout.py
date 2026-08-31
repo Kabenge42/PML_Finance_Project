@@ -51,10 +51,12 @@ __all__ = [
 #: Artifact roots. Separate on purpose — see the module docstring.
 DEFAULT_RESULTS_DIRNAME_V1 = "pymc_kalman_filter_pt_results"
 DEFAULT_RESULTS_DIRNAME_V2 = "pymc_kalman_filter_pt_v2_results"
+DEFAULT_RESULTS_DIRNAME_PORTFOLIO = "kalman_portfolio_results"
 
 #: The environment variable each workflow resolves its root from.
 RESULTS_DIR_ENV_V1 = "KALMAN_PT_RESULTS_DIR"
 RESULTS_DIR_ENV_V2 = "KALMAN_V2_RESULTS_DIR"
+RESULTS_DIR_ENV_PORTFOLIO = "KALMAN_PORTFOLIO_RESULTS_DIR"
 
 #: Where an artifact goes when no prefix matches. Not an error: a one-off frame
 #: is a legitimate thing to write, and burying it is better than refusing it.
@@ -154,6 +156,35 @@ V2_ONLY_SECTION_DIRS: frozenset[str] = frozenset({
     "04b_audit", "09b_comparison", "09_gates",
     "15_forecast", "15b_decision",
     "15c_forecast", "15d_sweeps", "15e_books",
+})
+
+#: Sections the DECISION LAYER owns, i.e. `kalman_portfolio.py` and nothing else.
+#:
+#: Its migration moves a file out of v2's tree when the stem resolves to one of
+#: these, or when the stem ends `_portfolio`. Ownership is provable rather than
+#: guessed, and it had to be checked rather than assumed: neither v2 nor v1
+#: writes any `14b_*` stem into the v2 tree (v1 has its own `14b_recommendations`
+#: under its own root), and `09_gate_report_portfolio` already carries a suffix
+#: that distinguishes it from `09_gate_report_v2` in the shared `09_gates`
+#: directory -- which is why `09_gates` is NOT listed here.
+#:
+#: `10_screen`, `10b_risk` and `10c_analytics` joined on 2026-08-31, when the
+#: screen and the risk book moved. They are not in `V2_ONLY_SECTION_DIRS`
+#: because v1 writes them too, under its own root.
+PORTFOLIO_ONLY_SECTION_DIRS: frozenset[str] = frozenset({
+    "10_screen", "10b_risk", "10c_analytics", "14b_recommendations",
+    "15c_forecast", "15d_sweeps", "15e_books",
+})
+
+#: Sections the v2 FIT still writes, after the decision layer moved out.
+#:
+#: Stated rather than derived by subtraction, because the two sets overlap:
+#: `09_gates` holds one report from each side and `04_panel` is read by the
+#: replay and written by the fit.
+V2_FIT_SECTION_DIRS: frozenset[str] = frozenset({
+    "01_data", "02_eda", "03_features", "04_panel", "04b_audit",
+    "06_prior", "07_posterior", "08_ppc", "09_diagnostics", "09b_comparison",
+    "09_gates",
 })
 
 

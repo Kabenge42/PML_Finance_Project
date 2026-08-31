@@ -347,3 +347,90 @@ def test_renderer_tolerates_every_section_missing():
     lines: list[str] = []
     render_recommendations(printer=lines.append)
     assert lines and any("NOT investment advice" in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# Refuse rather than fill
+#
+# One unresolved label used to become a group. On run `b00f8d8ca093` 145 names
+# that lost their descriptive block were filled to "Unknown", cleared
+# MIN_GROUP_N, took the largest shrunk excess of the run (+9.88pp against a
+# +/-4.93pp band) and were graded NEUTRAL -- not by a guard, but because a NaN
+# `p_pos_cond` fails `>= p_hi` and `<= p_lo` alike.
+# ---------------------------------------------------------------------------
+
+
+def _unlabelled_universe(n_missing: int = 30, n: int = 240, seed: int = 11):
+    """A universe where ``n_missing`` names carry no sector at all."""
+    rng = np.random.default_rng(seed)
+    isins = np.array([f"U{i:04d}" for i in range(n)])
+    sector = np.array(
+        ["Tech", "Health", "Fin"] * ((n - n_missing) // 3 + 1), dtype=object
+    )[: n - n_missing]
+    sector = np.concatenate([sector, np.array([None] * n_missing, dtype=object)])
+    latent = rng.normal(0.15, 0.25, size=(n, 500))
+    coords = pd.DataFrame({"isin": isins, "sector": pd.Series(sector, dtype=object)})
+    return latent, coords, n_missing
+
+
+def test_unlabelled_names_never_become_a_group():
+    latent, coords, n_missing = _unlabelled_universe()
+    signals = group_allocation_signals(latent, coords, levels=["sector"])
+
+    groups = set(signals["group"])
+    assert "Unknown" not in groups
+    assert "None" not in groups and "nan" not in groups
+    # The reported membership reconciles against the LABELLED universe, which is
+    # the arithmetic a reader uses to notice a phantom in the first place.
+    assert int(signals["n"].sum()) == len(coords) - n_missing
+
+
+def test_unlabelled_count_is_reported_not_swallowed():
+    latent, coords, n_missing = _unlabelled_universe()
+    signals = group_allocation_signals(latent, coords, levels=["sector"])
+
+    assert "n_unlabelled" in signals.columns
+    # Per level, not per group: these names reached no group, so there is no
+    # group to attribute them to.
+    assert signals["n_unlabelled"].unique().tolist() == [n_missing]
+
+
+def test_a_fully_labelled_universe_reports_zero_unlabelled():
+    latent, coords, _ = _unlabelled_universe(n_missing=0)
+    signals = group_allocation_signals(latent, coords, levels=["sector"])
+    assert signals["n_unlabelled"].unique().tolist() == [0]
+
+
+@pytest.mark.parametrize(
+    "excess, p_cond",
+    [(float("nan"), 0.9), (0.5, float("nan")), (float("nan"), float("nan"))],
+)
+def test_a_non_finite_input_is_unresolved_and_never_neutral(excess, p_cond):
+    from probabilistic_ml_model.pymc_models._recommendations import _verdict
+
+    verdict = _verdict(excess, p_cond, 0.1, -0.1, 0.6, 0.4)
+    assert verdict == "UNRESOLVED"
+    # NEUTRAL is a measurement. This is the absence of one, and the two must not
+    # print the same.
+    assert verdict != "NEUTRAL"
+    assert verdict in VERDICTS
+
+
+def test_size_down_mask_distinguishes_unseen_from_uncleared():
+    rng = np.random.default_rng(3)
+    isins = np.array([f"S{i:03d}" for i in range(40)])
+    # The watch is scored on the first 30 names only; the last 10 are invisible
+    # to it and come back sizeable by silence rather than by assessment.
+    scored = pd.DataFrame({
+        "isin": isins[:30],
+        "n_analysts": rng.integers(1, 25, 30),
+        "band_width": rng.random(30),
+    })
+
+    mask, unseen = size_down_mask(scored, isins, return_unseen=True)
+    assert unseen == 10
+    assert mask[30:].all(), "an unseen name is not flagged -- that is the hazard"
+
+    # The default return is unchanged, so no existing caller is broken.
+    assert isinstance(size_down_mask(scored, isins), np.ndarray)
+    assert np.array_equal(size_down_mask(scored, isins), mask)

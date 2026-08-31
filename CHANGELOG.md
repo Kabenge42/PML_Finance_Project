@@ -5,6 +5,443 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - the fit stops deciding, and nothing fills a missing label (2026-08-31)
+
+Replay `b00f8d8ca093` sized three positions it could not name, and a 30 % sector
+cap reported itself satisfied at a true **59.1 %**. Root cause, found by opening
+the artifacts rather than by reading the join: the replay ran a 2026-08-30
+handoff (`317dbfff4bcf`, 6,507 names) against a **2026-08-27 screen from a
+different fit** (`6efb530d5881`, 6,513 names). Overlap 6,362, so 145 handoff
+names had no row in the screen — and every symptom is that one number.
+
+This entry covers the first change of several: everywhere a missing label was
+filled, it now refuses instead. The cross-vintage read itself is closed by a
+blocking gate in a later change.
+
+### Changed
+
+
+- **`pymc_kalman_filter_pt_v2.py` ends at the posterior.** `run_screen`,
+  `_book_group_labels` and `run_risk_book` moved to `kalman_portfolio.py` and
+  `run_forecast_layer` is gone. The fit now fits, checks and writes
+  `07_forecast_handoff_v2.nc`; everything downstream replays off that file.
+  Production is two commands:
+
+  ```powershell
+  python pymc_kalman_filter_pt_v2.py --write     # fit -> handoff
+  python kalman_portfolio.py --write             # decide -> analytics
+  ```
+
+  **Why it had to be a move and not a guard.** Both scripts owned a decision
+  layer. §15b sized a book with the same `optimize_portfolio` call as
+  `run_decision_books` but with no ranking arms, no sector cap, no size-down veto
+  and no gates; §15's forecast summary duplicated §15c's. The seam between the two
+  was four CSVs read with no vintage check — which is how a 2026-08-30 posterior
+  came to meet a 2026-08-27 screen from a different fit. `15_forecast_summary_v2`
+  and `15b_decision_analytics_v2` are retired; `forecast_factor_effect` was the
+  one thing §15 measured that §15c did not, and it moved rather than died.
+
+  The import direction is one-way and now has a test: `kalman_portfolio` imports
+  the fit script, never the reverse. `apply_out_of_support`,
+  `EXPORT_IDENTITY_COLUMNS`, the gate vocabulary and the provenance SSOT stay in
+  the fit script and are imported, not copied — including the canonical column
+  renames, because what a column is called on the published surface must not
+  depend on which script happened to write it.
+
+- **The screen is built, not read.** `kalman_portfolio.main` calls `run_screen`
+  off the handoff. It used to read `10_screen_results_v2.csv` from whatever was
+  sitting in the results directory, and nothing checked the file came from the fit
+  being replayed. `_group_labels` now reads `handoff.identity` FIRST for the same
+  reason — the handoff's block is written by the fit from `panel.frame`, so it is
+  in-vintage by construction and covers every name the posterior does.
+
+  A property test states what this buys: one screen row per name in the
+  posterior, no name missing, no label invented. The 145-name gap is not
+  reachable from here.
+
+- **The forecast-error shrinkage moved with the screen**, and that is the
+  principled half rather than a consequence. `forecast_error_multiplier` is a
+  **prior the panel cannot identify** and `--sweep multiplier` exists to grid it;
+  baking one reading of it into the artifact the sweep reads would make the sweep
+  measure only that the prior had been applied. The handoff carries the
+  **unshrunk** latent.
+
+  The arithmetic is now in two array-level functions in `KalmanFilterModel_v2` —
+  `forecast_error_variance_from_arrays` and `shrink_latent_from_arrays` — with the
+  existing `(idata, panel)` entry points delegating to them. One implementation,
+  because the fit and the replay disagreeing about what was applied is the failure
+  worth spending a refactor on. The delegation is **bit-identical**: the noise is
+  drawn as `(sample, isin)` and transposed rather than as `(isin, sample)`
+  directly, which reproduces `standard_normal((chain, draw, isin))` element for
+  element under numpy's C-order fill. Drawn the other way every shrunk value moves
+  by a Monte-Carlo error no test tolerance would catch as a refactor.
+
+- **`--forecast`, `--portfolio`, `--forecast-backend`, `--forecast-horizon-days`
+  and `--forecast-factor-share` are refused by the fit script**, with a message
+  naming where they went. Accepting a flag that names a stage the script no longer
+  runs tells the caller nothing, and `--forecast-factor-share` sets a prior that
+  decides the shape of a book. This is the `--write is accepted but does nothing`
+  pattern, and it is the pattern being retired.
+
+- **`portfolio_input_vintage`, and it blocks.** Every v2 artifact the replay
+  reads is checked against the handoff's own `run_id` before anything reads it.
+  A mismatch exits **3** with nothing written — reporting the wrong lineage in a
+  gate table beside a sized book would be reporting it; refusing to produce the
+  book is the point. `--allow-stale-inputs` downgrades it to the behaviour
+  `dashboards/geib/data.py::_join_panel` has had since it was written: log an
+  error, **drop** the mismatched frame, and let the stages that needed it skip.
+  Degrading to empty is recoverable; degrading to wrong is not.
+
+  The verdict names **both** run_ids and the frame. A message that reports only
+  the offending file costs its reader a forensic pass to find what it was
+  supposed to match.
+
+  On the tree as it stands this fires immediately and correctly: the handoff is
+  `317dbfff4bcf` and `09_diagnostics_v2.csv` is `6efb530d5881`. That is the same
+  mismatch the artifact's 145-name gap came out of.
+
+  Three verdicts, and the difference between the last two is the design. A
+  **different** `run_id` is a positive assertion of the wrong lineage and blocks.
+  **No** `run_id` — an export predating the provenance SSOT — is warned and
+  **kept**: "no provenance" is not "wrong provenance", and the only frame that
+  can still reach this path has no ISIN axis (one row per model *parameter*), so
+  it cannot mis-attribute a company to a name. A per-ISIN frame in that position
+  would have to be refused, and the code says so.
+
+  The gate's surface is small now, and deliberately so: since the screen, the
+  risk book and the identity block moved into the handoff, `09_diagnostics_v2` is
+  the only frame still read from disk beside it. The gate is what makes adding
+  another one safe.
+
+- **Two gates block; neither grades the model.** The claim that *no* gate in this
+  replay blocks was right about gates that score the model against the analyst
+  trail it was fitted to — no such measurement can be decisive, which is why the
+  vintage harness exists. It was never a claim about lineage.
+  `portfolio_input_vintage` grades whether these files came from one fit, and
+  `portfolio_sector_concentration` grades whether a stated constraint was
+  actually applied to the weight it claims to cap. Both are facts, checkable now.
+  The test that pinned "nothing blocks" now pins that distinction instead.
+
+- **`group_allocation_signals` no longer fills an unresolved label.** A name whose
+  label did not resolve becomes `None`, which matches no group by construction,
+  and `n_unlabelled` travels with the frame per level. Filled to `"Unknown"`, the
+  145 cleared `MIN_GROUP_N`, took the largest shrunk excess of the run
+  (**+9.88 pp** against a ±4.93 pp band — nearly double Health Care's +5.17) and
+  appeared beside eleven real sectors with nothing marking it as different in
+  kind. It is not a group. It is the absence of one.
+
+- **`_verdict` returns `UNRESOLVED`, never `NEUTRAL`, on a non-finite input.**
+  Both comparisons are false against NaN, so a group the arithmetic could not
+  grade fell through to `NEUTRAL` and printed as a measurement. That is what kept
+  the phantom row out of the report as an exception — not a guard, an accident.
+  `VERDICTS` gains a fourth member that is deliberately not on the same scale.
+
+- **Unlabelled weight is measured where it escapes.** `pandas.groupby` **drops**
+  null keys, so weight on an unlabelled name left the total rather than joining a
+  bucket, and `top_group_weight` was a maximum over whatever survived.
+  `optimize_portfolio` now reports `unlabelled_<dim>_weight` and
+  `unlabelled_group_weight` from the same weights the cap projects, and
+  `portfolio_sector_concentration` **blocks** when a cap is set on a dimension and
+  any weight escaped it. A constraint enforced on a label that can be absent is
+  not a constraint.
+
+- **The cap projection treats unlabelled names as outside the constraint.** No
+  bucket, no spill, no headroom. This is also what stops it crashing: `np.unique`
+  over a mixed `str`/`None` array raises outright, so the previous code was only
+  ever safe because something upstream had already filled the nulls away.
+
+- **`size_down_mask` distinguishes *not flagged* from *not present*.** An ISIN
+  absent from the frame the watch was scored on came back sizeable —
+  indistinguishable from one the watch examined and cleared. That silence sized
+  **MaaT Pharma at 9.13 % on two analysts**, which is the watch's own
+  thin-coverage condition, because the screen came from a different fit and did
+  not contain the name. The count is now logged unconditionally (a caller who
+  does not ask is exactly the caller who needs telling) and available via
+  `return_unseen=`; the default ndarray return is unchanged. New non-blocking
+  `portfolio_size_down_coverage` gate records it.
+
+### Fixed — a gate that was measuring its own zero-fill
+
+- **`screen_contrast_identities` takes an `observed` mask** and measures each
+  feature on the rows where it was actually recorded. `prepare_panel` z-scores a
+  feature and then zero-fills the gaps, so a missing name lands exactly on the
+  feature mean; correlating that column against the response measures the FILL
+  as well, and it does so **asymmetrically** — the pinned block pulls the level
+  correlation toward zero faster than the contrast correlation, and the level is
+  the *denominator* of the dominance ratio.
+
+  This blocked the fit. `drift_contrast_leakage` failed on
+  `feat_eps_signal_beat` at dominance 1.52 against a 1.5 threshold — the only
+  admitted feature below 100% coverage (86.8%, 856 names filled; every other one
+  is ≥ 98.2%), and the only one flagged:
+
+  | rows | r(level) | r(contrast) | dominance | |
+  |---|---|---|---|---|
+  | all — what the gate did | −0.0827 | +0.1261 | **1.52** | FAIL |
+  | observed only | −0.1001 | +0.1393 | **1.39** | pass |
+  | raw MV, no panel prep | −0.1009 | +0.1392 | **1.38** | pass |
+
+  The observed numbers reproduce the raw MV's, so the feature's relationship to
+  the data never moved: the whole of the verdict was the fill.
+
+  **Not leakage, and it could not have been.** The gate exists to catch features
+  that *are* the trail's increments; the `feat_log_uplift` accounting identities
+  it was calibrated on scored 7.02 / 4.41 / 14.99. A historical EPS beat rate
+  carries no price and no price-target term, so it cannot be a leg of
+  `Δ log PT − Δ log P` **by construction** — which the function's own docstring
+  has recorded since 2026-08-19, when this same feature tripped the un-margined
+  form and the margin was added because of it. The margin was the previous
+  patch on this; the fill is the actual cause.
+
+  Verified pre-existing before touching anything: identical failure on a stashed
+  HEAD, same feature, same 1.53, same 9-kept/71-excluded — and the last committed
+  gate report already carried it. The calibration table for
+  `DRIFT_SELECTION_MIN_COVERAGE` names the hazard in its own prose ("a large
+  block of rows pinned at its own mean, which attenuates its slope toward zero");
+  this carries that recognition into the statistic instead of leaving it as a
+  comment.
+
+  The screen now also reports `n_observed`, so a verdict can be read against the
+  sample it was measured on. Four tests pin it — including that the mask is inert
+  where nothing is masked, that a wrong-shaped mask degrades loudly rather than
+  silently, and that `prepare_panel` builds the mask *before* the fill, since
+  afterwards a missing name is indistinguishable from one at the mean.
+
+  **No default moved.** All nine drift features are retained; the alternative
+  remedy the gate names — excluding the feature — would have discarded a
+  legitimate fundamental on a measurement artifact.
+
+### Added
+
+- **A third results root.** `KALMAN_PORTFOLIO_RESULTS_DIR` ->
+  `kalman_portfolio_results`. The replay writes there and reads the fit's tree;
+  `KalmanPortfolioConfig` splits `results_path` (write) from `v2_results_path`
+  (read), with `--results-dir` and `--v2-results-dir` behind them. One root until
+  now, so a fit and every replay of it interleaved in one directory -- a fit
+  happens once, a replay happens many times over that fit, and a reader browsing
+  the tree could not tell which run had produced what.
+
+  `kalman_portfolio.py --migrate-layout [--apply]` re-files an existing tree,
+  mirroring the v2 migration: dry-run default, `target.resolve() ==
+  path.resolve()` idempotence, empty-directory cleanup only. It moves **only what
+  it can prove it owns** -- stem ends `_portfolio`, or resolves to
+  `PORTFOLIO_ONLY_SECTION_DIRS`. Applied here: **51 files** moved, and
+  `09_gate_report_portfolio.csv` went while `09_gate_report_v2.csv`,
+  `04_panel_frame_v2`, the diagnostics and the handoff all stayed. That ownership
+  test was checked rather than assumed -- neither v2 nor v1 writes any `14b_*`
+  stem into the v2 tree.
+
+- **The `kalman_portfolio` schema, and the first `CREATE SCHEMA` in the
+  repository.** `sql_scripts/kalman_portfolio/00_schema.sql` plus
+  `scripts/apply_kalman_portfolio_schema.py` (`--verify`), modelled on the v2
+  applier: raw DBAPI cursor for the dollar-quoted body, apply-then-prove-clean.
+  `analytics` has always been assumed to pre-exist, which is fine for a schema
+  older than the code and wrong for one this change introduces --
+  `to_sql(schema=...)` fails with a bare `InvalidSchemaName` *after* the replay
+  has done its work. Applied and verified against the live database.
+
+- **`--write` writes.** `export_frames` appends to `kalman_portfolio` with CSV
+  written either way, and the documented no-op is gone. **Append-only**, because
+  a replay is one observation about a fit rather than the current state of one:
+  three ranking arms and two prior sweeps only mean anything against each other,
+  and a replay stops being reproducible the moment its handoff is superseded. A
+  `run_id` already stored is **refused** -- an append-only store whose rows can
+  be silently doubled is not a history.
+
+  `write_analytics` now defaults to **False**, matching what its docstring has
+  always said. It was `True` while the write was a no-op, so `--write` set a flag
+  that was already set and the documented "opt in" was not one.
+
+- **Two ids on the canonical table, and it stays in `analytics`.**
+  `kalman_filtered_price_targets_v2` is published by `publish_canonical_table`
+  with `if_exists='replace'` under the **fit's** `run_id`, plus new `replay_id` /
+  `replayed_at`. The fit's id is load-bearing: `_join_panel` asserts this table's
+  `run_id` equals `analytics."04_panel_frame_v2"`'s, which the fit writes, and
+  drops the whole descriptive block on a mismatch. Stamping it with the replay's
+  id would have made GEIB degrade to empty on every run -- the assertion working
+  exactly as designed, against us. Two ids because there are two runs behind the
+  row and one id cannot answer both questions.
+
+- **Precedence, declared on the row.** `10b_risk_book_v2` gains `book_role`,
+  `book_engine` and `book_universe`; `15e_decision_books` gains the last two
+  beside the `book_role` it already had. One posterior has produced two books for
+  four editions with no statement of which was the recommendation, and a reader
+  handed two books with no precedence uses whichever they find first. They are
+  not competing answers to one question -- they screen **disjoint** universes
+  (`mcap_global_r <= 0.03` against no screen), which is why neither is simply
+  better and why the universe is on the row too.
+
+- **`scripts/register_vintage_task.ps1`**, which
+  `capture_panel_vintage_task.ps1` has named since it was written and which did
+  not exist -- no `schtasks` or `Register-ScheduledTask` call appeared anywhere
+  in the repository. The capture was scheduled in principle and unscheduled in
+  fact.
+
+  Quarterly (1 Mar/Jun/Sep/Dec), idempotent, **no stored credentials** -- the
+  task runs as the current user and `DB_URL` comes from `set_env.ps1`, which the
+  tickler dot-sources. `-StartWhenAvailable` is the setting that matters: a
+  missed vintage cannot be reconstructed, because the price and target trails on
+  the MV are unversioned. This is what decides whether the second vintage arrives
+  -- and until it does, every gate in this pipeline still scores the model
+  against the analyst trail it was fitted to.
+
+
+- **The handoff carries the whole identity block, and the screen's own inputs.**
+  It was built from `screen`, which is assembled *before*
+  `_attach_identity_frames` enriches it, so it owned only the nine identity
+  columns the screen computes for itself — 9 of 42, and **no `country_name`**,
+  which is one of the five coordinates the recommendation layer reports a posture
+  on. A replay therefore could not fall back to the handoff even in principle,
+  which is why a partially-matching screen was able to shadow it. It is built
+  from `panel.frame` now, the same source the export's own identity join reads,
+  so the handoff and every exported table describe a name identically.
+
+  `ForecastHandoff` also gains `latent_sd`, `fitted_mean` (`mu_scaled`, falling
+  back to `mu_reg`), `rar` and `variance_weights`, plus the seven per-ISIN
+  vectors in `HANDOFF_PANEL_VECTORS`. Together these are what will let the SCREEN
+  run off a handoff rather than off a live fit. The three per-ISIN arrays are
+  thinned on the **same index** as `mu_std`: the shrinkage combines `latent_sd`
+  with `sigma_std` and the risk-adjusted probability differences `mu_std` against
+  `rar`, both per draw, so independently thinned arrays would pair unrelated
+  draws while every shape still matched. `__post_init__` shape-checks rather than
+  trusts, and `screen_ready` says whether a given file can be screened from — a
+  handoff written before today can be forecast from and not screened from, and it
+  degrades on purpose instead of on a `NoneType` three frames deep.
+
+  Cost: ~107 MB → ~270 MB at the current 2,000-sample float32 thin.
+  `DEFAULT_HANDOFF_SAMPLES` is the lever; the dtype is not.
+
+- **Identity columns are encoded by kind, not by `astype(str)`.** NetCDF has no
+  null string and no nullable integer, so every column has to be flattened to
+  *something*, and three of the four kinds round-trip wrong under the obvious
+  cast: a `datetime64` becomes an ISO string, a nullable `Int64` becomes
+  `float64` with `NaN` (its `to_numpy()` yields an OBJECT array holding `pd.NA`,
+  which the old branch stringified into the literal `"<NA>"` — a text column
+  where a ranking should be), floats pass through, and text carries `""` for
+  missing. The tag travels with the data as an `ident_encoding` attribute rather
+  than being imported from the workflow script's type SSOT, because that script
+  imports this module.
+
+  **The text case is the load-bearing one.** `""` coming back as a value rather
+  than as missing is the `"Unknown"` bucket again under a quieter name — `notna()`
+  is True for it, so it would form a group, clear `MIN_GROUP_N` and evade a cap
+  exactly as before. `_decode_ident_column` restores it as null.
+
+### Removed
+
+
+- **25 decision-layer fields left `KalmanRunConfigV2`**, at the same default
+  values, for `KalmanPortfolioConfig`: the shrinkage trio, the five
+  `gate_shrinkage_*` thresholds, the risk book's `cvar_alpha` / `k_book` /
+  `book_min_weight` / `weight_cap` / `group_caps` / `p_long` /
+  `mcap_global_r_max` / `tail_risk_vol_floor_k`, the `mc_horizon` / `mc_rho`
+  pair, and the whole `forecast_*` / `portfolio_*` block. `__post_init__`'s
+  validation and the `mcap_country_r_max` deprecation alias went with them.
+
+  **Deleted, not deprecated.** A knob that can still be set on the fit's config
+  and no longer reaches anything is `--write is accepted but does nothing` in
+  dataclass form, and that is the pattern being retired, not extended. Six tests
+  pin the split in both directions — absent there, present here, validation still
+  fires, and the fit's constructor refuses the keyword outright rather than
+  accepting it. A seventh asserts the property the removal bought:
+  `KalmanRunConfigV2` has **no field that nothing reads**.
+
+  The six tests in `test_kalman_filter_pt.py` that pinned these thresholds and
+  their validation were repointed at `KalmanPortfolioConfig` rather than deleted.
+  A validation test left behind on a config that no longer has the field is a
+  test that passes because there is nothing to check.
+
+  `forecast_scenarios` **stayed**: it sizes the file this script writes, which is
+  this script's decision. Everything else was a decision about what a replay does
+  with that file.
+
+  The five CLI flags that named the moved stages are **kept as arguments** and
+  refuse with a message pointing at `kalman_portfolio.py`. Deleting them gives
+  `unrecognized arguments`, which is true and unhelpful; `--help` now says MOVED
+  rather than describing a §15 this script no longer has.
+
+- **`gate_decay_rmse_max`, which was already dead.** A pre-existing orphan, not
+  one this change created: `ppc_decay_residual` grades against the module
+  constant `GATE_DECAY_RESIDUAL_TOL` and no stage reports an RMSE for this
+  ceiling to bound. Removed under the same rule as the 25 above rather than kept
+  with a docstring inventing a use for it — `KalmanRunConfigV2` now has **zero**
+  fields that nothing reads, and that is a property worth being able to state.
+
+- **A regex that would have gone stale silently.** The post-run skill reads
+  `mcap_global_r_max`'s shipped default out of a source file by regex rather than
+  by import (importing drags in the whole PyMC stack for one float). It pointed
+  at `pymc_kalman_filter_pt_v2.py`, which no longer defines the field, so it
+  would have returned its `0.03` fallback without saying so — the *exact*
+  staleness that function was written to prevent, after a hard-coded `0.01`
+  once reported a 175-name eligible pool that was really 850. It now searches
+  both files and **logs** a miss instead of swallowing it, and a test asserts the
+  regex still matches and agrees with the live default.
+
+### Fixed — the DDL divergence, settled
+
+The generator is authoritative; the reformatting pass was the mistake. Both
+long-standing failures are green, and the suite is at **five** pre-existing
+failures rather than seven.
+
+- **`write_analytics_ddl_v2` takes `schema=`.** It hardcoded `analytics` in the
+  emitted text while the actual `to_sql` honoured `DB_ANALYTICS_SCHEMA`, so the
+  two could disagree about the table they described. `kalman_portfolio.py` now
+  renders its own frames' DDL into `sql_scripts/kalman_portfolio/`.
+
+- **All eight analytics DDLs regenerated**, with the "Generated by" line
+  restored — the line the test uses to FIND them. Without it
+  `test_generated_analytics_ddls_carry_the_identity_block` checked zero files and
+  passed, because it counts what it found rather than what it expected to find.
+  The header now says so, at length, in the file most likely to be reformatted
+  again. `15_forecast_summary_v2.sql` and `15b_decision_analytics_v2.sql` are
+  deleted: §15/§15b are retired.
+
+- **§7m in `pml_df_metadata_populate.sql`**, registering the 42-column identity
+  block against `kalman_pt_v2`. Applied to the live catalogue: 42 of 42 tagged,
+  none missing from `pml_df_metadata`, `assert_pymc_catalogue_coverage()` still
+  clean. Nothing enforces this at runtime — none of the 42 matches the
+  `feat_` / `observed_` / `n_` prefixes the coverage view scans, so registering
+  them cannot raise PHANTOM and omitting them cannot raise MISSING. It is
+  checked in the test suite or not at all, which is exactly why it is written
+  down. §7m.3 **reports** an unknown column rather than inserting one: a row
+  invented there would claim a category and a data type this script cannot know,
+  and the catalogue would document a guess.
+
+- **The replay renders DDL only on a publishing run.** The fit renders
+  unconditionally, and should — it exports once, and an offline run still
+  deserves a reviewable schema. A replay runs many times over one fit, and is
+  what test suites drive with synthetic frames. Not hypothetical: rendering
+  unconditionally let a 40-name fixture overwrite the real 79-column canonical
+  schema during a test run, because `write_analytics_ddl_v2` resolves its default
+  path relative to the CWD and `sql_scripts/` is committed source.
+
+- **`capture_panel_vintage.py` pointed at a DDL that no longer exists.**
+  `kalman_panel_vintage.sql` was renamed to `panel_vintage_v2.sql`; the constant
+  was not. `ensure_table` would have exited with "missing DDL" on any database
+  without the table — the only case it exists to handle, and the case a fresh
+  quarterly capture hits.
+
+### Open — test-suite clean-up
+
+**Five** remain, down from seven: the two DDL/SQL failures are fixed above. All
+five predate this work and reproduce on a clean tree (verified by stashing every
+change). A standing red suite is how the next real regression arrives
+unnoticed.
+
+- `tests/test_portfolio_optimization.py::test_fractional_kelly_scales_down_and_refuses_to_scale_up`
+  — `assert 0.025 == 0.05`, i.e. the fraction is applied twice or the fixture's
+  expectation is stale. Isolated to the Kelly multiplier; no exported column is
+  known to depend on it. Cheapest of the five to settle.
+
+- Four in `tests/test_kalman_filter_pt.py`, all one disagreement:
+  `test_run_config_mcap_gate_default` asserts `mcap_country_r_max == 0.02` against
+  a shipped `0.01`, and `test_cvar_book_mcap_gate_default_excludes_small_and_unranked`,
+  `..._loose_threshold_keeps_ranked_names_only` and `..._skipped_when_column_missing`
+  fall out of the same default. **v1 only** — v2's gate is `mcap_global_r_max` and
+  is unaffected. Decide which number is right before touching the tests: `0.01`
+  keeps roughly the top 1 % per country and is a materially tighter universe than
+  the tests were written against.
+
 ## [Unreleased] - a hierarchy that can nest, and a book that solves its own size (2026-08-28)
 
 Run `807df55e7158` cleared all twenty-six export gates and then handed the

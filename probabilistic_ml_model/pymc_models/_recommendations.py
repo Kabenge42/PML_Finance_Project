@@ -104,8 +104,16 @@ GROUP_SIGNAL_COORDS: tuple[str, ...] = (
 HDI_LO: float = 0.04
 HDI_HI: float = 0.96
 
-#: The three postures. Ordered strong-to-weak so a sort is meaningful.
-VERDICTS: tuple[str, ...] = ("OVERWEIGHT", "NEUTRAL", "UNDERWEIGHT")
+#: The postures. Ordered strong-to-weak so a sort is meaningful.
+#:
+#: ``UNRESOLVED`` is not a fourth posture on the same scale -- it is the absence
+#: of one, and it exists because ``NEUTRAL`` was silently doing that job. A NaN
+#: ``p_pos_cond`` fails ``>= p_hi`` and fails ``<= p_lo``, so a group the
+#: arithmetic could not grade fell through to ``NEUTRAL`` and read as a measured
+#: verdict. On run ``b00f8d8ca093`` that is what kept a phantom 145-name group
+#: carrying the largest shrunk excess on the run (+9.88pp against a +/-4.93pp
+#: band) out of the report as an exception. Not a guard -- an accident.
+VERDICTS: tuple[str, ...] = ("OVERWEIGHT", "NEUTRAL", "UNDERWEIGHT", "UNRESOLVED")
 
 #: The per-name action ladder, most bullish first.
 #:
@@ -287,8 +295,27 @@ def group_allocation_signals(
     for level in levels:
         if level not in coords.columns:
             continue
-        labels = coords[level].fillna("Unknown").astype(str).to_numpy()
-        counts = pd.Series(labels).value_counts()
+        # NEVER FILL. A name whose label did not resolve is not a member of a
+        # group called "Unknown"; it is a name with no group. Filling it built a
+        # phantom twelfth sector of 145 names on run `b00f8d8ca093` that cleared
+        # MIN_GROUP_N, drew the largest shrunk excess of the run, and appeared
+        # beside eleven real sectors with nothing marking it as different in
+        # kind. `None` cannot equal any group label, so the membership test
+        # below excludes these rows by construction rather than by a filter
+        # someone has to remember to write.
+        raw = coords[level]
+        labelled = raw.notna().to_numpy()
+        labels = np.where(labelled, raw.astype(str).to_numpy(), None)
+        n_unlabelled = int((~labelled).sum())
+        if n_unlabelled:
+            logger.warning(
+                "%s: %d of %d names carry no label and are EXCLUDED from the "
+                "posture set. They are not a group -- an unresolved label is a "
+                "lineage failure upstream, and a verdict on it would describe "
+                "the failure rather than the universe.",
+                level, n_unlabelled, len(labelled),
+            )
+        counts = pd.Series(labels[labelled]).value_counts()
         eligible = [g for g in counts.index if int(counts[g]) >= min_group_n]
         n_dropped = int(counts.size - len(eligible))
         if not eligible:
@@ -329,6 +356,10 @@ def group_allocation_signals(
         frame["univ_mean"] = univ_mean
         frame["univ_confidence"] = univ_conf
         frame["n_dropped"] = n_dropped
+        # Carried per level, not per group: it counts names that reached NO
+        # group, so there is no group to attribute it to. A reader comparing
+        # `n.sum()` against the universe needs this to make the two reconcile.
+        frame["n_unlabelled"] = n_unlabelled
 
         ow = band if band > 0 else float("inf")
         frame["verdict"] = [
@@ -341,7 +372,8 @@ def group_allocation_signals(
         return pd.DataFrame(columns=[
             "level", "group", "n", "mean", "sd", "hdi_lo", "hdi_hi", "p_pos",
             "confidence", "excess_raw", "lambda_g", "excess_shrunk", "band",
-            "p_pos_cond", "univ_mean", "univ_confidence", "n_dropped", "verdict",
+            "p_pos_cond", "univ_mean", "univ_confidence", "n_dropped",
+            "n_unlabelled", "verdict",
         ])
     out = pd.concat(rows, ignore_index=True)
     out = out.sort_values(["level", "excess_shrunk"], ascending=[True, False])
@@ -356,9 +388,15 @@ def group_allocation_signals(
 def _verdict(excess_shrunk: float, p_cond: float,
              ow_thr: float, uw_thr: float,
              p_hi: float, p_lo: float) -> str:
-    """Posture from the shrunk excess and the conditional positive probability."""
-    if not np.isfinite(excess_shrunk):
-        return "NEUTRAL"
+    """Posture from the shrunk excess and the conditional positive probability.
+
+    A non-finite input on either axis yields ``UNRESOLVED``, never ``NEUTRAL``.
+    Both comparisons below are false against NaN, so the old fall-through
+    reported "measured, and unremarkable" for a group that was not measured at
+    all. See :data:`VERDICTS`.
+    """
+    if not np.isfinite(excess_shrunk) or not np.isfinite(p_cond):
+        return "UNRESOLVED"
     if excess_shrunk >= ow_thr and p_cond >= p_hi:
         return "OVERWEIGHT"
     if excess_shrunk <= uw_thr or p_cond <= p_lo:
@@ -585,17 +623,58 @@ def size_down_watch(
     return out.reset_index(drop=True)
 
 
-def size_down_mask(analytics: pd.DataFrame, isins: Sequence[str], **kwargs: Any) -> np.ndarray:
+def size_down_mask(
+    analytics: pd.DataFrame,
+    isins: Sequence[str],
+    *,
+    return_unseen: bool = False,
+    **kwargs: Any,
+) -> Any:
     """The watch as an ``eligible`` mask for ``optimize_portfolio``, aligned by ISIN.
 
     ``True`` means *not* flagged, i.e. sizeable. Keep this **opt-in**: applying it
     changes which names a book holds, and the value of doing so is a question about
     realised returns. What is not optional is measuring it — pass the mask, compare
     the books, and report how many names it removed.
+
+    **Not flagged is not the same as not present.** ``analytics`` is scored over
+    whatever universe it happens to cover; an ISIN absent from it cannot be
+    flagged, so it comes back ``True`` — indistinguishable from a name the watch
+    examined and cleared. On run ``b00f8d8ca093`` that silence sized MaaT Pharma
+    at 9.13 % on two analysts, which is the watch's own thin-coverage condition,
+    because the screen it was scored against came from a different fit and did
+    not contain the name. The count is logged unconditionally rather than offered
+    as an option: a caller who does not ask is exactly the caller who needs to be
+    told.
+
+    Parameters
+    ----------
+    return_unseen
+        Also return how many of ``isins`` the watch never saw. Keyword-only and
+        default ``False``, so the existing ndarray return is unchanged.
+
+    Returns
+    -------
+    numpy.ndarray or tuple[numpy.ndarray, int]
+        The sizeable mask, and — when ``return_unseen`` — the unseen count.
     """
     watch = size_down_watch(analytics, **kwargs)
     flagged = set(watch["isin"].astype(str)) if "isin" in watch.columns else set()
-    return np.array([str(i) not in flagged for i in isins], dtype=bool)
+    seen = (
+        set(analytics["isin"].astype(str))
+        if "isin" in getattr(analytics, "columns", []) else set()
+    )
+    keys = [str(i) for i in isins]
+    mask = np.array([k not in flagged for k in keys], dtype=bool)
+    unseen = int(sum(1 for k in keys if k not in seen)) if seen else len(keys)
+    if unseen:
+        logger.warning(
+            "size_down_mask: %d of %d names are ABSENT from the frame the watch "
+            "was scored on, so they are sizeable by silence rather than by "
+            "assessment. The veto cannot see them.",
+            unseen, len(keys),
+        )
+    return (mask, unseen) if return_unseen else mask
 
 
 # ---------------------------------------------------------------------------

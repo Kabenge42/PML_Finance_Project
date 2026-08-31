@@ -233,3 +233,79 @@ def test_eligibility_mask_is_honoured(draws, isins):
     mask[:40] = True
     book = optimize_portfolio(draws, isins, k_book=K_BOOK, eligible=mask)
     assert set(book.weights.index) <= set(isins[:40])
+
+
+# ---------------------------------------------------------------------------
+# A cap enforced on a label that can be absent is not a cap.
+#
+# `groupby` DROPS null keys, so weight sitting on an unlabelled name leaves the
+# total rather than joining a bucket, and `top_group_weight` is a maximum over
+# whatever survived. Run `b00f8d8ca093` reported 30.0% in Health Care against a
+# 30% cap while the true weight was 59.1%: three of that sector's names had no
+# label, so a fifth of the book was in no group at all.
+# ---------------------------------------------------------------------------
+
+
+def _partly_labelled(n: int = 60, n_missing: int = 12, seed: int = 7):
+    rng = np.random.default_rng(seed)
+    isins = np.array([f"P{i:03d}" for i in range(n)])
+    labelled = np.array(["Health Care", "Financials", "Energy"] * n)[: n - n_missing]
+    sector = np.concatenate(
+        [labelled.astype(object), np.array([None] * n_missing, dtype=object)]
+    )
+    draws = rng.normal(0.15, 0.25, size=(n, 800))
+    # Make some unlabelled names attractive enough to be sized.
+    draws[n - n_missing: n - n_missing + 3] += 0.6
+    draws[:10] += 0.5
+    return draws, isins, sector
+
+
+def test_weight_on_unlabelled_names_is_measured_not_dropped():
+    draws, isins, sector = _partly_labelled()
+    book = optimize_portfolio(
+        draws, isins, cap=0.10, min_weight=0.005, groups=sector, sector_cap=0.30
+    )
+    summary = book.summary
+
+    assert "unlabelled_sector_weight" in summary
+    assert summary["unlabelled_group_weight"] == pytest.approx(
+        summary["unlabelled_sector_weight"]
+    )
+    assert summary["unlabelled_group_weight"] > 0.0, (
+        "the fixture sizes unlabelled names on purpose; if none are held the "
+        "test is no longer testing anything"
+    )
+    # The escaped share is exactly what the reported maximum does not include.
+    # Before this was measured the two were indistinguishable from the outside.
+    assert summary["top_group_weight"] < 1.0
+    assert summary["top_group_weight"] + summary["unlabelled_group_weight"] > \
+        summary["top_group_weight"]
+
+
+def test_the_cap_still_holds_on_the_groups_it_can_see():
+    draws, isins, sector = _partly_labelled()
+    book = optimize_portfolio(
+        draws, isins, cap=0.10, min_weight=0.005, groups=sector, sector_cap=0.30
+    )
+    # Unlabelled names are OUTSIDE the constraint, not inside a bucket that
+    # competes with the real sectors for headroom, and they absorb no spill.
+    assert book.summary["top_group_weight"] <= 0.30 + 1e-9
+
+
+def test_a_fully_labelled_book_reports_zero_unlabelled_weight():
+    draws, isins, sector = _partly_labelled(n_missing=0)
+    book = optimize_portfolio(
+        draws, isins, cap=0.10, min_weight=0.005, groups=sector, sector_cap=0.30
+    )
+    assert book.summary["unlabelled_group_weight"] == pytest.approx(0.0)
+
+
+def test_unlabelled_names_do_not_crash_the_cap_projection():
+    """`np.unique` over a mixed str/None array raises outright."""
+    draws, isins, sector = _partly_labelled(n_missing=30)
+    book = optimize_portfolio(
+        draws, isins, cap=0.10, min_weight=0.005,
+        group_labels={"sector": sector}, group_caps={"sector": 0.30},
+    )
+    assert len(book.weights) > 0
+    assert book.weights.sum() == pytest.approx(1.0)

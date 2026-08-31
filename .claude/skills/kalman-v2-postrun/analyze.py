@@ -172,30 +172,45 @@ def _f(x: Any) -> Optional[float]:
     return v if math.isfinite(v) else None
 
 
-#: Fallback only. The real value is read from ``KalmanRunConfigV2`` below.
+#: Fallback only. The real value is read from ``KalmanPortfolioConfig`` below.
 _MCAP_R_MAX_FALLBACK = 0.03
 
 
 def _mcap_r_max() -> float:
     """Return the eligibility threshold the pipeline actually ships.
 
-    Read from ``KalmanRunConfigV2.mcap_global_r_max`` in the v2 script by regex
-    rather than by import, because importing that module drags in the whole
-    PyMC/ArviZ stack for one float.
+    Read from ``KalmanPortfolioConfig.mcap_global_r_max`` in
+    ``kalman_portfolio.py`` by regex rather than by import, because importing
+    that module drags in the whole PyMC/ArviZ stack for one float.
 
     This was a hard-coded ``0.01`` until 2026-08-30, and the hard-code went stale
     when the default moved to ``0.03``: run ``317dbfff4bcf`` was reported as
     drawing its book from an eligible pool of 175 names when the pool was 850,
     and 38 of the 50 book names sat outside the number this file printed. A
     threshold copied from a config is a second definition of that config.
+
+    The source file changed on 2026-08-31, when the risk book moved out of
+    ``pymc_kalman_filter_pt_v2.py``. A regex against a file that no longer
+    defines the field returns the fallback SILENTLY, which is the same class of
+    staleness this function exists to prevent -- so both files are searched and
+    a miss in both is logged rather than swallowed.
     """
-    src = Path(__file__).resolve().parents[3] / "pymc_kalman_filter_pt_v2.py"
-    try:
-        text_ = src.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return _MCAP_R_MAX_FALLBACK
-    m = re.search(r"^\s*mcap_global_r_max:\s*float\s*=\s*([0-9.eE+-]+)", text_, re.M)
-    return float(m.group(1)) if m else _MCAP_R_MAX_FALLBACK
+    root = Path(__file__).resolve().parents[3]
+    for name in ("kalman_portfolio.py", "pymc_kalman_filter_pt_v2.py"):
+        try:
+            text_ = (root / name).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        m = re.search(
+            r"^\s*mcap_global_r_max:\s*float\s*=\s*([0-9.eE+-]+)", text_, re.M
+        )
+        if m:
+            return float(m.group(1))
+    print(
+        f"  ! mcap_global_r_max not found in either source file; falling back to "
+        f"{_MCAP_R_MAX_FALLBACK}. The eligibility pool below may be wrong."
+    )
+    return _MCAP_R_MAX_FALLBACK
 
 
 def _table_exists(eng, name: str) -> bool:

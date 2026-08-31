@@ -3,7 +3,7 @@
 
 Why this exists
 ---------------
-``KalmanRunConfigV2.forecast_error_multiplier`` is a **prior, not an identified
+``KalmanPortfolioConfig.forecast_error_multiplier`` is a **prior, not an identified
 parameter**. The panel's own autocorrelation cannot separate forecast error (how
 far consensus sits from fair value) from reporting noise (how noisily a target is
 republished over a week), which is the whole reason the term is supplied rather

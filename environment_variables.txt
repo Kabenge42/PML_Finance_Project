@@ -33,7 +33,8 @@ OUTPUT_DIR=outputs
 # KALMAN_PT_CLEAN_RESULTS=1 -> purge each section subdirectory on first entry so
 #                              a re-run does not interleave with the previous one.
 # KALMAN_PT_RESULTS_DIR  -> v1 (pymc_kalman_filter_pt.py)
-# KALMAN_V2_RESULTS_DIR  -> v2 (pymc_kalman_filter_pt_v2.py) and its replay
+# KALMAN_V2_RESULTS_DIR  -> v2 (pymc_kalman_filter_pt_v2.py), the FIT only
+# KALMAN_PORTFOLIO_RESULTS_DIR -> the decision layer (kalman_portfolio.py)
 #                           (kalman_portfolio.py). SEPARATE ROOTS, on purpose:
 #                           both workflows used to read the first variable, so
 #                           v2's frames landed in v1's tree under names one
@@ -42,6 +43,7 @@ OUTPUT_DIR=outputs
 #                           --migrate-layout [--apply]`.
 KALMAN_PT_RESULTS_DIR=C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt_results
 KALMAN_V2_RESULTS_DIR=C:\Users\markm\PML_Finance_Project\pymc_kalman_filter_pt_v2_results
+KALMAN_PORTFOLIO_RESULTS_DIR=C:\Users\markm\PML_Finance_Project\kalman_portfolio_results
 KALMAN_PT_SQL_EXPORT=1
 KALMAN_PT_CLEAN_RESULTS=0
 

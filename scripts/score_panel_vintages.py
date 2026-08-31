@@ -33,7 +33,7 @@ statistic in the project computed against outcomes rather than against
 replicated price targets.
 
 The bias slope is what eventually replaces
-``KalmanRunConfigV2.forecast_error_multiplier`` — a prior today, because the
+``KalmanPortfolioConfig.forecast_error_multiplier`` — a prior today, because the
 panel's own autocorrelation cannot identify it — with an estimate.
 
 CAVEATS, which apply to any run of this script and must be quoted with its output
@@ -269,7 +269,7 @@ def main() -> int:
         "\nReading this: ols_slope is the factor the predictions should be "
         "scaled by, so 1/slope is roughly the shrinkage the decision layer owes "
         "-- the first evidence-based estimate of "
-        "KalmanRunConfigV2.forecast_error_multiplier, which is a prior today. "
+        "KalmanPortfolioConfig.forecast_error_multiplier, which is a prior today. "
         "band_coverage is the only coverage number in this project computed "
         "against outcomes rather than replicated price targets; nominal is 0.90."
         "\nSurvivorship, local-currency prices, horizon mismatch and a single "

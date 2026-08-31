@@ -141,3 +141,162 @@ def test_kalman_shared_answers_identically():
     assert shared._EXPORT_MISC_DIR == EXPORT_MISC_DIR
     for stem in ROUTES:
         assert shared._export_dir_for(stem) == export_dir_for(stem)
+
+
+# ---------------------------------------------------------------------------
+# The import direction
+#
+# `kalman_portfolio` imports `pymc_kalman_filter_pt_v2`, never the reverse. The
+# whole 2026-08-31 split rests on that: the fit script ends at the posterior and
+# the decision layer replays off the handoff, so a back-import would both close a
+# cycle and mean the fit had started deciding again.
+# ---------------------------------------------------------------------------
+
+from dataclasses import fields as _dc_fields  # noqa: E402
+import pathlib as _pathlib  # noqa: E402
+import re as _re  # noqa: E402
+
+_REPO_ROOT = _pathlib.Path(__file__).resolve().parent.parent
+
+
+def test_the_fit_script_never_imports_the_decision_layer():
+    src = (_REPO_ROOT / "pymc_kalman_filter_pt_v2.py").read_text(encoding="utf-8")
+    offenders = [
+        line.strip()
+        for line in src.splitlines()
+        if _re.match(r"\s*(from|import)\s+kalman_portfolio\b", line)
+    ]
+    assert not offenders, (
+        "pymc_kalman_filter_pt_v2 imports kalman_portfolio: "
+        f"{offenders}. The dependency runs the other way."
+    )
+
+
+def test_the_decision_layer_does_import_the_fit_script():
+    """The positive half. A split where neither side imports the other means the
+    shared SSOTs (gates, identity block, provenance, out-of-support) have been
+    copied rather than shared."""
+    src = (_REPO_ROOT / "kalman_portfolio.py").read_text(encoding="utf-8")
+    assert _re.search(r"^from pymc_kalman_filter_pt_v2 import", src, _re.M)
+
+
+def test_the_fit_script_no_longer_defines_the_decision_stages():
+    src = (_REPO_ROOT / "pymc_kalman_filter_pt_v2.py").read_text(encoding="utf-8")
+    for name in ("run_screen", "run_risk_book", "run_forecast_layer",
+                 "_book_group_labels", "class ScreenDraws"):
+        pattern = rf"^(def {name}\(|{name})" if name.startswith("class") else \
+            rf"^def {name}\("
+        assert not _re.search(pattern, src, _re.M), f"{name} is still defined here"
+
+
+def test_the_decision_layer_defines_them_instead():
+    src = (_REPO_ROOT / "kalman_portfolio.py").read_text(encoding="utf-8")
+    for name in ("run_screen", "run_risk_book"):
+        assert _re.search(rf"^def {name}\(", src, _re.M), f"{name} is missing"
+    assert _re.search(r"^class ScreenDraws", src, _re.M)
+
+
+# ---------------------------------------------------------------------------
+# The config split
+#
+# 25 decision-layer fields left `KalmanRunConfigV2` with the stages that read
+# them. They are DELETED rather than deprecated: a knob that can still be set on
+# the fit's config and no longer reaches anything is `--write is accepted but
+# does nothing` in dataclass form, which is the pattern this whole change retires.
+# ---------------------------------------------------------------------------
+
+_MOVED_KNOBS = (
+    "enable_forecast_error_shrinkage", "forecast_error_multiplier",
+    "forecast_error_n_exponent", "mc_horizon", "mc_rho", "cvar_alpha", "k_book",
+    "book_min_weight", "p_long", "mcap_global_r_max", "tail_risk_vol_floor_k",
+    "weight_cap", "group_caps",
+    "gate_shrinkage_slope_lo", "gate_shrinkage_slope_hi",
+    "gate_shrinkage_center_shift_max", "gate_shrinkage_rho_max",
+    "gate_shrinkage_revision_min_pp",
+)
+
+
+def test_the_fit_config_no_longer_carries_the_decision_knobs():
+    import pymc_kalman_filter_pt_v2 as v2
+
+    fields = {f.name for f in _dc_fields(v2.KalmanRunConfigV2)}
+    still_there = sorted(set(_MOVED_KNOBS) & fields)
+    assert not still_there, (
+        f"{still_there} can still be set on KalmanRunConfigV2 and reaches nothing"
+    )
+
+
+def test_the_decision_config_carries_them_instead():
+    import kalman_portfolio as kp
+
+    fields = {f.name for f in _dc_fields(kp.KalmanPortfolioConfig)}
+    missing = sorted(set(_MOVED_KNOBS) - fields)
+    assert not missing, f"{missing} moved off one config and onto neither"
+
+
+def test_the_handoffs_thinning_budget_stayed_with_the_writer():
+    """`forecast_scenarios` is the one forecast knob the fit still owns.
+
+    It sizes the file this script writes, which is its decision; everything else
+    is a decision about what a replay does with that file."""
+    import pymc_kalman_filter_pt_v2 as v2
+
+    assert "forecast_scenarios" in {f.name for f in _dc_fields(v2.KalmanRunConfigV2)}
+
+
+def test_the_validation_moved_with_the_fields():
+    """A negative multiplier gives a negative variance and a gain above 1, i.e.
+    ANTI-shrinkage — a plausible-looking number several stages later."""
+    import kalman_portfolio as kp
+
+    with pytest.raises(ValueError, match="forecast_error_multiplier"):
+        kp.KalmanPortfolioConfig(forecast_error_multiplier=-0.5)
+    with pytest.raises(ValueError, match="must be increasing"):
+        kp.KalmanPortfolioConfig(gate_shrinkage_slope_lo=0.99)
+
+
+def test_the_postrun_skill_still_finds_the_eligibility_threshold():
+    """It reads the default by REGEX out of a source file, so a field that moves
+    file returns the fallback silently — the exact staleness that function was
+    written to prevent."""
+    import re as _re2
+
+    src = (_REPO_ROOT / "kalman_portfolio.py").read_text(encoding="utf-8")
+    m = _re2.search(r"^\s*mcap_global_r_max:\s*float\s*=\s*([0-9.eE+-]+)", src, _re2.M)
+    assert m, "the postrun skill's regex no longer matches; update analyze.py"
+
+    import kalman_portfolio as kp
+
+    assert float(m.group(1)) == kp.KalmanPortfolioConfig().mcap_global_r_max
+
+
+def test_the_fit_config_has_no_field_that_nothing_reads():
+    """The property the 25-field removal bought, stated so it stays true.
+
+    A knob that can be set and reaches nothing is the same defect as a flag that
+    is accepted and ignored, and it is harder to notice: there is no message, and
+    the value looks applied to anyone reading the config back.
+    """
+    import re as _re3
+    from dataclasses import fields as _f
+
+    import pymc_kalman_filter_pt_v2 as v2
+
+    src = (_REPO_ROOT / "pymc_kalman_filter_pt_v2.py").read_text(encoding="utf-8")
+    start = src.index("class KalmanRunConfigV2:")
+    end = src.index("# §1  Data")
+    body, rest = src[start:end], src[:start] + src[end:]
+    from_env = body[body.index("def from_env"):]
+
+    dead = [
+        f.name for f in _f(v2.KalmanRunConfigV2)
+        # read anywhere outside the dataclass body...
+        if not _re3.search(rf"\b(?:run_cfg|cfg|self|config)\.{f.name}\b", rest)
+        # ...or set by from_env, or reached through a property inside the body
+        and not _re3.search(rf"\b{f.name}\s*=", from_env)
+        and not _re3.search(rf"self\.{f.name}\b", body)
+    ]
+    # `fig_width_px` is read by `visualizations.kalman_shared` through a
+    # duck-typed config protocol, so no attribute access appears in this file.
+    dead = [d for d in dead if d != "fig_width_px"]
+    assert not dead, f"{dead} can be set on KalmanRunConfigV2 and reach nothing"

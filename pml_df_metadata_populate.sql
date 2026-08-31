@@ -3004,6 +3004,147 @@ WHERE column_name IN ('trail_days_now', 'trail_days_1w', 'trail_days_1m',
 --   SELECT * FROM pml.vw_pymc_catalogue_coverage_check WHERE status <> 'OK';
 --   SELECT pml.assert_pymc_catalogue_coverage();
 
+-- =========================================================================
+-- 7m. THE EXPORT IDENTITY BLOCK -- the 42 columns every per-ISIN frame carries
+-- =========================================================================
+-- `EXPORT_IDENTITY_COLUMNS` in pymc_kalman_filter_pt_v2.py is the Python SSOT:
+-- 42 (column, SQL type) pairs left-joined onto every per-ISIN export frame by
+-- `attach_identity_columns`, so what a reader gets does not depend on which
+-- table they happen to open. They are read straight off pml_df via
+-- `SELECT *` into panel.frame -- nothing new is queried.
+--
+-- WHY REGISTER THEM AT ALL. None of these names matches `feat\_%` /
+-- `observed\_%` / `n\_%`, which is the whole surface
+-- `vw_pymc_catalogue_coverage_check` scans. So registering them cannot raise
+-- PHANTOM_CATALOGUE_ALIAS and omitting them cannot raise
+-- MISSING_FROM_CATALOGUE: the coverage check is blind to this block in both
+-- directions, and nothing at runtime enforces the correspondence.
+--
+-- That is precisely why it is written down here and checked in the test suite
+-- instead (`test_sql_section_7m_tags_exactly_the_python_ssot`). The catalogue is
+-- what tells a reader what a column is FOR, and a 42-column block that appears
+-- on every exported table while appearing in no catalogue is a block nobody can
+-- look up.
+
+-- 7m.1 The block is coords and constant_data, never predictors.
+--   Identity is what a name IS, not evidence about it. Every one of these is
+--   excluded from the drift matrix by construction -- the day-count horizons by
+--   `KALMAN_TIME_COVARIATE_PREFIX` (they are computed against CURRENT_DATE and
+--   so are not reproducible across refresh dates), the rest by never being
+--   selected. Registering one as `mutable_predictor` would make it eligible.
+
+-- 7m.2 Tag all 42 identity-block columns with the v2 model target.
+--   `array_append` guarded by the NOT-ANY test, the §7k.1 idiom: idempotent, and
+--   a no-op for the rows 7k.1 already tagged via their kalman_pt membership.
+--   A column absent from pml_df_metadata matches nothing and is handled by
+--   7m.3 below rather than failing here.
+UPDATE pml.pml_df_metadata
+SET model_targets = array_append(model_targets, 'kalman_pt_v2'),
+    updated_at    = CURRENT_TIMESTAMP
+WHERE column_name IN (
+    'isin', 'ticker', 'name', 'trading_region',
+    'region', 'country', 'country_name', 'trading_country',
+    'trading_country_name', 'exchange', 'exchange_name', 'unit',
+    'unit_name', 'style_class', 'size_class', 'sector',
+    'industry', 'last_updated', 'income_statement_report_date', 'next_earnings',
+    'next_earnings_when', 'next_earnings_status', 'fy_end_date', 'next_fiscal_quarter',
+    'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date', 'days_to_next_earnings',
+    'days_since_last_report', 'days_to_next_fy_end', 'days_to_next_fiscal_quarter', 'days_to_next_report',
+    'days_to_expected_report', 'days_since_fy_end', 'market_cap', 'enterprise_value',
+    'market_cap_global_r', 'market_cap_global_sec_r', 'market_cap_region_r', 'market_cap_region_sec_r',
+    'market_cap_country_r', 'market_cap_country_sec_r'
+)
+  AND NOT ('kalman_pt_v2' = ANY (model_targets));
+
+-- 7m.3 Report any identity column pml_df_metadata does not know about.
+--   NOT an INSERT: a row invented here would claim a category and a data_type
+--   this script cannot know, and the catalogue would then document a guess. The
+--   identity block is read from pml_df, so a name missing here means either the
+--   column is absent from pml_df -- in which case `attach_identity_columns`
+--   already warns and omits it at export time -- or its metadata row was never
+--   written, which is a gap to fix at the source in TASK 4.
+DO $$
+DECLARE
+    missing TEXT[];
+BEGIN
+    SELECT array_agg(c ORDER BY c)
+    INTO missing
+    FROM unnest(ARRAY [
+    'isin', 'ticker', 'name', 'trading_region',
+    'region', 'country', 'country_name', 'trading_country',
+    'trading_country_name', 'exchange', 'exchange_name', 'unit',
+    'unit_name', 'style_class', 'size_class', 'sector',
+    'industry', 'last_updated', 'income_statement_report_date', 'next_earnings',
+    'next_earnings_when', 'next_earnings_status', 'fy_end_date', 'next_fiscal_quarter',
+    'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date', 'days_to_next_earnings',
+    'days_since_last_report', 'days_to_next_fy_end', 'days_to_next_fiscal_quarter', 'days_to_next_report',
+    'days_to_expected_report', 'days_since_fy_end', 'market_cap', 'enterprise_value',
+    'market_cap_global_r', 'market_cap_global_sec_r', 'market_cap_region_r', 'market_cap_region_sec_r',
+    'market_cap_country_r', 'market_cap_country_sec_r'
+        ]) AS c
+    WHERE NOT EXISTS (SELECT 1
+                      FROM pml.pml_df_metadata m
+                      WHERE m.column_name = c);
+    IF missing IS NOT NULL THEN
+        RAISE NOTICE 'identity-block columns absent from pml_df_metadata: %', missing;
+    END IF;
+END
+$$;
+
+
+-- 7m.4 Pin the effective ROLE for v2. The identity block is never a predictor.
+--   7m.2 appends the model target and inherits `pml_df_metadata.pymc_role`,
+--   which is a GLOBAL role set by whichever model needed it first. Nine of the
+--   42 are globally `mutable_predictor` -- the seven `days_*` horizons plus
+--   market_cap and enterprise_value -- so a bare tag makes the catalogue claim
+--   they are trainable features of kalman_pt_v2. They are not, and two of them
+--   must not be:
+--
+--     * The `days_*` family is computed against CURRENT_DATE inside the MV, so
+--       refreshing on a different day shifts all seven. That is why
+--       `KALMAN_TIME_COVARIATE_PREFIX` bars them from the drift matrix in
+--       Python -- exported for context, never fitted on.
+--     * market_cap is last_price * shrs_out, i.e. price-derived, which is the
+--       reason §7j removed the market-cap/EV family from kalman_pt in the first
+--       place.
+--
+--   `pml_df_feature_alias.pymc_role` is the sanctioned per-model override --
+--   `vw_pymc_feature_catalogue` resolves COALESCE(fa.pymc_role, md.pymc_role) --
+--   so this pins the role for v2 without touching what other models see. The
+--   role is DERIVED, not hand-listed: a column globally registered as a coord
+--   stays a coord; everything else in the block becomes constant_data.
+--
+--   Python currently scopes drift selection to `feat_`-prefixed columns, so
+--   nothing is fitted on these today either way. That is a second line of
+--   defence, not a reason to leave the catalogue wrong: the catalogue is what
+--   tells a reader what a column is FOR, and a prefix convention in one function
+--   is not a statement about a column's role.
+INSERT INTO pml.pml_df_feature_alias (column_name, model_target, feature_alias, pymc_role)
+SELECT md.column_name,
+       'kalman_pt_v2',
+       md.column_name,
+       CASE WHEN md.pymc_role = 'coord' THEN 'coord' ELSE 'constant_data' END
+FROM pml.pml_df_metadata md
+WHERE md.column_name IN (
+    SELECT c
+    FROM unnest(ARRAY [
+        'isin', 'ticker', 'name', 'trading_region',
+        'region', 'country', 'country_name', 'trading_country',
+        'trading_country_name', 'exchange', 'exchange_name', 'unit',
+        'unit_name', 'style_class', 'size_class', 'sector',
+        'industry', 'last_updated', 'income_statement_report_date', 'next_earnings',
+        'next_earnings_when', 'next_earnings_status', 'fy_end_date', 'next_fiscal_quarter',
+        'next_income_statement_report_date', 'next_fy_end_date', 'expected_report_date', 'days_to_next_earnings',
+        'days_since_last_report', 'days_to_next_fy_end', 'days_to_next_fiscal_quarter', 'days_to_next_report',
+        'days_to_expected_report', 'days_since_fy_end', 'market_cap', 'enterprise_value',
+        'market_cap_global_r', 'market_cap_global_sec_r', 'market_cap_region_r', 'market_cap_region_sec_r',
+        'market_cap_country_r', 'market_cap_country_sec_r'
+        ]) AS c)
+ON CONFLICT (column_name, model_target) DO UPDATE
+    SET pymc_role = EXCLUDED.pymc_role
+WHERE pml.pml_df_feature_alias.pymc_role IS DISTINCT FROM EXCLUDED.pymc_role;
+
+
 CREATE OR REPLACE VIEW pml.vw_pml_df_predictors AS
 SELECT column_name, category, data_type, ordinal_position, description
 FROM pml.pml_df_metadata

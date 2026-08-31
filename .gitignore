@@ -23,6 +23,12 @@ pymc_kalman_filter_pt_results/*.nc
 # outright rather than merely bloating the repo.
 pymc_kalman_filter_pt_v2_results/**/*.nc
 pymc_kalman_filter_pt_v2_results/*.nc
+# The decision layer got its own root on 2026-08-31 (KALMAN_PORTFOLIO_RESULTS_DIR).
+# Same reasoning again, and it needed stating again: a rule naming one tree does
+# not cover the next one. A replay runs many times over one fit, so this tree
+# accumulates faster than either of the two above.
+kalman_portfolio_results/**/*.nc
+kalman_portfolio_results/*.nc
 archive/**/*.nc
 
 # Superseded whole run trees, kept on disk for reference only. Named by the
@@ -47,6 +53,10 @@ pymc_kalman_filter_pt_v2_results/**/*.png
 pymc_kalman_filter_pt_v2_results/**/*.csv
 pymc_kalman_filter_pt_v2_results/**/*.html
 pymc_kalman_filter_pt_v2_results/**/*.json
+kalman_portfolio_results/**/*.png
+kalman_portfolio_results/**/*.csv
+kalman_portfolio_results/**/*.html
+kalman_portfolio_results/**/*.json
 archive/*.png
 archive/*.ipynb
 
@@ -66,4 +76,4 @@ data/playground/pml_*_new.csv
 
 # Shell redirection artifacts from an unquoted `pip install pkg>=1.1.0` -- the
 # `>=1.1.0` became a redirect and left a 0-byte file named `=1.1.0`.
-/=*
+/=*!/pymc_kalman_filter_pt_v2_results/

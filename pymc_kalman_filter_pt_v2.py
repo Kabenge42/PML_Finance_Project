@@ -43,10 +43,25 @@ Section  Function                            Stage (CLAUDE.md contract)
 9        :func:`run_diagnostics`             Fitting diagnostics
 9b       :func:`run_model_comparison`        Model comparison (opt-in, exact)
 9b-fast  :func:`compare_arms_fast`           Model comparison (Max-and-Smooth screen)
-10       :func:`run_screen`                  Decision analysis
+10       :func:`write_forecast_handoff`      The seam: a persisted posterior
 10c      :func:`export_analytics`            Export
 14       :func:`summarise`                   Summary + gate report
 =======  ==================================  ==============================
+
+**The decision layer is not here.** Since 2026-08-31 the screen, the CVaR risk
+book, the forward simulation, the ranking arms and the recommendation layer all
+live in ``kalman_portfolio.py`` and replay off ``07_forecast_handoff_v2.nc``.
+This script fits, checks and hands over. Production is two commands, not one::
+
+    python pymc_kalman_filter_pt_v2.py --write     # fit -> handoff
+    python kalman_portfolio.py --write             # decide -> analytics
+
+Why: this script decided, and ``kalman_portfolio.py`` decided again off the same
+posterior, and the seam between them was four CSVs read with no vintage check.
+Replay ``b00f8d8ca093`` ran a 2026-08-30 posterior against a 2026-08-27 screen
+from a different fit; the 145 names the two universes did not share became a
+phantom sector that evaded a 30 % cap and hid three unnamed positions in an
+eleven-name book.
 
 There is no §5: the v1 legacy single-observation model has no v2 equivalent, and
 the §10K/§12 pooled GRW sections are deliberately absent — they have been
@@ -158,7 +173,10 @@ __all__ = [
     "PROVENANCE_COLUMNS",
     "stamp_export_provenance",
     "resolve_source_revision",
-    "run_screen",
+    # `run_screen` was here until 2026-08-31; it is `kalman_portfolio.run_screen`
+    # now, along with the risk book and the forecast layer. This module's last
+    # export is the handoff they replay off.
+    "write_forecast_handoff",
     "export_analytics",
     "main",
 ]
@@ -1176,6 +1194,12 @@ class KalmanRunConfigV2:
     ``from_env`` reads only the five variables the deployment actually sets;
     everything else is overridden programmatically with
     :func:`dataclasses.replace`.
+
+    A second boundary, since 2026-08-31: nothing here decides anything. The
+    screen's thresholds, the risk book's caps and the forecast's priors are
+    :class:`kalman_portfolio.KalmanPortfolioConfig`'s, because the stages that
+    read them are. What is left is the NUTS budget, the gates that grade the fit,
+    and where the output goes.
     """
 
     # ---- NUTS budget -------------------------------------------------------
@@ -1249,201 +1273,47 @@ class KalmanRunConfigV2:
     #: nominal, which is calibrated to within 0.008 and failed against 0.92.
     gate_coverage_percentiles: tuple[float, float] = (3.0, 97.0)
     gate_coverage_tol: float = 0.02
-    gate_shrinkage_slope_lo: float = 0.80
-    #: Ceiling on the model-on-consensus regression slope. **Lowered 1.20 ->
-    #: 0.98 on 2026-08-20**, because the old band contained identity and so
-    #: could not distinguish a working shrinkage estimator from a pass-through.
-    #: Run ``49e84d7e9d59`` passed this gate at slope 0.979 / intercept +0.0051
-    #: while reproducing the analyst consensus at Spearman 0.999995 and a median
-    #: revision of 0.03pp — the exact failure the gate was written to catch,
-    #: scored as a pass. A slope at or above 1 was never a legitimate outcome
-    #: for a shrinkage estimator; only the *lower* bound was ever doing work.
-    gate_shrinkage_slope_hi: float = 0.98
-    #: Ceiling on ``|mean(expected_upside) - mean(implied_upside)|`` — the
-    #: universe-wide shift the screen applies.
-    #:
-    #: **Replaced the raw y-intercept test on 2026-08-20, because that test was
-    #: the slope in disguise.** Shrinking a cloud toward a centre ``c`` gives
-    #: ``eu = c + slope*(iu - c)``, hence ``intercept = (1 - slope) * c`` as an
-    #: algebraic identity. Measured across a nine-point multiplier sweep on the
-    #: fitted run, ``intercept / (1 - slope)`` came out 0.2018, 0.2016, 0.2010,
-    #: 0.2006, 0.2006, 0.2007 — i.e. exactly the response centre, every time.
-    #: Any genuine shrinkage of a response centred at +20% therefore MUST show a
-    #: positive intercept, and pairing ``|intercept| <= 0.02`` with the new
-    #: ``rho <= 0.995`` left an EMPTY feasible set: the first needs slope >= 0.90,
-    #: the second needs slope <= ~0.88.
-    #:
-    #: The failure the old threshold was written for — a run where names above
-    #: consensus went 62% to 81% — is a shift of the centre, not a non-zero
-    #: intercept, and that is what this measures. The gate still reports the
-    #: intercept, as a diagnostic rather than as a pass condition.
-    gate_shrinkage_center_shift_max: float = 0.02
-    #: Ceiling on Spearman rho between model expected upside and analyst implied
-    #: upside. Slope and intercept are both blind to a pass-through — an exact
-    #: copy scores 1.0 and 0.0, which the band admits — so the gate needs a
-    #: statistic that measures *disagreement* rather than calibration. The
-    #: shipped model reorders the universe; a ranking identical to its own input
-    #: is a fault regardless of how well-calibrated the regression looks.
-    gate_shrinkage_rho_max: float = 0.995
-    #: Floor on the median absolute revision from consensus, in percentage
-    #: points. The scale-free companion to :attr:`gate_shrinkage_rho_max`: rho
-    #: catches a rank-preserving copy, this catches a uniform rescale that
-    #: reorders nothing of consequence. 0.25pp is two orders of magnitude above
-    #: the 0.03pp of run ``49e84d7e9d59`` and an order below v1's 14%.
-    gate_shrinkage_revision_min_pp: float = 0.25
-    gate_decay_rmse_max: float = 0.10
     #: Ceiling on ``Var(mu_reg) / Var(y_snapshot)``. 1.0 is not a tuning choice:
     #: an additive mean with more variance than its response implies a negative
     #: residual variance, so anything above it is arithmetic, not fit.
     gate_mean_spread_max: float = 1.0
-    #: Accepted range for the slope of ``y_now`` on the fitted mean. A
-    #: calibrated mean gives exactly 1; +/-0.1 is about twice the spread the
-    #: 2026-08-19 profile showed across the plausible ``signal_exponent``
-    #: band, so it admits a fitted lambda anywhere in that band and still
-    #: rejects the 1.230 that failed ppc_decay.
+    #: Accepted range for the slope of ``y_now`` on the fitted mean. A calibrated
+    #: mean gives exactly 1; +/-0.1 is about twice the spread the 2026-08-19
+    #: profile showed across the plausible ``signal_exponent`` band, so it admits
+    #: a fitted lambda anywhere in that band and still rejects the 1.230 that
+    #: failed ppc_decay.
     gate_mean_calibration: tuple[float, float] = (0.90, 1.10)
 
-    # ---- decision layer ----------------------------------------------------
-    #: Shrink the decision latent toward the fitted mean by an explicit
-    #: forecast-error term. See
-    #: :func:`~probabilistic_ml_model.pymc_models.KalmanFilterModel_v2.apply_forecast_error_shrinkage`
-    #: for why it is here and not in the likelihood. ``False`` restores the
-    #: pre-2026-08-20 pass-through exactly, and is the comparison arm.
-    enable_forecast_error_shrinkage: bool = True
-    #: Scalar on the standard error of the analyst consensus mean. **This is a
-    #: PRIOR, not an identified parameter** — the panel's own autocorrelation
-    #: cannot separate forecast error from reporting noise, which is the whole
-    #: reason the term is supplied rather than fitted. Only realised returns can
-    #: estimate it, which is what ``scripts/score_panel_vintages.py`` is being
-    #: built to do; until then, ``scripts/profile_forecast_error.py`` shows what
-    #: each value does to the gates so the choice is auditable.
-    #: **1.0, chosen on measurement, not on taste.** 1.0 means the forecast error
-    #: is exactly the standard error of the consensus mean, with no inflation --
-    #: the only value on the grid that needs no justification of its own.
+    # ---- the handoff -------------------------------------------------------
+    #: Posterior samples retained in ``07_forecast_handoff_v2.nc``. Each fixes one
+    #: posterior sample across every name, so this is also the joint-scenario
+    #: count the replay's forward simulation gets.
     #:
-    #: The first build defaulted to 2.0, picked to hit a target shrinkage. The
-    #: production fit ``760751604647`` rejected it: slope 0.723 against a
-    #: ``[0.80, 0.98]`` band, i.e. over-shrunk. Sweeping the multiplier offline
-    #: against that run's own output (the shrinkage is post-posterior, so no
-    #: refit is needed -- see ``scripts/profile_forecast_error.py``):
-    #:
-    #: ======  ========  ======  =====  ============
-    #: kappa   median g  slope   rho    revision pp
-    #: ======  ========  ======  =====  ============
-    #: 0.50    0.966     0.944   0.999  0.28
-    #: **1.00**  **0.876**  **0.858**  **0.992**  **1.00**
-    #: 1.25    0.818     0.819   0.986  1.45
-    #: 1.50    0.758     0.783   0.978  1.91
-    #: 2.00    0.638     0.723   0.960  2.83
-    #: ======  ========  ======  =====  ============
-    #:
-    #: The feasible band is roughly ``[0.85, 1.35]``: below it ``rho`` stays above
-    #: its 0.995 ceiling (the screen is still a consensus sort), above it the
-    #: slope falls out of the band. 1.0 sits mid-band and is the interpretable
-    #: choice, so the two criteria agree.
-    forecast_error_multiplier: float = 1.0
-    #: Exponent on the analyst count in that standard error. 0.5 is the textbook
-    #: standard error of the mean.
-    #:
-    #: **This no longer steepens ``coverage_gradient``, and must not be raised to
-    #: make that gate pass.** It used to say so, back when the gate read ``er_sd``
-    #: — the forward-return sd this exponent helps shape. Since 2026-08-27 the
-    #: gate is graded on ``expected_upside_sd``, the posterior sd, which is the
-    #: quantity its claim about the hierarchy is actually about; raising this knob
-    #: would change every name's forward variance to satisfy a measurement of a
-    #: different quantity. The forward-return gradient is still reported beside the
-    #: gate, and is deliberately not graded: this is a prior the panel cannot
-    #: identify, so a threshold on it would only confirm the prior was applied.
-    forecast_error_n_exponent: float = 0.5
-    #: Floor on ``tail_risk`` as a fraction of the name's own Monte-Carlo return
-    #: sd. The absolute 1pp floor in :mod:`RiskBookModel` binds for 13.4 % of the
-    #: universe and 14 of 25 book names on run ``49e84d7e9d59``, turning STARR
-    #: into ``100 x expected_upside`` for exactly the names whose simulated 5 %
-    #: quantile happens to be positive. A relative floor charges a name for the
-    #: dispersion it has instead of rewarding it for having no simulated loss.
-    tail_risk_vol_floor_k: float = 0.25
-    mc_horizon: int = 4
-    mc_rho: float = 0.85
-    cvar_alpha: float = 0.05
-    weight_cap: float = 0.10
-    #: Ceiling on the number of positions. **No longer the book size**: since
-    #: 2026-08-28 breadth is solved and this only bounds it, so a run may ship
-    #: fewer names. Kept at 50 so an existing run's ceiling is unchanged.
-    k_book: int = 50
-    #: Weights below this are dropped. The rule that makes breadth an OUTPUT --
-    #: run ``807df55e7158`` published fifty names of which thirty-eight held
-    #: 1.17 % between them and the smallest held 0.0002 %.
-    book_min_weight: float = 0.005
-    #: ``dimension -> maximum weight`` for the sized books, e.g.
-    #: ``{"sector": 0.30}``. **Empty by default, and that is a decision**: the
-    #: v2 export's own gate exists because a concentration nobody capped is one
-    #: taken by omission, and turning a cap on here changes the published book.
-    #: ``kalman_portfolio.py`` sets a sector cap for the replay; this stays off
-    #: so the fit path's book does not move underneath an unrelated change.
-    group_caps: dict[str, float] = field(default_factory=dict)
-    #: Baseline long-probability threshold. Scaled by the universe-average
-    #: kalman_gain inside the risk book to give ``p_long_cond``, which is what
-    #: ``p_upside_pos_cond`` is actually tested against.
-    p_long: float = 0.67
-    #: Market-cap pre-selection threshold for long-book eligibility: a name is
-    #: eligible when ``mcap_global_r < mcap_global_r_max``.
-    #:
-    #: **Renamed from ``mcap_country_r_max`` on 2026-08-22.** The old name said
-    #: *country* while the column it is compared against — and has always been
-    #: compared against, in ``RiskBookModel`` and in v1 before it — is
-    #: ``mcap_global_r``. Two different rank bases, one name, and no way to tell
-    #: from the call site which was meant. The column is the thing that cannot
-    #: move (``feat_mcap_global_r`` is the MV's contract and the size-tilt
-    #: driver), so the knob is what changes. :attr:`mcap_country_r_max` remains
-    #: as a read-only alias for one release; ``replace(cfg, mcap_country_r_max=…)``
-    #: raises rather than silently setting nothing.
-    mcap_global_r_max: float = 0.03
-
-    # ---- forecast + decision layers (§15 / §15b) ----------------------------
-    #: Run the forward-return forecast layer (:mod:`…pymc_models.KalmanForecast`)
-    #: alongside the AR simulator. **Off by default, and this must stay off until
-    #: a vintage scores it.** With it off nothing about the export changes: the
-    #: screen, the risk book and every ``er_*`` column keep coming from
-    #: ``simulate_lagged_risk_adjusted_returns`` exactly as they do today. With it
-    #: on, §15 and §15b emit their own frames beside the existing ones and the
-    #: shipped columns are still untouched — the forecast is *reported*, not
-    #: substituted, so the two engines can be contrasted on one fit.
-    #:
-    #: A default here moves on measurement. Both ELPD arms that ran ranked an
-    #: alternative first and neither cleared its own standard error, and both
-    #: scored against the same analyst trail every gate scores against. A forecast
-    #: engine is exactly the kind of component that internal criteria cannot
-    #: adjudicate, so the evidence that would justify flipping this is a realised
-    #: return, not a better fit.
-    enable_forecast_layer: bool = True
-    #: ``native`` | ``pymc_forecast`` | ``statespace``. Only ``native`` is built;
-    #: the other two report their missing dependency. ``statespace`` needs
-    #: pymc-extras, which pins ``pymc<6.3`` / ``pytensor<3.3`` — below what is
-    #: installed — so enabling it would require downgrading the coupled pair.
-    forecast_backend: str = "native"
-    #: Forecast horizon in calendar days. 365 because the response is a ~12-month
-    #: analyst price target; the AR simulator's ``mc_horizon = 4`` is four
-    #: *unitless* periods, which is the mismatch the forecast layer exists to fix.
-    forecast_horizon_days: int = 365
-    #: Simulation step in days. 91 gives four steps, deliberately the same count as
-    #: :attr:`mc_horizon`, so the engine contrast is like-for-like.
-    forecast_step_days: int = 91
-    #: Joint scenarios drawn. Each fixes one posterior sample across every name.
+    #: This is the ONE forecast knob that stayed, because it is a decision about
+    #: the file this script writes rather than about what a replay does with it.
+    #: At 6.5k names the handoff is ~270 MB at 2,000 float32 samples; this is the
+    #: lever if that is too much, and the dtype is not.
     forecast_scenarios: int = 2000
-    #: Share of each name's forward shock VARIANCE carried by shared factors.
-    #: **A prior, not an estimate** — the panel is a cross-section of price-target
-    #: trails and cannot identify a return factor structure. It is load-bearing:
-    #: at 0.0 the forward shocks are cross-sectionally independent, which is the
-    #: AR simulator's assumption and which makes portfolio diversification free.
-    #: Grid it and report the sensitivity, the way ``forecast_error_multiplier``
-    #: should be gridded, rather than quoting the point value.
-    forecast_factor_share: float = 0.35
-    #: Run the decision layer (:mod:`…pymc_models.PortfolioOptimizationModel`) on
-    #: the forecast draws. Requires :attr:`enable_forecast_layer`.
-    enable_portfolio_layer: bool = True
-    #: Kelly scaling reported by §15b. Half-Kelly guards against overbetting an
-    #: edge estimated from a non-stationary process under a prior-driven shrinkage.
-    portfolio_kelly_multiplier: float = 0.5
+
+    # ---- the decision layer's knobs are NOT here ---------------------------
+    #
+    # Twenty-five fields left on 2026-08-31 with the stages that read them:
+    # `enable_forecast_error_shrinkage` / `forecast_error_multiplier` /
+    # `forecast_error_n_exponent`, the five `gate_shrinkage_*` thresholds, the
+    # risk book's `cvar_alpha` / `k_book` / `book_min_weight` / `weight_cap` /
+    # `group_caps` / `p_long` / `mcap_global_r_max` / `tail_risk_vol_floor_k`,
+    # the `mc_horizon` / `mc_rho` pair, and the whole `forecast_*` /
+    # `portfolio_*` block. They live on `KalmanPortfolioConfig` now, at the same
+    # default values.
+    #
+    # They are DELETED rather than deprecated. A knob that can still be set on
+    # this config and no longer reaches anything is the failure this whole change
+    # is about -- `--write is accepted but does nothing`, in dataclass form. The
+    # CLI flags that named them are refused with a message saying where they
+    # went, which is the behaviour a caller can act on.
+    #
+    # `forecast_scenarios` STAYED: it is the handoff's thinning budget, which is
+    # this script's decision because this script writes the file.
 
     # ---- model comparison (§9b) --------------------------------------------
     #: Run the ELPD comparison stage. **Off by default and deliberately not in
@@ -1493,58 +1363,6 @@ class KalmanRunConfigV2:
     fig_width_px: int = 1150
     write_analytics: bool = True
     log_level: str = "INFO"
-
-    def __post_init__(self) -> None:
-        """Reject the decision-layer knobs that would fail silently downstream.
-
-        A negative multiplier gives a negative variance and a gain above 1, i.e.
-        anti-shrinkage; a slope band that does not contain a shrinkage estimator
-        makes the gate unsatisfiable. Both produce plausible-looking numbers
-        several stages later rather than an error here.
-        """
-        if self.forecast_error_multiplier < 0:
-            raise ValueError(
-                "forecast_error_multiplier must be non-negative, got "
-                f"{self.forecast_error_multiplier!r}"
-            )
-        if self.forecast_error_n_exponent < 0:
-            raise ValueError(
-                "forecast_error_n_exponent must be non-negative, got "
-                f"{self.forecast_error_n_exponent!r}"
-            )
-        if self.tail_risk_vol_floor_k < 0:
-            raise ValueError(
-                f"tail_risk_vol_floor_k must be non-negative, got "
-                f"{self.tail_risk_vol_floor_k!r}"
-            )
-        if not self.gate_shrinkage_slope_lo < self.gate_shrinkage_slope_hi:
-            raise ValueError(
-                "gate_shrinkage_slope band must be increasing, got "
-                f"[{self.gate_shrinkage_slope_lo}, {self.gate_shrinkage_slope_hi}]"
-            )
-        if not 0.0 < self.gate_shrinkage_rho_max <= 1.0:
-            raise ValueError(
-                "gate_shrinkage_rho_max must be in (0, 1], got "
-                f"{self.gate_shrinkage_rho_max!r}"
-            )
-
-    @property
-    def mcap_country_r_max(self) -> float:
-        """Deprecated alias of :attr:`mcap_global_r_max`.
-
-        The old name claimed a country-relative rank; the comparison has always
-        been against ``mcap_global_r``. Read-only on purpose — a writable alias
-        on a frozen dataclass would let ``replace()`` appear to work while
-        setting nothing.
-        """
-        warnings.warn(
-            "KalmanRunConfigV2.mcap_country_r_max is deprecated; it was renamed "
-            "to mcap_global_r_max because the threshold is compared against the "
-            "mcap_global_r column, not a country rank.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.mcap_global_r_max
 
     @property
     def gate_coverage_target(self) -> float:
@@ -2033,6 +1851,7 @@ def screen_contrast_identities(
     X: np.ndarray,
     names: Sequence[str],
     time_days: np.ndarray,
+    observed: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
     """Measure each drift feature against the response *level* and its *contrasts*.
 
@@ -2078,13 +1897,41 @@ def screen_contrast_identities(
         Column names of ``X``.
     time_days
         Calendar offsets, shape ``(T,)``, oldest first and ending at 0.
+    observed
+        ``(n_isin, p)`` boolean mask, ``True`` where the feature was actually
+        MEASURED. ``None`` measures every row, which is what this function did
+        until 2026-08-31.
+
+        **Why it matters.** ``prepare_panel`` z-scores each feature and then
+        zero-fills the gaps, so a missing name lands exactly on the feature mean.
+        Correlating that column against the response measures the FILL as much as
+        the feature, and it does so asymmetrically: the pinned block pulls the
+        level correlation toward zero faster than the contrast correlation, which
+        inflates a ratio whose denominator is the level.
+
+        Measured on `feat_eps_signal_beat`, the only admitted feature below 100%
+        coverage (86.8%, 856 names filled):
+
+        =================  ==========  =============  =========
+        rows               r(level)    r(contrast)    dominance
+        =================  ==========  =============  =========
+        all (filled)         -0.0827        +0.1261       1.52
+        observed only        -0.1001        +0.1393       1.39
+        =================  ==========  =============  =========
+
+        The feature's own relationship to the data is unchanged -- the observed
+        numbers reproduce the raw MV's -0.1009 / +0.1392 -- and the whole of the
+        verdict is the fill. The calibration table for
+        :data:`DRIFT_SELECTION_MIN_COVERAGE` already names this hazard ("a large
+        block of rows pinned at its own mean, which attenuates its slope toward
+        zero"); this carries that recognition into the statistic.
 
     Returns
     -------
     pandas.DataFrame
         One row per drift feature, sorted worst first:
         ``feature``, ``corr_level``, ``corr_contrast``, ``contrast_gap_days``,
-        ``dominance``, ``is_identity``.
+        ``dominance``, ``n_observed``, ``is_identity``.
 
     Notes
     -----
@@ -2116,8 +1963,19 @@ def screen_contrast_identities(
     snapshot = Y[:, T - 1]
     contrasts = {float(time_days[j]): snapshot - Y[:, j] for j in range(T - 1)}
 
-    def _corr(x: np.ndarray, y: np.ndarray) -> float:
+    obs = None if observed is None else np.asarray(observed, dtype=bool)
+    if obs is not None and obs.shape != X.shape:
+        logger.warning(
+            "observed mask %s does not match the design matrix %s; measuring "
+            "every row, which measures the zero-fill too", obs.shape, X.shape,
+        )
+        obs = None
+
+    def _corr(x: np.ndarray, y: np.ndarray,
+              keep: Optional[np.ndarray] = None) -> float:
         ok = np.isfinite(x) & np.isfinite(y)
+        if keep is not None:
+            ok &= keep
         if ok.sum() < 3:
             return float("nan")
         xs, ys = x[ok], y[ok]
@@ -2128,10 +1986,11 @@ def screen_contrast_identities(
     rows: list[dict[str, Any]] = []
     for j, name in enumerate(names):
         x = X[:, j]
-        level = _corr(x, snapshot)
+        keep = None if obs is None else obs[:, j]
+        level = _corr(x, snapshot, keep)
         best_gap, best_corr = float("nan"), 0.0
         for gap, contrast in contrasts.items():
-            r = _corr(x, contrast)
+            r = _corr(x, contrast, keep)
             if math.isfinite(r) and abs(r) > abs(best_corr):
                 best_gap, best_corr = gap, r
         reference = max(abs(level) if math.isfinite(level) else 0.0, CONTRAST_CORR_FLOOR)
@@ -2143,6 +2002,10 @@ def screen_contrast_identities(
                 "corr_contrast": best_corr,
                 "contrast_gap_days": best_gap,
                 "dominance": dominance,
+                # Reported so a verdict can be read against the sample it was
+                # measured on -- a feature screened on 87% of the universe and
+                # one screened on all of it are not equally well established.
+                "n_observed": int(x.size if keep is None else int(keep.sum())),
                 "is_identity": dominance > CONTRAST_DOMINANCE_MARGIN,
             }
         )
@@ -2247,13 +2110,19 @@ def prepare_panel(
     Y = (Y_raw - mu) / sd
 
     names = list(drift_names) if drift_names is not None else select_drift_features_v2(frame)
+    # Captured BEFORE `_standardise` zero-fills the gaps. After the fill a
+    # missing name is indistinguishable from one sitting at the feature mean,
+    # and the screen below would measure the fill along with the feature.
+    observed = np.column_stack([frame[c].notna().to_numpy() for c in names])
     X = np.column_stack([_standardise(frame[c].to_numpy()) for c in names])
 
     # Screen BEFORE rotating: an orthonormal rotation mixes a trail-contrast
     # identity into its neighbours, so on the rotated basis the flag lands on
     # whichever principal axis inherited the contrast content instead of on the
     # column responsible for it.
-    contrast_screen = screen_contrast_identities(Y, X, names, model_cfg.time_grid_days)
+    contrast_screen = screen_contrast_identities(
+        Y, X, names, model_cfg.time_grid_days, observed=observed
+    )
 
     rotation: Optional[np.ndarray] = None
     sources: tuple[str, ...] = ()
@@ -2873,6 +2742,52 @@ def sample_posterior(model: Any, run_cfg: KalmanRunConfigV2) -> Any:
         idata = pm.sample(**kwargs)
     log_sample_diagnostics(idata, model_name="KalmanPriceTargetV2")
     return idata
+
+
+# =========================================================================== #
+# §7b  Posterior readers                                                      #
+# =========================================================================== #
+#
+# Three one-liners the PPC and the diagnostics share. They stayed when the
+# decision layer moved to `kalman_portfolio.py`: that side reads a HANDOFF, whose
+# arrays are already flattened to (isin, sample), so it has nothing to flatten
+# and no idata to read.
+
+
+def _posterior_draws(idata: Any, name: str, *, per_isin: bool = True) -> np.ndarray:
+    """Flatten a posterior variable to ``(isin, sample)`` or ``(sample,)``."""
+    post = idata.posterior if hasattr(idata, "posterior") else idata["posterior"]
+    if name not in post:
+        raise KeyError(
+            f"{name!r} not in posterior. Available: {sorted(map(str, post.data_vars))}"
+        )
+    arr = np.asarray(post[name])
+    if per_isin:
+        return arr.reshape(-1, arr.shape[-1]).T  # (isin, sample)
+    return arr.reshape(-1)
+
+
+def _posterior_mean(idata: Any, name: str, panel: KalmanPanelV2) -> np.ndarray:
+    """Posterior mean of a per-ISIN variable, aligned to ``panel.isins``."""
+    try:
+        return _posterior_draws(idata, name).mean(axis=1)
+    except KeyError:
+        logger.warning("%s absent from the posterior; filling with NaN", name)
+        return np.full(panel.n_isin, np.nan)
+
+
+def _fitted_mean(idata: Any, panel: KalmanPanelV2) -> np.ndarray:
+    """Posterior mean of the linear predictor the likelihood actually centres on.
+
+    ``mu_scaled`` since 2026-08-19 — ``signal_scale * mu_reg`` — falling back to
+    ``mu_reg`` for an idata fitted before the signal-scaling exponent existed.
+    Resolved by membership rather than by catching ``KeyError``: `_posterior_mean`
+    swallows that and returns an all-NaN vector, which would have surfaced as a
+    spurious ``mean_spread`` failure instead of a fallback.
+    """
+    post = idata.posterior if hasattr(idata, "posterior") else idata["posterior"]
+    name = "mu_scaled" if "mu_scaled" in post else "mu_reg"
+    return _posterior_mean(idata, name, panel)
 
 
 # =========================================================================== #
@@ -4168,706 +4083,110 @@ def compare_arms_fast(
 
 
 # =========================================================================== #
-# §10  Screen + decision gates                                                #
+# §10  Screen, risk book and forecast layer -- MOVED                          #
 # =========================================================================== #
-
-
-@dataclass(frozen=True)
-class ScreenDraws:
-    """The draw arrays §10 builds and §10b needs, carried explicitly.
-
-    ``run_risk_book`` used to re-resolve the decision latent from the idata
-    itself. That was harmless while the screen was a thin summary of that same
-    latent, but it stopped being true once §10 gained forecast-error shrinkage:
-    a re-resolve would have sized the book on the UNSHRUNK latent while the
-    screen reported the shrunk one, and every gate would still have passed.
-
-    The Monte-Carlo array is carried for the same reason in reverse — it existed
-    only inside ``run_screen``, so ``compute_cvar_aware_book`` had no return
-    distribution to compute a CVaR from and fell back to the posterior upside
-    draws, which is why the exported ``cvar05`` was positive for 88 % of names.
-
-    Attributes
-    ----------
-    eu
-        Expected-upside draws in RETURN space, dims ``(chain, draw, isin)``.
-    mc_returns
-        Monte-Carlo forward returns, shape ``(n_isin, n_samples, horizon)``.
-    isins
-        Identifiers, aligned to the ``isin`` axis of both.
-    """
-
-    eu: Any
-    mc_returns: np.ndarray
-    isins: np.ndarray
-
-    @property
-    def pooled_returns(self) -> np.ndarray:
-        """``mc_returns`` flattened to ``(n_isin, n_samples * horizon)``.
-
-        The pooling ``summarize_mc_returns`` uses, so a CVaR taken from this and
-        the exported ``er_p05`` describe the same distribution.
-        """
-        return np.asarray(self.mc_returns).reshape(len(self.isins), -1)
-
-
-def _posterior_draws(idata: Any, name: str, *, per_isin: bool = True) -> np.ndarray:
-    """Flatten a posterior variable to ``(isin, sample)`` or ``(sample,)``."""
-    post = idata.posterior if hasattr(idata, "posterior") else idata["posterior"]
-    if name not in post:
-        raise KeyError(
-            f"{name!r} not in posterior. Available: {sorted(map(str, post.data_vars))}"
-        )
-    arr = np.asarray(post[name])
-    if per_isin:
-        return arr.reshape(-1, arr.shape[-1]).T  # (isin, sample)
-    return arr.reshape(-1)
-
-
-def _posterior_mean(idata: Any, name: str, panel: KalmanPanelV2) -> np.ndarray:
-    """Posterior mean of a per-ISIN variable, aligned to ``panel.isins``."""
-    try:
-        return _posterior_draws(idata, name).mean(axis=1)
-    except KeyError:
-        logger.warning("%s absent from the posterior; filling with NaN", name)
-        return np.full(panel.n_isin, np.nan)
-
-
-def _fitted_mean(idata: Any, panel: KalmanPanelV2) -> np.ndarray:
-    """Posterior mean of the linear predictor the likelihood actually centres on.
-
-    ``mu_scaled`` since 2026-08-19 — ``signal_scale * mu_reg`` — falling back to
-    ``mu_reg`` for an idata fitted before the signal-scaling exponent existed.
-    Resolved by membership rather than by catching ``KeyError``: `_posterior_mean`
-    swallows that and returns an all-NaN vector, which would have surfaced as a
-    spurious ``mean_spread`` failure instead of a fallback.
-    """
-    post = idata.posterior if hasattr(idata, "posterior") else idata["posterior"]
-    name = "mu_scaled" if "mu_scaled" in post else "mu_reg"
-    return _posterior_mean(idata, name, panel)
-
-
-def _risk_adjusted_prob_positive(
-    idata: Any,
-    panel: KalmanPanelV2,
-    mc_log: np.ndarray,
-    *,
-    chunk: int = 512,
-) -> Optional[np.ndarray]:
-    """P(risk-adjusted forward return > 0) per name, from log-space MC draws.
-
-    Replaces ``mc_prob_pos * kalman_gain``, which multiplied a probability by a
-    sigmoid of a location parameter: usable as an ordering, meaningless as a
-    level. This is one probability of one stated event — that the forward return,
-    net of the same risk / size / volume penalties the model applies to
-    ``risk_adj_return``, is positive.
-
-    Two implementation notes that are not incidental:
-
-    * The penalty is recovered as ``state_now_mean - risk_adj_return`` rather
-      than rebuilt from the three loadings and their data columns. That is the
-      penalty the model actually applied, so it cannot drift out of step with the
-      builder the way a reimplementation would.
-    * The test is on the LOG draws. ``expm1`` is monotone and the clip bounds
-      straddle zero, so ``expm1(x) > 0`` exactly when ``x > 0`` — converting
-      first would allocate a second multi-gigabyte array to learn nothing.
-
-    Parameters
-    ----------
-    mc_log
-        Simulated log-uplift, shape ``(n_isin, n_samples, horizon)``, already
-        clipped. Not modified.
-    chunk
-        Names per block. The comparison materialises
-        ``chunk * n_samples * horizon`` floats, so this bounds peak memory at a
-        few hundred MB against a ~1.7 GB source array.
-
-    Returns
-    -------
-    numpy.ndarray or None
-        Shape ``(n_isin,)``, or ``None`` when the posterior lacks the variables,
-        which signals the caller to fall back to the legacy product.
-    """
-    try:
-        state = _posterior_draws(idata, KALMAN_V2_SCREEN_LATENT)  # (isin, sample)
-        rar = _posterior_draws(idata, "risk_adj_return")
-    except KeyError as exc:
-        logger.warning(
-            "risk-adjusted MC probability unavailable (%s); p_upside_pos_cond "
-            "falls back to the mc_prob_pos * kalman_gain product, whose LEVEL is "
-            "not interpretable.", exc,
-        )
-        return None
-
-    penalty = (state - rar) * panel.response_std  # (isin, sample), log-uplift
-    n_isin = mc_log.shape[0]
-    if penalty.shape[0] != n_isin or penalty.shape[1] != mc_log.shape[1]:
-        logger.warning(
-            "penalty draws %s do not align with the MC array %s; "
-            "p_upside_pos_cond falls back to the legacy product.",
-            penalty.shape, mc_log.shape,
-        )
-        return None
-
-    out = np.empty(n_isin, dtype="float64")
-    for i0 in range(0, n_isin, chunk):
-        sl = slice(i0, min(i0 + chunk, n_isin))
-        adj = mc_log[sl] - penalty[sl, :, None]
-        out[sl] = (adj > 0.0).mean(axis=(1, 2))
-    return out
-
-
-def run_screen(
-    idata: Any,
-    panel: KalmanPanelV2,
-    run_cfg: KalmanRunConfigV2,
-    report: GateReport,
-) -> tuple[pd.DataFrame, "ScreenDraws"]:
-    """Build the per-ISIN screen and gate the decision layer.
-
-    Returns the screen frame **and** a :class:`ScreenDraws` carrying the draw
-    arrays §10b needs — see that class for why they are handed over rather than
-    re-derived.
-
-    Two gates here that v1 had nowhere to put, both aimed at failure modes that
-    a manual review caught only after they had shipped:
-
-    ``shrinkage_slope``
-        Regress model expected upside on analyst-implied upside. A well-behaved
-        shrinkage estimator has slope slightly below 1 and intercept near 0. An
-        *intercept* is a uniform offset applied to the entire universe — which is
-        exactly what drove names-above-consensus from 62 % to 81 % between two
-        runs while every other statistic stayed plausible.
-    ``coverage_gradient``
-        Posterior uncertainty must fall as analyst coverage rises. A flat or
-        inverted gradient means the hierarchy is not pricing information, and it
-        is the column the risk book divides by.
-    """
-    import xarray as xr
-
-    from probabilistic_ml_model.pymc_models._price_target_mc import (
-        simulate_lagged_risk_adjusted_returns,
-        summarize_mc_returns,
-    )
-
-    if run_cfg.enable_forecast_error_shrinkage:
-        latent, shrink_gain = apply_forecast_error_shrinkage(
-            idata,
-            panel,
-            multiplier=run_cfg.forecast_error_multiplier,
-            n_exponent=run_cfg.forecast_error_n_exponent,
-            latent=KALMAN_V2_SCREEN_LATENT,
-            random_seed=run_cfg.random_seed,
-        )
-    else:
-        latent = resolve_screen_latent_v2(
-            idata, latent=KALMAN_V2_SCREEN_LATENT, random_seed=run_cfg.random_seed
-        )
-        shrink_gain = np.ones(panel.n_isin)
-    draws = np.asarray(latent).reshape(-1, latent.shape[-1])  # (sample, isin)
-
-    # De-standardise back to log-uplift, then to a return. The clip is applied in
-    # LOG space so it is sign-preserving; converting first and clipping after
-    # would distort prob_pos.
-    log_uplift = np.clip(
-        draws * panel.response_std + panel.response_mean,
-        LOG_UPLIFT_CLIP_LO,
-        LOG_UPLIFT_CLIP_HI,
-    )
-    upside = np.expm1(log_uplift)
-    # The same quantity with its (chain, draw) axes intact, for the risk book.
-    # Built from ``latent`` rather than reshaped back out of ``upside`` so the
-    # dims and coords come from the posterior rather than being reconstructed.
-    eu_draws = xr.DataArray(
-        np.expm1(
-            np.clip(
-                np.asarray(latent) * panel.response_std + panel.response_mean,
-                LOG_UPLIFT_CLIP_LO,
-                LOG_UPLIFT_CLIP_HI,
-            )
-        ),
-        dims=latent.dims,
-        coords=latent.coords,
-    )
-
-    frame = panel.frame
-    screen = pd.DataFrame(
-        {
-            "isin": panel.isins,
-            "ticker": frame.get("ticker"),
-            "name": frame.get("name"),
-            "sector": frame.get("sector"),
-            "industry": frame.get("industry"),
-            "trading_region": frame.get("trading_region"),
-            "country": frame.get("country"),
-            "style_class": frame.get("style_class"),
-            "size_class": frame.get("size_class"),
-            "n_analysts": pd.to_numeric(frame.get("n_analysts"), errors="coerce"),
-            # The analyst panel's own 1-5 consensus (5 = Strong Buy). Carried so
-            # `name_action_list` can emit `consensus_gap` -- the model's action
-            # score minus the panel's rating, on one scale. Without it the whole
-            # reason the action ladder borrows the analyst vocabulary is
-            # unavailable at the point of use, and the screen that reproduces
-            # consensus at Spearman 0.992 has no column saying where it differs.
-            "feat_analyst_rating": pd.to_numeric(
-                frame.get("feat_analyst_rating"), errors="coerce"
-            ),
-            "market_cap": pd.to_numeric(frame.get("market_cap"), errors="coerce"),
-            "mcap_global_r": pd.to_numeric(frame.get("feat_mcap_global_r"), errors="coerce"),
-            "mcap_country_r": pd.to_numeric(frame.get("feat_mcap_country_r"), errors="coerce"),
-            "last_price": pd.to_numeric(frame.get("last_price"), errors="coerce"),
-            "observed_pt": pd.to_numeric(frame.get("observed_pt"), errors="coerce"),
-            "expected_upside": upside.mean(axis=0),
-            "expected_upside_sd": upside.std(axis=0),
-            # v1's column names, not v2's first draft. compute_cvar_aware_book
-            # requires expected_pt_hdi_lo/hi by name; supplying
-            # expected_upside_p05/p95 instead silently degrades three risk
-            # columns rather than raising.
-            "prob_pos": (upside > 0).mean(axis=0),
-        }
-    )
-    screen["implied_upside"] = screen["observed_pt"] / screen["last_price"] - 1.0
-    screen["expected_pt"] = screen["last_price"] * (1.0 + screen["expected_upside"])
-    screen["expected_pt_hdi_lo"] = screen["last_price"] * (
-        1.0 + np.percentile(upside, 3, axis=0)
-    )
-    screen["expected_pt_hdi_hi"] = screen["last_price"] * (
-        1.0 + np.percentile(upside, 97, axis=0)
-    )
-    screen["shrink_gain"] = shrink_gain
-    screen["risk_adj_return"] = _posterior_mean(idata, "risk_adj_return", panel)
-    # ``kalman_gain`` was ``sigmoid(risk_adj_return)`` — a sigmoid of a
-    # STANDARDISED LOG-UPLIFT, which is not the probability of any defined
-    # event. It has no calibration target, it pins at 0.5 wherever the
-    # risk-adjusted latent is near zero, and its prior (sigmoid of a wide
-    # unconstrained latent) piles mass at both ends. On run 49e84d7e9d59 the
-    # exported column correlated -0.004 with analyst count and +0.06 with the
-    # shrinkage actually applied. It is now the posterior probability that the
-    # risk-adjusted latent is positive: a real tail probability of a stated
-    # event, and a reduction over draws rather than a per-draw Deterministic,
-    # which is why it lives here and not in the model graph.
-    try:
-        _rar = _posterior_draws(idata, "risk_adj_return")  # (isin, sample)
-        screen["kalman_gain"] = (_rar > 0.0).mean(axis=1)
-    except KeyError:  # pragma: no cover - defensive
-        logger.warning(
-            "risk_adj_return absent from the posterior; kalman_gain falls back "
-            "to 1.0 and p_upside_pos_cond degrades to the unconditional MC "
-            "probability."
-        )
-        screen["kalman_gain"] = 1.0
-
-    # ---- Monte-Carlo forward returns (v1 §10 wiring) ------------------------
-    # mu and sigma must be de-standardised onto the response scale BEFORE the
-    # simulation, and the draws clipped in log space afterwards. Skipping the
-    # de-standardisation yields z-scores rather than returns — a real historical
-    # bug that reached the exported table.
-    # Both arrays must be (n_isin, n_samples) and share the sample ordering.
-    # ``_posterior_draws`` already returns that orientation; ``draws`` is
-    # (sample, isin) and needs the transpose.
-    sigma_draws = _posterior_draws(idata, "sigma_isin") * panel.response_std
-    mu_draws = (draws * panel.response_std + panel.response_mean).T  # (isin, sample)
-    nu_draws = _posterior_draws(idata, "nu", per_isin=False)
-    if sigma_draws.shape != mu_draws.shape:
-        raise ValueError(
-            f"MC input shape mismatch: sigma {sigma_draws.shape} vs mu "
-            f"{mu_draws.shape}. Both must be (n_isin, n_samples)."
-        )
-    mc = simulate_lagged_risk_adjusted_returns(
-        mu_draws,
-        sigma_draws,
-        nu_draws,
-        horizon=run_cfg.mc_horizon,
-        rho=run_cfg.mc_rho,
-        random_seed=run_cfg.random_seed,
-    )
-    # In place, and in this order, because the array is large: at the production
-    # budget it is (6500, chains*draws, horizon) = ~1.7 GB. Clip -> read the log
-    # array -> expm1 over the SAME buffer keeps exactly one copy alive. Binding
-    # the clipped log array to its own name and then allocating the return-space
-    # array from it holds two, and adding a risk-adjusted copy holds three, which
-    # does not fit.
-    np.clip(mc, LOG_UPLIFT_CLIP_LO, LOG_UPLIFT_CLIP_HI, out=mc)
-    p_cond = _risk_adjusted_prob_positive(idata, panel, mc)
-    np.expm1(mc, out=mc)
-    mc_summary = summarize_mc_returns(mc, panel.isins)
-    screen = screen.merge(
-        mc_summary.rename(columns={"prob_pos": "mc_prob_pos"}), on="isin", how="left"
-    )
-
-    if p_cond is not None:
-        screen["p_upside_pos_cond"] = p_cond
-    else:
-        # Documented fallback, matching compute_cvar_aware_book's degrade-with-a-
-        # warning pattern: the product form still orders names, it just cannot be
-        # read as a probability of anything.
-        screen["p_upside_pos_cond"] = (
-            screen["mc_prob_pos"].fillna(screen["prob_pos"])
-            * screen["kalman_gain"].fillna(1.0)
-        )
-
-    screen = screen.sort_values("expected_upside", ascending=False).reset_index(drop=True)
-
-    # ---- shrinkage slope gate ---------------------------------------------
-    valid = screen[["expected_upside", "implied_upside"]].replace(
-        [np.inf, -np.inf], np.nan
-    ).dropna()
-    if len(valid) >= 100:
-        slope, intercept = np.polyfit(valid["implied_upside"], valid["expected_upside"], 1)
-        above = float((screen["expected_upside"] > screen["implied_upside"]).mean())
-        # Slope and intercept grade CALIBRATION; rho and the median revision
-        # grade DISAGREEMENT. Both halves are needed: an exact copy of the input
-        # scores a perfect 1.0 / 0.0 on the first pair, which is how run
-        # 49e84d7e9d59 passed while reproducing consensus at rho 0.999995.
-        rho = float(valid["expected_upside"].corr(valid["implied_upside"], method="spearman"))
-        revision_pp = float((valid["expected_upside"] - valid["implied_upside"]).abs().median() * 100.0)
-        # The universe-wide shift, which is what the old |intercept| threshold
-        # was reaching for. The intercept itself is (1 - slope) * centre by
-        # construction and so cannot separate an offset from shrinkage; see
-        # gate_shrinkage_center_shift_max.
-        center_shift = float(valid["expected_upside"].mean() - valid["implied_upside"].mean())
-        slope_ok = run_cfg.gate_shrinkage_slope_lo <= slope <= run_cfg.gate_shrinkage_slope_hi
-        shift_ok = abs(center_shift) <= run_cfg.gate_shrinkage_center_shift_max
-        rho_ok = not (np.isfinite(rho) and rho > run_cfg.gate_shrinkage_rho_max)
-        rev_ok = revision_pp >= run_cfg.gate_shrinkage_revision_min_pp
-        report.add(
-            GateResult(
-                name="shrinkage_slope",
-                passed=bool(slope_ok and shift_ok and rho_ok and rev_ok),
-                value=(
-                    f"slope {slope:.3f}, shift {center_shift:+.4f}, above {above:.1%}, "
-                    f"rho {rho:.5f}, median revision {revision_pp:.2f}pp "
-                    f"(intercept {intercept:+.4f})"
-                ),
-                threshold=(
-                    f"slope in [{run_cfg.gate_shrinkage_slope_lo}, "
-                    f"{run_cfg.gate_shrinkage_slope_hi}], |shift| <= "
-                    f"{run_cfg.gate_shrinkage_center_shift_max}, rho <= "
-                    f"{run_cfg.gate_shrinkage_rho_max}, revision >= "
-                    f"{run_cfg.gate_shrinkage_revision_min_pp}pp"
-                ),
-                detail=(
-                    "A shift of the centre is a universe-wide offset, not a "
-                    "signal. Expect ~50% of names above consensus, not 80%. A rho "
-                    "at the ceiling or a revision at the floor means the opposite "
-                    "failure: the screen is a consensus sort, and the drift betas "
-                    "and the hierarchy are being estimated but are not reaching "
-                    "the exported number. The intercept is reported for continuity "
-                    "but is not graded -- it equals (1 - slope) * centre."
-                ),
-            )
-        )
-
-    # ---- coverage gradient gate -------------------------------------------
-    cov = screen.dropna(subset=["n_analysts"]).copy()
-    if len(cov) >= 500:
-        cov["bucket"] = pd.cut(
-            cov["n_analysts"], [0, 3, 8, 20, np.inf], labels=["1-3", "4-8", "9-20", "21+"]
-        )
-        # GRADE THE POSTERIOR SD. This gate asks whether the hierarchy prices
-        # information -- whether a name covered by 30 analysts gets a tighter
-        # ESTIMATE than one covered by 2 -- so it has to be measured on the
-        # estimate's own uncertainty.
-        #
-        # It used to read `er_sd if "er_sd" in cov.columns else expected_upside_sd`,
-        # and the fallback silently became the primary when the 2026-08-20 change
-        # made `er_sd` the pooled sd of the FORWARD-RETURN Monte Carlo. That is a
-        # different quantity: on run `6efb530d5881` the posterior leg was 2.9-6.4 %
-        # of `er_sd`'s VARIANCE, the rest being forward-simulation and
-        # forecast-error dispersion whose own gradient is 1.49x. The composite came
-        # out at 1.52x and the gate warned -- while `expected_upside_sd` over the
-        # same buckets ran 0.0703 / 0.0652 / 0.0462 / 0.0313, a 2.24x spread that
-        # clears the 2x floor. The hierarchy was doing exactly what the gate
-        # demands; the gate could not see it.
-        #
-        # Named explicitly rather than resolved by `in cov.columns`, because a
-        # column-availability fallback is precisely how the measured quantity
-        # changed underneath the threshold without anything failing.
-        col = "expected_upside_sd"
-        if col not in cov.columns:
-            logger.warning(
-                "%s absent from the screen; the coverage gradient cannot be "
-                "measured on the posterior sd this run", col,
-            )
-        else:
-            grad = cov.groupby("bucket", observed=True)[col].mean()
-            monotone = bool(grad.is_monotonic_decreasing)
-            spread = float(grad.max() / max(grad.min(), _EPS))
-            # The forward-return gradient, REPORTED and never graded. `er_sd`
-            # carries the forecast-error term, whose steepness is set by
-            # `forecast_error_n_exponent` -- a prior the panel cannot identify, so
-            # a threshold on it would test only that the prior was applied. Same
-            # reasoning, and the same treatment, as `forecast_factor_effect`.
-            fwd = ""
-            if "er_sd" in cov.columns:
-                g2 = cov.groupby("bucket", observed=True)["er_sd"].mean()
-                fwd = (
-                    f"; forward-return er_sd {g2.round(4).to_dict()} "
-                    f"(spread {float(g2.max() / max(g2.min(), _EPS)):.2f}x, "
-                    "reported not gated: its steepness is set by "
-                    "forecast_error_n_exponent, a prior)"
-                )
-            report.add(
-                GateResult(
-                    name="coverage_gradient",
-                    passed=monotone and spread >= 2.0,
-                    value=(
-                        f"{'monotone' if monotone else 'NOT monotone'}, "
-                        f"spread {spread:.2f}x"
-                    ),
-                    threshold="monotone decreasing, spread >= 2x (posterior sd)",
-                    blocking=False,
-                    detail=f"mean {col} by bucket: {grad.round(4).to_dict()}{fwd}",
-                )
-            )
-
-    # ---- prob_pos degeneracy (item 8) --------------------------------------
-    pinned = float((screen["prob_pos"] >= 0.99995).mean())
-    # The span check is the half that was missing. Grading only prob_pos meant
-    # its collapse was reported while the column that INHERITED the ranking went
-    # unmeasured; a future collapse of the promoted column would then have been
-    # silent. p95 - p05 is the range the ranking actually has to work in.
-    _cond = pd.to_numeric(screen.get("p_upside_pos_cond"), errors="coerce")
-    span = (
-        float(_cond.quantile(0.95) - _cond.quantile(0.05))
-        if _cond is not None and _cond.notna().any()
-        else float("nan")
-    )
-    span_ok = bool(np.isfinite(span) and span >= 0.30)
-    report.add(
-        GateResult(
-            name="prob_pos_degenerate",
-            passed=(pinned <= 0.60) and span_ok,
-            value=(
-                f"{pinned:.1%} pinned at 1.0, p_upside_pos_cond span "
-                f"{span:.3f}"
-            ),
-            threshold="pinned <= 60%, p_upside_pos_cond p95-p05 >= 0.30",
-            blocking=False,
-            detail=(
-                "prob_pos is a REPORTED diagnostic and is never ranked on. "
-                "p_upside_pos_cond is the primary probability column -- since "
-                "2026-08-20 it is P(risk-adjusted forward return > 0) computed "
-                "directly from the MC draws, not the old mc_prob_pos * sigmoid "
-                "product. The export ranks on it and suppresses it alongside the "
-                "other out-of-support metrics."
-            ),
-        )
-    )
-    return screen, ScreenDraws(eu=eu_draws, mc_returns=mc, isins=panel.isins)
-
-
-# =========================================================================== #
-# §10b  Risk book                                                             #
-# =========================================================================== #
-
-
-def _book_group_labels(
-    screen: pd.DataFrame,
-    run_cfg: "KalmanRunConfigV2",
-    *,
-    isins: Optional[np.ndarray] = None,
-) -> dict[str, np.ndarray]:
-    """Per-name labels for each capped dimension, aligned BY KEY.
-
-    Only the dimensions that carry a cap are resolved: a label array the sizer
-    cannot use is a per-name string column carried through the whole book for
-    nothing.
-
-    Alignment is by ISIN, never by position. ``run_screen`` returns the screen
-    sorted by ``expected_upside`` while the forecast draws stay in
-    ``panel.isins`` order, and attributing a sector to the wrong name is the
-    permutation this project has already shipped once -- a length check passes it.
-
-    Parameters
-    ----------
-    screen
-        Screen frame carrying ``isin`` and the classification columns.
-    run_cfg
-        Supplies ``group_caps``, whose keys name the dimensions.
-    isins
-        Order to align to. ``None`` keeps the screen's own order.
-
-    Returns
-    -------
-    dict[str, numpy.ndarray]
-        Labels per dimension; unresolvable dimensions are skipped with a warning,
-        because a cap silently not applied is worse than a cap not set.
-    """
-    caps = getattr(run_cfg, "group_caps", None) or {}
-    if not caps or screen is None or "isin" not in getattr(screen, "columns", []):
-        return {}
-    keyed = screen.drop_duplicates("isin").copy()
-    keyed.index = keyed["isin"].astype(str)
-    order = (np.asarray(isins).astype(str) if isins is not None
-             else screen["isin"].astype(str).to_numpy())
-    out: dict[str, np.ndarray] = {}
-    for dim in caps:
-        if dim not in keyed.columns:
-            logger.warning(
-                "group cap set for %r but the screen has no such column, so the "
-                "cap CANNOT be applied. Available: %s",
-                dim, sorted(c for c in keyed.columns if keyed[c].dtype == object)[:12],
-            )
-            continue
-        out[dim] = (
-            keyed[dim].reindex(order).fillna(UNKNOWN_LABEL).astype(str).to_numpy()
-        )
-    return out
-
-
-def run_risk_book(
-    idata: Any,
-    panel: KalmanPanelV2,
-    screen: pd.DataFrame,
-    run_cfg: KalmanRunConfigV2,
-    draws: Optional["ScreenDraws"] = None,
-) -> Any:
-    """Size a CVaR-aware long book, reusing :mod:`RiskBookModel` unchanged.
-
-    ``compute_cvar_aware_book`` needs the screen frame to already carry
-    ``er_mean`` / ``er_sd`` / ``er_p05`` and ``mc_prob_pos``. Without them
-    ``expected_sharpe_ratio`` silently becomes NaN, ``tail_risk`` loses its Monte-Carlo
-    loss leg, and ``p_upside_pos_cond`` degrades to ``p_upside_pos * kalman_gain``
-    — three quiet degradations rather than one loud failure, which is why
-    :func:`run_screen` builds those columns first.
-
-    Parameters
-    ----------
-    draws
-        The :class:`ScreenDraws` §10 returned. Supplies the **shrunk** upside
-        draws and the Monte-Carlo return distribution. Re-resolving the latent
-        here instead — which is what this function used to do — would size the
-        book on the unshrunk latent while the screen reported the shrunk one,
-        and leave ``cvar05`` computed from estimation uncertainty. Both are
-        silent failures, so the fallback path warns loudly.
-
-    Returns
-    -------
-    RiskBook or None
-        ``None`` when the risk book cannot be computed; the caller keeps going
-        with the screen alone rather than losing the whole run.
-    """
-    import xarray as xr
-
-    from probabilistic_ml_model.pymc_models.RiskBookModel import compute_cvar_aware_book
-
-    try:
-        if draws is not None:
-            eu = draws.eu
-            return_draws = draws.pooled_returns
-            return_draws_isins = draws.isins
-        else:
-            logger.warning(
-                "run_risk_book called without ScreenDraws: re-resolving the "
-                "latent (UNSHRUNK -- it will disagree with the screen) and "
-                "computing cvar05 from posterior rather than return draws."
-            )
-            latent = resolve_screen_latent_v2(
-                idata, latent=KALMAN_V2_SCREEN_LATENT, random_seed=run_cfg.random_seed
-            )
-            eu = xr.DataArray(
-                np.expm1(
-                    np.clip(
-                        np.asarray(latent) * panel.response_std + panel.response_mean,
-                        LOG_UPLIFT_CLIP_LO,
-                        LOG_UPLIFT_CLIP_HI,
-                    )
-                ),
-                dims=("chain", "draw", "isin"),
-                coords={"isin": panel.isins},
-            )
-            return_draws = None
-            return_draws_isins = None
-        book = compute_cvar_aware_book(
-            idata,
-            eu,
-            screen,
-            alpha=run_cfg.cvar_alpha,
-            cap=run_cfg.weight_cap,
-            # A CEILING since 2026-08-28, not the book size. `min_weight` on the
-            # config decides breadth; this only bounds it.
-            max_names=run_cfg.k_book,
-            min_weight=run_cfg.book_min_weight,
-            group_labels=_book_group_labels(screen, run_cfg),
-            group_caps=run_cfg.group_caps,
-            p_long=run_cfg.p_long,
-            mcap_r_max=run_cfg.mcap_global_r_max,
-            return_draws=return_draws,
-            return_draws_isins=return_draws_isins,
-            tail_risk_vol_floor_k=run_cfg.tail_risk_vol_floor_k,
-        )
-        logger.info(
-            "Risk book: %d names, port_up %.3f, STARR %.3f, div %.3f",
-            int(book.summary.get("n_book", 0)),
-            book.summary.get("port_up", float("nan")),
-            book.summary.get("starr_book", float("nan")),
-            book.summary.get("div", float("nan")),
-        )
-        return book
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.error("Risk book failed: %s", exc, exc_info=True)
-        return None
-
-
-# ===========================================================================
-#  §15  Forecast layer + §15b decision layer
-# ===========================================================================
+#
+# `run_screen`, `_book_group_labels`, `run_risk_book` and the `_posterior_*`
+# helpers now live in `kalman_portfolio.py`, and `run_forecast_layer` is gone.
+#
+# WHY. This script fitted the panel and then decided on it, while
+# `kalman_portfolio.py` decided on the same posterior a second time -- §15b sized
+# a book with the same `optimize_portfolio` call as `run_decision_books` but with
+# no ranking arms, no sector cap, no size-down veto and no gates, and §15's
+# forecast summary duplicated §15c's. Two decision layers off one fit, and the
+# seam between them was four CSVs read with no vintage check: replay
+# `b00f8d8ca093` ran a 2026-08-30 posterior against a 2026-08-27 screen from a
+# DIFFERENT fit, and the 145 names the two universes did not share became a
+# phantom sector that evaded a 30 % cap.
+#
+# So the cut is at the posterior. This script fits, checks and writes
+# `07_forecast_handoff_v2.nc`; everything downstream of it belongs to the
+# decision layer. The import direction is one-way and must stay that way --
+# `kalman_portfolio` imports this module, never the reverse.
+#
+# The forecast-error shrinkage went with them, and that is the principled half:
+# `forecast_error_multiplier` is a PRIOR, not an estimate -- the panel cannot
+# identify it, see `KalmanPortfolioConfig.forecast_error_multiplier` -- and
+# `--sweep multiplier` exists to grid it. A prior belongs with the sweep that
+# tests it, not baked into the artifact the sweep reads. The handoff therefore
+# carries the UNSHRUNK latent.
+#
+# What stays here: `apply_out_of_support` below, the export gates and
+# `EXPORT_IDENTITY_COLUMNS` -- all three are consumed by both sides, and the
+# decision layer imports them from here.
 
 
 def write_forecast_handoff(
     idata: Any,
     panel: KalmanPanelV2,
-    screen: pd.DataFrame,
-    draws: Optional["ScreenDraws"],
     run_cfg: KalmanRunConfigV2,
     run_id: str,
     report: GateReport,
 ) -> Optional[str]:
-    """Persist what the forward simulation needs, so it can be replayed off one fit.
+    """Persist the posterior the decision layer replays off. This script's last act.
 
-    The v2 workflow has never persisted its posterior. Every sensitivity the forecast
-    layer's two priors invite -- grid ``forecast_factor_share``, grid
-    ``forecast_error_multiplier``, contrast ranking rules -- therefore costs a full
-    NUTS run, which is why none of them has been run in eight releases. This writes
-    a compact NetCDF beside the other artifacts; ``kalman_portfolio.py`` replays the
-    forecast and decision layers off it in seconds.
+    Everything downstream of this file is `kalman_portfolio.py`'s, so this is the
+    seam. It carries the four quantities the forward simulation reads, the four
+    the screen reads, the small per-ISIN panel vectors and the whole 42-column
+    identity block -- enough that a replay never needs a live fit.
 
-    Additive and defensive, on the same rule as the forecast layer itself: a failure
-    to write a convenience artifact must never cost a run the fit it has already paid
-    for.
+    Two things it deliberately does NOT do any more:
+
+    * It does not take a ``screen`` or a ``ScreenDraws``. It used to persist
+      ``ScreenDraws.eu``, the latent AFTER forecast-error shrinkage, because the
+      screen ran in this script. That shrinkage is a **prior** the panel cannot
+      identify (see :attr:`KalmanPortfolioConfig.forecast_error_multiplier`), and
+      ``kalman_portfolio.py --sweep multiplier`` exists to grid it. Baking one
+      reading of a prior into the artifact the sweep reads would make the sweep
+      measure only that the prior had been applied. The UNSHRUNK latent goes out.
+
+    * It does not read the identity block off the screen. ``panel.frame`` is the
+      same source the export's own identity join uses, so the handoff and every
+      exported table describe a name identically. Off the screen it carried 9 of
+      42 columns and no ``country_name`` -- one of the five coordinates the
+      recommendation layer reports a posture on.
 
     Returns
     -------
     str or None
-        The written path, or ``None`` when the stage was skipped or failed.
+        The written path, or ``None`` when the stage failed. A handoff is the
+        run's whole point, so a failure here is logged loudly and still does not
+        raise: the export below is what a reader would diagnose it from.
     """
-    if draws is None:
-        logger.warning(
-            "no ScreenDraws; skipping the forecast handoff rather than writing one "
-            "built from the UNSHRUNK latent"
-        )
-        return None
     try:
         from probabilistic_ml_model.pymc_models.KalmanForecast import (
             save_forecast_handoff,
         )
 
-        # ScreenDraws.eu is in RETURN space; the handoff stores the STANDARDISED
-        # latent, which is the scale `prepare_forecast_inputs` de-standardises from.
-        # Same conversion `run_forecast_layer` applies, in one place.
-        latent = (
-            np.log1p(np.asarray(draws.eu)) - panel.response_mean
-        ) / panel.response_std
+        # The decision latent as the model resolved it, on the STANDARDISED
+        # scale -- which is the scale `prepare_forecast_inputs` de-standardises
+        # from, so no conversion happens here and none can be forgotten.
+        latent = resolve_screen_latent_v2(
+            idata, latent=KALMAN_V2_SCREEN_LATENT, random_seed=run_cfg.random_seed
+        )
 
         sha, dirty = resolve_source_revision()
-        ident_cols = [c for c, _ in EXPORT_IDENTITY_COLUMNS if c in screen.columns]
-        identity = screen[["isin", *[c for c in ident_cols if c != "isin"]]] \
-            if "isin" in screen.columns else None
+        ident_source = panel.frame
+        ident_cols = [
+            c for c, _ in EXPORT_IDENTITY_COLUMNS
+            if c != "isin" and c in getattr(ident_source, "columns", [])
+        ]
+        absent = [
+            c for c, _ in EXPORT_IDENTITY_COLUMNS
+            if c != "isin" and c not in ident_cols
+        ]
+        if absent:
+            logger.warning(
+                "identity columns absent from panel.frame and omitted from the "
+                "handoff: %s", ", ".join(absent),
+            )
+        identity = (
+            _coerce_identity_dtypes(ident_source[["isin", *ident_cols]].copy())
+            if "isin" in getattr(ident_source, "columns", []) else None
+        )
 
-        # Into `07_posterior/` -- the handoff IS a persisted posterior (the four
-        # quantities the forward simulation reads), not an output of the §15
-        # stage that consumes it. `EXPORT_DIR_ALIASES` carries that mapping.
+        # Into `07_posterior/` -- the handoff IS a persisted posterior, not an
+        # output of the stage that consumes it. `EXPORT_DIR_ALIASES` carries that.
         path = save_forecast_handoff(
             section_path(run_cfg.results_path, Path(_HANDOFF_STEM).stem,
                          suffix=Path(_HANDOFF_STEM).suffix),
@@ -4893,7 +4212,8 @@ def write_forecast_handoff(
                 blocking=False,
                 detail=(
                     f"{panel.n_isin} names thinned to {run_cfg.forecast_scenarios} "
-                    f"posterior samples; replay with "
+                    f"posterior samples, unshrunk latent, {len(ident_cols) + 1} "
+                    f"identity columns. Replay with "
                     f"`python kalman_portfolio.py --handoff {path}`"
                 ),
             )
@@ -4901,204 +4221,20 @@ def write_forecast_handoff(
         return str(path)
     except Exception as exc:  # pragma: no cover - defensive
         logger.error("Forecast handoff failed: %s", exc, exc_info=True)
-        return None
-
-
-def run_forecast_layer(
-    idata: Any,
-    panel: KalmanPanelV2,
-    screen: pd.DataFrame,
-    run_cfg: KalmanRunConfigV2,
-    report: GateReport,
-    draws: Optional["ScreenDraws"] = None,
-) -> dict[str, Any]:
-    """Simulate joint forward returns and decide on them. Reports; never substitutes.
-
-    Off unless ``run_cfg.enable_forecast_layer``. When on, this stage runs
-    *alongside* the AR simulator rather than in place of it: the shipped
-    ``er_*`` / ``cvar05`` / ``starr`` columns and the sized risk book are
-    untouched, and §15 emits its own frames so the two engines can be contrasted
-    on one fit. Flipping the default is a decision for a realised-return vintage,
-    not for a stage that can only be scored against the trail it was fitted to.
-
-    Two contrasts are worth reading off the result:
-
-    ``forecast`` vs the shipped ``er_*``
-        The AR simulator's horizon is four unitless periods; this one's is 365
-        calendar days with the fitted OU kernel carrying the decay. The
-        ``er_sd`` columns are directly comparable because both pool per-step
-        marginals the same way.
-    ``factor_share`` at its configured value vs 0
-        At 0 the forward shocks are cross-sectionally independent, which is what
-        the AR simulator assumes. That assumption is why a *long* book can report
-        a positive expected shortfall: pooling 25 names averages their
-        idiosyncratic risk to nearly nothing. The gate below measures it.
-
-    Parameters
-    ----------
-    idata
-        The fitted posterior.
-    panel
-        The panel it was fitted on.
-    screen
-        The screen frame, used only for its identity columns.
-    run_cfg
-        Supplies every forecast and decision knob.
-    report
-        Gate report; this stage adds one non-blocking gate.
-    draws
-        ``ScreenDraws`` from §10. **Pass it.** Its ``eu`` carries the SHRUNK
-        latent the screen reported; re-resolving here would forecast from the
-        unshrunk one, so §15 would describe a different model from §10 while
-        every gate still passed. That is the failure ``ScreenDraws`` exists to
-        prevent, in a new place.
-
-    Returns
-    -------
-    dict[str, Any]
-        ``forecast_draws``, ``forecast_summary``, ``portfolio``, and the frames
-        to export. Empty when the stage is disabled or fails — a forecast is
-        additive, so it must never cost a run a fit already paid for.
-    """
-    if not run_cfg.enable_forecast_layer:
-        return {}
-
-    from dataclasses import replace as _replace
-
-    from probabilistic_ml_model.pymc_models.KalmanForecast import (
-        ForecastConfig,
-        forecast_from_posterior,
-        summarize_forecast,
-    )
-
-    out: dict[str, Any] = {}
-    try:
-        cfg = ForecastConfig(
-            horizon_days=run_cfg.forecast_horizon_days,
-            step_days=run_cfg.forecast_step_days,
-            n_scenarios=run_cfg.forecast_scenarios,
-            backend=run_cfg.forecast_backend,
-            factor_share=run_cfg.forecast_factor_share,
-            # The clip SSOT is this module's UPLIFT_CLIP_*; passing it in is what
-            # keeps the forecast layer from owning a second copy of it.
-            uplift_clip=(UPLIFT_CLIP_LO, UPLIFT_CLIP_HI),
-            random_seed=run_cfg.random_seed,
-        )
-        latent = draws.eu if draws is not None else None
-        if latent is None:
-            logger.warning(
-                "run_forecast_layer called without ScreenDraws: the latent will be "
-                "re-resolved UNSHRUNK and will disagree with the screen"
-            )
-        else:
-            # ScreenDraws.eu is in RETURN space; the forecast wants the latent on
-            # the STANDARDISED scale it was resolved on, so undo the screen's
-            # de-standardisation rather than passing a differently-scaled array.
-            latent = (np.log1p(np.asarray(latent)) - panel.response_mean) / panel.response_std
-
-        fc = forecast_from_posterior(idata, panel, config=cfg, latent=latent)
-        out["forecast_draws"] = fc
-
-        summary = summarize_forecast(fc, terminal=False)
-        terminal = summarize_forecast(fc, terminal=True).rename(
-            columns=lambda c: c if c == "isin" else f"{c}_terminal"
-        )
-        summary = summary.merge(terminal, on="isin", how="left")
-        summary["backend"] = fc.backend
-        summary["factor_share"] = fc.factor_share
-        summary["horizon_days"] = fc.horizon_days
-        ident = [c for c in ("isin", "ticker", "name", "sector", "trading_region")
-                 if c in screen.columns]
-        summary = screen[ident].merge(summary, on="isin", how="right")
-        out["forecast_summary"] = summary
-
-        # How much diversification the shared factors removed. Reported, never
-        # gated: `factor_share` is a prior, so this measures the prior's
-        # consequence, and a gate on it would be a gate on an assumption.
-        independent = forecast_from_posterior(
-            idata, panel, config=_replace(cfg, factor_share=0.0), latent=latent
-        )
-        w = np.full(min(run_cfg.k_book, fc.n_isin), 1.0 / min(run_cfg.k_book, fc.n_isin))
-        rows = slice(0, len(w))
-        sd_joint = float((w @ fc.terminal[rows]).std())
-        sd_indep = float((w @ independent.terminal[rows]).std())
-        ratio = sd_joint / sd_indep if sd_indep > 0 else float("nan")
         report.add(
             GateResult(
-                name="forecast_factor_effect",
-                # Always passes: this reports the consequence of a PRIOR
-                # (`forecast_factor_share`), and a gate on an assumption would only
-                # be testing that the assumption was applied.
-                passed=True,
-                value=f"{ratio:.2f}x wider",
-                threshold="reported, not gated",
+                name="forecast_handoff_written",
+                passed=False,
+                value=str(exc)[:120],
+                threshold="a handoff must be written",
                 blocking=False,
                 detail=(
-                    f"equal-weight {len(w)}-name book sd {sd_joint:.4f} with shared "
-                    f"factors vs {sd_indep:.4f} with independent shocks"
+                    "Without it there is nothing to replay and the fit produced no "
+                    "decision output at all -- this script no longer screens."
                 ),
             )
         )
-        logger.info(
-            "factor structure widens an equal-weight %d-name book's sd by %.2fx "
-            "(%.4f -> %.4f); independent shocks make diversification free",
-            len(w),
-            ratio,
-            sd_indep,
-            sd_joint,
-        )
-
-        if run_cfg.enable_portfolio_layer:
-            from probabilistic_ml_model.pymc_models.PortfolioOptimizationModel import (
-                ergodicity_report,
-                optimize_portfolio,
-            )
-
-            eligible = None
-            if "mcap_global_r" in screen.columns:
-                mcap = (
-                    screen.set_index("isin")["mcap_global_r"]
-                    .reindex(fc.isins)
-                    .to_numpy(dtype="float64")
-                )
-                eligible = np.isfinite(mcap) & (mcap < run_cfg.mcap_global_r_max)
-
-            book = optimize_portfolio(
-                fc.terminal, fc.isins,
-                max_names=run_cfg.k_book,
-                min_weight=run_cfg.book_min_weight,
-                cap=run_cfg.weight_cap,
-                group_labels=_book_group_labels(screen, run_cfg, isins=fc.isins),
-                group_caps=run_cfg.group_caps,
-                kelly_multiplier=run_cfg.portfolio_kelly_multiplier,
-                eligible=eligible,
-            )
-            out["portfolio"] = book
-
-            decision = book.analytics.copy()
-            decision["backend"] = fc.backend
-            decision["factor_share"] = fc.factor_share
-            decision = screen[ident].merge(decision, on="isin", how="right")
-            out["decision_frame"] = decision
-
-            erg = ergodicity_report(fc.terminal)
-            out["ergodicity"] = erg
-            logger.info(
-                "decision layer: %d names, effective N %.1f, E[r] %.2f%%, "
-                "GVaR99 %.2f%%, GES %.2f%%, volatility drag %.2f%%",
-                int(book.summary["n_book"]),
-                book.summary["effective_n"],
-                100.0 * book.summary["port_expected"],
-                100.0 * book.summary["port_gvar"],
-                100.0 * book.summary["port_ges"],
-                100.0 * erg["volatility_drag"],
-            )
-    except Exception as exc:  # pragma: no cover - defensive
-        # Additive stage: a failure here must not cost a run its fit, for the same
-        # reason `run_risk_book` swallows its own.
-        logger.error("Forecast layer failed: %s", exc, exc_info=True)
-        return out
-    return out
+        return None
 
 
 def apply_out_of_support(results: pd.DataFrame) -> pd.DataFrame:
@@ -5571,9 +4707,23 @@ def export_analytics(
                 # into a wall of them.
                 logger.error("SQL export failed for %s (%s); CSV from here on", key, exc)
                 sql_ok = False
+        # CSV is written EITHER WAY since 2026-08-31, not only as a fallback.
+        #
+        # It used to be fallback-only, on the reasoning that a successful table
+        # write makes the file redundant. That stopped being true when the
+        # decision layer moved out: `kalman_portfolio.py` reads
+        # `09_diagnostics_v2` from this tree, and a successful DB write left the
+        # CSV at whatever the PREVIOUS run put there. The replay then read one
+        # fit's diagnostics beside another fit's handoff -- caught by
+        # `portfolio_input_vintage`, which is the gate doing its job over wiring
+        # that was wrong.
+        #
+        # It is also the rule the replay's own exporter already follows: a reader
+        # browsing a section directory should not find half of it in a database.
+        path = section_path(out_dir, key)
+        stamped_df.to_csv(path, index=False)
         if not wrote_table:
-            path = section_path(out_dir, key)
-            stamped_df.to_csv(path, index=False)
+            logger.info("wrote %s (%d rows)", path, len(stamped_df))
             logger.info("wrote %s (%d rows)", path, len(stamped_df))
 
     # ---- gate: single vintage ----------------------------------------------
@@ -5757,20 +4907,28 @@ _ANALYTICS_COLUMN_COMMENTS_V2: dict[str, str] = {
     ),
 }
 
-_ANALYTICS_DDL_HEADER_V2 = """\
+_ANALYTICS_DDL_HEADER_V2 = """-- ===========================================================================
+-- {schema}.{table}
 -- ===========================================================================
--- analytics.{table}
--- ===========================================================================
--- Generated by pymc_kalman_filter_pt_v2.py -- do not hand-edit; it is rewritten
--- on every export.
+-- Generated by pymc_kalman_filter_pt_v2.py -- DO NOT HAND-EDIT. It is rewritten
+-- on every export, so an edit here is lost on the next run and, worse, is
+-- invisible until then.
+--
+-- This line is also how the test suite FINDS these files. A reformatting pass
+-- stripped it from all eleven in August 2026, and
+-- `test_generated_analytics_ddls_carry_the_identity_block` went from checking
+-- eleven schemas to checking zero -- passing the whole time, because it counts
+-- what it found rather than what it expected to find. Reformat these files and
+-- the committed schema stops being provably in sync with the code.
 --
 -- UNITS: all return-like columns are RAW DECIMALS (0.25 = +25%), per the
 -- 0.9.9.7 convention. Percent scaling happens only at display boundaries.
 --
--- This is the **v2** table. v1 continues to write
--- analytics.kalman_filtered_price_targets, which is what the GEIB dashboard
--- reads; the two coexist so the models can be compared on one database.
--- Promoting v2 means repointing the dashboard, not renaming this table.
+-- WHO WRITES WHAT (2026-08-31). The fit `pymc_kalman_filter_pt_v2.py` writes
+-- the panel, the diagnostics and the comparison; `kalman_portfolio.py` writes
+-- the screen, the risk book and the canonical decision table the GEIB dashboard
+-- reads. The replay's own frames live in the `kalman_portfolio` schema instead,
+-- append-only.
 -- ===========================================================================
 """
 
@@ -5780,6 +4938,7 @@ def write_analytics_ddl_v2(
     *,
     table: str = _ANALYTICS_TABLE_V2,
     out_path: Optional[Path] = None,
+    schema: str = "analytics",
 ) -> Path:
     """Render a reviewable DDL file for the v2 analytics table.
 
@@ -5793,6 +4952,22 @@ def write_analytics_ddl_v2(
     deleted on 2026-08-31 once GEIB moved to the v2 table -- but v1's
     ``export_analytics`` still regenerates it, so a v1 run puts it back. It is a
     generated artifact either way, not a source of truth to maintain.
+
+    **These files are GENERATED. Do not hand-edit them.** Every one carries the
+    "Generated by" line in :data:`_ANALYTICS_DDL_HEADER_V2`, which is how
+    ``test_generated_analytics_ddls_carry_the_identity_block`` finds the files it
+    is meant to check. A reformatting pass over ``sql_scripts/analytics/``
+    stripped that line from all eleven, so the test silently checked ZERO files
+    and the committed schemas stopped being provably in sync with the code -- a
+    worse state than a red test, because nothing said so.
+
+    Parameters
+    ----------
+    schema
+        Schema the emitted DDL names, and the directory under ``sql_scripts/``
+        the file lands in. Was hardcoded ``analytics`` while the actual
+        ``to_sql`` honoured ``DB_ANALYTICS_SCHEMA``, so the two could disagree;
+        it is a parameter since the decision layer gained a schema of its own.
 
     Returns
     -------
@@ -5821,16 +4996,16 @@ def write_analytics_ddl_v2(
         )
         cols.append(f'    "{name}" {sql_type}')
 
-    body = [_ANALYTICS_DDL_HEADER_V2.format(table=table)]
-    body.append(f'DROP TABLE IF EXISTS analytics."{table}";')
-    body.append(f'CREATE TABLE analytics."{table}"\n(\n' + ",\n".join(cols) + "\n);")
+    body = [_ANALYTICS_DDL_HEADER_V2.format(table=table, schema=schema)]
+    body.append(f'DROP TABLE IF EXISTS {schema}."{table}";')
+    body.append(f'CREATE TABLE {schema}."{table}"\n(\n' + ",\n".join(cols) + "\n);")
     body.append("")
     for name in frame.columns:
         doc = _ANALYTICS_COLUMN_COMMENTS_V2.get(str(name))
         if doc:
             escaped = doc.replace("'", "''")
             body.append(
-                f'COMMENT ON COLUMN analytics."{table}"."{name}" IS\n    \'{escaped}\';'
+                f'COMMENT ON COLUMN {schema}."{table}"."{name}" IS\n    \'{escaped}\';'
             )
     body.append("")
     # The index is emitted only when the frame actually justifies it. It used to
@@ -5844,10 +5019,10 @@ def write_analytics_ddl_v2(
         body.append(
             f'CREATE {"UNIQUE " if _unique else ""}INDEX IF NOT EXISTS idx_{table}_isin'
         )
-        body.append(f'    ON analytics."{table}" (isin);')
+        body.append(f'    ON {schema}."{table}" (isin);')
         body.append("")
 
-    path = out_path or Path("sql_scripts") / "analytics" / f"{table}.sql"
+    path = out_path or Path("sql_scripts") / schema / f"{table}.sql"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(body), encoding="utf-8")
     logger.info("wrote %s (%d columns)", path, len(frame.columns))
@@ -6013,7 +5188,10 @@ def main(
     -------
     dict[str, Any]
         ``report``, ``panel``, ``panel_audit`` and — on a full run — ``idata``,
-        ``screen``, ``diagnostics``, ``ppc``, ``run_id``.
+        ``diagnostics``, ``ppc``, ``run_id`` and ``handoff_path``.
+
+        No ``screen``, no ``risk_book``, no ``forecast``: those are
+        ``kalman_portfolio.main``'s, and they replay off ``handoff_path``.
     """
     model_cfg = model_config or KalmanModelConfig()
     run_cfg = run_config or KalmanRunConfigV2.from_env()
@@ -6093,80 +5271,23 @@ def main(
             arms=run_cfg.fast_comparison_arms or None,
         )
 
-    screen, screen_draws = run_screen(idata, panel, run_cfg, report)
-    result["screen"] = screen
-    result["screen_draws"] = screen_draws
-
-    # The forecast handoff, written HERE and not earlier: `screen_draws.eu` is the
-    # SHRUNK decision latent, and a handoff carrying the raw one would replay a
-    # different model from the run that produced it while every gate still passed.
-    # Written before the forecast layer so a run that fails downstream still leaves
-    # behind the artifact that makes the failure reproducible in seconds.
+    # ---- The handoff: this script's last act ------------------------------
+    #
+    # The UNSHRUNK decision latent. Until 2026-08-31 this wrote `ScreenDraws.eu`,
+    # the SHRUNK latent, because the screen ran here; the shrinkage is a PRIOR the
+    # panel cannot identify and it now lives with the sweep that grids it, so what
+    # is persisted is the posterior quantity and not one prior's reading of it.
+    #
+    # Written before anything else that can fail, so a run which dies downstream
+    # still leaves the artifact that makes the failure reproducible in seconds.
     result["handoff_path"] = write_forecast_handoff(
-        idata, panel, screen, screen_draws, run_cfg, run_id, report
+        idata, panel, run_cfg, run_id, report
     )
-
-    risk_book = run_risk_book(idata, panel, screen, run_cfg, draws=screen_draws)
-    result["risk_book"] = risk_book
-
-    # §15 / §15b. Additive: with `enable_forecast_layer` off this is a no-op and the
-    # exported values are bit-for-bit what they were. With it on the stage emits its
-    # own frames and still does not touch the shipped columns -- the forecast is
-    # reported beside the AR simulator, not substituted for it.
-    forecast = run_forecast_layer(
-        idata, panel, screen, run_cfg, report, draws=screen_draws
-    )
-    result["forecast"] = forecast
-
-    # The canonical frame: the risk book's analytics if we have it (it is the
-    # screen plus the risk columns), otherwise the screen alone.
-    kalman_results = (
-        risk_book.analytics.copy() if risk_book is not None else screen.copy()
-    )
-    # A one-release guard, not a live hazard. `compute_cvar_aware_book` stopped
-    # emitting the `expected_sharpe` alias on 2026-08-24, so this is a no-op
-    # against the current RiskBookModel. It is retained because a stale or
-    # pinned RiskBookModel that still emits both would otherwise rename one onto
-    # the other and produce two columns with that name -- not merely untidy: the
-    # export_ranking_range gate then hands `pd.to_numeric` a DataFrame instead
-    # of a Series and the whole export dies with "arg must be a list, tuple,
-    # 1-d array, or Series", after the fit has already been paid for.
-    kalman_results = kalman_results.drop(columns=["expected_sharpe"], errors="ignore")
-    kalman_results = kalman_results.rename(
-        columns={
-            "starr": "reward_to_cvar",
-            "cvar05": "cvar_5pct_kalman",
-            # `exp_vol -> expected_vol_kalman` was here until 2026-08-27. Renaming
-            # a column only to drop it as a duplicate of `er_sd` two steps later is
-            # a round trip; `exp_vol` now keeps its own name until
-            # EXPORT_REDUNDANT_COLUMNS removes it. Both names stay in that mapping,
-            # so a stale RiskBookModel or a re-added rename cannot smuggle either
-            # back onto the published surface -- the same one-release guard the
-            # `expected_sharpe` drop above exists to be.
-            "book_weight": "cvar_book_weight",
-            "expected_upside": "expected_return_kalman",
-            "expected_pt": "price_target_kalman",
-            "last_price": "original_price",
-            "observed_pt": "original_target",
-        }
-    )
-    # Suppression runs BEFORE anything is written, so every consumer — including
-    # the intermediate risk table — sees the same guarded values. In v1 this ran
-    # after 10b_risk_analytics was persisted, which is why that table still
-    # carries an expected_sharpe_ratio of -2,142.
-    kalman_results = apply_out_of_support(kalman_results)
-    result["kalman_results"] = kalman_results
 
     frames: dict[str, pd.DataFrame] = {
         "04_panel_frame_v2": panel.frame,
         "09_diagnostics_v2": result["diagnostics"].reset_index(),
-        "10_screen_results_v2": screen,
-        _ANALYTICS_TABLE_V2: kalman_results,
     }
-    if "er_mean" in screen.columns:
-        frames["10_screen_mc_summary_v2"] = screen[
-            ["isin", "er_mean", "er_sd", "er_p05", "er_p50", "er_p95", "mc_prob_pos"]
-        ]
     # Both contrasts land in one table, distinguished by `backend`, so a reader
     # can never mistake a seconds-long screen for an exact ELPD measurement.
     _cmp_parts = [
@@ -6176,38 +5297,10 @@ def main(
     ]
     if _cmp_parts:
         frames["09b_comparison_v2"] = pd.concat(_cmp_parts, ignore_index=True)
-    if risk_book is not None:
-        # Same one-release guard as above, and the reason this frame is no
-        # longer the odd one out: the drop used to be applied HERE and to
-        # `kalman_results` but never to `risk_book.book`, so `10b_risk_book_v2`
-        # shipped `weight` beside `book_weight` and `expected_sharpe` beside
-        # `expected_sharpe_ratio` -- byte-identical pairs that
-        # `export_unique_columns` cannot see, because it checks duplicate NAMES.
-        # Fixed at the source in `compute_cvar_aware_book` (2026-08-24) so BOTH
-        # frames carry one column per quantity, with `export_duplicate_content`
-        # below watching for a recurrence.
-        frames["10b_risk_analytics_v2"] = apply_out_of_support(
-            risk_book.analytics.drop(columns=["expected_sharpe"], errors="ignore")
-        )
-        frames[_RISK_BOOK_KEY] = risk_book.book
-    # §15 frames sit BESIDE the shipped ones, never over them. `apply_out_of_support`
-    # is applied for the same reason the risk book applies it: a clip-pinned row is
-    # still informative, it just must not be ranked.
-    if isinstance(forecast.get("forecast_summary"), pd.DataFrame):
-        frames["15_forecast_summary_v2"] = apply_out_of_support(
-            forecast["forecast_summary"]
-        )
-    if isinstance(forecast.get("decision_frame"), pd.DataFrame):
-        frames["15b_decision_analytics_v2"] = apply_out_of_support(
-            forecast["decision_frame"]
-        )
     # One identity block, one place, applied to every per-ISIN frame at the last
     # moment before export. Doing it here rather than in each constructor is what
-    # makes the block uniform: `run_screen` owned nine of these columns and every
-    # downstream frame inherited a different subset of them, so what a reader got
-    # depended on which table they happened to open. The join is BY ISIN -- the
-    # screen is sorted by expected_upside while `panel.frame` is in universe
-    # order, so a positional attach would hand every name someone else's country.
+    # makes the block uniform: what a reader got used to depend on which table
+    # they happened to open. The join is BY ISIN, never positional.
     frames = _attach_identity_frames(frames, panel.frame)
     result["export_counts"] = export_analytics(frames, run_cfg, report, run_id=run_id)
 
@@ -6217,9 +5310,9 @@ def main(
             "run_id": run_id,
             "names": panel.n_isin,
             "T / T_eff": f"{panel.n_time} / {audit['t_eff']:.2f}",
-            "median expected upside": f"{screen['expected_upside'].median():.2%}",
-            "median implied upside": f"{screen['implied_upside'].median():.2%}",
-            "above consensus": f"{(screen['expected_upside'] > screen['implied_upside']).mean():.1%}",
+            # The screen's own summary lines moved with the screen. What this
+            # script can still say about the fit is the fit, not the decision.
+            "handoff": str(result.get("handoff_path") or "not written"),
         },
         results_path=run_cfg.results_path,
     )
@@ -6391,42 +5484,22 @@ def _cli() -> int:
     parser.add_argument("--tune", type=int, default=None)
     parser.add_argument("--chains", type=int, default=None)
     parser.add_argument("--cores", type=int, default=None)
-    parser.add_argument(
-        "--forecast", action="store_true",
-        help=(
-            "run the §15 forward-return forecast layer beside the AR simulator. "
-            "Additive: the shipped er_*/cvar05/starr columns and the risk book are "
-            "unchanged, and two extra frames are emitted for the contrast."
-        ),
-    )
-    parser.add_argument(
-        "--forecast-backend", type=str, default=None,
-        choices=("native", "pymc_forecast", "statespace"),
-        help=(
-            "forecast engine (implies --forecast). Only 'native' is built; "
-            "'statespace' needs pymc-extras, which pins pymc<6.3/pytensor<3.3 and "
-            "would downgrade the installed pair."
-        ),
-    )
-    parser.add_argument(
-        "--forecast-horizon-days", type=int, default=None,
-        help="forecast horizon in calendar days (default 365, the price-target horizon)",
-    )
-    parser.add_argument(
-        "--forecast-factor-share", type=float, default=None,
-        help=(
-            "share of each name's forward shock VARIANCE carried by shared factors "
-            "(default 0.35). A PRIOR: at 0.0 the shocks are cross-sectionally "
-            "independent, which makes portfolio diversification free."
-        ),
-    )
-    parser.add_argument(
-        "--portfolio", action="store_true",
-        help=(
-            "run the §15b decision layer on the forecast draws (implies --forecast): "
-            "generative VaR/ES/tail risk, ergodicity, and a log-optimal sized book."
-        ),
-    )
+    # ---- MOVED to kalman_portfolio.py (2026-08-31) -------------------------
+    #
+    # Kept as arguments only so passing one gets a message saying where the stage
+    # went. Removing them outright gives `unrecognized arguments`, which is true
+    # and unhelpful; accepting them silently is what this change exists to stop.
+    # The refusal is below, next to the other overrides.
+    _moved_help = "MOVED to kalman_portfolio.py; passing it is an error that says so"
+    parser.add_argument("--forecast", action="store_true", help=_moved_help)
+    parser.add_argument("--forecast-backend", type=str, default=None,
+                        choices=("native", "pymc_forecast", "statespace"),
+                        help=_moved_help)
+    parser.add_argument("--forecast-horizon-days", type=int, default=None,
+                        help=_moved_help)
+    parser.add_argument("--forecast-factor-share", type=float, default=None,
+                        help=_moved_help)
+    parser.add_argument("--portfolio", action="store_true", help=_moved_help)
     args = parser.parse_args()
 
     if args.migrate_layout:
@@ -6490,19 +5563,28 @@ def _cli() -> int:
         overrides["enable_fast_comparison"] = True
         overrides["fast_comparison_arms"] = fast_arms
 
-    # Every forecast knob implies the stage, so passing one without --forecast does
-    # what the caller obviously meant rather than being silently ignored.
-    _forecast_opts = {
-        "forecast_backend": args.forecast_backend,
-        "forecast_horizon_days": args.forecast_horizon_days,
-        "forecast_factor_share": args.forecast_factor_share,
+    # The forecast and portfolio flags name stages this script no longer runs.
+    # REFUSE rather than accept-and-ignore: a caller who passes
+    # `--forecast-factor-share 0.55` and gets a run with no forecast in it has
+    # been told nothing, and the value they set is a prior that decides the shape
+    # of a book. `--write is accepted but does nothing` is precisely the pattern
+    # this replaces.
+    _moved = {
+        "--forecast": args.forecast,
+        "--portfolio": args.portfolio,
+        "--forecast-backend": args.forecast_backend is not None,
+        "--forecast-horizon-days": args.forecast_horizon_days is not None,
+        "--forecast-factor-share": args.forecast_factor_share is not None,
     }
-    _forecast_set = {k: v for k, v in _forecast_opts.items() if v is not None}
-    if args.forecast or args.portfolio or _forecast_set:
-        overrides["enable_forecast_layer"] = True
-        overrides.update(_forecast_set)
-    if args.portfolio:
-        overrides["enable_portfolio_layer"] = True
+    _passed = [flag for flag, given in _moved.items() if given]
+    if _passed:
+        parser.error(
+            f"{', '.join(_passed)} moved to kalman_portfolio.py on 2026-08-31. "
+            "This script fits the panel and writes the handoff; the forecast, the "
+            "screen, the risk book and the decision books all replay off that "
+            "file. Run `python pymc_kalman_filter_pt_v2.py` first, then "
+            "`python kalman_portfolio.py` with the equivalent flag."
+        )
 
     if overrides:
         run_cfg = replace(run_cfg, **overrides)

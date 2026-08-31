@@ -82,6 +82,7 @@ probabilistic_ml_model.pymc_models.PortfolioOptimizationModel
 """
 from __future__ import annotations
 
+import json as _json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -570,6 +571,49 @@ DEFAULT_HANDOFF_SAMPLES: int = 2000
 #: the Monte-Carlo error of 2,000 samples.
 _HANDOFF_DTYPE = "float32"
 
+#: Per-ISIN posterior arrays beyond ``mu_std`` / ``sigma_std`` / ``nu``, stored so the
+#: decision layer can run off the handoff alone.
+#:
+#: Each is ``(isin, sample)`` and is thinned on the SAME index as ``mu_std``, so a
+#: row of one lines up with a row of the others draw for draw. That matters:
+#: ``forecast_error_shrinkage`` combines ``latent_sd`` with ``sigma_std``, and the
+#: risk-adjusted probability differences ``mu_std`` against ``rar`` -- both are
+#: per-draw operations, and independently thinned arrays would pair unrelated draws
+#: while every shape still matched.
+#:
+#: Optional by design. A handoff written before 2026-08-31 has none of them, and a
+#: replay that only forecasts does not need them; the screen is what refuses when
+#: they are absent.
+HANDOFF_POSTERIOR_ARRAYS: tuple[tuple[str, str], ...] = (
+    # stored name        posterior variable (first match wins)
+    # The smoother's conditional MEAN, which is what the shrinkage updates.
+    # `mu_std` holds the RESOLVED latent (mean plus its residual noise draw) and
+    # is what the forward simulation reads; the two are not interchangeable.
+    ("latent_mean",      "state_now_mean"),
+    ("latent_sd",        "state_now_sd"),
+    ("fitted_mean",      "mu_scaled|mu_reg"),
+    ("rar",              "risk_adj_return"),
+)
+
+#: Per-ISIN vectors lifted off the panel, for the screen the replay now builds.
+#:
+#: The WIDE descriptive block is deliberately not here -- it stays in
+#: ``04_panel_frame_v2``, read under a run_id assertion. These are the few columns
+#: the screen arithmetic itself needs, small enough that carrying them removes a
+#: file dependency rather than duplicating one: 6,507 float64 is ~52 KB each.
+#:
+#: ``dispersion_cv`` is a ``KalmanPanelV2`` attribute rather than a frame column;
+#: the rest are read from ``panel.frame``.
+HANDOFF_PANEL_VECTORS: tuple[str, ...] = (
+    "dispersion_cv",
+    "n_analysts",
+    "last_price",
+    "observed_pt",
+    "feat_analyst_rating",
+    "feat_mcap_global_r",
+    "feat_mcap_country_r",
+)
+
 
 @dataclass(frozen=True)
 class ForecastHandoff:
@@ -603,6 +647,20 @@ class ForecastHandoff:
     coord_uniques
         Level name -> the labels those codes index, so a replay can report a sector or
         region by name without the panel.
+    latent_mean, latent_sd, fitted_mean, rar
+        ``(n_isin, n_samples)``, thinned on the SAME index as ``mu_std``: the
+        smoother's conditional mean and sd, the
+        fitted mean the likelihood centres
+        on (``mu_scaled``, falling back to ``mu_reg``), and the risk-adjusted return
+        draws. ``None`` on a handoff written before 2026-08-31. Together with
+        ``variance_weights`` these are what let the SCREEN run off a handoff rather
+        than off a live fit -- see :data:`HANDOFF_POSTERIOR_ARRAYS`.
+    variance_weights
+        ``(n_samples, 3)`` level / state / observation variance shares. The
+        shrinkage needs ``sigma_isin**2 * (w_level + w_state)``; rebuilding that
+        from anything else is how the two sides drift apart.
+    panel_vectors
+        Name -> ``(n_isin,)`` float vector, per :data:`HANDOFF_PANEL_VECTORS`.
     identity
         Optional per-name identity frame keyed by ``isin``.
     attrs
@@ -619,6 +677,12 @@ class ForecastHandoff:
     ou_length_scale_days: Optional[float] = None
     coord_idx: dict[str, np.ndarray] = field(default_factory=dict)
     coord_uniques: dict[str, np.ndarray] = field(default_factory=dict)
+    latent_mean: Optional[np.ndarray] = None
+    latent_sd: Optional[np.ndarray] = None
+    fitted_mean: Optional[np.ndarray] = None
+    rar: Optional[np.ndarray] = None
+    variance_weights: Optional[np.ndarray] = None
+    panel_vectors: dict[str, np.ndarray] = field(default_factory=dict)
     identity: Any = None
     attrs: dict[str, Any] = field(default_factory=dict)
 
@@ -638,6 +702,30 @@ class ForecastHandoff:
             )
         if not np.isfinite(self.response_std) or self.response_std <= 0:
             raise ValueError(f"response_std must be positive, got {self.response_std!r}")
+        # Shape-check rather than trust. These are paired with `mu_std` DRAW FOR
+        # DRAW -- the shrinkage combines `latent_sd` with `sigma_std`, and the
+        # risk-adjusted probability differences `mu_std` against `rar` -- so a
+        # mismatch is a silently wrong number, not a crash later.
+        for name in ("latent_mean", "latent_sd", "fitted_mean", "rar"):
+            arr = getattr(self, name)
+            if arr is not None and np.asarray(arr).shape != self.mu_std.shape:
+                raise ValueError(
+                    f"{name} {np.asarray(arr).shape} must match mu_std "
+                    f"{self.mu_std.shape}; they are read per draw."
+                )
+        if self.variance_weights is not None:
+            vw = np.asarray(self.variance_weights)
+            if vw.ndim != 2 or vw.shape[0] != self.mu_std.shape[1]:
+                raise ValueError(
+                    f"variance_weights {vw.shape} must be (n_samples, k) with "
+                    f"n_samples == {self.mu_std.shape[1]}"
+                )
+        for name, vec in (self.panel_vectors or {}).items():
+            if len(np.asarray(vec)) != len(self.isins):
+                raise ValueError(
+                    f"panel vector {name!r} has {len(np.asarray(vec))} entries for "
+                    f"{len(self.isins)} names"
+                )
 
     @property
     def n_isin(self) -> int:
@@ -656,8 +744,94 @@ class ForecastHandoff:
             f"{self.n_isin} names x {self.n_samples} samples "
             f"(thinned {a.get('thin_factor', 1)}x from "
             f"{a.get('n_samples_original', self.n_samples)}), "
-            f"OU length scale {self.ou_length_scale_days}"
+            f"OU length scale {self.ou_length_scale_days}, "
+            f"screen-ready={self.screen_ready}"
         )
+
+    @property
+    def screen_ready(self) -> bool:
+        """Whether this handoff carries enough to rebuild the screen.
+
+        A handoff written before 2026-08-31 carries only the forward simulation's
+        four quantities, so a replay can forecast off it but cannot screen. Asking
+        this is how a caller degrades on purpose instead of on a ``NoneType`` error
+        three frames deep.
+        """
+        return all(
+            getattr(self, n) is not None
+            for n in ("latent_mean", "latent_sd", "fitted_mean", "rar",
+                      "variance_weights")
+        )
+
+
+#: Sentinel for a missing TEXT identity value inside NetCDF.
+#:
+#: NetCDF has no null for a fixed-width string, so a missing label has to be
+#: written as *something*. The empty string is that something, and the round trip
+#: MUST undo it: an identity block that comes back with `""` where a sector was
+#: missing is the "Unknown" bucket again under a quieter name -- `notna()` is
+#: True for it, so it would form a group, clear MIN_GROUP_N and evade a cap
+#: exactly as before.
+_IDENT_NULL = ""
+
+
+def _encode_ident_column(series: "Any") -> tuple[np.ndarray, str]:
+    """Flatten one identity column to a NetCDF-storable array, plus its kind tag.
+
+    Four kinds, because three of them round-trip wrong under the obvious
+    ``astype(str)``:
+
+    ``date``
+        ``datetime64`` becomes an ISO ``YYYY-MM-DD`` string. NetCDF can encode
+        datetimes natively, but only with a units attribute that a later reader
+        has to honour; a date this project only ever prints is cheaper and safer
+        as text.
+    ``int``
+        pandas nullable ``Int64`` becomes ``float64`` with ``NaN``. Its
+        ``to_numpy()`` yields an OBJECT array holding ``pd.NA``, which the old
+        object branch stringified into the literal ``"<NA>"``.
+    ``float``
+        stored as-is.
+    ``text``
+        stored as ``str`` with :data:`_IDENT_NULL` for missing.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, str]
+        The encoded array and the tag :func:`_decode_ident_column` reads.
+    """
+    import pandas as pd
+
+    if pd.api.types.is_datetime64_any_dtype(series):
+        out = series.dt.strftime("%Y-%m-%d").to_numpy()
+        return np.asarray([_IDENT_NULL if v is None or v is pd.NaT or
+                           (isinstance(v, float) and np.isnan(v)) else str(v)
+                           for v in out]), "date"
+    if isinstance(series.dtype, pd.api.extensions.ExtensionDtype) and             pd.api.types.is_integer_dtype(series.dtype):
+        return pd.to_numeric(series, errors="coerce").astype("float64").to_numpy(), "int"
+    if pd.api.types.is_float_dtype(series) or pd.api.types.is_integer_dtype(series):
+        return series.to_numpy(dtype="float64"), "float"
+    values = series.to_numpy()
+    return np.asarray([
+        _IDENT_NULL if (v is None or v is pd.NA or
+                        (isinstance(v, float) and np.isnan(v))) else str(v)
+        for v in values
+    ]), "text"
+
+
+def _decode_ident_column(values: np.ndarray, kind: str) -> "Any":
+    """Undo :func:`_encode_ident_column`, restoring nulls as nulls."""
+    import pandas as pd
+
+    if kind == "date":
+        ser = pd.Series(values).replace(_IDENT_NULL, None)
+        return pd.to_datetime(ser, errors="coerce")
+    if kind == "int":
+        return pd.to_numeric(pd.Series(values), errors="coerce").astype("Int64")
+    if kind == "float":
+        return pd.to_numeric(pd.Series(values), errors="coerce")
+    # text -- and this replace is the load-bearing half of the round trip.
+    return pd.Series(values).astype(object).replace(_IDENT_NULL, None)
 
 
 def _thin_index(n_available: int, n_keep: Optional[int], seed: int) -> np.ndarray:
@@ -751,6 +925,7 @@ def save_forecast_handoff(
         logger.info("no 'nu' in the posterior; the handoff records Gaussian shocks")
         nu = np.array([np.inf])
 
+    post = _posterior_group(idata)
     n_available = mu_std.shape[1]
     keep = _thin_index(n_available, n_samples, random_seed)
     thin_factor = n_available / max(len(keep), 1)
@@ -767,8 +942,46 @@ def save_forecast_handoff(
     if nu.size == n_available:
         nu = nu[keep]
 
+    # The screen's own inputs. Optional: absent from the posterior means the
+    # handoff can still be forecast from, just not screened from, and
+    # `ForecastHandoff.screen_ready` is what says which.
+    extra: dict[str, np.ndarray] = {}
+    for stored, candidates in HANDOFF_POSTERIOR_ARRAYS:
+        for var in candidates.split("|"):
+            try:
+                arr = _flat_draws(idata, var)
+            except KeyError:
+                continue
+            if arr.shape[0] != mu_std.shape[0] or arr.shape[1] != n_available:
+                logger.warning(
+                    "%s (%s) has shape %s against the latent's (%d, %d); not stored",
+                    stored, var, arr.shape, mu_std.shape[0], n_available,
+                )
+                break
+            # Thinned on `keep`, the SAME index as mu_std, so draw i of one is
+            # draw i of the others. Re-thinning independently would pair
+            # unrelated draws with every shape still matching.
+            extra[stored] = arr[:, keep]
+            break
+        else:
+            logger.info(
+                "none of %s in the posterior; the handoff cannot rebuild the screen",
+                candidates.replace("|", " / "),
+            )
+
+    vw = None
+    if "variance_weights" in post:
+        vw_arr = np.asarray(post["variance_weights"], dtype="float64")
+        vw_arr = vw_arr.reshape(-1, vw_arr.shape[-1])          # (sample, k)
+        if vw_arr.shape[0] == n_available:
+            vw = vw_arr[keep]
+        else:  # pragma: no cover - defensive
+            logger.warning(
+                "variance_weights carries %d samples against the latent's %d; "
+                "not stored", vw_arr.shape[0], n_available,
+            )
+
     ou_days: Optional[float] = None
-    post = _posterior_group(idata)
     if "ou_length_scale_days" in post:
         ou_days = float(np.asarray(post["ou_length_scale_days"]).mean())
 
@@ -778,6 +991,31 @@ def save_forecast_handoff(
         "sigma_std": (("isin", "sample"), sigma_std.astype(_HANDOFF_DTYPE)),
         "nu": (("nu_sample",), nu),
     }
+    for stored, arr in extra.items():
+        data_vars[stored] = (("isin", "sample"), arr.astype(_HANDOFF_DTYPE))
+    if vw is not None:
+        data_vars["variance_weights"] = (("sample", "vw_component"), vw)
+
+    # Per-ISIN panel vectors. `dispersion_cv` is an attribute; the rest are frame
+    # columns. Anything absent is skipped and named, never zero-filled -- a zeroed
+    # `n_analysts` would make `forecast_error_variance` divide by nothing and
+    # return an infinite forecast error rather than an error.
+    frame = getattr(panel, "frame", None)
+    for col in HANDOFF_PANEL_VECTORS:
+        values = getattr(panel, col, None)
+        if values is None and frame is not None and col in getattr(frame, "columns", []):
+            values = frame[col].to_numpy()
+        if values is None:
+            logger.info("panel vector %r unavailable; not stored", col)
+            continue
+        arr = np.asarray(values, dtype="float64").ravel()
+        if len(arr) != len(isins):
+            logger.warning(
+                "panel vector %r has %d entries for %d names; not stored",
+                col, len(arr), len(isins),
+            )
+            continue
+        data_vars[f"panel__{col}"] = (("isin",), arr)
 
     coord_idx = getattr(panel, "coord_idx", {}) or {}
     coord_uniques = getattr(panel, "coord_uniques", {}) or {}
@@ -796,16 +1034,16 @@ def save_forecast_handoff(
                 (f"level__{level}",), np.asarray(uniques).astype(str)
             )
 
+    ident_encoding: dict[str, str] = {}
     if identity is not None and getattr(identity, "empty", True) is False:
         # Reindexed BY ISIN, never positionally -- the screen is sorted by
         # expected_upside while the panel is in universe order, and a positional
         # attach hands every name someone else's country while the row count matches.
         ident = identity.drop_duplicates("isin").set_index("isin").reindex(isins)
         for col in ident.columns:
-            values = ident[col].to_numpy()
-            if values.dtype == object:
-                values = np.asarray([("" if v is None else str(v)) for v in values])
-            data_vars[f"ident__{col}"] = (("isin",), values)
+            encoded, kind = _encode_ident_column(ident[col])
+            data_vars[f"ident__{col}"] = (("isin",), encoded)
+            ident_encoding[str(col)] = kind
 
     attrs: dict[str, Any] = {
         "n_samples_original": int(n_available),
@@ -816,6 +1054,11 @@ def save_forecast_handoff(
     }
     if ou_days is not None:
         attrs["ou_length_scale_days"] = float(ou_days)
+    if ident_encoding:
+        # How each identity column was flattened, so the reader can undo it
+        # without importing the workflow script's type SSOT (which imports this
+        # module -- the cycle is why the tag travels with the data).
+        attrs["ident_encoding"] = _json.dumps(ident_encoding, sort_keys=True)
     for key, value in (provenance or {}).items():
         # NetCDF attributes take scalars and strings. A bool would round-trip as an
         # int and read as 0/1 rather than as a flag, so make the coercion explicit.
@@ -866,19 +1109,33 @@ def load_forecast_handoff(path: Any) -> ForecastHandoff:
     coord_idx: dict[str, np.ndarray] = {}
     coord_uniques: dict[str, np.ndarray] = {}
     ident_cols: dict[str, Any] = {}
+    panel_vectors: dict[str, np.ndarray] = {}
+    encoding = _json.loads(attrs.get("ident_encoding", "{}") or "{}")
     for name in ds.data_vars:
         key = str(name)
         if key.startswith("coord__"):
             coord_idx[key[len("coord__"):]] = np.asarray(ds[name].values, dtype="int64")
         elif key.startswith("uniques__"):
             coord_uniques[key[len("uniques__"):]] = np.asarray(ds[name].values).astype(str)
+        elif key.startswith("panel__"):
+            panel_vectors[key[len("panel__"):]] = np.asarray(
+                ds[name].values, dtype="float64"
+            )
         elif key.startswith("ident__"):
-            ident_cols[key[len("ident__"):]] = np.asarray(ds[name].values)
+            col = key[len("ident__"):]
+            # `text` is the fallback for a handoff written before the encoding tag
+            # existed, which is what those files effectively were.
+            ident_cols[col] = _decode_ident_column(
+                np.asarray(ds[name].values), encoding.get(col, "text")
+            )
 
     isins = np.asarray(ds["isin"].values).astype(str)
     identity = None
     if ident_cols:
         identity = pd.DataFrame({"isin": isins, **ident_cols})
+
+    def _opt(key: str) -> Optional[np.ndarray]:
+        return np.asarray(ds[key].values, dtype="float64") if key in ds else None
 
     handoff = ForecastHandoff(
         isins=isins,
@@ -893,9 +1150,22 @@ def load_forecast_handoff(path: Any) -> ForecastHandoff:
         ),
         coord_idx=coord_idx,
         coord_uniques=coord_uniques,
+        latent_mean=_opt("latent_mean"),
+        latent_sd=_opt("latent_sd"),
+        fitted_mean=_opt("fitted_mean"),
+        rar=_opt("rar"),
+        variance_weights=_opt("variance_weights"),
+        panel_vectors=panel_vectors,
         identity=identity,
         attrs=attrs,
     )
+    if not handoff.screen_ready:
+        logger.warning(
+            "%s carries the forward simulation's inputs but NOT the screen's "
+            "(latent_mean / latent_sd / fitted_mean / rar / variance_weights). It "
+            "can be forecast from; it cannot be screened from. Re-run the v2 "
+            "workflow to write a current one.", src.name,
+        )
     logger.info("loaded %s", handoff.describe())
     return handoff
 

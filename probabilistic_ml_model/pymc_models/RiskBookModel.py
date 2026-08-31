@@ -289,7 +289,15 @@ def _cap_normalize_with_groups(
         breached = False
         for dim, limit in caps.items():
             codes = labels[dim]
-            uniques = np.unique(codes)
+            # Unlabelled names are OUTSIDE this constraint, not inside a group
+            # called "Unknown". They form no bucket, they receive no spill, and
+            # the weight that sits on them escapes the cap -- which is why
+            # `optimize_portfolio` measures `unlabelled_<dim>_weight` and the
+            # concentration gate blocks on it. `np.unique` over a mixed
+            # str/None array raises outright, so this is also what keeps the
+            # projection from crashing the moment a label fails to resolve.
+            labelled = pd.notna(codes)
+            uniques = pd.unique(pd.Series(codes)[labelled])
             totals = {g: out[codes == g].sum() for g in uniques}
             over = {g: t for g, t in totals.items() if t > limit + 1e-12}
             if not over:
@@ -301,7 +309,9 @@ def _cap_normalize_with_groups(
                 excess += total - limit
                 out[sel] *= limit / total
             room = np.array([
-                max(limit - totals[g], 0.0) if g not in over else 0.0 for g in codes
+                max(limit - totals[g], 0.0) if (g in totals and g not in over)
+                else 0.0
+                for g in codes
             ])
             headroom = sum(
                 max(limit - totals[g], 0.0) for g in uniques if g not in over
